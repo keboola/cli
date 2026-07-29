@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from ..auth.sentinel import is_session_token
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..constants import DEFAULT_TOKEN_DESCRIPTION
@@ -274,6 +275,11 @@ class OrgService:
         projects with expired or invalid tokens. Already-valid tokens are
         skipped unless ``force=True``.
 
+        Browser-login (session) projects are reported under
+        ``projects_skipped`` and never touched, ``force`` included: they hold a
+        ``kbc-session://`` sentinel instead of a static token, and their real
+        credential rotates on its own.
+
         Args:
             manage_token: Manage API token (for creating new storage tokens).
             aliases: Optional list of project aliases to refresh. If None, all
@@ -339,6 +345,24 @@ class OrgService:
         projects_skipped: list[dict[str, Any]] = []
 
         for alias, project in projects_to_check:
+            # A browser-login session project has no static token to replace:
+            # its credential lives in auth.json and the access token rotates on
+            # its own. Skipping here rather than at the token-validity check
+            # keeps ``force=True`` from converting it too, and reports the
+            # outcome truthfully instead of raising.
+            if is_session_token(project.token):
+                projects_skipped.append(
+                    {
+                        "alias": alias,
+                        "project_name": project.project_name,
+                        "reason": (
+                            "Browser-login (session) project -- nothing to refresh; "
+                            "session access tokens rotate automatically."
+                        ),
+                    }
+                )
+                continue
+
             # Skip projects without project_id (cannot create tokens via Manage API)
             if project.project_id is None:
                 projects_skipped.append(

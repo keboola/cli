@@ -22,6 +22,7 @@ from pathlib import Path
 import platformdirs
 from pydantic import ValidationError
 
+from .auth.sentinel import is_session_token
 from .constants import (
     ENV_CONFIG_DIR,
     ENV_KBC_STORAGE_API_URL,
@@ -30,7 +31,7 @@ from .constants import (
     ENV_PROJECT_FROM_ENV,
     LOCAL_CONFIG_DIR_NAME,
 )
-from .errors import ConfigError
+from .errors import ConfigError, SessionAuthUnsupportedError
 from .models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
 logger = logging.getLogger(__name__)
@@ -664,17 +665,58 @@ class ConfigStore:
             config.projects[alias].active_branch_id = branch_id
             self.save(config)
 
-    def edit_project(self, alias: str, **kwargs: str | int | None) -> None:
+    @staticmethod
+    def _reject_session_credential_swap(alias: str, stored_token: str, new_token: str) -> None:
+        """Refuse to overwrite a ``kbc-session://`` sentinel with a static token.
+
+        The sentinel is the only marker that a project belongs to a
+        browser-login session: its live credential lives in ``auth.json`` and
+        ``auth logout --remove-projects`` selects on it. Writing a static
+        Storage token over it silently changes the project's credential type
+        into a long-lived one that logout no longer cleans up, so the swap has
+        to be a deliberate choice rather than a side effect of a token refresh.
+        """
+        if is_session_token(stored_token) and not is_session_token(new_token):
+            raise SessionAuthUnsupportedError(
+                f"Replacing the stored credential of project '{alias}' with a static Storage token",
+                remedy=(
+                    "A browser-login session keeps its credential in auth.json and "
+                    f"rotates it automatically. Run `kbagent project edit --project {alias} "
+                    "--token <token>` to convert the project to a static Storage token "
+                    "deliberately, or `kbagent auth logout --remove-projects` to drop the "
+                    "session projects first."
+                ),
+            )
+
+    def edit_project(
+        self,
+        alias: str,
+        *,
+        allow_credential_type_change: bool = False,
+        **kwargs: str | int | None,
+    ) -> None:
         """Update fields on an existing project.
 
         Only non-None keyword arguments are applied.
 
         Args:
             alias: The project alias to edit.
+            allow_credential_type_change: Permit a ``token`` that replaces a
+                browser-login session sentinel with a static Storage token.
+                Off by default so bulk maintenance paths (``project refresh``,
+                ``org setup --refresh``) cannot convert a session project's
+                credential type behind the user's back. Only a caller acting
+                on explicit per-project user intent -- ``project edit
+                --token`` -- passes True, and it warns while doing so.
             **kwargs: Fields to update (stack_url, token, project_name, project_id).
 
         Raises:
             ConfigError: If the alias does not exist.
+            SessionAuthUnsupportedError: If ``token`` would overwrite a session
+                sentinel and ``allow_credential_type_change`` is False. Carries
+                ``ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK`` so a ``--json``
+                consumer can tell this apart from an ordinary config error, and
+                subclasses ``ConfigError`` so existing handlers keep exit code 5.
         """
         with self.transaction():
             config = self.load()
@@ -682,6 +724,9 @@ class ConfigStore:
                 raise self.project_not_found_error(alias)
             self._reject_ephemeral_mutation(config, alias, "edited")
             project = config.projects[alias]
+            new_token = kwargs.get("token")
+            if not allow_credential_type_change and isinstance(new_token, str):
+                self._reject_session_credential_swap(alias, project.token, new_token)
             for key, value in kwargs.items():
                 if hasattr(project, key) and value is not None:
                     setattr(project, key, value)

@@ -11,11 +11,29 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..auth.sentinel import is_session_token
 from ..config_store import project_not_found_error, validate_alias_format
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
 from .base import BaseService
+
+# Credential type of a config.json project entry, surfaced as ``auth_mode`` in
+# every query result. Both modes coexist per project, and which one applies
+# decides whether a command works at all (the AI/MCP/SDK paths are static-only),
+# so it is a first-class field rather than something to infer from the token.
+AUTH_MODE_SESSION = "session"
+AUTH_MODE_STATIC = "static"
+
+
+def auth_mode_of(token: str) -> str:
+    """Classify a stored token: ``session`` for a browser-login sentinel.
+
+    The masked form of a sentinel (``kbc-...9840``) is indistinguishable from a
+    truncated real token, which is why callers get this instead of parsing
+    ``token``.
+    """
+    return AUTH_MODE_SESSION if is_session_token(token) else AUTH_MODE_STATIC
 
 
 class ProjectService(BaseService):
@@ -176,7 +194,9 @@ class ProjectService(BaseService):
             includes ``old_alias`` and ``rename`` keys describing the
             cascade outcome. In dry-run mode the dict has
             ``dry_run: True`` and a ``planned`` sub-dict; ``alias``
-            reports the ORIGINAL alias (no mutation occurred).
+            reports the ORIGINAL alias (no mutation occurred). A
+            ``warnings`` list is present only when there is something to
+            warn about, so consumers can key off its presence.
 
         Raises:
             KeboolaApiError: If token re-verification fails (live mode only).
@@ -205,6 +225,20 @@ class ProjectService(BaseService):
         if stack_url is not None:
             stack_url = normalize_stack_url(stack_url)
 
+        # Swapping a browser-login sentinel for a static token is a legitimate
+        # request here (unlike in a bulk refresh), so it is allowed -- but it
+        # changes the project's credential type, and the user has to be told.
+        # Computed before the dry-run branch so the preview says the same thing.
+        warnings: list[str] = []
+        if token is not None and is_session_token(existing.token) and not is_session_token(token):
+            warnings.append(
+                f"Project '{alias}' was registered by `kbagent auth login` and its "
+                "credential is being replaced with a static Storage token. It becomes "
+                "a static-token project, so `kbagent auth logout --remove-projects` "
+                "will no longer clean it up -- remove it with `kbagent project remove` "
+                "when you are done with it."
+            )
+
         # ----- dry-run path: validate everything, mutate nothing ----------
         if dry_run:
             planned_rename: dict[str, Any] | None = None
@@ -214,7 +248,7 @@ class ProjectService(BaseService):
                     new_alias=new_alias,
                     search_root=search_root if search_root is not None else Path.cwd(),
                 )
-            return {
+            preview: dict[str, Any] = {
                 "alias": alias,
                 "project_name": existing.project_name,
                 "project_id": existing.project_id,
@@ -230,6 +264,9 @@ class ProjectService(BaseService):
                     "rename": planned_rename,
                 },
             }
+            if warnings:
+                preview["warnings"] = warnings
+            return preview
 
         rename_result: dict[str, Any] | None = None
         original_alias = alias
@@ -259,7 +296,7 @@ class ProjectService(BaseService):
                 updates["project_id"] = token_info.project_id
 
         if updates:
-            self._config_store.edit_project(alias, **updates)
+            self._config_store.edit_project(alias, allow_credential_type_change=True, **updates)
 
         updated = self._config_store.get_project(alias)
         if updated is None:
@@ -278,6 +315,8 @@ class ProjectService(BaseService):
         if rename_result is not None:
             result["old_alias"] = original_alias
             result["rename"] = rename_result
+        if warnings:
+            result["warnings"] = warnings
         return result
 
     def _rename_project_alias(
@@ -622,7 +661,9 @@ class ProjectService(BaseService):
         """List all configured projects.
 
         Returns:
-            List of dicts with project details (token masked).
+            List of dicts with project details (token masked). ``auth_mode`` is
+            always present, ``session`` or ``static``, so a consumer never has
+            to infer the credential type from the masked token.
         """
         config = self._config_store.load()
         result = []
@@ -634,6 +675,7 @@ class ProjectService(BaseService):
                     "project_id": project.project_id,
                     "stack_url": project.stack_url,
                     "token": mask_token(project.token),
+                    "auth_mode": auth_mode_of(project.token),
                     "is_default": alias == config.default_project,
                     "active_branch_id": project.active_branch_id,
                     "org_id": project.org_id,
@@ -715,6 +757,7 @@ class ProjectService(BaseService):
             "alias": alias,
             "stack_url": project.stack_url,
             "token": mask_token(project.token),
+            "auth_mode": auth_mode_of(project.token),
             "active_branch_id": project.active_branch_id,
         }
 
@@ -763,6 +806,9 @@ class ProjectService(BaseService):
 
         Returns:
             List of dicts with status, response time, and project details.
+            Every entry carries ``auth_mode``, always either ``session`` or
+            ``static`` -- including the rows synthesized for a worker that
+            raised.
 
         Raises:
             ConfigError: If a specified alias does not exist.
@@ -782,13 +828,20 @@ class ProjectService(BaseService):
         # threads and concurrent ConfigStore writes would race on the JSON file.
         self._backfill_org_info(successes)
 
-        # Convert unexpected errors to status entries
+        # Convert unexpected errors to status entries. The credential type comes
+        # from the config, not from the call that blew up, so ``auth_mode`` is
+        # exactly ``session`` or ``static`` on every row. ``project_alias`` is
+        # always a key of ``projects`` -- ``_run_parallel`` derives it from that
+        # same dict on both of its error paths -- so indexing directly keeps the
+        # two-valued guarantee instead of inventing an "unknown" third state.
         for error in errors:
+            alias = error["project_alias"]
             results.append(
                 {
-                    "alias": error["project_alias"],
+                    "alias": alias,
                     "stack_url": "",
                     "token": "",
+                    "auth_mode": auth_mode_of(projects[alias].token),
                     "status": "error",
                     "response_time_ms": 0,
                     "error": error["message"],
@@ -889,9 +942,11 @@ class ProjectService(BaseService):
             alias: The project alias to query.
 
         Returns:
-            Dict with project_id, project_name, stack_url, default_backend,
-            features, limits, metrics, token_id, token_description,
-            is_master_token, token_expires, and description fields.
+            Dict with project_id, project_name, stack_url, auth_mode,
+            default_backend, features, limits, metrics, token_id,
+            token_description, is_master_token, token_expires, and description
+            fields. The token_* fields describe the session's current access
+            token when ``auth_mode`` is ``session``.
 
         Raises:
             ConfigError: If the alias does not exist.
@@ -915,6 +970,7 @@ class ProjectService(BaseService):
             "project_id": owner.get("id"),
             "project_name": owner.get("name", ""),
             "stack_url": project.stack_url,
+            "auth_mode": auth_mode_of(project.token),
             "default_backend": owner.get("defaultBackend", "snowflake"),
             "features": owner.get("features", []),
             "limits": owner.get("limits", {}),

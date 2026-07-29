@@ -17,8 +17,10 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from helpers import make_mock_client
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -239,3 +241,84 @@ class TestProjectEditNewAliasErrorPaths:
         assert "--new-alias" in payload["error"]["message"]
         assert "--url" in payload["error"]["message"]
         assert "--token" in payload["error"]["message"]
+
+
+class TestProjectEditTokenOnSessionProject:
+    """``--token`` on a browser-login project converts it and says so.
+
+    Human mode puts the warning on stderr so stdout stays parseable; ``--json``
+    carries the same text in an additive ``warnings`` key.
+    """
+
+    SESSION_ALIAS = "session-proj"
+    SESSION_PROJECT_ID = 9840
+    NEW_TOKEN = "901-22222-replacementTokenValue123"
+
+    def _seed_session_project(self, config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            self.SESSION_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(self.SESSION_PROJECT_ID),
+                project_name="Session Project",
+                project_id=self.SESSION_PROJECT_ID,
+            ),
+        )
+        return store
+
+    def _invoke(self, tmp_path: Path, argv: list[str]):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = self._seed_session_project(config_dir)
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: make_mock_client(
+                project_name="Session Project", project_id=self.SESSION_PROJECT_ID
+            ),
+        )
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = service
+            result = runner.invoke(app, argv)
+        return store, result
+
+    def test_human_mode_warns_on_stderr_and_converts(self, tmp_path: Path) -> None:
+        store, result = self._invoke(
+            tmp_path,
+            ["project", "edit", "--project", self.SESSION_ALIAS, "--token", self.NEW_TOKEN],
+        )
+
+        assert result.exit_code == 0, result.output
+        stderr = " ".join(result.stderr.split())
+        assert "Warning:" in stderr
+        assert "auth logout --remove-projects" in stderr
+        # stdout stays the success line only.
+        assert "Warning" not in result.stdout
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == self.NEW_TOKEN
+
+    def test_json_mode_carries_the_warning_in_the_payload(self, tmp_path: Path) -> None:
+        _store, result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "project",
+                "edit",
+                "--project",
+                self.SESSION_ALIAS,
+                "--token",
+                self.NEW_TOKEN,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert len(payload["data"]["warnings"]) == 1
+        assert "auth logout --remove-projects" in payload["data"]["warnings"][0]

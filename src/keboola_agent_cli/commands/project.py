@@ -23,6 +23,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._helpers import (
     check_cli_permission,
     get_formatter,
@@ -50,6 +51,36 @@ def _project_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "project")
 
 
+def _format_auth_mode(auth_mode: str) -> str:
+    """Render the credential type of a project entry.
+
+    ``session`` is highlighted because it is the non-default mode and decides
+    which commands work at all; ``SESSION_UNSUPPORTED_FEATURES`` in
+    ``services/_auth_registration.py`` lists the static-token-only surfaces.
+
+    The service guarantees one of the two known values; the empty fallback only
+    keeps this display helper total for an unrecognised one.
+    """
+    if auth_mode == AUTH_MODE_SESSION:
+        return f"[cyan]{AUTH_MODE_SESSION}[/cyan]"
+    if auth_mode == AUTH_MODE_STATIC:
+        return f"[dim]{AUTH_MODE_STATIC}[/dim]"
+    return ""
+
+
+def _format_token_cell(project: dict[str, Any]) -> str:
+    """Masked token, or a dash for a browser-login project.
+
+    A session project stores the ``kbc-session://{project_id}`` sentinel rather
+    than a credential, and masked it reads as ``kbc-...9840`` -- which looks
+    like a truncated real token. The Auth and Project ID columns already carry
+    everything that string encodes.
+    """
+    if project["auth_mode"] == AUTH_MODE_SESSION:
+        return "[dim]-[/dim]"
+    return escape(str(project.get("token", "")))
+
+
 def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> None:
     """Render a Rich table of projects for human output."""
     if not projects:
@@ -61,6 +92,7 @@ def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> N
     table.add_column("Project Name")
     table.add_column("Project ID", justify="right")
     table.add_column("Stack URL")
+    table.add_column("Auth", justify="center")
     table.add_column("Token", style="dim")
     table.add_column("Default", justify="center")
     table.add_column("Branch", justify="center")
@@ -74,7 +106,8 @@ def _format_project_table(console: Console, projects: list[dict[str, Any]]) -> N
             escape(p.get("project_name", "")),
             str(p.get("project_id", "")),
             escape(p["stack_url"]),
-            p["token"],
+            _format_auth_mode(p["auth_mode"]),
+            _format_token_cell(p),
             default_marker,
             branch_display,
         )
@@ -91,6 +124,7 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     table = Table(title="Project Status")
     table.add_column("Alias", style="bold cyan")
     table.add_column("Status")
+    table.add_column("Auth", justify="center")
     table.add_column("Response Time", justify="right")
     table.add_column("Project Name")
     table.add_column("Stack URL")
@@ -107,6 +141,7 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
         table.add_row(
             escape(s["alias"]),
             status_str,
+            _format_auth_mode(s["auth_mode"]),
             response_time,
             escape(s.get("project_name", "")),
             escape(s["stack_url"]),
@@ -234,7 +269,12 @@ def project_edit(
     url: str | None = typer.Option(None, help="New Keboola stack URL"),
     token: str | None = typer.Option(
         None,
-        help="New Storage API token",
+        help=(
+            "New Storage API token. On a project registered by 'kbagent auth "
+            "login' this deliberately converts it to a static-token project, "
+            "which 'kbagent auth logout --remove-projects' no longer cleans up; "
+            "a warning says so."
+        ),
     ),
     new_alias: str | None = typer.Option(
         None,
@@ -306,6 +346,12 @@ def project_edit(
                 c.print(
                     f"[bold green]Success:[/bold green] Project [bold]{d['alias']}[/bold] updated."
                 )
+
+        # Converting a browser-login project to a static token is allowed but
+        # noteworthy: stderr in human mode (never pollutes stdout), and the
+        # additive "warnings" key already carries it in --json mode.
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
 
         formatter.output(result, _human)
     except KeboolaApiError as exc:
@@ -729,6 +775,9 @@ def _format_info_table(console: Console, data: dict[str, Any]) -> None:
     table.add_row("Project Name", escape(str(data.get("project_name", ""))))
     table.add_row("Stack URL", escape(str(data.get("stack_url", ""))))
     table.add_row("Default Backend", str(data.get("default_backend", "")))
+    # Placed above the Token rows because it says what they describe: a session
+    # project's token id/description belong to the rotating access token.
+    table.add_row("Auth", _format_auth_mode(str(data.get("auth_mode", ""))))
     table.add_row("Token ID", str(data.get("token_id", "")))
     table.add_row("Token Description", escape(str(data.get("token_description", ""))))
     table.add_row("Master Token", "Yes" if data.get("is_master_token") else "No")

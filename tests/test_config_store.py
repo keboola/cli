@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import (
     _HAS_FCNTL,
     CURRENT_CONFIG_VERSION,
@@ -16,7 +17,7 @@ from keboola_agent_cli.config_store import (
     project_not_found_error,
     validate_alias_format,
 )
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, SessionAuthUnsupportedError
 from keboola_agent_cli.models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
 
@@ -354,6 +355,133 @@ class TestEditProject:
 
         with pytest.raises(ConfigError, match="not found"):
             store.edit_project("nonexistent", stack_url="https://new.com")
+
+
+class TestEditProjectCredentialTypeGuard:
+    """The channel-B chokepoint: a static token must not silently replace a
+    ``kbc-session://`` sentinel.
+
+    The sentinel is what makes ``auth logout --remove-projects`` recognise a
+    project as session-owned, so overwriting it converts the project into a
+    long-lived static credential that logout stops cleaning up.
+    """
+
+    SESSION_ALIAS = "session-proj"
+    STATIC_ALIAS = "static-proj"
+    STATIC_TOKEN = "901-11111-staticTokenValue1234567"
+    REPLACEMENT_TOKEN = "901-22222-replacementTokenValue123"
+
+    def _mixed_store(self, tmp_config_dir: Path) -> ConfigStore:
+        """A store holding one session project and one static-token project."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            self.SESSION_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+        store.add_project(
+            self.STATIC_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return store
+
+    def test_static_token_over_sentinel_raises_without_opt_in(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            store.edit_project(self.SESSION_ALIAS, token=self.REPLACEMENT_TOKEN)
+
+        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert self.SESSION_ALIAS in exc_info.value.message
+        # A remedy, not just a refusal.
+        assert "kbagent project edit" in exc_info.value.message
+
+    def test_rejected_swap_leaves_the_sentinel_on_disk(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(SessionAuthUnsupportedError):
+            store.edit_project(
+                self.SESSION_ALIAS,
+                token=self.REPLACEMENT_TOKEN,
+                project_name="Renamed by refresh",
+            )
+
+        # Reload from disk: the whole transaction was refused, not partly applied.
+        reloaded = ConfigStore(config_dir=tmp_config_dir).get_project(self.SESSION_ALIAS)
+        assert reloaded is not None
+        assert reloaded.token == make_session_token(9840)
+        assert reloaded.project_name == "Session Project"
+
+    def test_opt_in_allows_the_swap(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(
+            self.SESSION_ALIAS,
+            allow_credential_type_change=True,
+            token=self.REPLACEMENT_TOKEN,
+        )
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == self.REPLACEMENT_TOKEN
+
+    def test_static_to_static_edit_is_unaffected(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.STATIC_ALIAS, token=self.REPLACEMENT_TOKEN)
+
+        project = store.get_project(self.STATIC_ALIAS)
+        assert project is not None
+        assert project.token == self.REPLACEMENT_TOKEN
+
+    def test_sentinel_to_sentinel_edit_needs_no_opt_in(self, tmp_config_dir: Path) -> None:
+        """Re-registering the same session project is not a credential-type change."""
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.SESSION_ALIAS, token=make_session_token(1234))
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(1234)
+
+    def test_non_token_edit_on_session_project_needs_no_opt_in(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.SESSION_ALIAS, project_name="Renamed")
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.project_name == "Renamed"
+        assert project.token == make_session_token(9840)
+
+    def test_add_project_cannot_replace_a_session_alias(self, tmp_config_dir: Path) -> None:
+        """``add_project`` needs no credential inspection: a duplicate alias is
+        rejected outright, so a sentinel can never be overwritten through it."""
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(ConfigError, match="already exists"):
+            store.add_project(
+                self.SESSION_ALIAS,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=self.REPLACEMENT_TOKEN,
+                    project_name="Session Project",
+                    project_id=9840,
+                ),
+            )
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(9840)
 
 
 class TestGetProject:

@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
@@ -1261,3 +1262,169 @@ class TestRefreshTokens:
         assert result["projects_checked"] == 0
         assert len(result["projects_refreshed"]) == 0
         assert len(result["projects_valid"]) == 0
+
+
+class TestRefreshTokensSkipsSessionProjects:
+    """A browser-login (session) project must survive every refresh path.
+
+    Minting a static Storage token over its ``kbc-session://`` sentinel would
+    silently change the project's credential type, and
+    ``auth logout --remove-projects`` (which selects on the sentinel) would
+    then stop cleaning the alias up. Refresh has nothing to do for such a
+    project anyway: its access token rotates on its own.
+    """
+
+    SESSION_ALIAS = "session-proj"
+    SESSION_PROJECT_ID = 9840
+    STATIC_ALIAS = "static-proj"
+    STATIC_TOKEN = "901-static-expiredTokenValue12345"
+    MINTED_TOKEN = "901-99999-newGeneratedTokenValue12345"
+
+    def _mixed_store(self, tmp_path: Path) -> ConfigStore:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            self.SESSION_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(self.SESSION_PROJECT_ID),
+                project_name="Session Project",
+                project_id=self.SESSION_PROJECT_ID,
+            ),
+        )
+        store.add_project(
+            self.STATIC_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return store
+
+    def _wire(self, store: ConfigStore) -> tuple[OrgService, MagicMock, list[str]]:
+        """Build a service plus the manage mock and the tokens the storage
+        factory was asked to build a client for."""
+        manage_mock = MagicMock()
+        manage_mock.verify_token.return_value = {
+            "user": {"email": "admin@test.com", "name": "Admin"},
+        }
+        manage_mock.create_project_token.return_value = {
+            "id": "tok-new",
+            "token": self.MINTED_TOKEN,
+            "description": "kbagent-cli",
+        }
+
+        seen_tokens: list[str] = []
+
+        def storage_factory(url: str, token: str) -> MagicMock:
+            seen_tokens.append(token)
+            mock = MagicMock()
+            if token == self.STATIC_TOKEN:
+                mock.verify_token.side_effect = KeboolaApiError(
+                    message="Invalid token",
+                    status_code=401,
+                    error_code="INVALID_TOKEN",
+                )
+            else:
+                mock.verify_token.return_value = TokenVerifyResponse(
+                    token_id="new-258",
+                    token_description="kbagent-cli",
+                    project_id=258,
+                    project_name="Static Project",
+                    owner_name="Static Project",
+                )
+            return mock
+
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=lambda url, token: manage_mock,
+            storage_client_factory=storage_factory,
+        )
+        return service, manage_mock, seen_tokens
+
+    def _assert_sentinel_intact(self, store: ConfigStore) -> None:
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(self.SESSION_PROJECT_ID)
+
+    def test_session_project_skipped_static_project_refreshed(self, tmp_path: Path) -> None:
+        store = self._mixed_store(tmp_path)
+        service, manage_mock, _seen_tokens = self._wire(store)
+
+        result = service.refresh_tokens(manage_token="manage-token-123456789012345678")
+
+        assert [p["alias"] for p in result["projects_skipped"]] == [self.SESSION_ALIAS]
+        assert "rotate automatically" in result["projects_skipped"][0]["reason"]
+        assert [p["alias"] for p in result["projects_refreshed"]] == [self.STATIC_ALIAS]
+        assert result["projects_failed"] == []
+
+        self._assert_sentinel_intact(store)
+        static = store.get_project(self.STATIC_ALIAS)
+        assert static is not None
+        assert static.token == self.MINTED_TOKEN
+
+        # Only the static project's project_id was ever minted a token.
+        assert manage_mock.create_project_token.call_count == 1
+        assert manage_mock.create_project_token.call_args.kwargs["project_id"] == 258
+
+    def test_force_does_not_convert_the_session_project(self, tmp_path: Path) -> None:
+        """``--force`` bypasses the token-validity short-circuit, so the skip has
+        to happen at the selection layer to hold here too."""
+        store = self._mixed_store(tmp_path)
+        service, manage_mock, _seen_tokens = self._wire(store)
+
+        result = service.refresh_tokens(
+            manage_token="manage-token-123456789012345678",
+            force=True,
+        )
+
+        assert [p["alias"] for p in result["projects_skipped"]] == [self.SESSION_ALIAS]
+        assert [p["alias"] for p in result["projects_refreshed"]] == [self.STATIC_ALIAS]
+        assert result["projects_failed"] == []
+        self._assert_sentinel_intact(store)
+        assert manage_mock.create_project_token.call_count == 1
+
+    def test_sentinel_is_never_sent_to_a_storage_client(self, tmp_path: Path) -> None:
+        """The skip precedes the validity probe, so an expired session cannot
+        raise SESSION_EXPIRED into the ``token_valid = False`` fallback."""
+        store = self._mixed_store(tmp_path)
+        service, _manage_mock, seen_tokens = self._wire(store)
+
+        service.refresh_tokens(manage_token="manage-token-123456789012345678")
+
+        assert make_session_token(self.SESSION_PROJECT_ID) not in seen_tokens
+
+    def test_explicitly_named_session_alias_is_skipped_not_failed(self, tmp_path: Path) -> None:
+        store = self._mixed_store(tmp_path)
+        service, manage_mock, _seen_tokens = self._wire(store)
+
+        result = service.refresh_tokens(
+            manage_token="manage-token-123456789012345678",
+            aliases=[self.SESSION_ALIAS],
+            force=True,
+        )
+
+        assert result["projects_checked"] == 1
+        assert [p["alias"] for p in result["projects_skipped"]] == [self.SESSION_ALIAS]
+        assert result["projects_refreshed"] == []
+        assert result["projects_failed"] == []
+        self._assert_sentinel_intact(store)
+        manage_mock.create_project_token.assert_not_called()
+
+    def test_dry_run_reports_the_skip_and_touches_nothing(self, tmp_path: Path) -> None:
+        store = self._mixed_store(tmp_path)
+        service, manage_mock, _seen_tokens = self._wire(store)
+
+        result = service.refresh_tokens(
+            manage_token="manage-token-123456789012345678",
+            dry_run=True,
+            force=True,
+        )
+
+        assert [p["alias"] for p in result["projects_skipped"]] == [self.SESSION_ALIAS]
+        assert [p["alias"] for p in result["projects_refreshed"]] == [self.STATIC_ALIAS]
+        self._assert_sentinel_intact(store)
+        manage_mock.create_project_token.assert_not_called()

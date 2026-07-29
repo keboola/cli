@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from helpers import make_failing_client, make_mock_client
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
@@ -792,6 +793,137 @@ SAMPLE_COMPONENTS_2 = [
         ],
     },
 ]
+
+
+class TestAuthModeField:
+    """``auth_mode`` labels each project's credential type in every query result.
+
+    Both modes coexist per project and which one applies decides whether a
+    command works at all, so a consumer must never have to infer it from the
+    masked token -- ``mask_token('kbc-session://9840')`` is ``'kbc-...9840'``,
+    indistinguishable from a truncated real token.
+    """
+
+    STATIC_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+
+    def _mixed_service(self, tmp_config_dir: Path) -> ProjectService:
+        """One sentinel project and one static project in the same config."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "session-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+        store.add_project(
+            "static-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: make_mock_client(),
+        )
+
+    def test_list_projects_labels_both_modes(self, tmp_config_dir: Path) -> None:
+        service = self._mixed_service(tmp_config_dir)
+
+        by_alias = {p["alias"]: p for p in service.list_projects()}
+
+        assert by_alias["session-proj"]["auth_mode"] == "session"
+        assert by_alias["static-proj"]["auth_mode"] == "static"
+
+    def test_list_projects_keeps_the_masked_token_key(self, tmp_config_dir: Path) -> None:
+        """``auth_mode`` is additive -- the ``token`` key stays for existing consumers."""
+        service = self._mixed_service(tmp_config_dir)
+
+        by_alias = {p["alias"]: p for p in service.list_projects()}
+
+        assert by_alias["session-proj"]["token"] == "kbc-...9840"
+        assert by_alias["static-proj"]["token"] == "901-...XXXX"
+
+    def test_get_status_labels_both_modes(self, tmp_config_dir: Path) -> None:
+        service = self._mixed_service(tmp_config_dir)
+
+        by_alias = {s["alias"]: s for s in service.get_status()}
+
+        assert by_alias["session-proj"]["auth_mode"] == "session"
+        assert by_alias["static-proj"]["auth_mode"] == "static"
+
+    def test_get_status_single_project_carries_the_field(self, tmp_config_dir: Path) -> None:
+        """`project status --project` goes through the same path."""
+        service = self._mixed_service(tmp_config_dir)
+
+        result = service.get_status(aliases=["session-proj"])
+
+        assert len(result) == 1
+        assert result[0]["auth_mode"] == "session"
+
+    def test_get_status_unexpected_error_row_still_carries_the_field(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A blown-up connectivity check does not drop the credential type: it is
+        read from the config, not from the failed call."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "session-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+
+        def exploding_factory(url: str, token: str) -> MagicMock:
+            raise RuntimeError("socket blew up")
+
+        service = ProjectService(config_store=store, client_factory=exploding_factory)
+
+        result = service.get_status()
+
+        assert len(result) == 1
+        assert result[0]["status"] == "error"
+        assert result[0]["auth_mode"] == "session"
+
+    def test_auth_mode_is_never_empty_or_absent(self, tmp_config_dir: Path) -> None:
+        """Two values, never a third: a consumer branches on the value and never
+        has to test for a missing key or an "unknown" placeholder.
+
+        Covers the healthy rows and the row synthesized for a worker that raised,
+        which is the only path that does not build its entry from a live client.
+        """
+        healthy = self._mixed_service(tmp_config_dir)
+        rows = [*healthy.list_projects(), *healthy.get_status()]
+
+        exploding_dir = tmp_config_dir.parent / "exploding"
+        exploding_dir.mkdir()
+        store = ConfigStore(config_dir=exploding_dir)
+        store.add_project(
+            "static-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+
+        def exploding_factory(url: str, token: str) -> MagicMock:
+            raise RuntimeError("socket blew up")
+
+        rows += ProjectService(config_store=store, client_factory=exploding_factory).get_status()
+
+        assert rows, "expected rows to assert on"
+        for row in rows:
+            assert row["auth_mode"] in {"session", "static"}, row
 
 
 class TestUseAndCurrentProject:
