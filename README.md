@@ -195,7 +195,7 @@ KBC_MANAGE_API_TOKEN=your-org-admin-manage-token \
   kbagent --allow-env-manage-token org setup --org-id 123 --url https://connection.keboola.com --yes
 ```
 
-**Browser login** — you have no token and a browser on this machine (since 0.77.0):
+**Browser login** — you have no token and a browser on this machine (since 0.78.0):
 ```bash
 # Opens a browser (PKCE), or prints a code to type in on another device.
 kbagent auth login --stack https://connection.keboola.com
@@ -222,7 +222,7 @@ Full command reference with flags: [SKILL.md](plugins/kbagent/skills/kbagent/SKI
 
 ```
 kbagent search      QUERY [--type table|bucket|config|flow|data-app|transformation]   # cross-project search (0.30.0)
-kbagent auth        login | status | register-projects | logout   # browser login, needs a human (0.77.0)
+kbagent auth        login | status | register-projects | logout   # browser login, needs a human (0.78.0)
 kbagent project     add | list | remove | edit | status | refresh | info | use | current
                     description-get | description-set
                     invite | member-list | member-remove | member-set-role

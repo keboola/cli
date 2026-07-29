@@ -54,7 +54,7 @@ observability -- all API requests will include the X-Conversation-ID header.
 
 Use `kbagent <command> --help` for full flag details and examples.
 
-### Programmatic Auth (Browser Login) (since v0.77.0)
+### Programmatic Auth (Browser Login) (since v0.78.0)
 
   Browser-based login (PKCE authorization-code by default; RFC 8628 device
   authorization on SSH/containers/WSL, or with --device-code) as an

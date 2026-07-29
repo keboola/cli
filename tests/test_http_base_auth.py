@@ -1,4 +1,4 @@
-"""Tests for the additive ``http_auth`` plumbing across the HTTP clients (0.77.0).
+"""Tests for the additive ``http_auth`` plumbing across the HTTP clients (0.78.0).
 
 ``http_auth`` is the zero-churn seam that lets a programmatic-auth session
 (bearer) reuse every existing client without touching the ~150
@@ -6,7 +6,7 @@
 are asserted here:
 
 1. **Omitting it changes nothing.** ``http_auth=None`` must be byte-identical
-   to the pre-0.77.0 behaviour -- the static token still goes out as
+   to the pre-0.78.0 behaviour -- the static token still goes out as
    ``X-StorageApi-Token`` (resp. ``X-KBC-ManageApiToken``).
 2. **Setting it removes the static header entirely.** A session-registered
    project's ``token`` is the ``kbc-session://`` sentinel, not a credential;
@@ -73,7 +73,7 @@ class _StubBearerAuth(httpx.Auth):
 
 class TestStaticModeUnchanged:
     def test_static_token_header_still_sent(self, httpx_mock) -> None:
-        """Without http_auth, the client behaves exactly as before 0.77.0."""
+        """Without http_auth, the client behaves exactly as before 0.78.0."""
         httpx_mock.add_response(url=f"{STACK_URL}/v2/storage/buckets", json=[])
 
         with KeboolaClient(stack_url=STACK_URL, token=STATIC_TOKEN) as client:

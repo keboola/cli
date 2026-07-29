@@ -161,7 +161,7 @@ def project_not_found_error(alias: str, config_path: object, source: object) -> 
     When a programmatic-auth session exists in the sibling ``auth.json``, the
     remedy is NOT ``project add`` -- a session user has no static token to
     paste, and would have to hand-write a ``kbc-session://`` sentinel. Point
-    those users at the picker instead (0.77.0). Note that a session
+    those users at the picker instead (0.78.0). Note that a session
     registers aliases from the project *name*, so the numeric project id is
     never a valid alias, which is the exact trap this hint exists to defuse.
 

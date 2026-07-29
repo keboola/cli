@@ -427,7 +427,7 @@ class ProjectService(BaseService):
         """Reject filesystem-unsafe ``--new-alias`` values.
 
         Delegates to the shared ``config_store.validate_alias_format`` (added
-        for the ``auth register-projects`` picker, 0.77.0) so ``project edit
+        for the ``auth register-projects`` picker, 0.78.0) so ``project edit
         --new-alias`` and the picker can never drift into accepting different
         alias character sets for the same config.json key. Error messages are
         byte-identical to the pre-delegation version (same ``field`` label).

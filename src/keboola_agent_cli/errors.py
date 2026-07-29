@@ -127,7 +127,7 @@ class ErrorCode(StrEnum):
     # protocol) rather than in the tool's own result.
     MCP_ERROR = "MCP_ERROR"
 
-    # Programmatic auth / browser login (since 0.77.0)
+    # Programmatic auth / browser login (since 0.78.0)
     AUTH_NOT_SUPPORTED_ON_STACK = "AUTH_NOT_SUPPORTED_ON_STACK"
     AUTH_FLOW_TIMEOUT = "AUTH_FLOW_TIMEOUT"
     AUTH_FLOW_DENIED = "AUTH_FLOW_DENIED"
