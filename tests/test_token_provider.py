@@ -424,8 +424,13 @@ class _StalledAuthClient(AuthClient):
 
     This is the shape httpx's per-phase `read` / `write` timeouts cannot catch --
     they are applied per I/O operation, so a response that keeps dribbling resets
-    them forever. Closing the client releases the call, exactly as closing a real
-    `httpx.Client` aborts an in-flight socket.
+    them forever.
+
+    `close()` here releases the stalled call, which is deliberately MORE
+    cooperative than the real thing: `httpx.Client.close()` returns immediately
+    without aborting a request already in flight. The fake is generous only so an
+    abandoned worker cannot sit parked for the rest of the suite; what these tests
+    assert -- elapsed time and the file lock coming free -- does not depend on it.
     """
 
     def __init__(self, *, late_tokens: CliTokenResponse | None = None) -> None:

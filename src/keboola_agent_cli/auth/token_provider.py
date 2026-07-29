@@ -223,16 +223,23 @@ class SessionTokenProvider:
         call while every other holder waits only `AUTH_LOCK_TIMEOUT`, so the
         hold needs a ceiling that does not depend on the server's cooperation.
 
-        A request still running at the deadline is abandoned rather than awaited:
-        the worker is a daemon thread, and unwinding past the caller's
-        `with self._build_client()` closes the client under it, which aborts the
-        socket. The lock is released as the caller unwinds -- which is the
-        property being protected.
+        A request still running at the deadline is abandoned rather than awaited,
+        so the caller unwinds and the lock is released on time -- which is the one
+        property being protected here.
 
-        Cost of abandoning: the server may have rotated a pair that is then
-        discarded, leaving the on-disk refresh token one generation stale. That
-        is the same state any lost response leaves behind, and the server's 30 s
-        idempotent grace window is what forgives it (see `AuthClient.refresh`).
+        Abandoning is genuinely abandoning: `httpx.Client.close()` returns at once
+        but does NOT abort a request already in flight (measured, httpx 0.28.1),
+        so the worker outlives this call until its own per-phase timeout fires. It
+        is a daemon thread, so it can never delay interpreter exit, and it touches
+        no shared state -- persistence stays on the lock-holding thread below. In
+        a short CLI invocation that is the end of it; in a long-running `kbagent
+        serve` process, repeated stalls against the same unresponsive auth service
+        can leave several such workers parked until they time out.
+
+        Second cost: the server may have rotated a pair that is then discarded,
+        leaving the on-disk refresh token one generation stale. That is the same
+        state any lost response leaves behind, and the server's 30 s idempotent
+        grace window is what forgives it (see `AuthClient.refresh`).
         """
         rotated: list[CliTokenResponse] = []
         failure: list[BaseException] = []
