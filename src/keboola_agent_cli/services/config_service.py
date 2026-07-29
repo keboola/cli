@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from ..ai_client import AiServiceClient
-from ..auth.sentinel import require_static_token
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
@@ -33,10 +32,9 @@ AiClientFactory = Callable[[str, str], AiServiceClient]
 def _default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
     """Default factory: build an ``AiServiceClient`` for the given project.
 
-    Static-token-only (v1 scope is Storage + Manage) -- fails fast on a
-    session sentinel rather than sending it as a literal credential.
+    Static-token-only (v1 scope is Storage + Manage); the client's
+    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
     """
-    require_static_token(token, feature="The Keboola AI Service")
     return AiServiceClient(stack_url=stack_url, token=token)
 
 

@@ -25,7 +25,6 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ..auth.sentinel import require_static_token
 from ..config_store import ConfigStore
 from ..constants import (
     OTLP_PROTOCOL,
@@ -50,10 +49,9 @@ _SECRET_MASK = "***"
 def default_stream_client_factory(stack_url: str, token: str) -> StreamClient:
     """Construct a :class:`StreamClient` bound to ``stack_url`` + ``token``.
 
-    Static-token-only (v1 scope is Storage + Manage) -- fails fast on a
-    session sentinel rather than sending it as a literal credential.
+    Static-token-only (v1 scope is Storage + Manage); the client's
+    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
     """
-    require_static_token(token, feature="The Data Streams Service")
     return StreamClient(stack_url=stack_url, token=token)
 
 

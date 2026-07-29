@@ -25,9 +25,17 @@ from __future__ import annotations
 from collections.abc import Generator
 
 import httpx
+import pytest
 
+from keboola_agent_cli.ai_client import AiServiceClient
 from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.data_science_client import DataScienceClient
+from keboola_agent_cli.dev_portal_client import DeveloperPortalClient
+from keboola_agent_cli.errors import ErrorCode, SessionAuthUnsupportedError
 from keboola_agent_cli.manage_client import ManageClient
+from keboola_agent_cli.metastore_client import MetastoreClient
+from keboola_agent_cli.scheduler_client import SchedulerClient
+from keboola_agent_cli.stream_client import StreamClient
 
 STACK_URL = "https://connection.keboola.com"
 QUEUE_URL = "https://queue.keboola.com"
@@ -35,6 +43,7 @@ QUERY_URL = "https://query.keboola.com"
 ENCRYPT_URL = "https://encryption.keboola.com"
 SYNC_ACTIONS_URL = "https://sync-actions.keboola.com"
 STATIC_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+SENTINEL_TOKEN = "kbc-session://9840"
 BEARER_TOKEN = "kbc_at_fakeAccessTokenForTestsOnly"
 
 
@@ -212,3 +221,67 @@ class TestManageClientParity:
         request = httpx_mock.get_requests()[0]
         assert "X-KBC-ManageApiToken" not in request.headers
         assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
+
+
+class TestSessionAuthFeatureGuard:
+    """``BaseHttpClient.SESSION_AUTH_FEATURE`` guards static-token-only clients.
+
+    Before this, each service's client factory called ``require_static_token``
+    itself, so a new factory -- or a direct constructor call like the one in
+    ``client/stream.py`` -- silently sent the sentinel instead of failing fast.
+    Declaring the feature on the class moves the check to the one place every
+    caller must go through.
+    """
+
+    def test_guarded_client_rejects_a_sentinel_token(self) -> None:
+        for cls in (AiServiceClient, DataScienceClient, MetastoreClient, SchedulerClient):
+            with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+                cls(stack_url=STACK_URL, token=SENTINEL_TOKEN)
+            assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+            assert cls.SESSION_AUTH_FEATURE in str(exc_info.value)
+
+        with pytest.raises(SessionAuthUnsupportedError):
+            StreamClient(stack_url=STACK_URL, token=SENTINEL_TOKEN)
+
+    def test_guarded_client_accepts_a_static_token(self) -> None:
+        for cls in (AiServiceClient, DataScienceClient, MetastoreClient, SchedulerClient):
+            with cls(stack_url=STACK_URL, token="123-static"):
+                pass
+        with StreamClient(stack_url=STACK_URL, token="123-static"):
+            pass
+
+    def test_bearer_capable_clients_are_not_guarded(self) -> None:
+        """A sentinel must not be *rejected* by clients that support sessions.
+
+        ``KeboolaClient`` / ``ManageClient`` reach Storage and Manage over bearer,
+        so guarding them would break the supported path. ``DeveloperPortalClient``
+        authenticates with its own identity and never sees a project token.
+        """
+        assert KeboolaClient.SESSION_AUTH_FEATURE is None
+        assert ManageClient.SESSION_AUTH_FEATURE is None
+        assert DeveloperPortalClient.SESSION_AUTH_FEATURE is None
+
+    def test_supplying_http_auth_bypasses_the_guard(self) -> None:
+        """In session mode the token is empty and the credential is the auth hook.
+
+        The guard must not fire then, or every bearer-mode sub-client would break.
+        """
+        with StreamClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()):
+            pass
+
+    def test_stream_sub_client_inherits_the_bearer_hook(self, httpx_mock) -> None:
+        """``client/stream.py`` builds a ``StreamClient`` from the main client.
+
+        Without propagating ``http_auth`` it would send an empty
+        ``X-StorageApi-Token`` in session mode and draw an opaque 401.
+        """
+        httpx_mock.add_response(
+            url="https://stream.keboola.com/v1/branches/default/sources",
+            json={"sources": []},
+        )
+        with KeboolaClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()) as client:
+            client._get_stream_client().list_sources("default")
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
+        assert not request.headers.get("X-StorageApi-Token")

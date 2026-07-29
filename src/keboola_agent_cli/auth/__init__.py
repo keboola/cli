@@ -17,48 +17,12 @@ Sub-modules (see docs/programmatic-auth-login-plan.md for the full design):
   the HTTP client, browser/device login flows, and the per-stack token cache
   that keeps a session's access token fresh (built by other packages).
 
-This module re-exports only the pieces implemented so far (sentinel helpers,
-wire/persisted models, and the state store) and stays import-light: no
-``httpx`` client construction and no filelock acquisition happen merely by
-importing ``keboola_agent_cli.auth``.
+This package deliberately re-exports nothing. Importing
+``keboola_agent_cli.auth`` executes this module, so a re-export of
+``state_store`` would pull ``filelock`` into every process that merely reaches a
+sentinel helper -- including the static-token path, which never touches
+``auth.json``. Import the submodule you need (``from ..auth.sentinel import
+is_session_token``) and the cost stays proportional to what you use.
 """
 
 from __future__ import annotations
-
-from .models import (
-    AuthProject,
-    AuthState,
-    AuthUser,
-    CliTokenResponse,
-    DeviceAuthorization,
-    DevicePollResult,
-    DevicePollStatus,
-    IntrospectResponse,
-    RevokeResult,
-    StackSession,
-)
-from .sentinel import (
-    is_session_token,
-    make_session_token,
-    parse_session_project_id,
-    require_static_token,
-)
-from .state_store import AuthStateStore
-
-__all__ = [
-    "AuthProject",
-    "AuthState",
-    "AuthStateStore",
-    "AuthUser",
-    "CliTokenResponse",
-    "DeviceAuthorization",
-    "DevicePollResult",
-    "DevicePollStatus",
-    "IntrospectResponse",
-    "RevokeResult",
-    "StackSession",
-    "is_session_token",
-    "make_session_token",
-    "parse_session_project_id",
-    "require_static_token",
-]

@@ -27,6 +27,7 @@ import pytest
 
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
+from keboola_agent_cli.data_science_client import DataScienceClient
 from keboola_agent_cli.errors import ErrorCode, SessionAuthUnsupportedError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.base import default_client_factory, make_client_factory
@@ -335,11 +336,15 @@ class TestListDataAppsMixedProjects:
     def _service(self, store: ConfigStore, ds_mock: MagicMock, storage_mock: MagicMock):
         from keboola_agent_cli.services.data_app_service import DataAppService
 
-        # Patching the client class (not the factory) keeps the real
-        # static-token guard in `_default_ds_client_factory` in the path.
-        return patch(
-            "keboola_agent_cli.services.data_app_service.DataScienceClient",
-            return_value=ds_mock,
+        # Stub only the HTTP call, so the real `DataScienceClient.__init__`
+        # still runs and its `SESSION_AUTH_FEATURE` guard fires for the session
+        # project. Replacing the class itself would construct a MagicMock and
+        # silently skip the very guard under test.
+        return patch.object(
+            DataScienceClient,
+            "list_apps",
+            autospec=True,
+            side_effect=lambda _self, *a, **kw: ds_mock.list_apps(*a, **kw),
         ), DataAppService(
             config_store=store,
             client_factory=lambda url, token: storage_mock,

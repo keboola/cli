@@ -68,6 +68,8 @@ class MetastoreClient(BaseHttpClient):
     no in-memory caching. All such concerns live in the service layer.
     """
 
+    SESSION_AUTH_FEATURE = "The Metastore Service (semantic layer)"
+
     def __init__(self, stack_url: str, token: str) -> None:
         self._stack_url = stack_url.rstrip("/")
         base_url = self._derive_service_url(self._stack_url, "metastore")

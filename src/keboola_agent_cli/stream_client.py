@@ -25,6 +25,8 @@ import time
 from typing import Any
 from urllib.parse import quote, urlparse
 
+import httpx
+
 from .constants import (
     OTLP_BUCKET_PREFIX,
     OTLP_SINK_COLUMNS,
@@ -92,7 +94,9 @@ class StreamClient(BaseHttpClient):
     :class:`BaseHttpClient`.
     """
 
-    def __init__(self, stack_url: str, token: str) -> None:
+    SESSION_AUTH_FEATURE = "The Data Streams Service"
+
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         stream_base_url = self._derive_service_url(self._stack_url, "stream")
         headers = {
@@ -104,6 +108,7 @@ class StreamClient(BaseHttpClient):
             token=token,
             headers=headers,
             timeout=STREAM_API_TIMEOUT,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> StreamClient:

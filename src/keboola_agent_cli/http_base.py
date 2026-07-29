@@ -70,6 +70,13 @@ class BaseHttpClient:
     static-token callers are completely unaffected.
     """
 
+    # Name of the surface this client speaks to, for subclasses that only
+    # understand a static Storage token. ``None`` means the client supports
+    # bearer sessions (KeboolaClient / ManageClient / AuthClient) and must not be
+    # guarded. Set it and the sentinel can no longer reach the wire through a
+    # constructor whose caller forgot to guard it.
+    SESSION_AUTH_FEATURE: str | None = None
+
     def __init__(
         self,
         base_url: str,
@@ -79,7 +86,11 @@ class BaseHttpClient:
         *,
         http_auth: httpx.Auth | None = None,
     ) -> None:
+        from .auth.sentinel import require_static_token
         from .constants import DEFAULT_TIMEOUT
+
+        if http_auth is None and self.SESSION_AUTH_FEATURE is not None:
+            require_static_token(token, feature=self.SESSION_AUTH_FEATURE)
 
         self._base_url = base_url.rstrip("/")
         self._token = token
