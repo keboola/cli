@@ -8,7 +8,7 @@ browser, sleep for real, or hit a real stack.
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -178,6 +178,7 @@ def _make_service(
     client: _FakeAuthClient,
     *,
     browser_env: BrowserEnvironment | None = None,
+    browser_opener: Callable[[str], bool] | None = None,
 ) -> AuthService:
     env = browser_env or _usable_env()
     return AuthService(
@@ -185,7 +186,7 @@ def _make_service(
         auth_client_factory=lambda _stack_url: client,  # ty: ignore[invalid-argument-type]
         state_store=state_store,
         browser_env_detector=lambda: env,
-        browser_opener=lambda _url: True,
+        browser_opener=browser_opener or (lambda _url: True),
         sleep=lambda _seconds: None,
     )
 
@@ -454,6 +455,88 @@ class TestLoginPkceFallback:
 
 
 # ----------------------------------------------------------------------------
+# login -- the device flow's best-effort browser open (review F4)
+# ----------------------------------------------------------------------------
+
+
+class TestDeviceVerificationLinkOpen:
+    """`verificationUriComplete` is server-supplied; only https may be opened."""
+
+    @staticmethod
+    def _login_with_complete_uri(
+        store, state_store, monkeypatch, *, complete_uri: str
+    ) -> tuple[list[str], list[str]]:
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        opened: list[str] = []
+        notices: list[str] = []
+
+        def _record_open(url: str) -> bool:
+            opened.append(url)
+            return True
+
+        service = _make_service(store, state_store, client, browser_opener=_record_open)
+
+        def _fake_run_device_flow(_client, *, on_prompt, sleep):
+            from keboola_agent_cli.auth.device import DeviceFlowOutcome
+
+            on_prompt(
+                DeviceAuthorization(
+                    deviceCode="dc",
+                    userCode="ABCD-EFGH",
+                    verificationUri="https://connection.keboola.com/device",
+                    verificationUriComplete=complete_uri,
+                    expiresIn=600,
+                )
+            )
+            return DeviceFlowOutcome(tokens=_tokens(), polls=1)
+
+        monkeypatch.setattr(svc_mod, "run_device_flow", _fake_run_device_flow)
+        service.login(stack=STACK_URL, device_code=True, on_notice=notices.append)
+        return opened, notices
+
+    def test_https_link_is_opened(self, store, state_store, monkeypatch) -> None:
+        target = "https://connection.keboola.com/device?code=ABCD-EFGH"
+        opened, notices = self._login_with_complete_uri(
+            store, state_store, monkeypatch, complete_uri=target
+        )
+
+        assert opened == [target]
+        assert notices == []
+
+    @pytest.mark.parametrize(
+        "hostile_uri",
+        [
+            "file:///etc/passwd",
+            "http://connection.keboola.com/device",
+            "keboola-evil://run",
+            "--remote-debugging-port=9222",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_non_https_link_is_reported_and_never_opened(
+        self, store, state_store, monkeypatch, hostile_uri: str
+    ) -> None:
+        opened, notices = self._login_with_complete_uri(
+            store, state_store, monkeypatch, complete_uri=hostile_uri
+        )
+
+        assert opened == []
+        assert any("non-https" in message for message in notices)
+
+    def test_absent_complete_uri_opens_nothing_and_says_nothing(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        """An omitted optional field is normal, not a hostile stack."""
+        opened, notices = self._login_with_complete_uri(
+            store, state_store, monkeypatch, complete_uri=""
+        )
+
+        assert opened == []
+        assert notices == []
+
+
+# ----------------------------------------------------------------------------
 # login -- session replacement (review B-1)
 # ----------------------------------------------------------------------------
 
@@ -494,6 +577,57 @@ class TestLoginSessionReplacement:
         # The NEW session must survive even though the old one's revoke failed.
         assert session.session_id == "new-sess"
         assert session.orphaned_session_ids == ["old-sess"]
+
+    def test_orphans_recorded_by_an_earlier_login_survive_the_next_login(
+        self, store, state_store
+    ) -> None:
+        """An orphan is the only record a live session exists -- a login must not drop it.
+
+        Starts from a session that ALREADY carries an orphan, so the assertion
+        distinguishes "the list was preserved" from "the list happened to be
+        empty all along".
+        """
+        state_store.put_session(
+            _existing_session(
+                session_id="old-sess", refresh_token="old-rt", orphaned_session_ids=["orphan-a"]
+            )
+        )
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens(session_id="new-sess")
+        client.introspect_response = _introspect(session_id="new-sess")
+        client.revoke_result = RevokeResult(confirmed=True)
+        service = _make_service(store, state_store, client)
+
+        service.login(stack=STACK_URL)
+
+        session = state_store.get_session(STACK_URL)
+        assert session.session_id == "new-sess"
+        assert session.orphaned_session_ids == ["orphan-a"]
+
+    def test_third_login_accumulates_orphans_instead_of_forgetting_the_first(
+        self, store, state_store
+    ) -> None:
+        """Two consecutive unconfirmed revokes must leave BOTH sessions revocable.
+
+        The failure this pins down: `put_session` replaces the whole per-stack
+        row, so a login that rebuilt `orphaned_session_ids` from scratch left
+        the first orphan live on the server with nothing left to name it.
+        """
+        state_store.put_session(_existing_session(session_id="sess-a", refresh_token="rt-a"))
+        client = _FakeAuthClient()
+        client.revoke_result = RevokeResult(confirmed=False, message="network blip")
+
+        client.exchange_response = _tokens(session_id="sess-b")
+        client.introspect_response = _introspect(session_id="sess-b")
+        _make_service(store, state_store, client).login(stack=STACK_URL)
+
+        client.exchange_response = _tokens(session_id="sess-c")
+        client.introspect_response = _introspect(session_id="sess-c")
+        _make_service(store, state_store, client).login(stack=STACK_URL)
+
+        session = state_store.get_session(STACK_URL)
+        assert session.session_id == "sess-c"
+        assert session.orphaned_session_ids == ["sess-a", "sess-b"]
 
     def test_new_pair_persisted_before_revoke_is_attempted(self, store, state_store) -> None:
         """Durability ordering: put_session happens before the revoke call."""
@@ -565,7 +699,9 @@ class TestLoginRefreshExpiry:
         assert result.refresh_expires_at == session.refresh_expires_at.isoformat()
 
 
-def _existing_session(*, session_id: str, refresh_token: str):
+def _existing_session(
+    *, session_id: str, refresh_token: str, orphaned_session_ids: Sequence[str] = ()
+):
     from datetime import UTC, datetime, timedelta
 
     from keboola_agent_cli.auth.models import StackSession
@@ -581,6 +717,7 @@ def _existing_session(*, session_id: str, refresh_token: str):
         access_expires_at=now + timedelta(hours=1),
         refresh_expires_at=now + timedelta(days=30),
         created_at=now,
+        orphaned_session_ids=list(orphaned_session_ids),
     )
 
 

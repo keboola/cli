@@ -72,6 +72,19 @@ def _noop_device_prompt(_authorization: DeviceAuthorization) -> None:
     """Default `on_device_prompt`: a caller that renders the code itself, or not at all."""
 
 
+def _is_browser_safe_url(url: str) -> bool:
+    """True for a URL that may be handed to the platform's browser opener.
+
+    `verificationUriComplete` arrives from the stack and goes to
+    `webbrowser.open` (or a platform command), which honours whatever scheme it
+    is given -- `file://`, a registered custom-scheme handler, or a leading `-`
+    that the underlying command reads as a flag. The stack URL itself is held to
+    `https://` by `normalize_stack_url`; a value the stack supplies gets no more
+    trust than that.
+    """
+    return url.startswith("https://")
+
+
 @dataclass(frozen=True)
 class _LiveAccessToken:
     """Outcome of the best-effort live-token fetch that orphan cleanup needs.
@@ -246,7 +259,9 @@ class AuthService:
 
             if method == "device":
                 outcome = run_device_flow(
-                    client, on_prompt=self._wrap_device_prompt(prompt), sleep=self._sleep
+                    client,
+                    on_prompt=self._wrap_device_prompt(prompt, notice),
+                    sleep=self._sleep,
                 )
                 tokens = outcome.tokens
 
@@ -256,6 +271,7 @@ class AuthService:
                     error_code=ErrorCode.API_ERROR,
                 )
             now = datetime.now(UTC)
+            previous = self._state_store.get_session(stack_url)
             new_session = StackSession(
                 stack_url=stack_url,
                 session_id=tokens.session_id,
@@ -272,9 +288,15 @@ class AuthService:
                 # when the field is absent.
                 refresh_expires_at=tokens.refresh_expiry(now=now),
                 created_at=now,
+                # An orphan is a session this CLI failed to revoke server-side,
+                # and the only record that it exists. `put_session` replaces the
+                # whole per-stack row, so a login that did not carry the list
+                # forward would drop every orphan older than the session it is
+                # replacing -- leaving a live session no `auth logout` can ever
+                # reach, while telling the user logout would retry it.
+                orphaned_session_ids=list(previous.orphaned_session_ids) if previous else [],
             )
 
-            previous = self._state_store.get_session(stack_url)
             # Durable first, always -- never delete the old credentials before
             # the new ones are safely on disk (review B-1).
             self._state_store.put_session(new_session)
@@ -335,7 +357,9 @@ class AuthService:
             )
 
     def _wrap_device_prompt(
-        self, prompt: Callable[[DeviceAuthorization], None]
+        self,
+        prompt: Callable[[DeviceAuthorization], None],
+        notice: Callable[[str], None],
     ) -> Callable[[DeviceAuthorization], None]:
         """Wrap the caller's display callback with the best-effort browser open.
 
@@ -343,12 +367,22 @@ class AuthService:
         verificationUri + userCode; this service owns *opening*
         verificationUriComplete, since that is the injectable
         ``browser_opener`` seam the rest of this class already uses.
+
+        A non-https URL is reported and not opened rather than skipped in
+        silence: the login still completes from the printed URI + code, so the
+        only thing lost is the convenience open, and a stack sending one is
+        worth knowing about.
         """
 
         def _prompt(authorization: DeviceAuthorization) -> None:
             prompt(authorization)
-            if authorization.verification_uri_complete:
-                self._browser_opener(authorization.verification_uri_complete)
+            target = authorization.verification_uri_complete
+            if not target:
+                return
+            if not _is_browser_safe_url(target):
+                notice("Not opening the verification link: the stack sent a non-https URL.")
+                return
+            self._browser_opener(target)
 
         return _prompt
 

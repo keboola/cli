@@ -169,6 +169,14 @@ permission class, while the bare `auth logout` needs only `write`. A policy that
 denies `cli:admin` to keep an agent out of the project registry still lets it end
 its own session.
 
+Logout clears the whole per-stack record, so an orphan it could not revoke is
+also **forgotten locally** — the last place it is reported is that logout's own
+output (`orphans_remaining` in `--json`). A session listed there is still live on
+the server until its refresh token expires; end it from the Keboola UI if that
+matters. Repeated logins do not have this problem: each one carries the
+outstanding orphan list forward, so `auth logout` still retries every one of
+them.
+
 ---
 
 ## 3. Where things live on disk
