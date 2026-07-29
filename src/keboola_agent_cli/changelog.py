@@ -24,6 +24,17 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.77.0": [
+        "New (#505): `kbagent config update` and `kbagent config row-update` accept "
+        "`--change-description TEXT`, which writes the new config version's "
+        "`changeDescription` -- the version-history audit line -- instead of the generic "
+        "auto-generated default. On shared production configs that history is the paper "
+        "trail, so a change can now say *why* it happened. Omitting the flag preserves the "
+        "previous default verbatim, and `--dry-run` echoes the description that would be "
+        "sent (`change_description` in `--json`). Note this is distinct from `--description`, "
+        "which sets the configuration's display description. Both `kbagent serve` PATCH "
+        "routes mirror the flag. Thanks to @jordanrburger.",
+    ],
     "0.76.3": [
         "Security: bump npm dependencies flagged by Dependabot in `web/backend` and "
         "`web/frontend` -- `@fastify/static` (path traversal / auth bypass), "
