@@ -189,7 +189,7 @@ default, or whatever `--config-dir`, `KBAGENT_CONFIG_DIR`, or a project-local
 |---|---|---|
 | `config.json` | Projects, aliases, defaults. Session projects hold the sentinel here. | `0600` |
 | `auth.json` | The live sessions, keyed by stack URL. | `0600` |
-| `auth.json.lock` | Sidecar lock serialising concurrent refreshes. | — |
+| `auth.json.lock` | Sidecar lock guarding each read/write of `auth.json`. Concurrent refreshes are serialised by a lease recorded inside `auth.json` itself, so this lock is never held while a request is in flight. | — |
 
 The sentinel is an ordinary string in an existing `config.json` field, so the
 file's schema and `CURRENT_CONFIG_VERSION` accommodate it as they are and any

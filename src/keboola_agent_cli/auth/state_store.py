@@ -8,6 +8,7 @@ import logging
 import os
 import stat
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,7 +22,7 @@ from ..constants import (
 )
 from ..errors import ConfigError
 from ..models import normalize_stack_url
-from .models import AuthState, StackSession
+from .models import AuthState, RefreshLease, StackSession
 
 if TYPE_CHECKING:
     # Only needed for the type hint below; importing ConfigStore at runtime
@@ -216,15 +217,72 @@ class AuthStateStore:
             self.save(state)
 
     def delete_session(self, stack_url: str) -> bool:
-        """Remove the session for ``stack_url``. Returns True if one was removed."""
+        """Remove the session for ``stack_url``. Returns True if one was removed.
+
+        Drops the stack's refresh lease too: with no session there is no token
+        left to protect, and leaving the claim behind would make the next login
+        wait out a lease that can never be released.
+        """
         with self.transaction():
             state = self.load()
             normalized = normalize_stack_url(stack_url)
+            state.refresh_leases.pop(normalized, None)
             if normalized not in state.sessions:
+                self.save(state)
                 return False
             del state.sessions[normalized]
             self.save(state)
             return True
+
+    def get_refresh_lease(self, stack_url: str) -> RefreshLease | None:
+        """Return the stack's refresh lease, whether or not it is still live."""
+        state = self.load()
+        return state.refresh_leases.get(normalize_stack_url(stack_url))
+
+    def claim_refresh_lease(self, stack_url: str, *, holder: str, ttl: float) -> bool:
+        """Claim the right to refresh ``stack_url``; True when the claim succeeded.
+
+        Refuses only while somebody else's claim is still live. An expired lease
+        is taken over -- a holder that crashed mid-refresh must not block every
+        later process for good. Re-claiming one's own lease renews it.
+
+        Callers must run this inside a `transaction()` so the read-then-write is
+        atomic against another process doing the same.
+        """
+        state = self.load()
+        normalized = normalize_stack_url(stack_url)
+        current = state.refresh_leases.get(normalized)
+        if current is not None and current.holder != holder and current.is_live():
+            return False
+        state.refresh_leases[normalized] = RefreshLease(
+            holder=holder, expires_at=datetime.now(UTC) + timedelta(seconds=ttl)
+        )
+        self.save(state)
+        return True
+
+    def extend_refresh_lease(self, stack_url: str, *, holder: str, ttl: float) -> None:
+        """Push the holder's own lease expiry out by ``ttl`` from now. No-op otherwise."""
+        with self.transaction():
+            state = self.load()
+            normalized = normalize_stack_url(stack_url)
+            current = state.refresh_leases.get(normalized)
+            if current is None or current.holder != holder:
+                return
+            state.refresh_leases[normalized] = RefreshLease(
+                holder=holder, expires_at=datetime.now(UTC) + timedelta(seconds=ttl)
+            )
+            self.save(state)
+
+    def release_refresh_lease(self, stack_url: str, *, holder: str) -> None:
+        """Drop ``holder``'s claim. Never touches a lease somebody else now holds."""
+        with self.transaction():
+            state = self.load()
+            normalized = normalize_stack_url(stack_url)
+            current = state.refresh_leases.get(normalized)
+            if current is None or current.holder != holder:
+                return
+            del state.refresh_leases[normalized]
+            self.save(state)
 
     def record_orphan(self, stack_url: str, session_id: str) -> None:
         """Append ``session_id`` to the orphan list of the session at ``stack_url``.

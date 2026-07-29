@@ -3,9 +3,13 @@
 Two pieces live here:
 
 - `SessionTokenProvider`: caches a stack's live access token in memory and
-  refreshes it -- serialized both across threads (a `threading.Lock`) and
-  across processes (the cross-platform `filelock` behind
-  `AuthStateStore.transaction()`) -- before the 1 hour access token expires.
+  refreshes it before the 1 hour access token expires, serialized across
+  threads by a `threading.Lock` and across processes by a **refresh lease**
+  recorded in `auth.json`. The cross-platform `filelock` behind
+  `AuthStateStore.transaction()` protects each read and write of that file, but
+  is never held across the network call -- the lease is what keeps a refresh
+  token from being presented to the server by two requests at once, which is
+  the replay that triggers server-side family revocation.
   A rotated token pair is always persisted to `auth.json` BEFORE it is handed
   to a caller, so a crash between refresh and use can never leave an
   in-flight token that was never written down.
@@ -22,14 +26,25 @@ algorithm this module implements literally.
 
 from __future__ import annotations
 
+import os
 import threading
+import time
+import uuid
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
-from ..constants import AUTH_REFRESH_MARGIN, AUTH_REFRESH_MAX_WALL_CLOCK
+from ..constants import (
+    AUTH_REFRESH_ABANDON_GRACE,
+    AUTH_REFRESH_LEASE_TTL,
+    AUTH_REFRESH_MARGIN,
+    AUTH_REFRESH_MAX_WALL_CLOCK,
+    AUTH_REFRESH_POLL_INTERVAL,
+    AUTH_REFRESH_WAIT_TIMEOUT,
+)
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from .models import CliTokenResponse, IntrospectResponse, StackSession
@@ -42,6 +57,30 @@ if TYPE_CHECKING:
     from .auth_client import AuthClient
 
 _LOGIN_REMEDY = "Run `kbagent auth login` to sign in again."
+
+
+class _AbandonedRefresh(KeboolaApiError):
+    """The wall-clock ceiling fired; the request may still be in flight.
+
+    A subclass rather than a flag so it stays a `KeboolaApiError` (callers and
+    the CLI error mapping are unchanged) while the one caller that must tell this
+    apart -- the lease holder, which may not release a claim protecting a token
+    that is still on the wire -- can catch it precisely.
+    """
+
+
+@dataclass(frozen=True)
+class _LeaseOutcome:
+    """What one pass of the claim loop established.
+
+    Exactly one of these three states: ``token`` set (another process already
+    rotated; adopt it), ``session`` set (the lease is ours; refresh it), or both
+    empty (somebody else holds a live lease; wait).
+    """
+
+    token: str = ""
+    session: StackSession | None = None
+
 
 # Process-wide registry of providers, keyed by (auth.json path, normalized
 # stack URL) so every caller sharing a config dir + stack shares one cache
@@ -75,8 +114,9 @@ class SessionTokenProvider:
     `get_session_token_provider`. Parallel multi-project commands run through
     a `ThreadPoolExecutor`, and several kbagent processes can run at once, so
     refresh must be serialized on both axes: a `threading.Lock` inside the
-    process and the cross-platform `filelock` on `auth.json.lock` (via
-    `AuthStateStore.transaction()`) across processes.
+    process, and a **refresh lease** in `auth.json` across processes. The
+    cross-platform `filelock` on `auth.json.lock` protects each read/write of
+    that file; it is never held across the network call (see `_refresh_locked`).
     """
 
     def __init__(
@@ -84,13 +124,22 @@ class SessionTokenProvider:
         stack_url: str,
         state_store: AuthStateStore,
         client_factory: Callable[[str], AuthClient] | None = None,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._stack_url = normalize_stack_url(stack_url)
         self._state_store = state_store
         self._client_factory = client_factory
+        self._sleep = sleep
+        self._monotonic = monotonic
         self._lock = threading.Lock()
         self._cached_token: str = ""
         self._cached_expires_at: datetime | None = None
+        # Identifies THIS provider's lease claims. Process id alone would be
+        # ambiguous: a pid is reused after the process exits, so a recycled pid
+        # could release or renew a lease it never took.
+        self._holder_id = f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
 
     @property
     def stack_url(self) -> str:
@@ -169,21 +218,49 @@ class SessionTokenProvider:
         the server has just rejected, so the step-5 adopt-what-another-process
         persisted shortcut must skip it even when it still looks time-fresh.
 
-        Holds the `auth.json.lock` file lock across the re-read AND the
-        network refresh call (deliberately -- this is what serializes
-        refresh across processes: a second process blocks here, then adopts
-        the pair the first process just persisted instead of minting its
-        own). This is a different lock from `ConfigStore`'s `config.json`
-        lock, which must never be held across network I/O; that invariant is
-        untouched by this module.
+        Cross-process serialization is a **refresh lease**, not the file lock:
+        `auth.json.lock` is held only for the local read and the local write, and
+        never across the network call. The invariant being protected is that a
+        given refresh token is presented to the server by at most one request at
+        a time -- a second, concurrent presentation is the replay that triggers
+        server-side family revocation, i.e. a hard logout.
 
-        Holding a lock across network I/O is only safe while the hold stays
-        shorter than the `AUTH_LOCK_TIMEOUT` every other holder waits, so
-        `AuthClient.refresh` is a single attempt and `_refresh_within_budget`
-        caps it at `AUTH_REFRESH_MAX_WALL_CLOCK` (< half of
-        `AUTH_LOCK_TIMEOUT`). Without that cap a slow auth service would make
-        concurrent processes report this lock as stuck -- with a `ConfigError`
-        (exit 5) that names the wrong cause.
+        Holding the file lock across the request would enforce that too, but at
+        the cost of an unbounded hold: every other process, including a read-only
+        `auth status`, would wait `AUTH_LOCK_TIMEOUT` and then report the lock as
+        stuck (`ConfigError`, exit 5) whenever the auth service was merely slow.
+        The lease keeps the invariant without that hold, and expires on its own so
+        a crashed or abandoned holder self-heals.
+
+        A caller that loses the lease polls until the holder persists a rotated
+        pair -- which the step-5 check below then adopts -- or until
+        `AUTH_REFRESH_WAIT_TIMEOUT` runs out.
+        """
+        deadline = self._monotonic() + AUTH_REFRESH_WAIT_TIMEOUT
+        while True:
+            outcome = self._claim_lease_or_adopt(rejected_token=rejected_token)
+            if outcome.token:
+                return outcome.token
+            if outcome.session is not None:
+                return self._refresh_as_lease_holder(outcome.session)
+            if self._monotonic() >= deadline:
+                raise KeboolaApiError(
+                    message=(
+                        f"Another kbagent process is still refreshing your Keboola login "
+                        f"for {self._stack_url} (waited "
+                        f"{AUTH_REFRESH_WAIT_TIMEOUT:.0f}s). Run the command again."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.TIMEOUT,
+                    retryable=True,
+                )
+            self._sleep(AUTH_REFRESH_POLL_INTERVAL)
+
+    def _claim_lease_or_adopt(self, *, rejected_token: str) -> _LeaseOutcome:
+        """One pass of steps 5-6 plus the lease claim, under the file lock.
+
+        Returns a token to adopt, or the session to refresh once the lease is
+        ours, or neither when somebody else holds a live lease.
         """
         with self._state_store.transaction():
             session = self._state_store.get_session(self._stack_url)
@@ -200,7 +277,7 @@ class SessionTokenProvider:
             if session.access_token_fresh() and session.access_token != rejected_token:
                 self._cached_token = session.access_token
                 self._cached_expires_at = session.access_expires_at
-                return self._cached_token
+                return _LeaseOutcome(token=session.access_token)
 
             # Step 6: a refresh token past its known expiry never round-trips.
             if session.refresh_token_expired():
@@ -211,7 +288,33 @@ class SessionTokenProvider:
                     retryable=False,
                 )
 
-            return self._perform_refresh(session)
+            if self._state_store.claim_refresh_lease(
+                self._stack_url, holder=self._holder_id, ttl=AUTH_REFRESH_LEASE_TTL
+            ):
+                return _LeaseOutcome(session=session)
+            return _LeaseOutcome()
+
+    def _refresh_as_lease_holder(self, session: StackSession) -> str:
+        """Run the network refresh while holding the lease, then release it.
+
+        The lease is released on every outcome EXCEPT an abandoned request: there
+        the token may still be travelling, so the claim is extended by
+        `AUTH_REFRESH_ABANDON_GRACE` instead, which keeps any other process from
+        presenting the same refresh token while that is true. A completed request
+        -- success or a server error -- carries no such risk.
+        """
+        try:
+            token = self._perform_refresh(session)
+        except _AbandonedRefresh:
+            self._state_store.extend_refresh_lease(
+                self._stack_url, holder=self._holder_id, ttl=AUTH_REFRESH_ABANDON_GRACE
+            )
+            raise
+        except KeboolaApiError:
+            self._state_store.release_refresh_lease(self._stack_url, holder=self._holder_id)
+            raise
+        self._state_store.release_refresh_lease(self._stack_url, holder=self._holder_id)
+        return token
 
     def _refresh_within_budget(self, client: AuthClient, refresh_token: str) -> CliTokenResponse:
         """Issue the refresh request under a hard wall-clock ceiling.
@@ -219,20 +322,21 @@ class SessionTokenProvider:
         `AuthClient.refresh` already carries short per-phase httpx timeouts, but
         httpx applies `read` / `write` per I/O operation and has no
         total-duration option, so a server that trickles a response stays inside
-        them for as long as it likes. The `auth.json` lock is held across this
-        call while every other holder waits only `AUTH_LOCK_TIMEOUT`, so the
-        hold needs a ceiling that does not depend on the server's cooperation.
+        them for as long as it likes. Without a ceiling, one unresponsive auth
+        service would keep a refresh lease claimed until it expired and stall
+        every command against this stack for that long.
 
         A request still running at the deadline is abandoned rather than awaited,
-        so the caller unwinds and the lock is released on time -- which is the one
-        property being protected here.
+        and reported as `_AbandonedRefresh` so the lease holder knows to keep the
+        claim rather than release it -- the token may still be travelling, and a
+        second presentation of it is what family revocation punishes.
 
         Abandoning is genuinely abandoning: `httpx.Client.close()` returns at once
         but does NOT abort a request already in flight (measured, httpx 0.28.1),
         so the worker outlives this call until its own per-phase timeout fires. It
         is a daemon thread, so it can never delay interpreter exit, and it touches
-        no shared state -- persistence stays on the lock-holding thread below. In
-        a short CLI invocation that is the end of it; in a long-running `kbagent
+        no shared state -- persistence stays on the calling thread below. In a
+        short CLI invocation that is the end of it; in a long-running `kbagent
         serve` process, repeated stalls against the same unresponsive auth service
         can leave several such workers parked until they time out.
 
@@ -254,7 +358,7 @@ class SessionTokenProvider:
         worker.start()
         worker.join(AUTH_REFRESH_MAX_WALL_CLOCK)
         if worker.is_alive():
-            raise KeboolaApiError(
+            raise _AbandonedRefresh(
                 message=(
                     f"Refreshing your Keboola login at {self._stack_url} exceeded its "
                     f"{AUTH_REFRESH_MAX_WALL_CLOCK:.0f}s budget. Run the command again."

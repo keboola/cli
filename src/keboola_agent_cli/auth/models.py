@@ -240,11 +240,47 @@ class StackSession(BaseModel):
         return moment >= self.refresh_expires_at
 
 
+class RefreshLease(BaseModel):
+    """Claim on the right to refresh one stack's token pair, held across processes.
+
+    A refresh token may only ever be presented to the server by one request at a
+    time: a second, concurrent presentation of the same token is what triggers
+    server-side family revocation (a hard logout). The lease is what enforces
+    that without keeping ``auth.json.lock`` held across the network call --
+    whoever holds it does the refresh, everyone else waits for the result.
+
+    ``expires_at`` makes the claim self-healing: a holder that crashes, or one
+    whose request was abandoned at the wall-clock ceiling, cannot wedge every
+    other process forever.
+    """
+
+    holder: str
+    expires_at: datetime
+
+    model_config = {"extra": "allow"}
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def _timestamps_utc(cls, value: object) -> object:
+        return _ensure_utc(value)
+
+    def is_live(self, *, now: datetime | None = None) -> bool:
+        """True while the claim still stands."""
+        moment = now if now is not None else datetime.now(UTC)
+        return self.expires_at > moment
+
+
 class AuthState(BaseModel):
-    """Top-level shape of ``auth.json``: a version tag plus sessions by stack."""
+    """Top-level shape of ``auth.json``: a version tag, sessions and refresh leases.
+
+    ``refresh_leases`` is deliberately a sibling of ``sessions`` rather than a
+    field on `StackSession`: a session write replaces the whole per-stack row, so
+    a lease living inside it could be dropped by an unrelated `put_session`.
+    """
 
     version: int = AUTH_STATE_VERSION
     sessions: dict[str, StackSession] = Field(default_factory=dict)
+    refresh_leases: dict[str, RefreshLease] = Field(default_factory=dict)
 
 
 __all__ = [
@@ -256,6 +292,7 @@ __all__ = [
     "DevicePollResult",
     "DevicePollStatus",
     "IntrospectResponse",
+    "RefreshLease",
     "RevokeResult",
     "StackSession",
 ]

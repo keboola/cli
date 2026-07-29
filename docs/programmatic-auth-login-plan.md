@@ -242,9 +242,13 @@ touching the token provider or the flows.
   30 s grace window exists to forgive — and past that window it triggers family revocation,
   a hard logout. Losing the retry costs little: the old token is still on disk and still
   inside the grace window, so the next command simply refreshes again. The single attempt
-  is also what keeps the lock-hold bound (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful, since
-  `SessionTokenProvider` holds `auth.json.lock` across this call. `invalid_grant`/replay is
-  mapped to `SESSION_EXPIRED` before the generic error path.
+  is also what keeps the attempt ceiling (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful.
+  `invalid_grant`/replay is mapped to `SESSION_EXPIRED` before the generic error path.
+
+  > **Superseded.** This section described `SessionTokenProvider` holding
+  > `auth.json.lock` across the refresh request. It no longer does: cross-process
+  > serialization is a refresh lease in `auth.json`, and the file lock is held only
+  > for local reads and writes. See "Refresh lease" below.
 - `introspect(access_token)` — bearer set per request.
 - `revoke(token, token_type_hint)` (review B-2) — `POST /v1/auth/token/revoke` is a
   **public** endpoint whose input is a JSON **body** `{token, tokenTypeHint?}`, not an
@@ -494,17 +498,54 @@ command); `--remove-projects` deletes the matching sentinel aliases too.
 `AUTH_DEVICE_MAX_INTERVAL = 60`, `AUTH_REFRESH_MARGIN = 120`, `AUTH_LOCK_TIMEOUT = 30.0`,
 `SESSION_TOKEN_PREFIX = "kbc-session://"`, `AUTH_STATE_FILENAME = "auth.json"`.
 
-`AUTH_REFRESH_TIMEOUT` / `AUTH_REFRESH_MAX_WALL_CLOCK` (review B-5): the refresh request
-runs while `auth.json.lock` is held, and every other holder waits only
-`AUTH_LOCK_TIMEOUT`, so a merely slow auth service must not make concurrent processes
-report the lock as stuck. `AUTH_REFRESH_TIMEOUT` is a per-phase `httpx.Timeout`
-(connect 5.0, read 5.0, write 2.0, pool 2.0) rather than the client default.
-`AUTH_REFRESH_MAX_WALL_CLOCK` is **derived** as the sum of those phases — they are
-sequential and each carries its own deadline — so the two cannot drift apart when a phase
-is retuned. That sum is the whole bound only because `refresh` is a single attempt
-(§ 4.3). The resulting 14.0 s sits under `AUTH_LOCK_TIMEOUT`'s 30.0 s with room to spare:
-`tests/test_auth_client.py` asserts `AUTH_REFRESH_MAX_WALL_CLOCK * 2 <= AUTH_LOCK_TIMEOUT`,
-so a future timeout bump cannot quietly erase the headroom.
+`AUTH_REFRESH_TIMEOUT` / `AUTH_REFRESH_MAX_WALL_CLOCK` (review B-5): `AUTH_REFRESH_TIMEOUT`
+is a per-phase `httpx.Timeout` (connect 5.0, read 5.0, write 2.0, pool 2.0) rather than the
+client default. `AUTH_REFRESH_MAX_WALL_CLOCK` (14.0 s) is a hard ceiling on one attempt.
+
+Two claims this section originally made about it were wrong and are corrected here, since
+this file is the design record the code was written from:
+
+- It described the sum of the phases as a **bound**. It is not one: httpx applies `read`
+  and `write` per I/O operation and exposes no total-duration option, so a server that
+  trickles a response never trips them. The value is still the sum (the lowest ceiling
+  that cannot fire before each phase has had its chance), but it is now **enforced** by
+  `SessionTokenProvider._refresh_within_budget` rather than assumed.
+- It justified the ceiling as protecting a lock hold. The refresh no longer holds
+  `auth.json.lock` at all — see "Refresh lease" below.
+
+### Refresh lease (review B-1, second round)
+
+Cross-process serialization of refresh is a **lease recorded in `auth.json`**, not the file
+lock. `auth.json.lock` is taken only for local reads and writes, never across the network
+call.
+
+The invariant is unchanged: a given refresh token must be presented to the server by at
+most one request at a time, because a second concurrent presentation is the replay that
+triggers family revocation. Holding the file lock across the request enforced that too, but
+at the cost of an unbounded hold — every other process, including a read-only `auth
+status`, waited `AUTH_LOCK_TIMEOUT` and then blamed a "stuck" lock whenever the auth
+service was merely slow. Worse, once the request was abandoned at the ceiling the lock was
+released while the token was still travelling, so the next attempt could present it
+concurrently after all: the ceiling and the invariant were in direct conflict.
+
+The lease resolves both:
+
+- `claim_refresh_lease` / `extend_refresh_lease` / `release_refresh_lease` on
+  `AuthStateStore`, each a short critical section under the file lock.
+- The holder refreshes; anyone else polls (`AUTH_REFRESH_POLL_INTERVAL`) until the holder
+  persists a rotated pair and the existing step-5 check adopts it, or until
+  `AUTH_REFRESH_WAIT_TIMEOUT` elapses and a truthful "another process is refreshing" error
+  is raised.
+- `expires_at` (`AUTH_REFRESH_LEASE_TTL`) makes a crashed holder self-healing.
+- An **abandoned** request (the ceiling fired, `_AbandonedRefresh`) keeps its claim,
+  extended by `AUTH_REFRESH_ABANDON_GRACE`: the token may still be in flight, and nobody
+  may re-present it until the server's idempotent grace window has passed. A request that
+  *completed*, successfully or not, releases the lease immediately.
+- `refresh_leases` is a sibling of `sessions` in `AuthState`, not a field on
+  `StackSession` — a session write replaces the whole per-stack row, so a lease living
+  inside it could be dropped by an unrelated `put_session` (the same shape as review F1).
+  `delete_session` drops the stack's lease deliberately, so a fresh login never waits out
+  a claim nobody can release.
 
 `AUTH_CALLBACK_TIMEOUT` (review NB-5): the backend documents
 `AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120` (and a 300 s authorization-code lifetime). The

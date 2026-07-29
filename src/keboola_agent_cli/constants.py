@@ -661,14 +661,10 @@ AUTH_REFRESH_MARGIN: int = 120
 # Cross-process advisory lock (filelock) acquisition timeout for auth.json.
 AUTH_LOCK_TIMEOUT: float = 30.0
 
-# Timeout for the token-refresh request alone. `SessionTokenProvider` holds the
-# `auth.json.lock` flock across that request, so the request must finish well
-# inside AUTH_LOCK_TIMEOUT -- otherwise a merely slow auth service makes every
-# other kbagent process (including a read-only `auth status`) report the lock as
-# stuck and exit 5, which is false. Tighter than DEFAULT_TIMEOUT on every phase:
-# a refresh that takes longer than this is useless anyway.
+# Timeout for the token-refresh request alone. Tighter than DEFAULT_TIMEOUT on
+# every phase: a refresh that takes longer than this is useless anyway.
 AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write=2.0, pool=2.0)
-# Hard ceiling on the wall clock a refresh may add to the lock hold, ENFORCED by
+# Hard ceiling on the wall clock one refresh attempt may take, ENFORCED by
 # `SessionTokenProvider._refresh_within_budget` around the request rather than
 # inferred from AUTH_REFRESH_TIMEOUT: httpx applies `read` and `write` per I/O
 # operation, not per request, and exposes no total-duration option, so a server
@@ -676,8 +672,7 @@ AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write
 # deadlines indefinitely. The value is the sum of the phases -- the lowest
 # ceiling that cannot fire before each phase has had its own chance -- and it
 # stays a true ceiling only because `AuthClient.refresh` is a single attempt,
-# outside `BaseHttpClient`'s retry loop. Must keep clear headroom under
-# AUTH_LOCK_TIMEOUT, which `tests/test_auth_client.py` asserts.
+# outside `BaseHttpClient`'s retry loop.
 AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
     phase
     for phase in (
@@ -688,6 +683,25 @@ AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
     )
     if phase is not None
 )
+
+# Refresh-lease parameters. The lease -- not the file lock -- is what keeps two
+# requests from presenting the same refresh token at once, which is the shape
+# that triggers server-side family revocation. `auth.json.lock` is therefore
+# held only for local reads and writes, never across the network call.
+#
+# TTL covers one whole attempt, so it must not expire while the holder is still
+# legitimately working.
+AUTH_REFRESH_LEASE_TTL: float = AUTH_REFRESH_MAX_WALL_CLOCK + 2.0
+# When the ceiling fires, the request may still be in flight and its token still
+# live on the wire, so the lease is EXTENDED rather than released: nobody may
+# re-present that token until the server's idempotent grace window has passed.
+AUTH_REFRESH_ABANDON_GRACE: float = 30.0
+# How long a caller that lost the lease waits for the holder's rotated pair
+# before giving up. Not bounded by AUTH_LOCK_TIMEOUT -- a waiter holds no file
+# lock -- but must exceed AUTH_REFRESH_LEASE_TTL so a normal attempt is awaited
+# to completion instead of being reported as contention.
+AUTH_REFRESH_WAIT_TIMEOUT: float = AUTH_REFRESH_LEASE_TTL + 4.0
+AUTH_REFRESH_POLL_INTERVAL: float = 0.2
 
 # The backend closes the PKCE callback window at
 # AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit

@@ -566,6 +566,195 @@ class TestRefreshWallClockCeiling:
 
 
 # ----------------------------------------------------------------------------
+# The refresh lease (review B-1)
+# ----------------------------------------------------------------------------
+
+
+class _LockProbingAuthClient(AuthClient):
+    """Fake that inspects the file lock and the lease from INSIDE the request.
+
+    The point of the lease is that `auth.json.lock` is not held while the network
+    call runs. That can only be observed from within the call, so this fake takes
+    the measurement there rather than inferring it afterwards.
+    """
+
+    def __init__(self, store: AuthStateStore) -> None:
+        self._store = store
+        self.calls: list[str] = []
+        self.lock_was_free: bool | None = None
+        self.lease_holder_during_call: str | None = None
+
+    def __enter__(self) -> _LockProbingAuthClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        return None
+
+    def refresh(self, refresh_token: str) -> CliTokenResponse:
+        self.calls.append(refresh_token)
+        probe = filelock.FileLock(str(self._store.lock_path), timeout=0)
+        try:
+            probe.acquire()
+            probe.release()
+            self.lock_was_free = True
+        except filelock.Timeout:
+            self.lock_was_free = False
+        lease = self._store.get_refresh_lease(STACK_URL)
+        self.lease_holder_during_call = lease.holder if lease else None
+        return CliTokenResponse(
+            accessToken="kbc_at_rotated_1",
+            refreshToken="kbc_rt_rotated_1",
+            expiresIn=3600,
+            sessionId="session-1",
+        )
+
+
+class TestRefreshLease:
+    """A refresh token may be presented to the server by one request at a time.
+
+    Before the lease that was enforced by holding `auth.json.lock` across the
+    network call, which made every other process (including a read-only `auth
+    status`) wait `AUTH_LOCK_TIMEOUT` and then blame a "stuck" lock whenever the
+    auth service was merely slow. These tests pin both halves of the trade: the
+    lock comes free immediately, and the token is still never presented twice.
+    """
+
+    def test_the_file_lock_is_free_while_the_request_is_in_flight(self, tmp_path: Path) -> None:
+        """The property the whole redesign exists for, measured from inside the call."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        fake = _LockProbingAuthClient(store)
+
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+        assert provider.get_access_token() == "kbc_at_rotated_1"
+        assert fake.lock_was_free is True
+
+    def test_the_lease_is_held_during_the_request_and_released_after(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        fake = _LockProbingAuthClient(store)
+
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+        provider.get_access_token()
+
+        assert fake.lease_holder_during_call is not None
+        assert store.get_refresh_lease(STACK_URL) is None
+
+    def test_a_caller_that_loses_the_lease_adopts_the_winners_pair(self, tmp_path: Path) -> None:
+        """No second request: the loser polls, then takes what the holder persisted."""
+        store = AuthStateStore(tmp_path)
+        session = _seed_session(store, access_expires_in=-10)
+        with store.transaction():
+            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=60.0)
+        fake = _FakeAuthClient()
+
+        def _winner_finishes(_seconds: float) -> None:
+            """Stand in for the holder completing while this caller waits."""
+            store.put_session(
+                session.model_copy(
+                    update={
+                        "access_token": "kbc_at_from_winner",
+                        "refresh_token": "kbc_rt_from_winner",
+                        "access_expires_at": datetime.now(UTC) + timedelta(hours=1),
+                    }
+                )
+            )
+
+        provider = SessionTokenProvider(
+            STACK_URL, store, client_factory=lambda _url: fake, sleep=_winner_finishes
+        )
+
+        assert provider.get_access_token() == "kbc_at_from_winner"
+        assert fake.calls == [], "the loser must not issue its own refresh"
+
+    def test_a_live_foreign_lease_times_out_with_a_truthful_message(self, tmp_path: Path) -> None:
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        with store.transaction():
+            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=600.0)
+        fake = _FakeAuthClient()
+        clock = iter([0.0, 0.0, 10_000.0, 10_000.0])
+
+        provider = SessionTokenProvider(
+            STACK_URL,
+            store,
+            client_factory=lambda _url: fake,
+            sleep=lambda _s: None,
+            monotonic=lambda: next(clock),
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            provider.get_access_token()
+
+        assert exc_info.value.error_code == ErrorCode.TIMEOUT
+        assert "Another kbagent process" in exc_info.value.message
+        assert fake.calls == []
+
+    def test_an_expired_lease_is_taken_over(self, tmp_path: Path) -> None:
+        """A holder that crashed mid-refresh must not wedge everyone for good."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        with store.transaction():
+            store.claim_refresh_lease(STACK_URL, holder="crashed-holder", ttl=-1.0)
+        fake = _FakeAuthClient()
+
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+        assert provider.get_access_token() == "kbc_at_rotated_1"
+        assert fake.calls == ["kbc_rt_original"]
+
+    def test_an_abandoned_request_keeps_the_lease_so_nobody_replays_the_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The B-1 fix: an in-flight token must not be presented by a second caller.
+
+        The ceiling firing does NOT mean the request is over -- it may still land
+        server-side. Releasing the lease there would let the next process fire the
+        same refresh token concurrently, which is the replay that triggers
+        server-side family revocation.
+        """
+        monkeypatch.setattr(tp_mod, "AUTH_REFRESH_MAX_WALL_CLOCK", 0.2)
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        client = _StalledAuthClient()
+
+        with pytest.raises(KeboolaApiError):
+            SessionTokenProvider(
+                STACK_URL, store, client_factory=lambda _url: client
+            ).get_access_token()
+
+        lease = store.get_refresh_lease(STACK_URL)
+        assert lease is not None, "the lease was released while the token was still in flight"
+        assert lease.is_live()
+
+    def test_a_completed_failure_releases_the_lease(self, tmp_path: Path) -> None:
+        """A request that finished carries no in-flight token, so the next attempt may run."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        fake = _TimingOutThenOkAuthClient()
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+
+        with pytest.raises(KeboolaApiError):
+            provider.get_access_token()
+        assert store.get_refresh_lease(STACK_URL) is None
+
+        assert provider.get_access_token() == "kbc_at_rotated_1"
+
+    def test_a_deleted_session_takes_its_lease_with_it(self, tmp_path: Path) -> None:
+        """Otherwise a fresh login would wait out a lease nobody can release."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        with store.transaction():
+            store.claim_refresh_lease(STACK_URL, holder="gone", ttl=600.0)
+
+        store.delete_session(STACK_URL)
+
+        assert store.get_refresh_lease(STACK_URL) is None
+
+
+# ----------------------------------------------------------------------------
 # force_refresh
 # ----------------------------------------------------------------------------
 
