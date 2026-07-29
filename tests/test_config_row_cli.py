@@ -309,6 +309,44 @@ class TestConfigRowUpdateCli:
         assert cfg["parameters"]["table"] == "invoices"
         assert cfg["parameters"]["limit"] == 1000  # sibling preserved
 
+    def test_change_description_flag_forwarded(self, tmp_config_dir: Path) -> None:
+        """--change-description reaches the client as change_description."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.update_config_row.return_value = {**SAMPLE_ROW}
+        service = ConfigService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.config.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "row-update",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-001",
+                    "--name",
+                    "New Name",
+                    "--change-description",
+                    "AI-1234: rename row",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock_client.update_config_row.call_args.kwargs
+        assert call_kwargs["change_description"] == "AI-1234: rename row"
+
     def test_dry_run_output(self, tmp_config_dir: Path) -> None:
         """--dry-run shows diff in JSON mode."""
         store = setup_single_project(tmp_config_dir)

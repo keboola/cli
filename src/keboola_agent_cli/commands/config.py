@@ -647,6 +647,11 @@ def config_update(
         "--merge",
         help="Deep-merge into existing config instead of replacing",
     ),
+    change_description: str | None = typer.Option(
+        None,
+        "--change-description",
+        help="Version changeDescription for the audit trail (default: auto-generated)",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -692,6 +697,10 @@ def config_update(
       # Preview changes without applying
       kbagent config update --project P --component-id C --config-id ID \\
         --set 'parameters.db.host=new-host' --dry-run
+
+      # Set a meaningful version changeDescription for the audit trail
+      kbagent config update --project P --component-id C --config-id ID \\
+        --set 'parameters.db.host=new-host' --change-description "AI-1234: point at new DB host"
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
@@ -753,6 +762,7 @@ def config_update(
             set_paths=parsed_sets,
             merge=effective_merge,
             dry_run=dry_run,
+            change_description=change_description,
             branch_id=branch,
             allow_plaintext_fallback=allow_plaintext,
         )
@@ -782,6 +792,9 @@ def config_update(
                 for change in changes:
                     formatter.console.print(f"  {change}")
                 formatter.console.print()
+            change_desc = result.get("change_description")
+            if change_desc:
+                formatter.console.print(f"[dim]changeDescription:[/dim] {change_desc}")
             _emit_normalizations_warning(formatter, normalizations)
         return
 
@@ -2259,6 +2272,11 @@ def config_row_update(
         "--merge",
         help="Deep-merge into existing row config instead of replacing",
     ),
+    change_description: str | None = typer.Option(
+        None,
+        "--change-description",
+        help="Version changeDescription for the audit trail (default: auto-generated)",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -2313,6 +2331,10 @@ def config_row_update(
 
       # Disable a row (excludes it from job runs)
       kbagent config row-update --project P --component-id C --config-id ID --row-id R --is-disabled
+
+      # Set a meaningful version changeDescription for the audit trail
+      kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
+        --set 'parameters.table=new_table' --change-description "AI-1234: repoint row"
     """
     if is_disabled and is_enabled:
         formatter = get_formatter(ctx)
@@ -2369,6 +2391,7 @@ def config_row_update(
             set_paths=parsed_sets,
             merge=effective_merge,
             dry_run=dry_run,
+            change_description=change_description,
             is_disabled=is_disabled_value,
             branch_id=branch,
             allow_plaintext_fallback=allow_plaintext,
@@ -2396,6 +2419,9 @@ def config_row_update(
                 for change in changes:
                     formatter.console.print(f"  {change}")
                 formatter.console.print()
+            change_desc = result.get("change_description")
+            if change_desc:
+                formatter.console.print(f"[dim]changeDescription:[/dim] {change_desc}")
         return
 
     if formatter.json_mode:

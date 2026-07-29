@@ -300,6 +300,56 @@ class TestUpdateConfigRow:
         call_kwargs = client.update_config_row.call_args.kwargs
         assert call_kwargs["branch_id"] == 99
 
+    def test_custom_change_description_forwarded(self, tmp_config_dir: Path) -> None:
+        """An explicit change_description is sent verbatim to the client."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            row_id="row-001",
+            name="New Name",
+            change_description="AI-1234: bump row limit",
+        )
+
+        call_kwargs = client.update_config_row.call_args.kwargs
+        assert call_kwargs["change_description"] == "AI-1234: bump row limit"
+
+    def test_default_change_description_when_omitted(self, tmp_config_dir: Path) -> None:
+        """Omitting change_description preserves the generated default."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            row_id="row-001",
+            name="New Name",
+        )
+
+        call_kwargs = client.update_config_row.call_args.kwargs
+        assert call_kwargs["change_description"] == (
+            "Updated metadata via kbagent config row-update"
+        )
+
+    def test_dry_run_includes_change_description(self, tmp_config_dir: Path) -> None:
+        """dry_run surfaces the change_description that would be sent."""
+        service, client = _make_service(tmp_config_dir)
+
+        result = service.update_config_row(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            config_id="cfg-001",
+            row_id="row-001",
+            set_paths=[("parameters.table", "orders")],
+            change_description="AI-1234: repoint table",
+            dry_run=True,
+        )
+
+        assert result["change_description"] == "AI-1234: repoint table"
+        client.update_config_row.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # delete_config_row tests

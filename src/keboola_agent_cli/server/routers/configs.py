@@ -20,6 +20,7 @@ class ConfigUpdate(BaseModel):
     set_paths: list[tuple[str, Any]] | None = None
     merge: bool = False
     dry_run: bool = False
+    change_description: str | None = None
     branch_id: int | None = None
 
 
@@ -36,6 +37,7 @@ class ConfigUpdateRow(BaseModel):
     description: str | None = None
     configuration: dict[str, Any] | None = None
     is_disabled: bool | None = None
+    change_description: str | None = None
     branch_id: int | None = None
 
 
@@ -172,6 +174,7 @@ def config_update(
         set_paths=body.set_paths,
         merge=body.merge,
         dry_run=body.dry_run,
+        change_description=body.change_description,
         branch_id=body.branch_id,
     )
 
@@ -401,6 +404,7 @@ def row_update(
         name=body.name,
         description=body.description,
         configuration=body.configuration,
+        change_description=body.change_description,
         is_disabled=body.is_disabled,
         branch_id=body.branch_id,
     )
