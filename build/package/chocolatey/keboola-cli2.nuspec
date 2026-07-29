@@ -8,17 +8,20 @@
     <version>{VERSION}</version>
     <title>Keboola Agent CLI (kbagent)</title>
     <authors>Keboola</authors>
+    <!-- owners = package maintainer on community.chocolatey.org; must match the
+         account behind the CHOCOLATEY_KEY secret. Update both together. -->
     <owners>Matovidlo</owners>
     <projectUrl>https://github.com/keboola/cli</projectUrl>
+    <iconUrl>https://components.keboola.com/assets/default-app-icon-DGCyIYB1.png</iconUrl>
     <licenseUrl>https://github.com/keboola/cli/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    <packageSourceUrl>https://github.com/keboola/cli</packageSourceUrl>
+    <packageSourceUrl>https://github.com/keboola/cli/tree/main/build/package/chocolatey</packageSourceUrl>
     <projectSourceUrl>https://github.com/keboola/cli</projectSourceUrl>
     <bugTrackerUrl>https://github.com/keboola/cli/issues</bugTrackerUrl>
-    <docsUrl>https://help.keboola.com/</docsUrl>
+    <docsUrl>https://github.com/keboola/cli/tree/main/docs</docsUrl>
     <!-- URL form so this never needs per-version edits (moderator-endorsed). -->
     <releaseNotes>https://github.com/keboola/cli/releases</releaseNotes>
-    <copyright>Keboola</copyright>
+    <copyright>2025-2026 Keboola</copyright>
     <summary>AI-friendly CLI for managing Keboola projects.</summary>
     <description>Self-contained native CLI for managing Keboola Connection projects. No Python runtime required.</description>
     <tags>keboola cli kbagent</tags>
