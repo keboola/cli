@@ -125,6 +125,12 @@ Versioning convention:
   `project remove` when done with it. The warning text is identical in
   `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
   array, so a consumer must not assume the key is absent.
+- **`auth logout --remove-projects` needs the `admin` permission class, the
+  bare `auth logout` only `write`** (since v0.77.0). The flag deletes
+  `config.json` entries, the same observable effect as `project remove`, so a
+  policy denying `cli:admin` blocks the flag while still letting the session be
+  ended. `permissions list` shows it as its own row,
+  `auth.logout --remove-projects`.
 - **To find out which credential mode a project uses, read `auth_mode` --
   never parse the token.** `kbagent project list --json | jq '.data[].auth_mode'`
   (also on `project status` and `project info`, and over HTTP on `/projects`,

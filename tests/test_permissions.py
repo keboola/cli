@@ -7,6 +7,7 @@ import pytest
 from keboola_agent_cli.errors import PermissionDeniedError
 from keboola_agent_cli.models import PermissionPolicy
 from keboola_agent_cli.permissions import (
+    FLAG_ESCALATIONS,
     OPERATION_REGISTRY,
     PermissionEngine,
     classify_mcp_tool,
@@ -300,10 +301,10 @@ class TestPermissionEngineListOperations:
     def test_returns_all_operations(self) -> None:
         engine = PermissionEngine(None)
         ops = engine.list_operations()
-        # Should have all CLI ops + 3 MCP categories
+        # Every registry command, every flag escalation, and 3 MCP categories.
         cli_ops = [op for op in ops if op["type"] == "cli"]
         mcp_ops = [op for op in ops if op["type"] == "mcp"]
-        assert len(cli_ops) == len(OPERATION_REGISTRY)
+        assert len(cli_ops) == len(OPERATION_REGISTRY) + len(FLAG_ESCALATIONS)
         assert len(mcp_ops) == 3
 
     def test_status_reflects_policy(self) -> None:
@@ -448,3 +449,47 @@ class TestDevPortalPermissions:
 
         for op, expected_cat in self.DP_OPS.items():
             assert OPERATION_REGISTRY.get(op) == expected_cat, op
+
+
+class TestFlagEscalations:
+    """`auth logout --remove-projects` carries the admin class the bare command does not.
+
+    Deleting config.json project entries is the same observable effect as the
+    admin-class `project remove`, so a policy denying `cli:admin` to keep an
+    agent out of the project registry must not leave a way in through `auth`.
+    """
+
+    def test_escalated_operation_is_admin_class(self) -> None:
+        assert FLAG_ESCALATIONS["auth.logout --remove-projects"] == "admin"
+
+    def test_escalation_is_not_a_registry_key(self) -> None:
+        # OPERATION_REGISTRY must hold exactly one key per live command;
+        # scripts/check_command_sync.py rejects any key matching no command.
+        assert "auth.logout --remove-projects" not in OPERATION_REGISTRY
+
+    def test_denying_admin_blocks_the_flag_but_not_the_command(self) -> None:
+        policy = PermissionPolicy(mode="allow", deny=["cli:admin"])
+        engine = PermissionEngine(policy)
+        assert engine.is_allowed("auth.logout") is True
+        assert engine.is_allowed("auth.logout --remove-projects") is False
+
+    def test_allowing_admin_permits_both(self) -> None:
+        policy = PermissionPolicy(mode="deny", allow=["cli:admin", "auth.logout"])
+        engine = PermissionEngine(policy)
+        assert engine.is_allowed("auth.logout") is True
+        assert engine.is_allowed("auth.logout --remove-projects") is True
+
+    def test_cli_write_still_covers_the_escalation(self) -> None:
+        # cli:write spans write, destructive and admin, so a policy denying all
+        # writes must not be loosened by the escalation.
+        policy = PermissionPolicy(mode="allow", deny=["cli:write"])
+        engine = PermissionEngine(policy)
+        assert engine.is_allowed("auth.logout --remove-projects") is False
+
+    def test_listed_so_a_caller_can_see_the_higher_class(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["cli:admin"]))
+        entry = next(
+            op for op in engine.list_operations() if op["name"] == "auth.logout --remove-projects"
+        )
+        assert entry["category"] == "admin"
+        assert entry["status"] == "denied"

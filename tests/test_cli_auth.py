@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
@@ -768,6 +769,43 @@ class TestPermissionClassification:
             )
         assert result.exit_code == EXIT_PERMISSION_DENIED
         svc.register_projects.assert_not_called()
+
+    def test_remove_projects_needs_the_admin_class(self, tmp_path: Path) -> None:
+        """`--remove-projects` deletes config.json entries, so cli:admin gates it.
+
+        The bare logout stays available: denying admin must not stop an agent
+        from ending its own session.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        base = ["--config-dir", str(config_dir)]
+        # Written directly: `permissions set` requires a human to type a
+        # confirmation code at a real terminal and has no --yes bypass.
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "version": CURRENT_CONFIG_VERSION,
+                    "projects": {},
+                    "permissions": {"mode": "allow", "allow": [], "deny": ["cli:admin"]},
+                }
+            )
+        )
+
+        svc = MagicMock()
+        svc.logout.return_value = _logout_result()
+        with patch("keboola_agent_cli.cli.AuthService", return_value=svc):
+            denied = runner.invoke(
+                app, [*base, "--json", "auth", "logout", "--yes", "--remove-projects"]
+            )
+        assert denied.exit_code == EXIT_PERMISSION_DENIED
+        svc.logout.assert_not_called()
+
+        svc = MagicMock()
+        svc.logout.return_value = _logout_result()
+        with patch("keboola_agent_cli.cli.AuthService", return_value=svc):
+            allowed = runner.invoke(app, [*base, "--json", "auth", "logout", "--yes"])
+        assert allowed.exit_code == 0, allowed.output
+        svc.logout.assert_called_once()
 
     def test_deny_writes_does_not_block_status(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"

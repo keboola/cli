@@ -14,8 +14,10 @@ from .models import PermissionPolicy
 # read = no side effects, write = creates/modifies, destructive = deletes, admin = org-level
 OPERATION_REGISTRY: dict[str, str] = {
     # Programmatic auth (browser login). login/logout mutate local credential
-    # state in auth.json -- same risk class as `project add` -- while status
-    # is a read-only local + introspect check.
+    # state in auth.json but never touch the project registry, so they sit below
+    # the admin class `project add` uses for a pasted static token; status is a
+    # read-only local + introspect check. `auth logout --remove-projects` does
+    # touch the registry and is escalated via FLAG_ESCALATIONS below.
     "auth.login": "write",
     "auth.logout": "write",
     "auth.status": "read",
@@ -357,6 +359,19 @@ OPERATION_REGISTRY: dict[str, str] = {
     "permissions.check": "read",
 }
 
+# Flags that carry a higher risk class than their command's registry entry.
+# Keys are `<operation> <flag>`; they are deliberately NOT in
+# OPERATION_REGISTRY, which must contain exactly one key per live command.
+#
+# `auth logout` clears local credentials, but `--remove-projects` also deletes
+# config.json project entries -- the same observable effect as the admin-class
+# `project remove`. Without this, a policy denying `cli:admin` to keep an agent
+# out of the project registry would still let it de-register projects through
+# `auth`.
+FLAG_ESCALATIONS: dict[str, str] = {
+    "auth.logout --remove-projects": "admin",
+}
+
 # Prefixes for classifying MCP tools. Single source of truth -- also drives
 # mcp_service.py multi-project dispatch (read tools fan out, others don't).
 # Order of evaluation: destructive > read > write > fail-closed default.
@@ -426,7 +441,7 @@ def _matches_pattern(operation: str, pattern: str) -> bool:
         # Fail-closed: unknown CLI ops default to 'write' so they are
         # blocked by cli:write policies. This prevents new commands from
         # bypassing restrictions if OPERATION_REGISTRY is not updated.
-        op_category = OPERATION_REGISTRY.get(operation, "write")
+        op_category = FLAG_ESCALATIONS.get(operation) or OPERATION_REGISTRY.get(operation, "write")
         if target_category == "write":
             # cli:write matches write, destructive, and admin
             return op_category in ("write", "destructive", "admin")
@@ -499,8 +514,9 @@ class PermissionEngine:
         """
         ops: list[dict[str, str]] = []
 
-        # CLI operations
-        for name, category in sorted(OPERATION_REGISTRY.items()):
+        # CLI operations, plus the flag-scoped escalations so a caller can see
+        # that a flag carries a higher risk class than its bare command.
+        for name, category in sorted({**OPERATION_REGISTRY, **FLAG_ESCALATIONS}.items()):
             status = "allowed" if self.is_allowed(name) else "denied"
             ops.append({"name": name, "type": "cli", "category": category, "status": status})
 

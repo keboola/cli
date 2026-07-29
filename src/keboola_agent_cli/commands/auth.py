@@ -41,6 +41,7 @@ from ..services.auth_service import (
 )
 from ._auth_picker import parse_alias_overrides, run_project_picker
 from ._helpers import (
+    check_cli_operation,
     check_cli_permission,
     get_formatter,
     get_service,
@@ -422,8 +423,13 @@ def auth_logout(
     Local credentials are always cleared, even when the remote revoke call
     fails or is uncertain -- that outcome is reported distinctly rather than
     presented as a full success.
+
+    `--remove-projects` additionally deletes config.json entries, so it needs
+    the admin risk class the bare logout does not.
     """
     formatter = get_formatter(ctx)
+    if remove_projects:
+        check_cli_operation(ctx, "auth.logout --remove-projects")
     if (
         not formatter.json_mode
         and not yes

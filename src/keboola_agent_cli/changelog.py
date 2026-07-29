@@ -107,6 +107,11 @@ CHANGELOG: dict[str, list[str]] = {
         "names coming from the stack are escaped before rendering, so a project name containing "
         "Rich markup can no longer render as a clickable link in `auth status`, `auth login`, or "
         "the project picker.",
+        "Security: `auth logout --remove-projects` now requires the `admin` permission class "
+        "because it deletes `config.json` project entries -- the same observable effect as "
+        "`project remove`. The bare `auth logout` stays in the `write` class, so a policy denying "
+        "`cli:admin` to keep an agent out of the project registry no longer leaves a way in "
+        "through `auth`, while still letting the agent end its own session.",
         'Fix: the "not supported on session projects" error points at `kbagent project edit '
         "--project <alias> --token <token>`, which works on an already-registered alias, instead "
         "of `project add`, which rejects one that already exists.",

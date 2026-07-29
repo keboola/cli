@@ -170,7 +170,20 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
     if subcommand is None:
         return
 
-    operation = f"{group_name}.{subcommand}"
+    check_cli_operation(ctx, f"{group_name}.{subcommand}")
+
+
+def check_cli_operation(ctx: typer.Context, operation: str) -> None:
+    """Check one named operation against the active policy.
+
+    Use for a check the group callback cannot express, where a flag carries a
+    higher risk class than its command (see `permissions.FLAG_ESCALATIONS`).
+    The callback has already cleared the bare command by the time a command
+    body runs, so this is an additional gate, not a replacement.
+    """
+    engine = ctx.obj.get("permission_engine")
+    if engine is None or not engine.active:
+        return
 
     try:
         engine.check_or_raise(operation)

@@ -164,6 +164,11 @@ session registered — projects you later converted to a static token are left
 alone, since they no longer belong to the session
 ([section 6](#6-converting-a-session-project-to-a-static-token)).
 
+Because `--remove-projects` deletes project entries, it needs the `admin`
+permission class, while the bare `auth logout` needs only `write`. A policy that
+denies `cli:admin` to keep an agent out of the project registry still lets it end
+its own session.
+
 ---
 
 ## 3. Where things live on disk
