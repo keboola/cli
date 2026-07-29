@@ -24,6 +24,13 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.76.3": [
+        "Security: bump npm dependencies flagged by Dependabot in `web/backend` and "
+        "`web/frontend` -- `@fastify/static` (path traversal / auth bypass), "
+        "`brace-expansion` and `find-my-way` (DoS), `postcss` (source-map path traversal), "
+        "and `dompurify` (XSS/sanitization bypass, pinned via an npm override on the "
+        "`monaco-editor`/`mermaid` transitive copy). No behavior change.",
+    ],
     "0.76.2": [
         "Fix (#528, #530): self-update no longer risks leaving the running Windows uv tool "
         "environment partially upgraded. kbagent now completes all network checks and command "
