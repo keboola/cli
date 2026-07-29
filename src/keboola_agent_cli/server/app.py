@@ -471,6 +471,19 @@ def _format_error(
     )
 
 
+# A browser-login session backing a session-registered project is USER-scoped
+# and lives on the host, so its failures are the caller's authentication
+# problem rather than an upstream fault: they answer 401, not the 502 every
+# other `KeboolaApiError` maps to. The server cannot renew such a session
+# itself -- a browser login only completes where a human sits.
+_SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
+
+_SESSION_REMEDY_ON_HOST = (
+    "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "
+    "cannot open a browser login for a remote caller."
+)
+
+
 _DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",  # Vite dev default
     "http://localhost:8000",  # Node BFF
@@ -628,12 +641,19 @@ def create_app(
 
     @app.exception_handler(ConfigError)
     async def _config_error_handler(_request, exc: ConfigError):
-        return _format_error(str(exc), ErrorCode.CONFIG_ERROR, http_status=400)
+        # Subclasses carry a narrower code (`SessionAuthUnsupportedError` ->
+        # AUTH_NOT_SUPPORTED_ON_STACK); a plain ConfigError has no `error_code`
+        # and stays CONFIG_ERROR. Both are configuration problems, so the 400
+        # is the same either way -- only the code distinguishes them.
+        code = getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        return _format_error(str(exc), code, http_status=400)
 
     @app.exception_handler(KeboolaApiError)
     async def _api_error_handler(_request, exc: KeboolaApiError):
         code = getattr(exc, "error_code", ErrorCode.API_ERROR)
         msg = getattr(exc, "message", str(exc)) or str(exc)
+        if code in _SESSION_CREDENTIAL_CODES:
+            return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
         return _format_error(msg, code, http_status=502)
 
     @app.exception_handler(StarletteHTTPException)

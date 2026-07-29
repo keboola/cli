@@ -66,6 +66,25 @@ class ServiceRegistry:
     the bearer-session support (Storage/Manage) and the `AUTH_NOT_SUPPORTED_
     ON_STACK` fail-fast guards (MCP, AI/data-science/metastore/dev-portal/
     stream) purely by delegating to those already-guarded services.
+
+    Serving session-registered projects is a deliberate trade for web-UI
+    usability, and it carries two properties worth stating where the wiring
+    lives (see `docs/web-server.md` > "Session-registered projects"):
+
+    1. A browser-login session is USER-scoped. Whoever holds
+       `KBAGENT_SERVE_TOKEN` acts as the signed-in Keboola user for as long
+       as the session lives, and the serve token is not that user's Keboola
+       identity -- the REST surface has no second identity layer to tell the
+       two apart.
+    2. Refresh-token rotation was designed for short CLI invocations. In a
+       daemon running for weeks, the crash window between `put_session`
+       (`services/auth_service.py`) and the following revoke stays open far
+       longer, and a crash inside it leaves a server-side session that no
+       later `auth logout` can revoke.
+
+    A session that expires while the daemon runs surfaces as HTTP 401 with
+    `error_code: SESSION_EXPIRED` (mapped centrally in `app.py`), because a
+    browser login only completes on the host, never for a REST caller.
     """
 
     config_store: ConfigStore
