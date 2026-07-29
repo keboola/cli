@@ -317,6 +317,40 @@ VERSION_CACHE_FILENAME: str = "version_cache.json"
 UPDATE_TIMEOUT_SECONDS: int = 300
 ENV_UPDATE_TIMEOUT: str = "KBAGENT_UPDATE_TIMEOUT"
 
+# --- Deferred (out-of-process) self-update -- issue #528 ---
+#
+# `uv tool install` recreates a tool environment by REMOVING it and then
+# creating a fresh venv at the same path (`uv-tool/src/lib.rs`:
+# create_environment -> "Remove any existing environment" -> create_venv).
+# The removal is not atomic and has no rollback. On POSIX that is harmless --
+# unlinking a file another process holds open leaves that process's inode
+# intact. On Windows the running `kbagent.exe` trampoline keeps the tool
+# venv's interpreter DLL and extension modules locked, so the removal deletes
+# whatever it can and then aborts, leaving a GUTTED venv (upstream: astral-sh/
+# uv#11930). That is exactly the reported corruption -- `rich/_windows.py` and
+# `typer/rich_utils.py` missing from packages that otherwise still exist.
+#
+# The only safe sequencing is therefore to run the reinstall from a process
+# that does NOT live in the environment being replaced, once no kbagent
+# process is left holding it open.
+ENV_DEFER_UPDATE: str = "KBAGENT_DEFER_UPDATE"
+DEFERRED_UPDATE_MARKER_FILENAME: str = "pending_update.json"
+DEFERRED_UPDATE_EXIT_FILENAME: str = "pending_update.exit"
+DEFERRED_UPDATE_LOG_FILENAME: str = "pending_update.log"
+# Written by the helper into the exit file when kbagent never stopped running
+# within the wait window, so nothing was installed and nothing was mutated.
+DEFERRED_UPDATE_ABANDONED_MARKER: str = "abandoned"
+# Executable name the helper waits on. uv's Windows trampoline loads the venv
+# interpreter in-process, so the shim keeps the process named `kbagent`.
+DEFERRED_UPDATE_PROCESS_NAME: str = "kbagent"
+DEFERRED_UPDATE_POLL_SECONDS: int = 2
+# Give up (without installing anything) if a kbagent process is still alive
+# after this long -- e.g. a long-lived `kbagent serve` or `kbagent repl`.
+DEFERRED_UPDATE_MAX_WAIT_SECONDS: int = 900
+# A marker older than this whose helper never wrote an exit file is treated as
+# lost (helper killed, machine rebooted mid-wait) and reported once.
+DEFERRED_UPDATE_STALE_SECONDS: int = 86400
+
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 

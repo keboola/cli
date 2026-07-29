@@ -150,6 +150,13 @@ def update_command(
        the whole tool environment and preserves ``[server]`` extras. On a
        failure the result includes a copy/paste recovery command.
 
+    On Windows the kbagent stage is **scheduled, not run here** (issue #528).
+    ``uv tool install`` removes the tool environment before recreating it, so
+    running it from inside that environment deletes files the live process has
+    locked and aborts half-way. A detached helper waits until every kbagent has
+    exited and installs then; ``deferred: true`` marks that in JSON and the next
+    launch reports the outcome.
+
     JSON output reports both stages independently. Human mode prints a
     one-line summary such as
     ``kbagent v0.30.0 -> v0.30.1 | keboola-mcp-server v1.49.0 -> v1.59.1``.
@@ -171,6 +178,12 @@ def update_command(
             formatter.success(result["message"])
         else:
             formatter.console.print(result["message"])
+        # The summary line only says "(scheduled)". What the user has to *do*
+        # -- close other kbagent processes -- lives on the stage result, so
+        # print that too rather than leave the instruction in JSON only.
+        kbagent_stage = result.get("kbagent", {})
+        if kbagent_stage.get("deferred") is not None and not kbagent_stage.get("updated"):
+            formatter.console.print(kbagent_stage["message"])
 
 
 def _env_opted_into_prerelease() -> bool:

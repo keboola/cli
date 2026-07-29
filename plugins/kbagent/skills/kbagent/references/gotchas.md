@@ -2138,6 +2138,39 @@ transparent -- no user action is normally required.
 - Never crashes the CLI -- update failures leave the current invocation running
   and print a recovery command (since v0.76.2)
 
+### Windows updates are deferred, not immediate (since v0.76.4)
+
+`uv tool install` recreates a tool environment by **removing** it and then
+building a fresh venv at the same path. It is not atomic and has no rollback.
+On POSIX that is harmless; on Windows uv's `kbagent.exe` trampoline holds the
+venv's interpreter locked, so the removal deletes what it can, hits a locked
+file, and aborts -- leaving a **gutted** venv (`No module named
+'rich._windows'`, `cannot import name 'rich_utils' from 'typer'`). Upstream:
+astral-sh/uv#11930.
+
+So on Windows kbagent never installs into its own live environment:
+
+- Both `kbagent update` and the startup hook hand the reinstall to a detached
+  helper, which waits until **every** kbagent process has exited and installs
+  then. The current invocation continues on the old version.
+- Consequence: the new version is active on the **next** launch, not this one.
+  `kbagent update --json` marks this with `kbagent.deferred: true`; the summary
+  line reads `(scheduled)`, which is **not** a failure.
+- If a kbagent process (typically `kbagent serve` or `kbagent repl`) never
+  exits, the helper installs nothing and reports `skipped` -- also not a
+  failure; the environment is untouched and the next launch retries.
+- The outcome is printed by the next launch, including a copy-paste recovery
+  command when the install failed.
+- `KBAGENT_DEFER_UPDATE=1` / `=0` forces the deferred path on or off,
+  overriding the platform default.
+
+A slow install is never killed on any platform (also since v0.76.4): the
+timeout bounds only how long kbagent waits, because terminating uv mid-write
+produces the same half-deleted environment a file lock does. When that happens
+the banner says the install is *still running* and deliberately offers no
+recovery command -- starting a second installer against an environment a live
+uv is rewriting is the corruption itself.
+
 ## `lineage build` and sync layouts
 
 `lineage build` reads synced data from disk and supports both layouts produced by

@@ -1,6 +1,7 @@
 """Tests for VersionService - version detection and update checks."""
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ from keboola_agent_cli.services.version_service import (
     get_update_timeout,
     resolve_kbagent_wheel_url,
 )
+from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
 
 class TestIsUvxAvailable:
@@ -766,12 +768,17 @@ class TestSelfUpdateTwoStage:
             events.append("mcp_probe")
             return "2.0.0"
 
-        def run(command: list[str], **kwargs: object) -> MagicMock:
+        def install(command: tuple[str, ...], **kwargs: object) -> InstallRun:
             nonlocal mutated
-            assert command == ["uv", "tool", "install"]
+            assert command == ("uv", "tool", "install")
             mutated = True
             events.append("kbagent")
-            return MagicMock(returncode=1, stdout="", stderr="locked")
+            return InstallRun(
+                status=InstallStatus.FAILED,
+                exit_code=1,
+                output="locked",
+                log_path=Path("update.log"),
+            )
 
         monkeypatch.setattr(
             "keboola_agent_cli.services.version_service.prepare_update_plan", prepare
@@ -782,7 +789,10 @@ class TestSelfUpdateTwoStage:
         monkeypatch.setattr(
             "keboola_agent_cli.services.version_service._get_local_mcp_version", probe_mcp
         )
-        monkeypatch.setattr("keboola_agent_cli.services.version_service.subprocess.run", run)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.should_defer", lambda: False
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", install)
 
         result = VersionService().self_update()
 
@@ -790,6 +800,91 @@ class TestSelfUpdateTwoStage:
         assert result["mcp"]["updated"] is True
         assert result["kbagent"]["updated"] is False
         assert result["kbagent"]["recovery_command"].endswith("exact")
+
+
+class TestSelfUpdateDefersOnWindows:
+    """`kbagent update` must not replace the venv it is running from (#528)."""
+
+    @staticmethod
+    def _plan() -> UpdatePlan:
+        return UpdatePlan(
+            kbagent=KbagentUpdatePlan(
+                current_version="1.0.0",
+                latest_version="2.0.0",
+                up_to_date=False,
+                command=("uv", "tool", "install", "--force", "--reinstall", "keboola-cli @ x"),
+                recovery_command="uv tool install --force --reinstall 'keboola-cli @ x'",
+            ),
+            mcp=McpUpdatePlan(
+                current_version="1.0.0",
+                latest_version="1.0.0",
+                install_method="uv_tool",
+                up_to_date=True,
+                command=None,
+            ),
+        )
+
+    def test_schedules_helper_and_never_installs_inline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The install is handed to the detached helper, not run here.
+
+        Running it inline is what deletes the live environment mid-flight and
+        leaves a gutted venv behind, so `run_install` must never be reached.
+        """
+        requests: list[DeferredUpdateRequest] = []
+
+        def schedule(request: DeferredUpdateRequest) -> bool:
+            requests.append(request)
+            return True
+
+        def refuse_inline(*args: object, **kwargs: object) -> InstallRun:
+            raise AssertionError("the installer must not run inside the target environment")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.prepare_update_plan",
+            lambda **_: self._plan(),
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.should_defer", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.request_deferred_update", schedule
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", refuse_inline)
+
+        result = VersionService().self_update()
+
+        assert len(requests) == 1
+        assert requests[0].target_version == "2.0.0"
+        assert requests[0].install_command == self._plan().kbagent.command
+        assert result["kbagent"]["deferred"] is True
+        assert result["kbagent"]["updated"] is False
+        # A scheduled update is not a failure and must not be summarised as one.
+        assert "FAILED" not in result["message"]
+        assert "scheduled" in result["message"]
+
+    def test_unschedulable_hands_the_user_the_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No helper -> tell the user, never fall back to the unsafe install."""
+
+        def refuse_inline(*args: object, **kwargs: object) -> InstallRun:
+            raise AssertionError("the installer must not run inside the target environment")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.prepare_update_plan",
+            lambda **_: self._plan(),
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.should_defer", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.request_deferred_update", lambda _: False
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", refuse_inline)
+
+        result = VersionService().self_update()
+
+        assert result["kbagent"]["deferred"] is False
+        assert result["kbagent"]["updated"] is False
+        assert result["kbagent"]["recovery_command"] in result["kbagent"]["message"]
 
     @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
