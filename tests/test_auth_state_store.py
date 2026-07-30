@@ -157,6 +157,41 @@ class TestMutators:
         store = AuthStateStore(config_dir=tmp_config_dir)
         assert store.delete_session("https://connection.keboola.com") is False
 
+    def test_delete_session_does_not_create_a_state_file_for_a_read_miss(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """`auth logout` on a stack with no session must leave no trace behind.
+
+        Creating an `auth.json` for a user who never logged in is a side effect
+        nobody asked for, and it makes the file's mere existence a misleading
+        signal that this machine has used programmatic auth.
+        """
+        store = AuthStateStore(config_dir=tmp_config_dir)
+        assert not store.state_path.exists()
+
+        store.delete_session("https://connection.keboola.com")
+
+        assert not store.state_path.exists()
+
+    def test_delete_session_clears_the_stacks_refresh_lease(self, tmp_config_dir: Path) -> None:
+        """Otherwise a fresh login waits out a claim nobody is left to release."""
+        store = AuthStateStore(config_dir=tmp_config_dir)
+        store.put_session(_make_session())
+        with store.transaction():
+            store.claim_refresh_lease("https://connection.keboola.com", holder="gone", ttl=600.0)
+
+        assert store.delete_session("https://connection.keboola.com") is True
+        assert store.get_refresh_lease("https://connection.keboola.com") is None
+
+    def test_a_lease_without_a_session_is_still_cleared(self, tmp_config_dir: Path) -> None:
+        """The write happens for a dropped lease alone, even though False is returned."""
+        store = AuthStateStore(config_dir=tmp_config_dir)
+        with store.transaction():
+            store.claim_refresh_lease("https://connection.keboola.com", holder="gone", ttl=600.0)
+
+        assert store.delete_session("https://connection.keboola.com") is False
+        assert store.get_refresh_lease("https://connection.keboola.com") is None
+
     def test_record_and_clear_orphans(self, tmp_config_dir: Path) -> None:
         store = AuthStateStore(config_dir=tmp_config_dir)
         store.put_session(_make_session())

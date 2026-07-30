@@ -226,13 +226,15 @@ class AuthStateStore:
         with self.transaction():
             state = self.load()
             normalized = normalize_stack_url(stack_url)
-            state.refresh_leases.pop(normalized, None)
-            if normalized not in state.sessions:
+            dropped_lease = state.refresh_leases.pop(normalized, None) is not None
+            dropped_session = normalized in state.sessions
+            if dropped_session:
+                del state.sessions[normalized]
+            # Nothing to remove means nothing to write: a read-miss must not
+            # create an `auth.json` for a user who never logged in.
+            if dropped_session or dropped_lease:
                 self.save(state)
-                return False
-            del state.sessions[normalized]
-            self.save(state)
-            return True
+            return dropped_session
 
     def get_refresh_lease(self, stack_url: str) -> RefreshLease | None:
         """Return the stack's refresh lease, whether or not it is still live."""
