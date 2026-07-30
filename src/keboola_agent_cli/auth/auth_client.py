@@ -80,6 +80,27 @@ _GRANT_VERDICT_MARKERS = (
     "rejected",
 )
 
+# ...and must not read as a complaint about the SHAPE of the request. "invalid"
+# and "unknown" describe a malformed field as naturally as a dead credential
+# ("the refresh token field contains an invalid character"), and a substring test
+# cannot tell which noun the verdict attaches to. Any of these vetoes the
+# classification, because the two mistakes are not symmetric: refusing to purge
+# leaves an error the user can clear with `auth login`, while purging wrongly
+# destroys a working credential over a bug on our own side.
+_REQUEST_SHAPE_MARKERS = (
+    "field",
+    "parameter",
+    "schema",
+    "must be",
+    "must not",
+    "character",
+    "exceed",
+    "length",
+    "required",
+    "missing",
+    "malformed",
+)
+
 
 def _is_rejected_grant(exc: KeboolaApiError) -> bool:
     """True when a refresh failure means "this refresh token is unusable".
@@ -100,7 +121,8 @@ def _is_rejected_grant(exc: KeboolaApiError) -> bool:
     our own bug -- and purging on that would destroy a still-valid refresh
     token and force an avoidable re-login. So a 400 counts only when it
     carries `invalid_grant`, or names the refresh token AND passes a verdict
-    on it (see the marker tuples above for why both halves are required).
+    on it AND does not read as a complaint about the request's shape (see the
+    three marker tuples above for why all three halves are required).
     """
     if exc.status_code == 401:
         return True
@@ -110,7 +132,8 @@ def _is_rejected_grant(exc: KeboolaApiError) -> bool:
             return True
         names_the_token = any(marker in message for marker in _GRANT_SUBJECT_MARKERS)
         passes_a_verdict = any(marker in message for marker in _GRANT_VERDICT_MARKERS)
-        return names_the_token and passes_a_verdict
+        about_the_request = any(marker in message for marker in _REQUEST_SHAPE_MARKERS)
+        return names_the_token and passes_a_verdict and not about_the_request
     return False
 
 

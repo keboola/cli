@@ -531,6 +531,40 @@ class TestRefresh:
 
         assert excinfo.value.error_code == ErrorCode.SESSION_EXPIRED
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "The refresh token field contains an invalid character.",
+            "Missing parameter: refresh token is unknown to this request schema.",
+            "refreshToken field is invalid: value must not exceed 512 characters.",
+            "Malformed refreshToken parameter.",
+        ],
+    )
+    def test_400_complaining_about_the_request_shape_is_not_remapped(
+        self, httpx_mock, message: str
+    ) -> None:
+        """ "invalid" and "unknown" describe a malformed field, not only a dead token.
+
+        Each of these names the refresh token and carries a verdict word, so a
+        subject-plus-verdict rule alone classifies them as a rejected grant and
+        `SessionTokenProvider` deletes the session -- turning a bug on our own side
+        (a truncated or mis-encoded value) into a forced browser re-login.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"message": message},
+            status_code=400,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_valid")
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code != ErrorCode.SESSION_EXPIRED
+
     def test_400_naming_the_field_without_a_verdict_is_not_remapped(self, httpx_mock) -> None:
         """A validation error about the field is our own bug, not a dead token.
 

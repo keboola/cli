@@ -21,7 +21,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..constants import AUTH_DEVICE_DEFAULT_INTERVAL, AUTH_REFRESH_MARGIN, AUTH_STATE_VERSION
+from ..constants import (
+    AUTH_DEVICE_DEFAULT_INTERVAL,
+    AUTH_REFRESH_LEASE_MAX_HORIZON,
+    AUTH_REFRESH_MARGIN,
+    AUTH_STATE_VERSION,
+)
 
 _WIRE_MODEL_CONFIG = {"populate_by_name": True, "extra": "allow"}
 
@@ -265,9 +270,27 @@ class RefreshLease(BaseModel):
         return _ensure_utc(value)
 
     def is_live(self, *, now: datetime | None = None) -> bool:
-        """True while the claim still stands."""
+        """True while the claim still stands, judged against the READER's clock.
+
+        A lease crosses process boundaries, so its expiry has to be a wall-clock
+        instant -- and the clock that wrote it may have been wrong. An expiry
+        further out than `AUTH_REFRESH_LEASE_MAX_HORIZON` is therefore treated as
+        unusable rather than honoured: no TTL this code grants reaches that far,
+        so such a value can only come from a skewed clock or a hand-edited file,
+        and honouring it would lock every later process out of the stack for the
+        whole skew with no recovery short of `auth logout`.
+
+        The opposite skew -- a claim written by a clock running *behind*, which
+        every reader sees as already expired -- cannot be detected from the
+        payload at all, and fails towards taking the lease over. That direction is
+        the residual risk of anchoring liveness in wall clock, and it is the
+        reason the abandon path exists: a token that may still be in flight is
+        protected by a claim, not by a lock.
+        """
         moment = now if now is not None else datetime.now(UTC)
-        return self.expires_at > moment
+        if self.expires_at <= moment:
+            return False
+        return self.expires_at <= moment + timedelta(seconds=AUTH_REFRESH_LEASE_MAX_HORIZON)
 
 
 class AuthState(BaseModel):

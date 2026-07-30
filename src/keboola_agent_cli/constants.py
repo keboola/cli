@@ -702,6 +702,14 @@ AUTH_REFRESH_ABANDON_GRACE: float = 30.0
 # to completion instead of being reported as contention.
 AUTH_REFRESH_WAIT_TIMEOUT: float = AUTH_REFRESH_LEASE_TTL + 4.0
 AUTH_REFRESH_POLL_INTERVAL: float = 0.2
+# A lease crosses process boundaries, so its expiry has to be a wall-clock
+# instant -- and the clock that wrote it may have been wrong. An expiry further
+# out than any TTL this code ever grants cannot have come from a correct clock, so
+# a reader treats it as unusable rather than honouring it: otherwise a claim
+# written by a host whose clock ran an hour fast would lock every later process
+# out of the stack for that hour, with no recovery short of logging out. Twice the
+# longest grant, to leave room for ordinary clock jitter.
+AUTH_REFRESH_LEASE_MAX_HORIZON: float = AUTH_REFRESH_ABANDON_GRACE * 2
 
 # The backend closes the PKCE callback window at
 # AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit

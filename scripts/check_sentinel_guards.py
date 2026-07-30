@@ -33,6 +33,22 @@ noise rather than a finding.
    bypassing `make_client_factory` and putting the sentinel string on the wire
    as an `X-StorageApi-Token` header.
 
+Known limits -- this is a static check, so state them rather than imply coverage
+it does not have. All three are absent from the tree today (verified), and the
+runtime guards (`require_static_token`, `make_client_factory`) are the actual
+protection; this gate exists to stop a NEW unguarded path from landing quietly.
+
+- A `ConfigStore` reached through indirection (`self._cfg = provider.get_store()`)
+  is not recognised as one: `_config_store_holders` resolves an annotation, a
+  direct construction, or a parameter name, not an arbitrary call chain.
+- A client constructed through a local binding (`ctor = KeboolaClient; ctor(...)`)
+  or a factory wrapper is invisible to Check 4, which resolves literal call
+  targets and import aliases only.
+- Sentinel-awareness is judged by the names appearing in the enclosing function's
+  source, so a guard applied in a helper the function calls does not count -- that
+  errs towards a false finding, which is the safe direction, and
+  `CREDENTIAL_WRITE_ALLOWED` is where such a case gets recorded with a reason.
+
 Usage (run from repo root):
     python scripts/check_sentinel_guards.py          # exits 1 on violations
     python scripts/check_sentinel_guards.py --list   # print the guard inventory

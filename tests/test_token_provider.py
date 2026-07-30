@@ -40,7 +40,7 @@ import pytest
 
 from keboola_agent_cli.auth import token_provider as tp_mod
 from keboola_agent_cli.auth.auth_client import AuthClient
-from keboola_agent_cli.auth.models import CliTokenResponse, StackSession
+from keboola_agent_cli.auth.models import CliTokenResponse, RefreshLease, StackSession
 from keboola_agent_cli.auth.state_store import AuthStateStore
 from keboola_agent_cli.auth.token_provider import (
     BearerAuth,
@@ -48,6 +48,7 @@ from keboola_agent_cli.auth.token_provider import (
     get_session_token_provider,
     reset_provider_registry,
 )
+from keboola_agent_cli.constants import AUTH_REFRESH_LEASE_TTL
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 STACK_URL = "https://connection.keboola.com"
@@ -648,7 +649,7 @@ class TestRefreshLease:
         store = AuthStateStore(tmp_path)
         session = _seed_session(store, access_expires_in=-10)
         with store.transaction():
-            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=60.0)
+            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=AUTH_REFRESH_LEASE_TTL)
         fake = _FakeAuthClient()
 
         def _winner_finishes(_seconds: float) -> None:
@@ -674,7 +675,7 @@ class TestRefreshLease:
         store = AuthStateStore(tmp_path)
         _seed_session(store, access_expires_in=-10)
         with store.transaction():
-            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=600.0)
+            store.claim_refresh_lease(STACK_URL, holder="someone-else", ttl=AUTH_REFRESH_LEASE_TTL)
         fake = _FakeAuthClient()
         clock = iter([0.0, 0.0, 10_000.0, 10_000.0])
 
@@ -741,6 +742,44 @@ class TestRefreshLease:
         assert store.get_refresh_lease(STACK_URL) is None
 
         assert provider.get_access_token() == "kbc_at_rotated_1"
+
+    def test_a_lease_from_a_fast_clock_does_not_wedge_the_stack(self, tmp_path: Path) -> None:
+        """The self-healing property must not depend on the writer's clock being right.
+
+        A container that boots before NTP syncs, a VM resumed from a snapshot, or
+        a wrong RTC all persist an expiry anchored to the wrong instant. Honouring
+        it locks every later process out of the stack for the whole skew -- an hour
+        here -- with no recovery short of `auth logout` and a full re-login.
+        """
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        skewed_now = datetime.now(UTC) + timedelta(hours=1)
+        with store.transaction():
+            state = store.load()
+            state.refresh_leases[STACK_URL] = RefreshLease(
+                holder="crashed-holder-with-a-fast-clock",
+                expires_at=skewed_now + timedelta(seconds=AUTH_REFRESH_LEASE_TTL),
+            )
+            store.save(state)
+        fake = _FakeAuthClient()
+
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+
+        assert provider.get_access_token() == "kbc_at_rotated_1"
+        assert fake.calls == ["kbc_rt_original"]
+
+    def test_a_normal_lease_is_still_honoured(self, tmp_path: Path) -> None:
+        """The horizon clamp must not turn every live claim into a takeable one."""
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+        with store.transaction():
+            store.claim_refresh_lease(STACK_URL, holder="holder-a", ttl=AUTH_REFRESH_LEASE_TTL)
+
+        lease = store.get_refresh_lease(STACK_URL)
+        assert lease is not None
+        assert lease.is_live()
+        with store.transaction():
+            assert not store.claim_refresh_lease(STACK_URL, holder="holder-b", ttl=1.0)
 
     def test_a_deleted_session_takes_its_lease_with_it(self, tmp_path: Path) -> None:
         """Otherwise a fresh login would wait out a lease nobody can release."""
