@@ -26,6 +26,7 @@ from keboola_agent_cli.services.version_service import (
     build_kbagent_upgrade_command,
     get_update_timeout,
     resolve_kbagent_wheel_url,
+    summarize_failure_tail,
 )
 
 
@@ -1419,3 +1420,10 @@ class TestComposeUpdateSummary:
         assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
         assert VersionService._summarize_failure_tail("") == "update failed"
         assert VersionService._summarize_failure_tail(None) == "update failed"
+
+    def test_failure_tail_shared_with_startup_hook(self) -> None:
+        # The startup auto-update hook imports the module-level function, so
+        # both update paths must compress a transcript identically (#545).
+        msg = "Resolved 52 packages\nerror: Access is denied. (os error 5)\n"
+        assert summarize_failure_tail(msg) == VersionService._summarize_failure_tail(msg)
+        assert summarize_failure_tail(msg) == "error: Access is denied. (os error 5)"

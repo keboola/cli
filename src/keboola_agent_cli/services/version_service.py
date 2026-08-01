@@ -248,6 +248,26 @@ def build_kbagent_upgrade_command(
     return cmd
 
 
+def summarize_failure_tail(message: str | None) -> str:
+    """Compress a multi-line installer transcript to its last non-empty line.
+
+    Subprocess failures embed the whole uv/pip transcript; the actionable line
+    (e.g. ``error: Executable already exists: kbagent``, or a Windows
+    ``failed to remove file ... (os error 32)``) is last. Callers surface only
+    that tail in a one-line message and keep the full transcript for
+    ``--json`` / ``--verbose``.
+
+    Args:
+        message: The captured transcript, or None.
+
+    Returns:
+        The last non-empty line, or ``"update failed"`` when there is nothing
+        to report.
+    """
+    lines = [ln.strip() for ln in (message or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else "update failed"
+
+
 def _render_command(command: tuple[str, ...]) -> str:
     """Render argv for the current platform's interactive shell."""
     if os.name == "nt":
@@ -958,13 +978,11 @@ class VersionService:
     def _summarize_failure_tail(message: str | None) -> str:
         """Compress a multi-line failure message to its last non-empty line.
 
-        Subprocess failures embed the whole uv/pip transcript; the actionable
-        line (e.g. ``error: Executable already exists: kbagent``) is last. We
-        surface only that tail in the one-line summary -- the full transcript
-        stays in the result's ``output`` for ``--json`` / ``--verbose``.
+        Thin delegate to :func:`summarize_failure_tail` so the startup
+        auto-update hook and the explicit ``kbagent update`` path report a
+        failure the same way.
         """
-        lines = [ln.strip() for ln in (message or "").splitlines() if ln.strip()]
-        return lines[-1] if lines else "update failed"
+        return summarize_failure_tail(message)
 
     @classmethod
     def _compose_update_summary(

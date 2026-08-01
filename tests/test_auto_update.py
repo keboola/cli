@@ -9,6 +9,7 @@ import pytest
 
 import keboola_agent_cli.auto_update as auto_update_module
 from keboola_agent_cli.auto_update import (
+    UpdateAttempt,
     UpdateOutcome,
     _get_cache_path,
     _is_cache_fresh,
@@ -245,7 +246,7 @@ class TestPerformUpdate:
     def test_update_with_uv_success(self, mock_run, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         # Verify uv was called
         call_args = mock_run.call_args
         assert "uv" in call_args[0][0][0]
@@ -255,7 +256,7 @@ class TestPerformUpdate:
     def test_update_with_uv_failure(self, mock_run, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.return_value = MagicMock(returncode=1, stderr="error")
-        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.FAILED
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -265,14 +266,14 @@ class TestPerformUpdate:
             None if cmd == "uv" else "/usr/bin/pip" if cmd == "pip" else None
         )
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         call_args = mock_run.call_args
         assert "pip" in call_args[0][0][0]
 
     @patch("shutil.which")
     def test_update_no_tools(self, mock_which):
         mock_which.return_value = None
-        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.FAILED
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -281,7 +282,7 @@ class TestPerformUpdate:
 
         mock_which.return_value = "/usr/local/bin/uv"
         mock_run.side_effect = sp.TimeoutExpired(cmd="uv", timeout=120)
-        assert _perform_update("2.0.0") is UpdateOutcome.TIMEOUT
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.TIMEOUT
 
     @patch(
         "keboola_agent_cli.services.version_service.has_server_extras",
@@ -302,7 +303,7 @@ class TestPerformUpdate:
         ``--force`` when ``fastapi`` is importable.
         """
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
         # The extras live in the primary PEP 508 requirement so the complete
         # environment is resolved in one forced reinstall.
@@ -320,7 +321,7 @@ class TestPerformUpdate:
     def test_update_without_server_extras_uses_upgrade(self, mock_run, mock_which, mock_has_server):
         """No-extras installs are also a full forced reinstall."""
         mock_run.return_value = MagicMock(returncode=0)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_run.call_args[0][0]
         assert "--force" in argv
         assert "--reinstall" in argv
@@ -344,7 +345,7 @@ class TestPerformUpdateWheel:
         mock_head.return_value = MagicMock(status_code=200)
         mock_run.return_value = MagicMock(returncode=0)
 
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
 
         argv = mock_run.call_args[0][0]
         # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
@@ -360,10 +361,116 @@ class TestPerformUpdateWheel:
         mock_head.return_value = MagicMock(status_code=404)
         mock_run.return_value = MagicMock(returncode=0)
 
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
 
         argv = mock_run.call_args[0][0]
         assert any("git+" in part for part in argv)
+
+
+class TestPerformUpdateFailureDetail:
+    """A failed startup update must say WHY (issues #528 / #545).
+
+    The installer runs with ``capture_output=True``; before this the transcript
+    was discarded and the banner said only "Auto-update failed", so a Windows
+    user whose tool environment was left mid-swap could not report what uv
+    actually refused to do. The explicit ``kbagent update`` path has always
+    surfaced ``result.stderr``.
+    """
+
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_failure_carries_stderr_tail(self, mock_run, mock_which):
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr=(
+                "Resolved 52 packages in 1.20s\n"
+                "error: failed to remove file `...\\Scripts\\kbagent.exe`\n"
+                "  Caused by: Access is denied. (os error 5)\n"
+            ),
+            stdout="",
+        )
+        attempt = _perform_update("2.0.0")
+        assert attempt.outcome is UpdateOutcome.FAILED
+        assert attempt.detail == "Caused by: Access is denied. (os error 5)"
+
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_falls_back_to_stdout_when_stderr_empty(self, mock_run, mock_which):
+        # Not every installer writes diagnostics to stderr; an empty tail would
+        # put us right back to "something failed, no idea what".
+        mock_run.return_value = MagicMock(returncode=1, stderr="", stdout="ERROR: no matching dist")
+        assert _perform_update("2.0.0").detail == "ERROR: no matching dist"
+
+    @patch("shutil.which", return_value=None)
+    def test_missing_installer_is_explained(self, mock_which):
+        attempt = _perform_update("2.0.0")
+        assert attempt.outcome is UpdateOutcome.FAILED
+        assert "neither uv nor pip" in attempt.detail
+
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run", side_effect=OSError("Permission denied"))
+    def test_os_error_is_explained(self, mock_run, mock_which):
+        attempt = _perform_update("2.0.0")
+        assert attempt.outcome is UpdateOutcome.FAILED
+        assert "Permission denied" in attempt.detail
+
+    @patch("shutil.which", return_value="/usr/local/bin/uv")
+    @patch("subprocess.run")
+    def test_timeout_carries_no_detail(self, mock_run, mock_which):
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="uv", timeout=1)
+        attempt = _perform_update("2.0.0")
+        assert attempt.outcome is UpdateOutcome.TIMEOUT
+        assert attempt.detail == ""
+
+
+class TestFailureBannerText:
+    """The failure banner surfaces the installer's own last line."""
+
+    @staticmethod
+    def _run_failed_update(monkeypatch, attempt: UpdateAttempt) -> None:
+        monkeypatch.setattr(auto_update_module, "_AUTO_UPDATE_RAN", False)
+        monkeypatch.setattr(auto_update_module, "_should_skip_all", lambda: False)
+        monkeypatch.setattr(auto_update_module, "_should_skip_kbagent_stage", lambda: False)
+        monkeypatch.setattr(auto_update_module, "_read_cache", lambda: None)
+        monkeypatch.setattr(
+            auto_update_module, "_fetch_kbagent_latest_version", lambda **_: "2.0.0"
+        )
+        monkeypatch.setattr(auto_update_module, "_fetch_mcp_latest_version", lambda **_: None)
+        monkeypatch.setattr(auto_update_module, "_apply_prepared_mcp_update", lambda _plan: None)
+        monkeypatch.setattr(auto_update_module, "_write_cache", lambda **_: None)
+        monkeypatch.setattr(auto_update_module, "_is_up_to_date", lambda *_: False)
+        monkeypatch.setattr(
+            auto_update_module,
+            "prepare_kbagent_update_plan",
+            lambda latest: KbagentUpdatePlan(
+                current_version="1.0.0",
+                latest_version="2.0.0",
+                up_to_date=False,
+                command=("uv", "tool", "install"),
+                recovery_command="uv tool install --force --reinstall keboola-cli",
+            ),
+        )
+        monkeypatch.setattr(auto_update_module, "_perform_update", lambda *_a, **_k: attempt)
+        monkeypatch.setattr(auto_update_module, "_re_exec", lambda: None)
+        maybe_auto_update()
+
+    def test_detail_is_printed(self, monkeypatch, capsys):
+        self._run_failed_update(
+            monkeypatch,
+            UpdateAttempt(UpdateOutcome.FAILED, "error: Access is denied. (os error 5)"),
+        )
+        err = capsys.readouterr().err
+        assert "Auto-update failed (error: Access is denied. (os error 5))" in err
+        assert "uv tool install --force --reinstall keboola-cli" in err
+
+    def test_banner_stays_clean_without_detail(self, monkeypatch, capsys):
+        # No empty parentheses when the installer told us nothing.
+        self._run_failed_update(monkeypatch, UpdateAttempt(UpdateOutcome.FAILED))
+        err = capsys.readouterr().err
+        assert "Auto-update failed; continuing with current version." in err
+        assert "()" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +619,10 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.SUCCESS)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateAttempt(UpdateOutcome.SUCCESS),
+    )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_newer_available_updates_and_reexec(
@@ -534,7 +644,10 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateAttempt(UpdateOutcome.FAILED),
+    )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_update_failure_continues(
@@ -556,7 +669,7 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
         "keboola_agent_cli.auto_update._perform_update",
-        return_value=UpdateOutcome.TIMEOUT,
+        return_value=UpdateAttempt(UpdateOutcome.TIMEOUT),
     )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
@@ -836,7 +949,10 @@ class TestMaybeAutoUpdateMcpIntegration:
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateAttempt(UpdateOutcome.FAILED),
+    )
     @patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update")
     @patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="uv_tool")
     @patch("keboola_agent_cli.auto_update._write_cache")
@@ -1110,12 +1226,12 @@ class TestSafeStartupUpdateOrder:
             assert not mutated
             events.append("cache")
 
-        def perform(version: str, *, command: tuple[str, ...]) -> UpdateOutcome:
+        def perform(version: str, *, command: tuple[str, ...]) -> UpdateAttempt:
             nonlocal mutated
             assert events[-1] == "cache"
             mutated = True
             events.append("kbagent")
-            return UpdateOutcome.SUCCESS
+            return UpdateAttempt(UpdateOutcome.SUCCESS)
 
         def reexec() -> None:
             assert mutated

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from importlib.metadata import distribution
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from .services.version_service import (
     prepare_kbagent_update_plan,
     prepare_mcp_update_plan,
     resolve_kbagent_wheel_url,
+    summarize_failure_tail,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,28 @@ class UpdateOutcome(enum.Enum):
     SUCCESS = "success"
     TIMEOUT = "timeout"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class UpdateAttempt:
+    """One self-update subprocess run: its outcome plus *why* it ended that way.
+
+    The startup hook runs the installer with ``capture_output=True`` and used to
+    throw the transcript away, so a failed auto-update printed a bare
+    "Auto-update failed" and every bug report arrived without the one line that
+    explains it -- see issues #528 and #545, where the venv was left broken on
+    Windows and neither report could say what uv actually refused to do. The
+    explicit ``kbagent update`` path has always surfaced ``result.stderr``;
+    carrying the tail here closes that asymmetry.
+
+    Attributes:
+        outcome: SUCCESS / TIMEOUT / FAILED.
+        detail: Last actionable line of the installer transcript (empty when
+            there is nothing to report, e.g. on SUCCESS or TIMEOUT).
+    """
+
+    outcome: UpdateOutcome
+    detail: str = ""
 
 
 # Process-level sentinel for the auto-update flow.
@@ -270,7 +294,7 @@ def _should_skip() -> bool:
 
 def _perform_update(
     latest_version: str, *, command: tuple[str, ...] | None = None
-) -> UpdateOutcome:
+) -> UpdateAttempt:
     """Download and install the latest version.
 
     Delegates to :func:`build_kbagent_upgrade_command` so this path stays
@@ -285,9 +309,12 @@ def _perform_update(
         latest_version: The version being updated to (for logging).
 
     Returns:
-        :class:`UpdateOutcome`: ``SUCCESS`` on a clean install, ``TIMEOUT`` when
-        the install subprocess outran :func:`get_update_timeout` (a slow git+
-        build -- retried next run, not a real failure), ``FAILED`` otherwise.
+        :class:`UpdateAttempt` carrying ``SUCCESS`` on a clean install,
+        ``TIMEOUT`` when the install subprocess outran
+        :func:`get_update_timeout` (a slow git+ build -- retried next run, not a
+        real failure), ``FAILED`` otherwise. A FAILED attempt also carries the
+        last actionable line of the installer transcript so the banner can say
+        what went wrong instead of only that something did.
     """
     # ``command`` is supplied by the startup planner. Keep the fallback only
     # for direct legacy callers; it must never be used after another stage has
@@ -298,7 +325,9 @@ def _perform_update(
     else:
         cmd = list(command)
     if cmd is None:
-        return UpdateOutcome.FAILED
+        return UpdateAttempt(
+            UpdateOutcome.FAILED, "no installer found on PATH (neither uv nor pip)"
+        )
 
     try:
         result = subprocess.run(
@@ -307,11 +336,16 @@ def _perform_update(
             text=True,
             timeout=get_update_timeout(),
         )
-        return UpdateOutcome.SUCCESS if result.returncode == 0 else UpdateOutcome.FAILED
+        if result.returncode == 0:
+            return UpdateAttempt(UpdateOutcome.SUCCESS)
+        # uv writes its diagnostics to stderr; fall back to stdout for
+        # installers that do not (and so the tail is never empty by accident).
+        transcript = result.stderr or result.stdout
+        return UpdateAttempt(UpdateOutcome.FAILED, summarize_failure_tail(transcript))
     except subprocess.TimeoutExpired:
-        return UpdateOutcome.TIMEOUT
-    except OSError:
-        return UpdateOutcome.FAILED
+        return UpdateAttempt(UpdateOutcome.TIMEOUT)
+    except OSError as exc:
+        return UpdateAttempt(UpdateOutcome.FAILED, str(exc))
 
 
 def _re_exec() -> None:
@@ -608,9 +642,10 @@ def maybe_auto_update() -> None:
             return
 
         sys.stderr.write(f"Updating kbagent v{__version__} -> v{kbagent_plan.latest_version}...\n")
-        outcome = _perform_update(
+        attempt = _perform_update(
             kbagent_plan.latest_version or __version__, command=kbagent_plan.command
         )
+        outcome = attempt.outcome
         if outcome is UpdateOutcome.SUCCESS:
             sys.stderr.write(f"Updated to v{kbagent_plan.latest_version}. Re-launching...\n")
             os.environ[ENV_UPDATED_FROM] = __version__
@@ -622,8 +657,13 @@ def maybe_auto_update() -> None:
                 f"{kbagent_plan.recovery_command}\n"
             )
         else:
+            # The installer's own last line is the only clue to WHY the upgrade
+            # failed, and on Windows a failed upgrade can leave the tool
+            # environment mid-swap (#528 / #545) -- so it must reach the user,
+            # not just the discarded subprocess buffer.
+            reason = f" ({attempt.detail})" if attempt.detail else ""
             sys.stderr.write(
-                "Auto-update failed; continuing with current version. Recover with: "
+                f"Auto-update failed{reason}; continuing with current version. Recover with: "
                 f"{kbagent_plan.recovery_command}\n"
             )
     except Exception:
