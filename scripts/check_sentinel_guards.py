@@ -105,7 +105,15 @@ CREDENTIAL_WRITE_ALLOWED = {
 # Check 4: clients constructed with a PROJECT credential, which is the value that
 # can be a sentinel. `ManageClient` is bearer-capable too, but its credential is
 # a manage token and never a sentinel, so its construction is not a risk here.
-PROJECT_CREDENTIAL_CLIENTS = {"KeboolaClient"}
+#
+# Seeded with `_CoreClient`, not `KeboolaClient`: `_descendants_of` walks DOWN the
+# hierarchy, while the construction that puts a sentinel on the wire
+# (`headers["X-StorageApi-Token"] = token`) lives in `_CoreClient.__init__`, an
+# ANCESTOR of `KeboolaClient`. Seeding the leaf left `_CoreClient(...)` and its ten
+# endpoint-family mixins -- every one of them a class that runs that same
+# `__init__` -- outside the check. `KeboolaClient` stays listed because it is the
+# name a reader looks for here; it is already covered as a descendant.
+PROJECT_CREDENTIAL_CLIENTS = {"_CoreClient", "KeboolaClient"}
 
 # Check 2: clients that reach Storage or Manage over bearer, or authenticate
 # with an identity of their own, and so must NOT be guarded. Anything else must

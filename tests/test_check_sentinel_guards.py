@@ -310,6 +310,41 @@ def build(stack_url, provider, project_id):
         )
         assert len(_mod._unguarded_project_clients(root)) == 1
 
+    def test_the_shared_base_construction_is_detected(self, tmp_path: Path) -> None:
+        """`_CoreClient.__init__` is where the header is written, so it is the real seed.
+
+        Seeding Check 4 with `KeboolaClient` alone left this uncovered:
+        `_descendants_of` walks DOWN, and the vulnerable `__init__` lives one level
+        UP. Constructing the base directly puts the sentinel on the wire exactly as
+        the leaf class would.
+        """
+        root = _tree(
+            tmp_path,
+            **{
+                "client/_core.py": "class _CoreClient(BaseHttpClient):\n    pass\n",
+                "services/rogue_service.py": (
+                    "def _client_for(project):\n"
+                    "    return _CoreClient(project.stack_url, project.token)\n"
+                ),
+            },
+        )
+        assert len(_mod._unguarded_project_clients(root)) == 1
+
+    def test_an_endpoint_family_mixin_construction_is_detected(self, tmp_path: Path) -> None:
+        """The ten mixins each run `_CoreClient.__init__`, so each is the same finding."""
+        root = _tree(
+            tmp_path,
+            **{
+                "client/_core.py": "class _CoreClient(BaseHttpClient):\n    pass\n",
+                "client/stream.py": "class _StreamMixin(_CoreClient):\n    pass\n",
+                "services/rogue_service.py": (
+                    "def _client_for(project):\n"
+                    "    return _StreamMixin(project.stack_url, project.token)\n"
+                ),
+            },
+        )
+        assert len(_mod._unguarded_project_clients(root)) == 1
+
     def test_a_manage_client_is_not_a_project_credential_risk(self, tmp_path: Path) -> None:
         """A manage token is never a sentinel, so its construction is out of scope."""
         source = """
