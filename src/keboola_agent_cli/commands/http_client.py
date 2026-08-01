@@ -16,12 +16,12 @@ of :mod:`keboola_agent_cli.services.http_forwarder_service`.
 from __future__ import annotations
 
 import json
-import sys
 from typing import Any
 
 import typer
 
 from ..constants import HTTP_DEFAULT_TIMEOUT
+from ..output import write_machine_output
 from ..services.http_forwarder_service import (
     ForwardedResponse,
     ForwarderError,
@@ -41,7 +41,7 @@ http_app = typer.Typer(
 def _print_json(_console: Any, data: Any) -> None:
     """Human-mode renderer: pipe-safe pretty JSON.
 
-    Uses ``sys.stdout.write`` instead of ``console.print`` because Rich
+    Uses a raw stdout write instead of ``console.print`` because Rich
     can soft-wrap long strings or escape markup, which breaks downstream
     ``json.loads`` consumers. Real-world case: an AI agent piped
     ``kbagent http get /openapi.json`` into ``python3 -c "json.load(sys.stdin)"``
@@ -49,7 +49,7 @@ def _print_json(_console: Any, data: Any) -> None:
     of ``kbagent http`` is virtually always parsed by something downstream
     (an LLM, a script, jq) -- so machine-clean stdout is the contract.
     """
-    sys.stdout.write(json.dumps(data, indent=2) + "\n")
+    write_machine_output(json.dumps(data, indent=2) + "\n")
 
 
 def _resolve_service(ctx: typer.Context) -> HttpForwarderService:

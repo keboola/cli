@@ -1,5 +1,6 @@
 """Output formatting with JSON and Rich dual mode support."""
 
+import contextlib
 import json
 import sys
 from collections.abc import Callable
@@ -12,6 +13,76 @@ from rich.table import Table
 from rich.text import Text
 
 from .models import ErrorResponse, SuccessResponse
+
+
+def _stdout_is_utf8() -> bool:
+    """Whether ``sys.stdout`` already encodes as UTF-8 (or a UTF-8 alias)."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return False
+    return encoding.lower().replace("-", "").replace("_", "") in ("utf8", "utf8sig")
+
+
+def force_utf8_stdout() -> None:
+    """Re-encode ``sys.stdout`` as UTF-8 for machine-readable output.
+
+    Machine output (``--json``, ``kbagent http``, agent run-event streams) is
+    written for a downstream consumer -- a file, a pipe, an LLM, ``jq`` -- so it
+    must not depend on the console codepage of the terminal that happens to be
+    attached. On Windows the inherited codepage is a legacy single-byte encoding
+    (cp1250 on Czech/Polish/Hungarian locales), and a single non-ASCII character
+    anywhere in the payload -- an arrow in a flow name, an accented config name,
+    an emoji -- made ``sys.stdout.write`` raise ``UnicodeEncodeError`` and killed
+    the command instead of printing JSON (issue #546).
+
+    Unlike the ``kbagent serve`` startup banner (issue #522), transliterating to
+    ASCII is *not* an option here: the banner is decoration, this is data.
+
+    Best effort and idempotent: streams that cannot be reconfigured (a
+    ``StringIO`` in tests, an already-detached stream) are left alone and the
+    write-time fallback in :func:`write_machine_output` covers them.
+    """
+    if _stdout_is_utf8():
+        return
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    # Non-critical on failure: write_machine_output() still has a byte-level path.
+    with contextlib.suppress(OSError, ValueError, LookupError):
+        reconfigure(encoding="utf-8")
+
+
+def write_machine_output(text: str) -> None:
+    """Write machine-readable text to stdout as UTF-8, never as the console codepage.
+
+    :func:`force_utf8_stdout` handles the normal case up front; this stays
+    defensive for the streams it could not reconfigure. On
+    ``UnicodeEncodeError`` the text is encoded to UTF-8 bytes and written to the
+    underlying binary buffer, which bypasses the text layer's codec entirely.
+    The text stream is flushed first so the bytes cannot overtake previously
+    buffered output.
+
+    Args:
+        text: The already-serialized payload (typically JSON), including any
+            trailing newline.
+    """
+    force_utf8_stdout()
+    try:
+        sys.stdout.write(text)
+        return
+    except UnicodeEncodeError as exc:
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is None:
+            # No binary layer to fall back to (an exotic stream). Surfacing the
+            # original error beats silently dropping or mangling machine output.
+            raise exc
+
+    # The failed write left nothing valid to flush, but anything written before
+    # it must reach the stream ahead of the bytes below.
+    with contextlib.suppress(UnicodeEncodeError):
+        sys.stdout.flush()
+    buffer.write(text.encode("utf-8"))
+    buffer.flush()
 
 
 class OutputFormatter:
@@ -54,7 +125,7 @@ class OutputFormatter:
         """
         if self.json_mode:
             response = SuccessResponse(status="ok", data=data)
-            sys.stdout.write(response.model_dump_json(indent=2) + "\n")
+            write_machine_output(response.model_dump_json(indent=2) + "\n")
         else:
             if human_formatter is not None:
                 human_formatter(self.console, data)
@@ -99,7 +170,7 @@ class OutputFormatter:
                 "status": "error",
                 "error": err.model_dump(exclude_none=True),
             }
-            sys.stdout.write(json.dumps(error_envelope, indent=2) + "\n")
+            write_machine_output(json.dumps(error_envelope, indent=2) + "\n")
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")
 
@@ -111,7 +182,7 @@ class OutputFormatter:
         """
         if self.json_mode:
             response = SuccessResponse(status="ok", data={"message": message})
-            sys.stdout.write(response.model_dump_json(indent=2) + "\n")
+            write_machine_output(response.model_dump_json(indent=2) + "\n")
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
 
