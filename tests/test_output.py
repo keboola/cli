@@ -4,6 +4,7 @@ import io
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from io import StringIO
 from typing import cast
 
@@ -1080,6 +1081,23 @@ class TestFormatQueryResults:
         assert "alice" in output
 
 
+@dataclass(frozen=True)
+class Cp1250Stdout:
+    """A stdout whose text layer cannot encode non-ASCII, like a cp1250 console.
+
+    `raw` is held directly rather than reached through `text.buffer`, whose
+    declared type (`_WrappedBuffer`) has no `getvalue`.
+    """
+
+    text: io.TextIOWrapper
+    raw: io.BytesIO
+
+    @classmethod
+    def create(cls) -> "Cp1250Stdout":
+        raw = io.BytesIO()
+        return cls(io.TextIOWrapper(raw, encoding="cp1250", newline=""), raw)
+
+
 class TestMachineOutputIsAlwaysUtf8:
     """`--json` must not depend on the console codepage (issue #546).
 
@@ -1097,17 +1115,12 @@ class TestMachineOutputIsAlwaysUtf8:
 
     ARROW_NAME = "extract → transform"
 
-    @staticmethod
-    def _cp1250_stdout() -> io.TextIOWrapper:
-        """A stdout whose text layer cannot encode the payload, like cp1250."""
-        return io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
-
     def _capture(self, monkeypatch: pytest.MonkeyPatch, action: Callable[[], None]) -> bytes:
-        stream = self._cp1250_stdout()
-        monkeypatch.setattr(sys, "stdout", stream)
+        stdout = Cp1250Stdout.create()
+        monkeypatch.setattr(sys, "stdout", stdout.text)
         action()
-        stream.flush()
-        return cast(io.BytesIO, stream.buffer).getvalue()
+        stdout.text.flush()
+        return stdout.raw.getvalue()
 
     def test_output_survives_a_codepage_that_cannot_encode_the_data(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1155,14 +1168,14 @@ class TestMachineOutputIsAlwaysUtf8:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Flushing the text layer first stops the two writers reordering."""
-        stream = self._cp1250_stdout()
-        monkeypatch.setattr(sys, "stdout", stream)
+        stdout = Cp1250Stdout.create()
+        monkeypatch.setattr(sys, "stdout", stdout.text)
 
         sys.stdout.write("first\n")
         write_machine_output("second")
-        stream.flush()
+        stdout.text.flush()
 
-        assert cast(io.BytesIO, stream.buffer).getvalue() == b"first\nsecond\n"
+        assert stdout.raw.getvalue() == b"first\nsecond\n"
 
 
 class TestStreamedAgentEventsAreUtf8:
@@ -1180,14 +1193,14 @@ class TestStreamedAgentEventsAreUtf8:
     ) -> None:
         from keboola_agent_cli.commands.agent import _render_stream_event
 
-        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
-        monkeypatch.setattr(sys, "stdout", stream)
+        stdout = Cp1250Stdout.create()
+        monkeypatch.setattr(sys, "stdout", stdout.text)
         formatter = OutputFormatter(json_mode=True)
 
         _render_stream_event(formatter, {"event": "log", "data": {"msg": "načítám → hotovo"}})
-        stream.flush()
+        stdout.text.flush()
 
-        written = cast(io.BytesIO, stream.buffer).getvalue()
+        written = stdout.raw.getvalue()
         assert json.loads(written.decode("utf-8"))["data"]["msg"] == "načítám → hotovo"
 
     def test_each_event_is_flushed_so_consumers_see_it_immediately(
@@ -1196,11 +1209,11 @@ class TestStreamedAgentEventsAreUtf8:
         """A stream consumer reads line by line; buffering would stall it."""
         from keboola_agent_cli.commands.agent import _render_stream_event
 
-        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
-        monkeypatch.setattr(sys, "stdout", stream)
+        stdout = Cp1250Stdout.create()
+        monkeypatch.setattr(sys, "stdout", stdout.text)
         formatter = OutputFormatter(json_mode=True)
 
         _render_stream_event(formatter, {"event": "init", "data": {}})
 
         # Readable without an explicit flush by the test.
-        assert cast(io.BytesIO, stream.buffer).getvalue().endswith(b"\n")
+        assert stdout.raw.getvalue().endswith(b"\n")

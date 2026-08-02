@@ -24,7 +24,15 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.77.1": [
+    "0.78.0": [
+        "Fix (#546): `kbagent --json` no longer crashes with `UnicodeEncodeError` on Windows "
+        "consoles using a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). Any "
+        "non-ASCII character in the data -- an arrow in a flow name was the report -- made "
+        "machine-readable output unusable, because pydantic's `model_dump_json` emits raw UTF-8 "
+        "and `sys.stdout` then encoded it through the console codepage. All machine output, "
+        "including the `--stream` NDJSON from `kbagent agent run`, is now written as UTF-8 bytes "
+        "independent of the console. The `PYTHONUTF8=1` workaround is no longer needed. JSON "
+        "lines now end LF rather than CRLF on Windows. Thanks to @MichalProchazka for the report.",
         "Fix (#528): the Windows self-update no longer corrupts the uv tool environment. "
         "`uv tool install` recreates a tool environment by REMOVING it and then building a fresh "
         "venv at the same path -- it is not atomic and has no rollback. On POSIX that is harmless, "
