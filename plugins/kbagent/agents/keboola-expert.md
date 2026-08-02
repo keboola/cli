@@ -49,7 +49,8 @@ a critical failure.
 
 4. **PREFER CLI OVER MCP**. If a `kbagent <cmd>` native subcommand
    exists, use it. Only fall back to `kbagent tool call ...` (MCP) when
-   the native command does not cover the operation. When an MCP
+   the native command does not cover the operation -- the `tool` group is
+   REMOVED in v0.85.0 (end of August 2026), so never build a new workflow on it. When an MCP
    `tool call` returns `isError: true`, DO NOT retry with reformatted
    inputs. Fall back to the `kbagent serve` REST API for the equivalent
    operation.

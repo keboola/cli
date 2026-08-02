@@ -11,7 +11,7 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
-## MCP passthrough is DEPRECATED; parity map + canary (since v0.74.0)
+## MCP passthrough is DEPRECATED; REMOVED in v0.85.0 (since v0.74.0)
 
 - **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
   track** (epic #390 phase 2). `tool call` warns with the exact native
@@ -25,9 +25,15 @@ Versioning convention:
   (also `make parity-check`) diffs the live keboola-mcp-server `TOOLS.md`
   against it, so a new upstream tool turns the canary red instead of
   silently widening the gap.
-- **`agent --type mcp_tool` tasks keep working** through the deprecation
-  window -- creation just warns; migrate to `--type cli_command` with the
-  native command at your own pace before the removal release.
+- **Removal is scheduled: v0.85.0, end of August 2026** (epic #390 phase 3,
+  announced in 0.80.0). Before 0.80.0 the notice said only "a future
+  release"; it now names the version everywhere.
+- **`agent --type mcp_tool` tasks keep working** until then -- creation just
+  warns. Migrate to `--type cli_command` with the native command BEFORE
+  v0.85.0. These tasks are persisted in `<config_dir>/agents.json`, so
+  unlike an interactive `tool call` they get no warning at removal time: a
+  scheduled task simply starts failing on its next cron tick. Use the
+  `cli_equivalent` from `kbagent tool list` to rewrite each one.
 
 ## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
 
