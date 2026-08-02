@@ -17,7 +17,12 @@ import typer
 
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, PermissionDeniedError
-from ..mcp_parity import deprecation_message, native_equivalent
+from ..mcp_parity import (
+    MCP_REMOVAL_TARGET_DATE,
+    MCP_REMOVAL_VERSION,
+    deprecation_message,
+    native_equivalent,
+)
 from ..output import OutputFormatter, format_tool_result, format_tools_table
 from ._helpers import (
     EXIT_PERMISSION_DENIED,
@@ -35,7 +40,8 @@ tool_app = typer.Typer(help="MCP tools - interact with Keboola via MCP server")
 # messages for `tool call` come from mcp_parity.deprecation_message().
 TOOL_LIST_DEPRECATION = (
     "The MCP passthrough is deprecated (epic #390); every tool has a native "
-    "command -- see the cli_equivalent column."
+    "command -- see the cli_equivalent column. The `tool` group is REMOVED in "
+    f"kbagent v{MCP_REMOVAL_VERSION} ({MCP_REMOVAL_TARGET_DATE})."
 )
 
 

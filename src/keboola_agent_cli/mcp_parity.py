@@ -20,6 +20,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Removal target for the MCP passthrough (epic #390 phase 3). Deprecated since
+# 0.74.0; until 0.80.0 the notice said only "a future release", which gives a
+# user nothing to plan against -- especially for `agent --type mcp_tool`, whose
+# tasks live in `<config_dir>/agents.json` on disk and would simply start
+# failing on their next cron tick. Every surface that mentions the deprecation
+# quotes these two so they cannot drift apart.
+#
+# Deliberately NOT in constants.py, which is otherwise the home for values like
+# these: this module must stay stdlib-only and standalone-importable so
+# `scripts/check_mcp_parity.py` can load it on a bare python3 in the canary
+# workflow, and constants.py imports httpx. Moving them there turns the canary
+# red -- verified.
+MCP_REMOVAL_VERSION: str = "0.85.0"
+MCP_REMOVAL_TARGET_DATE: str = "end of August 2026"
+
 
 @dataclass(frozen=True)
 class ParityEntry:
@@ -135,10 +150,12 @@ def deprecation_message(tool_name: str) -> str:
         return (
             f"MCP passthrough is deprecated (epic #390) and tool {tool_name!r} has "
             f"no native equivalent yet -- please report it at "
-            f"https://github.com/keboola/cli/issues/390."
+            f"https://github.com/keboola/cli/issues/390 before the group is "
+            f"removed in v{MCP_REMOVAL_VERSION} ({MCP_REMOVAL_TARGET_DATE})."
         )
     suffix = f" ({entry.note})" if entry.note else ""
     return (
         f"MCP passthrough is deprecated (epic #390); use `kbagent {entry.command}` "
-        f"instead{suffix}. The `tool` group will be removed in a future release."
+        f"instead{suffix}. The `tool` group is REMOVED in kbagent "
+        f"v{MCP_REMOVAL_VERSION} ({MCP_REMOVAL_TARGET_DATE})."
     )

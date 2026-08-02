@@ -23,6 +23,7 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, ErrorCode
+from ..mcp_parity import MCP_REMOVAL_TARGET_DATE, MCP_REMOVAL_VERSION
 from ..output import OutputFormatter, write_machine_output
 from ..server.agents_store import AgentAction, Trigger
 from ..services.agent_service import AgentService
@@ -35,10 +36,17 @@ agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 # stderr warning in human mode, additive "deprecation" envelope key in
 # JSON mode. Creation is never blocked; agents.json / REST payloads are
 # unchanged.
+# The deadline matters MORE here than on `tool call`. An interactive `tool call`
+# warns on every invocation right up to removal; a scheduled task is written to
+# agents.json once and then runs unattended, so creation time is the only moment
+# its owner is present to hear the date. Removing the action type without this
+# turns those tasks into a silent cron failure.
 MCP_TOOL_ACTION_DEPRECATION = (
     "agent action type 'mcp_tool' is deprecated (epic #390); prefer --type "
     "cli_command with the native kbagent command (see `kbagent tool list` "
-    "cli_equivalent column)."
+    f"cli_equivalent column). It is REMOVED in kbagent v{MCP_REMOVAL_VERSION} "
+    f"({MCP_REMOVAL_TARGET_DATE}) -- migrate scheduled tasks before then or they "
+    "will start failing on their next run."
 )
 
 

@@ -1276,8 +1276,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
-### MCP Tools (Multi-Project) -- DEPRECATED since 0.74.0
+### MCP Tools (Multi-Project) -- DEPRECATED since 0.74.0, REMOVED in 0.85.0
 
+  The `tool` group and `agent --type mcp_tool` are REMOVED in kbagent
+  v0.85.0, scheduled for the end of August 2026. Migrate before then.
   The MCP passthrough is on a removal track (epic #390): every catalog tool
   has a native command. Prefer the native command in ALL new work -- `tool
   list` prints the replacement in the cli_equivalent column and `tool call`

@@ -305,6 +305,7 @@ MCP_UPGRADE_TIMEOUT: float = 180.0
 MCP_UV_PRERELEASE_FLAG: str = "--prerelease=allow"
 MCP_PIP_PRERELEASE_FLAG: str = "--pre"
 
+
 # --- Auto-Update ---
 ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
 ENV_SKIP_UPDATE: str = "KBAGENT_SKIP_UPDATE"

@@ -24,6 +24,25 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.0": [
+        "Note (#390): the MCP passthrough now has a named removal date -- `kbagent tool "
+        "list` / `tool call` and `agent --type mcp_tool` are REMOVED in **v0.85.0**, "
+        "scheduled for the **end of August 2026**. Deprecated since 0.74.0, the notice "
+        'until now said only "a future release", which gives nobody anything to plan '
+        "against. Every surface that mentions the deprecation -- the `tool call` warning, "
+        "the `tool list` banner, `kbagent context`, the skill references and the agent "
+        "prompt -- quotes the same two constants, so the version and the date cannot drift "
+        "apart. All 39 upstream tools already have a native command (`make parity-check` "
+        "verifies it against the live catalogue on every canary run), so nothing is lost "
+        "by migrating early: `kbagent tool list` prints the replacement per tool in its "
+        "`cli_equivalent` column.",
+        "Note (#390): if you have scheduled agent tasks of `--type mcp_tool`, migrate them "
+        "to `--type cli_command` before v0.85.0. Unlike an interactive `tool call`, these "
+        "are persisted in `<config_dir>/agents.json` and get no warning at removal time -- "
+        "they simply start failing on their next cron tick. `kbagent agent list` shows the "
+        "action type of each task, and `kbagent tool list` gives the native command to "
+        "replace each tool with.",
+    ],
     "0.79.0": [
         "Fix: the standalone `kbagent` binary no longer tries to update itself with "
         "`uv tool install`. kbagent ships both as a Python distribution and as a "

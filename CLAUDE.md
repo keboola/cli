@@ -425,7 +425,9 @@ kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID
 #   prints a cli_equivalent column, tool call warns with the exact replacement (stderr; --json adds
 #   an additive "deprecation" key). Parity map = src/keboola_agent_cli/mcp_parity.py; weekly
 #   mcp-parity-canary workflow (make parity-check) diffs it against upstream TOOLS.md. The group
-#   (and `agent --type mcp_tool`) will be removed after the deprecation window.
+#   (and `agent --type mcp_tool`) is REMOVED in v0.85.0, scheduled for the end of August 2026
+#   -- epic #390 phase 3. `agent --type mcp_tool` tasks persist in agents.json, so they need
+#   migrating to `--type cli_command` before that release or they fail on their next cron tick.
 
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
