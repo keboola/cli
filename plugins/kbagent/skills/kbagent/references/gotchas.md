@@ -2171,6 +2171,29 @@ the banner says the install is *still running* and deliberately offers no
 recovery command -- starting a second installer against an environment a live
 uv is rewriting is the corruption itself.
 
+## `--json` output is always UTF-8, never the console codepage (since v0.78.0)
+
+`kbagent --json ...` used to crash with `UnicodeEncodeError` on a Windows console
+with a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows) as soon as
+the data held a non-ASCII character -- an arrow in a flow name was enough, which
+made `kbagent --json flow list` unusable on those machines.
+
+All machine-readable output is now written as UTF-8 bytes independent of the
+console: the `OutputFormatter` JSON paths, `kbagent http`, and the `--stream`
+NDJSON from `kbagent agent run` / `agent test`.
+
+Consequences for an agent:
+
+- **Do not recommend `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` as a workaround
+  for `--json`.** It is no longer needed and only muddies the picture.
+- On Windows, `--json` lines end `LF`, not `CRLF` -- the binary write does no
+  newline translation. Anything diffing or byte-comparing kbagent JSON output
+  across platforms should expect LF everywhere.
+- Human-mode output is unchanged and still goes through Rich, which does its own
+  encoding handling. The `kbagent serve` banner keeps its separate ASCII
+  fallback (since v0.76.1) -- decorative output degrades rather than forcing
+  UTF-8.
+
 ## `lineage build` and sync layouts
 
 `lineage build` reads synced data from disk and supports both layouts produced by
