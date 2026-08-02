@@ -4,8 +4,9 @@ Budgets are measured in **code lines**, not raw line count: docstrings,
 comments and blank lines are excluded. Raw LOC would tax the long
 rationale-carrying docstrings this codebase deliberately writes -- they are
 what makes it navigable, so a metric that punishes them pushes in exactly the
-wrong direction. Measured on the 0.78.0 tree, `version_service.py` is 1259
-lines but only 657 lines of code; 36% of the file is prose.
+wrong direction. The gap is not marginal: `services/version_service.py` is 1252
+lines but 705 lines of code (36% prose), and `constants.py` is 574 lines but
+190 lines of code (56% prose).
 
 What counts as a code line: any physical line carrying at least one token that
 is not a comment, a docstring, or pure layout (NEWLINE/NL/INDENT/DEDENT). A
@@ -198,7 +199,11 @@ def _report(metrics: list[FileMetrics], limit: int | None) -> None:
     for metric in ranked:
         rel = metric.path.relative_to(PKG_ROOT).as_posix()
         budget = budget_for(rel)
-        if rel in _EXEMPT or metric.path.name in _EXEMPT:
+        # Full-path match only, exactly like the gate below. A basename fallback
+        # would print `commands/changelog.py` as exempt (it shares a name with
+        # the exempt top-level `changelog.py`) while main() still measured it --
+        # the report would promise a budget the build does not honour.
+        if _is_exempt(rel):
             state = "exempt"
         elif metric.code > budget.hard:
             state = f"HARD >{budget.hard}"

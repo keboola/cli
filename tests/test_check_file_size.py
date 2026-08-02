@@ -121,7 +121,7 @@ class TestBudgetResolution:
             ("manage_client.py", "client"),
             ("server/app.py", "server"),
             ("sync/engine.py", "sync"),
-            ("frozen_dist.py", "module"),
+            ("http_base.py", "module"),
             ("auto_update.py", "module"),
         ],
     )
@@ -198,6 +198,23 @@ class TestRepoState:
             assert (_mod.PKG_ROOT / relative_path).is_file(), (
                 f"{relative_path} is baselined but gone -- run `make loc-baseline`"
             )
+
+    def test_report_and_gate_agree_on_what_is_exempt(self, capsys):
+        """The report must not promise a budget the gate does not honour.
+
+        `commands/changelog.py` shares a basename with the exempt top-level
+        `changelog.py`. A basename-based exemption in the report would print it
+        as unlimited while main() still measured it -- a wasted debugging cycle
+        the first time it crossed the ceiling.
+        """
+        _mod.main(["--report"])
+        lines = capsys.readouterr().out.splitlines()
+        exempt_in_report = {
+            line.split()[0] for line in lines[1:] if line.strip().endswith("exempt")
+        }
+        assert exempt_in_report == set(_mod._EXEMPT), (
+            "report exemptions must match _EXEMPT exactly (full paths, no basename match)"
+        )
 
     def test_exemptions_are_justified_and_real(self):
         for relative_path, reason in _mod._EXEMPT.items():

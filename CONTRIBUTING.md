@@ -199,7 +199,7 @@ make loc-baseline   # re-record grandfathered files AFTER a split
 | `sync/*.py` | 1000 | 1500 |
 | everything else in the package | 1000 | 1500 |
 
-**Why code lines and not LOC.** This codebase deliberately writes long rationale-carrying docstrings -- they are the reason it stays navigable, for humans and for the AI agents that work in it. A raw-LOC budget taxes exactly that and pushes toward *less* explanation, which is backwards. The gap is not marginal: at 0.78.0 `version_service.py` is 1259 lines but 657 lines of code (36% prose), and `frozen_dist.py` is 203 lines but 63 lines of code (52% prose).
+**Why code lines and not LOC.** This codebase deliberately writes long rationale-carrying docstrings -- they are the reason it stays navigable, for humans and for the AI agents that work in it. A raw-LOC budget taxes exactly that and pushes toward *less* explanation, which is backwards. The gap is not marginal: `services/version_service.py` is 1252 lines but 705 lines of code (36% prose), and `constants.py` is 574 lines but 190 lines of code (56% prose). Run `make loc-report` for the current numbers rather than trusting these.
 
 The line the metric draws: a **docstring** (the bare leading string of a module, class or function) is prose and is exempt. A string **assigned to a name** -- a SQL block, a template, the `CHANGELOG` tables -- is data, is counted, and cannot be used to hide content from the budget.
 
