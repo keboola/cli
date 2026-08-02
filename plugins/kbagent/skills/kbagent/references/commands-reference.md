@@ -5,8 +5,8 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 ## Setup & Info
 - `init [--from-global] [--project ALIAS ...]` -- create local `.kbagent/` workspace in current directory; `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies `--from-global`
 - `doctor [--fix]` -- health check for CLI config and MCP server
-- `version [--beta]` -- show version info and dependency update status. `--beta` (since v0.42.0) reports the latest pre-release (beta / rc) instead of the latest stable. Env override: `KBAGENT_INCLUDE_PRERELEASE=1`
-- `update [--beta]` -- self-update to latest version. `--beta` (since v0.42.0) opts into pre-release versions (PEP 440 betas / rc, e.g. `0.43.0b1`). Default behaviour: GitHub's `/releases/latest` endpoint filters prereleases server-side, so the startup auto-update hook never silently lands on a beta. Resolver-level opt-in (`--prerelease=allow` for uv, `--pre` for pip) is added automatically when `--beta` is set
+- `version [--beta]` -- show version info and dependency update status. On a standalone binary the payload carries additive `kbagent.install_channel` + `kbagent.upgrade_hint` keys and `upgrade_command` holds the channel's command (empty for a hand-unpacked archive) (since v0.79.0). `--beta` (since v0.42.0) reports the latest pre-release (beta / rc) instead of the latest stable. Env override: `KBAGENT_INCLUDE_PRERELEASE=1`
+- `update [--beta]` -- self-update to latest version. `--beta` (since v0.42.0) opts into pre-release versions (PEP 440 betas / rc, e.g. `0.43.0b1`). Default behaviour: GitHub's `/releases/latest` endpoint filters prereleases server-side, so the startup auto-update hook never silently lands on a beta. Resolver-level opt-in (`--prerelease=allow` for uv, `--pre` for pip) is added automatically when `--beta` is set. **Standalone (PyInstaller) binaries refuse the self-update** and report their own channel's command instead -- a uv/pip reinstall would install a second, unrelated kbagent rather than upgrade the packaged one (since v0.79.0)
 - `changelog [--limit N] [--full]` -- show recent changelog (default: last 5 versions, one-line summary per version; `--full` / `-v` expands every note). After auto-update, "What's new" is printed automatically (summarised). Manual trigger: `KBAGENT_UPDATED_FROM=0.17.0 kbagent version`
 - `context` -- print full CLI reference for AI agents
 
@@ -368,7 +368,7 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 ## Utility
 - `init [--from-global] [--project ALIAS ...]` -- create local `.kbagent/` workspace (per-directory isolation); `--project ALIAS` (repeatable) copies only the named project(s) and implies `--from-global`
 - `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary. Includes a `sync_secrets` check (since 0.55.0): when run inside a sync working tree (`.keboola/manifest.json`), warns if any in-sync config holds plaintext `#`-secrets (#378); `skip` outside a sync tree
-- `version` -- show version and check for MCP server updates
+- `version` -- show version and check for MCP server updates; on a standalone binary it advertises the native channel's upgrade command instead of `kbagent update` (v0.79.0+)
 - `context` -- full usage instructions for AI agents
 
 ## Global Flags
