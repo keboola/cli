@@ -2138,7 +2138,7 @@ transparent -- no user action is normally required.
 - Never crashes the CLI -- update failures leave the current invocation running
   and print a recovery command (since v0.76.2)
 
-### Windows updates are deferred, not immediate (since v0.77.1)
+### Windows updates are deferred, not immediate (since v0.78.0)
 
 `uv tool install` recreates a tool environment by **removing** it and then
 building a fresh venv at the same path. It is not atomic and has no rollback.
@@ -2164,7 +2164,7 @@ So on Windows kbagent never installs into its own live environment:
 - `KBAGENT_DEFER_UPDATE=1` / `=0` forces the deferred path on or off,
   overriding the platform default.
 
-A slow install is never killed on any platform (also since v0.77.1): the
+A slow install is never killed on any platform (also since v0.78.0): the
 timeout bounds only how long kbagent waits, because terminating uv mid-write
 produces the same half-deleted environment a file lock does. When that happens
 the banner says the install is *still running* and deliberately offers no
