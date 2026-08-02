@@ -3135,10 +3135,14 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   helper from v0.78.0 -- the guard sits ahead of the `should_defer()` branch, so
   a frozen binary is never scheduled for an install it cannot receive either.
 - **Read the channel out of `kbagent version --json`.** A frozen build carries
-  an additive `kbagent.install_channel` key (`chocolatey` / `winget` /
-  `homebrew` / `debian` / `rpm` / `system` / `archive`) and `upgrade_command`
-  holds that channel's command. The key is **absent** on uv/pip installs -- so
-  `install_channel` present is the reliable "this is a native binary" signal.
+  two additive keys: `kbagent.install_channel` (`chocolatey` / `winget` /
+  `homebrew` / `debian` / `rpm` / `system` / `archive`) and
+  `kbagent.upgrade_hint` (always a human sentence). Both are **absent** on
+  uv/pip installs -- so `install_channel` present is the reliable "this is a
+  native binary" signal. `upgrade_command` stays runnable-or-empty: for
+  `archive` and `system` there is no single correct command, so it is `""` and
+  the sentence lives in `upgrade_hint`. **Never shell out to `upgrade_hint`**,
+  and check `upgrade_command` is non-empty before running it.
   Do not infer it from the version string; a frozen binary reports a perfectly
   normal version (PyInstaller bundles the dist metadata, so there is no
   `0.0.0-dev` tell).

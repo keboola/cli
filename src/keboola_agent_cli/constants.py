@@ -393,10 +393,13 @@ NATIVE_HOMEBREW_PATH_MARKERS: tuple[str, ...] = (
     "/opt/homebrew/",
     "/linuxbrew/",
 )
-# nfpm installs to /usr/bin/kbagent (see build/package/nfpm.yaml). Only consulted
-# on Linux -- deb/rpm do not exist elsewhere, and on macOS /usr/local/bin is a
-# hand-unpacked archive, not a system package.
-NATIVE_SYSTEM_BIN_PREFIXES: tuple[str, ...] = ("/usr/bin/", "/usr/local/bin/")
+# nfpm installs to /usr/bin/kbagent (see build/package/nfpm.yaml) and nothing we
+# ship ever writes /usr/local/bin -- which is precisely where a hand-unpacked
+# archive lands. Listing it would hand those users `apt-get install
+# --only-upgrade keboola-cli2` for a package that was never installed; they must
+# degrade to ARCHIVE and the release page instead. Only consulted on Linux, since
+# deb/rpm do not exist elsewhere.
+NATIVE_SYSTEM_BIN_PREFIXES: tuple[str, ...] = ("/usr/bin/",)
 
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)

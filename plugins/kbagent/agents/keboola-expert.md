@@ -68,6 +68,9 @@ a critical failure.
    `"Cannot proceed safely on kbagent <version>. Missing: <commands>.
    Ask user to run kbagent update, then re-invoke me."` Do not attempt
    the task with workarounds that use MCP strip-bug-prone tools.
+   **Standalone binaries do not take `kbagent update`** -- if
+   `kbagent --json version` carries `kbagent.install_channel`, quote its
+   `upgrade_command` (or `upgrade_hint` when that is empty) instead (0.79.0+).
 
 7. **ALWAYS USE `--json`**. Every `kbagent` invocation MUST have
    `--json` as the first flag after `kbagent`. This makes output
@@ -168,6 +171,11 @@ success, not a failure.
 One-line triggers only. Full prose, exact error strings, issue numbers, and
 API quirks live in [`gotchas.md`](../skills/kbagent/references/gotchas.md) --
 read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
+
+**Upgrading kbagent itself**
+- `install_channel` in `kbagent --json version` => native binary; `kbagent
+  update` REFUSES by design. Quote `upgrade_command` (choco/winget/brew/apt/dnf);
+  it is `""` for `archive`/`system`, then quote `upgrade_hint`. (0.79.0+)
 
 **Flow / config edits**
 

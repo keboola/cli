@@ -30,7 +30,7 @@ from .constants import (
     VERSION_CACHE_FILENAME,
     VERSION_CHECK_TIMEOUT,
 )
-from .frozen_dist import FrozenDistribution, detect_frozen_distribution
+from .frozen_dist import FrozenDistribution, detect_frozen_distribution, is_frozen_build
 from .services.version_service import (
     MCP_PACKAGE_NAME,
     MCP_UV_PRERELEASE_FLAG,
@@ -180,7 +180,21 @@ def _is_dev_install() -> bool:
     Returns True if:
     - __version__ is '0.0.0-dev' (PackageNotFoundError fallback), or
     - The package was installed in editable mode (PEP 660 direct_url.json).
+
+    A frozen (PyInstaller) build is NEVER a dev tree, whatever its bundled
+    metadata claims -- and the claim is routinely wrong. The release workflow
+    freezes from a ``uv run`` sync, which installs the project editable, and
+    ``--collect-all keboola_agent_cli`` copies the whole ``.dist-info`` into the
+    binary *including* ``direct_url.json`` with ``"editable": true``. Every
+    shipped binary therefore looked like a developer checkout here, which
+    silently disabled the entire startup hook -- including the frozen-build
+    notification that is supposed to replace the self-update for exactly those
+    users (see :mod:`keboola_agent_cli.frozen_dist`). The check must come first:
+    the bundled marker describes the BUILD MACHINE, not the machine running it.
     """
+    if is_frozen_build():
+        return False
+
     if __version__ == "0.0.0-dev":
         return True
 

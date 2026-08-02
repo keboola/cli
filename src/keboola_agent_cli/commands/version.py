@@ -97,7 +97,10 @@ def _format_version_panel(console: Console, data: dict) -> None:
         # it would just send them one step further down a dead end. The service
         # already put that channel's real command in `upgrade_command`.
         if kbagent.get("install_channel"):
-            text.append(f"  ({kbagent.get('upgrade_command')})", style="dim")
+            # `upgrade_command` is empty for channels with no single runnable
+            # command (hand-unpacked archive); the hint sentence covers those.
+            action = kbagent.get("upgrade_command") or kbagent.get("upgrade_hint", "")
+            text.append(f"  ({action})", style="dim")
         else:
             text.append("  (run: kbagent update)", style="dim")
     elif kbagent.get("up_to_date") is True:

@@ -909,9 +909,12 @@ class VersionService:
         # replaces it, and the wheel-URL HEAD probe is skipped as dead weight.
         frozen_distribution = detect_frozen_distribution()
         if frozen_distribution is not None:
-            kbagent_upgrade_str = (
-                frozen_distribution.upgrade_command or frozen_distribution.upgrade_hint
-            )
+            # Keep `upgrade_command` a RUNNABLE command or nothing. A consumer
+            # that shells out to it verbatim -- the use the gotchas entry
+            # documents -- must never be handed the prose hint. Channels with no
+            # single command (hand-unpacked archive, unidentified system
+            # package) carry the sentence in `upgrade_hint` instead.
+            kbagent_upgrade_str = frozen_distribution.upgrade_command or ""
         else:
             # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
             # prebuilt-wheel install command when the asset exists, so a programmatic
@@ -934,10 +937,13 @@ class VersionService:
             "up_to_date": kbagent_up_to_date,
             "upgrade_command": kbagent_upgrade_str,
         }
-        # Additive key, present ONLY on a frozen build, so the JSON shape every
-        # existing uv/pip consumer sees stays byte-identical.
+        # Additive keys, present ONLY on a frozen build, so the JSON shape every
+        # existing uv/pip consumer sees stays byte-identical. `upgrade_hint` is
+        # always a human sentence; `upgrade_command` is empty when the channel
+        # has no single runnable command.
         if frozen_distribution is not None:
             kbagent_entry["install_channel"] = frozen_distribution.channel.value
+            kbagent_entry["upgrade_hint"] = frozen_distribution.upgrade_hint
         return {
             "kbagent": kbagent_entry,
             "dependencies": [
@@ -1057,9 +1063,13 @@ class VersionService:
             # otherwise report this deliberate refusal as "update FAILED".
             channel = kbagent_result.get("install_channel")
             action = kbagent_result.get("upgrade_command") or "see the release page"
+            latest = kbagent_result.get("latest_version")
+            # `latest` is None when the release lookup failed (offline). The
+            # refusal is still worth reporting -- the user asked for an update
+            # and got none -- but "-> vNone available" is not.
+            target = f" -> v{latest} available" if latest else " (latest version unknown)"
             parts.append(
-                f"kbagent v{kbagent_result.get('current_version')} -> "
-                f"v{kbagent_result.get('latest_version')} available "
+                f"kbagent v{kbagent_result.get('current_version')}{target} "
                 f"(standalone {channel} binary; {action})"
             )
         elif kbagent_result.get("current_version"):

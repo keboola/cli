@@ -94,16 +94,22 @@ class TestClassifyChannel:
             _classify_channel(CHOCOLATEY_PATH.upper(), platform="win32") is FrozenChannel.CHOCOLATEY
         )
 
-    def test_macos_usr_local_bin_is_an_archive_not_a_system_package(self):
-        """/usr/local/bin on macOS is a hand-unpacked archive.
+    @pytest.mark.parametrize("platform", ["darwin", "linux"])
+    def test_usr_local_bin_is_an_archive_not_a_system_package(self, platform):
+        """/usr/local/bin is a hand-unpacked archive on EVERY platform.
 
-        deb/rpm do not exist there and the Homebrew formula refuses Intel Macs
-        outright, so claiming a system package would send the user to a package
-        manager they do not have.
+        nfpm installs the deb/rpm exclusively to /usr/bin (build/package/
+        nfpm.yaml); nothing we ship ever writes /usr/local/bin. Attributing it
+        to the system package manager would hand a Debian/Ubuntu user
+        `apt-get install --only-upgrade keboola-cli2` for a package that was
+        never installed -- it fails with "unable to locate package" and points
+        nowhere. The Linux case is the one that bit: `apt-get` exists on
+        essentially every such host, so the misattribution was silent.
         """
-        assert _classify_channel("/usr/local/bin/kbagent", platform="darwin") is (
-            FrozenChannel.ARCHIVE
-        )
+        with patch("keboola_agent_cli.frozen_dist.shutil.which", _which_only("apt-get")):
+            assert _classify_channel("/usr/local/bin/kbagent", platform=platform) is (
+                FrozenChannel.ARCHIVE
+            )
 
     def test_empty_path_degrades_to_archive(self):
         """A missing sys.executable must not raise."""

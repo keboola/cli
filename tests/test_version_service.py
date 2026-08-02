@@ -1750,14 +1750,38 @@ class TestFrozenBuildVersionOutput:
         assert kbagent["install_channel"] == "chocolatey"
         assert "uv tool install" not in kbagent["upgrade_command"]
 
-    def test_frozen_archive_falls_back_to_the_hint(self):
-        """No command for this channel -- surface the hint rather than uv."""
+    def test_frozen_archive_keeps_prose_out_of_upgrade_command(self):
+        """`upgrade_command` must stay runnable-or-empty, never a sentence.
+
+        The gotchas entry tells consumers they may shell out to
+        `upgrade_command`; handing them "re-download the signed archive
+        from https://..." would make them execute prose. Channels with no
+        single command carry it in `upgrade_hint` instead.
+        """
         with patch(
             "keboola_agent_cli.services.version_service.detect_frozen_distribution",
             return_value=TestFrozenBuildSelfUpdateGuard.ARCHIVE_DIST,
         ):
             result = VersionService().get_versions()
-        assert "re-download the signed archive" in result["kbagent"]["upgrade_command"]
+        kbagent = result["kbagent"]
+        assert kbagent["upgrade_command"] == ""
+        assert "re-download the signed archive" in kbagent["upgrade_hint"]
+        assert kbagent["install_channel"] == "archive"
+
+    def test_offline_refusal_does_not_print_vnone(self):
+        """The release lookup can fail; the summary must not say "-> vNone"."""
+        plan = KbagentUpdatePlan(
+            current_version="1.0.0",
+            latest_version=None,
+            up_to_date=None,
+            command=None,
+            recovery_command=None,
+            frozen_distribution=TestFrozenBuildSelfUpdateGuard.CHOCO_DIST,
+        )
+        summary = VersionService._compose_update_summary(VersionService._update_kbagent(plan), {})
+        assert "vNone" not in summary
+        assert "latest version unknown" in summary
+        assert "choco upgrade keboola-cli2" in summary
 
     def test_non_frozen_json_shape_is_unchanged(self):
         """The additive key must not appear for uv/pip installs."""
@@ -1773,4 +1797,5 @@ class TestFrozenBuildVersionOutput:
         ):
             result = VersionService().get_versions()
         assert "install_channel" not in result["kbagent"]
+        assert "upgrade_hint" not in result["kbagent"]
         assert "uv tool install" in result["kbagent"]["upgrade_command"]
