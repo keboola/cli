@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,9 +22,16 @@ from keboola_agent_cli.auto_update import (
     _top_level_subcommand_is_versioning,
     _write_cache,
     maybe_auto_update,
+    report_finished_deferred_update,
 )
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UPGRADE_TIMEOUT
 from keboola_agent_cli.services.version_service import KbagentUpdatePlan, McpUpdatePlan
+from keboola_agent_cli.update_runner import (
+    DeferredUpdateReport,
+    DeferredUpdateStatus,
+    InstallRun,
+    InstallStatus,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -237,37 +245,45 @@ class TestVersionCache:
 # ---------------------------------------------------------------------------
 # _perform_update
 # ---------------------------------------------------------------------------
+def _finished_install(status: InstallStatus, exit_code: int | None = 0) -> InstallRun:
+    """An :class:`InstallRun` stand-in for a mocked installer execution."""
+    return InstallRun(status=status, exit_code=exit_code, output="", log_path=Path("update.log"))
+
+
 class TestPerformUpdate:
-    """Tests for the _perform_update() function."""
+    """Tests for the _perform_update() function.
+
+    The installer subprocess itself is owned by ``update_runner.run_install``
+    (issue #528), so these tests assert the command _perform_update hands it --
+    the contract that actually matters here -- rather than reaching through to
+    ``subprocess``.
+    """
 
     @patch("shutil.which")
-    @patch("subprocess.run")
-    def test_update_with_uv_success(self, mock_run, mock_which):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_update_with_uv_success(self, mock_install, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
-        # Verify uv was called
-        call_args = mock_run.call_args
-        assert "uv" in call_args[0][0][0]
+        assert "uv" in mock_install.call_args.args[0][0]
 
     @patch("shutil.which")
-    @patch("subprocess.run")
-    def test_update_with_uv_failure(self, mock_run, mock_which):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_update_with_uv_failure(self, mock_install, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=1, stderr="error")
+        mock_install.return_value = _finished_install(InstallStatus.FAILED, exit_code=1)
         assert _perform_update("2.0.0") is UpdateOutcome.FAILED
 
     @patch("shutil.which")
-    @patch("subprocess.run")
-    def test_update_pip_fallback(self, mock_run, mock_which):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_update_pip_fallback(self, mock_install, mock_which):
         # uv not found, pip found
         mock_which.side_effect = lambda cmd: (
             None if cmd == "uv" else "/usr/bin/pip" if cmd == "pip" else None
         )
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
-        call_args = mock_run.call_args
-        assert "pip" in call_args[0][0][0]
+        assert "pip" in mock_install.call_args.args[0][0]
 
     @patch("shutil.which")
     def test_update_no_tools(self, mock_which):
@@ -275,12 +291,15 @@ class TestPerformUpdate:
         assert _perform_update("2.0.0") is UpdateOutcome.FAILED
 
     @patch("shutil.which")
-    @patch("subprocess.run")
-    def test_update_timeout(self, mock_run, mock_which):
-        import subprocess as sp
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_still_running_maps_to_timeout(self, mock_install, mock_which):
+        """An installer that outran the wait is TIMEOUT, not FAILED.
 
+        It was not killed (issue #528) -- it is still recreating the
+        environment and the next launch picks up the result.
+        """
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.side_effect = sp.TimeoutExpired(cmd="uv", timeout=120)
+        mock_install.return_value = _finished_install(InstallStatus.STILL_RUNNING, exit_code=None)
         assert _perform_update("2.0.0") is UpdateOutcome.TIMEOUT
 
     @patch(
@@ -288,8 +307,8 @@ class TestPerformUpdate:
         return_value=True,
     )
     @patch("shutil.which", return_value="/usr/local/bin/uv")
-    @patch("subprocess.run")
-    def test_update_preserves_server_extras(self, mock_run, mock_which, mock_has_server):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_update_preserves_server_extras(self, mock_install, mock_which, mock_has_server):
         """Bug fix (v0.41.1): startup auto-update must preserve [server] extras.
 
         Before v0.41.1, ``_perform_update`` ran a bare
@@ -301,9 +320,9 @@ class TestPerformUpdate:
         :func:`build_kbagent_upgrade_command`, which pairs ``--with`` and
         ``--force`` when ``fastapi`` is importable.
         """
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
-        argv = mock_run.call_args[0][0]
+        argv = mock_install.call_args.args[0]
         # The extras live in the primary PEP 508 requirement so the complete
         # environment is resolved in one forced reinstall.
         assert "--force" in argv
@@ -316,12 +335,14 @@ class TestPerformUpdate:
         return_value=False,
     )
     @patch("shutil.which", return_value="/usr/local/bin/uv")
-    @patch("subprocess.run")
-    def test_update_without_server_extras_uses_upgrade(self, mock_run, mock_which, mock_has_server):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_update_without_server_extras_uses_upgrade(
+        self, mock_install, mock_which, mock_has_server
+    ):
         """No-extras installs are also a full forced reinstall."""
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
-        argv = mock_run.call_args[0][0]
+        argv = mock_install.call_args.args[0]
         assert "--force" in argv
         assert "--reinstall" in argv
         assert "keboola-cli[server]" not in argv
@@ -336,17 +357,17 @@ class TestPerformUpdateWheel:
         return_value=False,
     )
     @patch("shutil.which", return_value="/usr/local/bin/uv")
-    @patch("subprocess.run")
+    @patch("keboola_agent_cli.auto_update.run_install")
     def test_installs_wheel_when_asset_present(
-        self, mock_run, mock_which, mock_has_server, mock_head
+        self, mock_install, mock_which, mock_has_server, mock_head
     ):
         """A 200 HEAD on the asset -> install the prebuilt wheel, not git+."""
         mock_head.return_value = MagicMock(status_code=200)
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
 
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
 
-        argv = mock_run.call_args[0][0]
+        argv = mock_install.call_args.args[0]
         # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
         assert "--force" in argv
         assert any(part.endswith("keboola_cli-2.0.0-py3-none-any.whl") for part in argv)
@@ -354,15 +375,15 @@ class TestPerformUpdateWheel:
 
     @patch("keboola_agent_cli.services.version_service.httpx.head")
     @patch("shutil.which", return_value="/usr/local/bin/uv")
-    @patch("subprocess.run")
-    def test_falls_back_to_git_when_no_asset(self, mock_run, mock_which, mock_head):
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_falls_back_to_git_when_no_asset(self, mock_install, mock_which, mock_head):
         """A 404 HEAD (older release without an asset) -> git+ source build."""
         mock_head.return_value = MagicMock(status_code=404)
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
 
         assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
 
-        argv = mock_run.call_args[0][0]
+        argv = mock_install.call_args.args[0]
         assert any("git+" in part for part in argv)
 
 
@@ -580,12 +601,17 @@ class TestMaybeAutoUpdate:
         The banner should say the build is still running, not that it failed --
         the wheel fast path makes timeouts rare, but when the git+ fallback runs
         long the next invocation finishes it.
+
+        Since issue #528 the installer is not killed when the wait expires, so
+        the banner must NOT offer a recovery command either: a second installer
+        started against the environment a live uv is rewriting is precisely the
+        corruption being fixed.
         """
         maybe_auto_update()
         mock_reexec.assert_not_called()
         err = capsys.readouterr().err
-        assert "timed out" in err
-        assert "Recover with:" in err
+        assert "still running" in err
+        assert "Recover with:" not in err
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value=None)
@@ -1149,3 +1175,143 @@ class TestSafeStartupUpdateOrder:
         ]
         # Sentinel was flipped before the crash.
         assert auto_update_module._AUTO_UPDATE_RAN is True
+
+
+# ---------------------------------------------------------------------------
+# Deferred (out-of-process) startup update -- issue #528
+# ---------------------------------------------------------------------------
+class TestStartupDefersTheReinstall:
+    """On Windows the startup hook must not replace its own live environment.
+
+    `uv tool install` removes the tool venv before recreating it, so running it
+    from inside that venv on Windows deletes the files the running process has
+    locked and aborts part-way -- the gutted `rich`/`typer` the reporter saw.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _quiet_mcp_and_cache(self):
+        auto_update_module._AUTO_UPDATE_RAN = False
+        with (
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
+            patch("keboola_agent_cli.auto_update._write_cache"),
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update"),
+            patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value=None),
+            patch("keboola_agent_cli.auto_update._get_local_mcp_version", return_value=None),
+            patch("keboola_agent_cli.auto_update._detect_mcp_install_method", return_value="none"),
+            patch("keboola_agent_cli.auto_update._should_skip_all", return_value=False),
+            patch("keboola_agent_cli.auto_update._should_skip_kbagent_stage", return_value=False),
+            patch(
+                "keboola_agent_cli.auto_update.report_finished_deferred_update",
+            ),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
+                return_value="2.0.0",
+            ),
+            patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False),
+            patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
+        ):
+            yield
+
+    @patch("keboola_agent_cli.auto_update.should_defer", return_value=True)
+    @patch("keboola_agent_cli.auto_update.request_deferred_update", return_value=True)
+    @patch("keboola_agent_cli.auto_update._perform_update")
+    @patch("keboola_agent_cli.auto_update._re_exec")
+    def test_schedules_instead_of_installing_in_place(
+        self, mock_reexec, mock_perform, mock_request, mock_defer, capsys
+    ):
+        maybe_auto_update()
+
+        mock_perform.assert_not_called()
+        mock_reexec.assert_not_called()
+        request = mock_request.call_args.args[0]
+        assert request.from_version == "1.0.0"
+        assert request.target_version == "2.0.0"
+        assert "background" in capsys.readouterr().err
+
+    @patch("keboola_agent_cli.auto_update.should_defer", return_value=True)
+    @patch("keboola_agent_cli.auto_update.request_deferred_update", return_value=False)
+    @patch("keboola_agent_cli.auto_update._perform_update")
+    def test_unschedulable_prints_the_command_and_installs_nothing(
+        self, mock_perform, mock_request, mock_defer, capsys
+    ):
+        """Falling back to the in-place install would reintroduce the corruption."""
+        maybe_auto_update()
+
+        mock_perform.assert_not_called()
+        assert "cannot be installed safely" in capsys.readouterr().err
+
+    @patch("keboola_agent_cli.auto_update.should_defer", return_value=False)
+    @patch("keboola_agent_cli.auto_update.request_deferred_update")
+    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.SUCCESS)
+    @patch("keboola_agent_cli.auto_update._re_exec")
+    def test_posix_keeps_the_inline_install_and_re_exec(
+        self, mock_reexec, mock_perform, mock_request, mock_defer
+    ):
+        """The path that works today must not regress for the majority of users."""
+        maybe_auto_update()
+
+        mock_request.assert_not_called()
+        mock_perform.assert_called_once()
+        mock_reexec.assert_called_once()
+
+
+class TestReportFinishedDeferredUpdate:
+    """The run that schedules an update can never report it -- the next one does."""
+
+    def _report(self, status):
+        return DeferredUpdateReport(
+            status=status,
+            from_version="0.76.3",
+            target_version="0.76.4",
+            exit_code=2 if status is DeferredUpdateStatus.FAILED else None,
+            recovery_command="uv tool install --force --reinstall x",
+            log_path=Path("update.log"),
+        )
+
+    @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update", return_value=None)
+    def test_nothing_to_report_prints_nothing(self, mock_collect, capsys):
+        report_finished_deferred_update()
+        assert capsys.readouterr().err == ""
+
+    @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
+    def test_success_is_announced(self, mock_collect, capsys):
+        mock_collect.return_value = self._report(DeferredUpdateStatus.SUCCEEDED)
+        report_finished_deferred_update()
+        assert "Updated kbagent to v0.76.4" in capsys.readouterr().err
+
+    @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
+    def test_failure_carries_the_recovery_command(self, mock_collect, capsys):
+        mock_collect.return_value = self._report(DeferredUpdateStatus.FAILED)
+        err = capsys.readouterr()  # drain
+        report_finished_deferred_update()
+        err = capsys.readouterr().err
+        assert "did not complete" in err
+        assert "uv tool install --force --reinstall x" in err
+
+    @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
+    def test_abandoned_does_not_read_as_a_failure(self, mock_collect, capsys):
+        """Nothing was installed, so nothing needs recovering."""
+        mock_collect.return_value = self._report(DeferredUpdateStatus.ABANDONED)
+        report_finished_deferred_update()
+        err = capsys.readouterr().err
+        assert "skipped" in err
+        assert "Recover with" not in err
+
+    @patch(
+        "keboola_agent_cli.auto_update.collect_finished_deferred_update",
+        side_effect=OSError("unreadable"),
+    )
+    def test_never_raises(self, mock_collect):
+        report_finished_deferred_update()
+
+    @patch("keboola_agent_cli.auto_update._should_skip_all", return_value=True)
+    @patch("keboola_agent_cli.auto_update.report_finished_deferred_update")
+    def test_reported_even_when_the_run_will_not_update(self, mock_report, mock_skip):
+        """The result is owed to the user on the very next run, whatever it is.
+
+        Gating it behind the skip check would swallow a failed background
+        update on a dev install, an opt-out, or `kbagent version`.
+        """
+        auto_update_module._AUTO_UPDATE_RAN = False
+        maybe_auto_update()
+        mock_report.assert_called_once()

@@ -136,7 +136,7 @@ jobs:
   # `npm.cmd` invocation (Bug 1) and the force-include path resolution (Bug 2)
   # are exercised against a real `uv build` rather than mocks.
   build-windows:
-    name: Windows wheel build and export regression (issues #320, #529)
+    name: Windows wheel build, export and self-update regressions (issues #320, #529, #528)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -171,6 +171,16 @@ jobs:
       # regression here, where the portable flags run on the real platform.
       - name: Test semantic-layer export on Windows (issue #529)
         run: uv run pytest tests/test_semantic_layer_service.py -k "export" -v
+
+      # The self-update helper is a PowerShell script authored on machines that
+      # cannot execute it. This suite runs it for real: it proves the script
+      # parses, that it records the installer's exit code, and -- the branch
+      # that actually protects the environment -- that it installs NOTHING
+      # while a watched process is still alive (issue #528). The rest of the
+      # suite also runs here with `should_defer()` returning its real Windows
+      # default and a real detached spawn.
+      - name: Test the deferred self-update helper on Windows (issue #528)
+        run: uv run pytest tests/test_update_runner.py -v
 
       - name: Assert the SPA is bundled (Bug 1 fixed)
         run: python scripts/check_wheel_ui.py --expect-ui

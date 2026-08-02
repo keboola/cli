@@ -33,6 +33,13 @@ from ..constants import (
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
+from ..update_runner import (
+    DeferredUpdateRequest,
+    InstallStatus,
+    request_deferred_update,
+    run_install,
+    should_defer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -506,10 +513,17 @@ def _perform_mcp_update(
 ) -> tuple[bool, str]:
     """Run the appropriate upgrade command for keboola-mcp-server.
 
+    Goes through :func:`run_install`, so a slow upgrade is never terminated
+    (issue #528). The MCP environment is not the one kbagent runs from, so the
+    Windows file-lock problem does not apply here -- but killing uv part-way
+    through recreating *any* tool environment leaves it half-written, and that
+    would break ``kbagent tool call`` until the user reinstalled MCP by hand.
+
     Args:
         method: Optional install method; if None, detect via
             :func:`_detect_mcp_install_method`.
-        timeout: Subprocess timeout in seconds.
+        timeout: How long to wait before giving up on the wait -- not on the
+            upgrade, which is left running.
         command: Prepared command. Supplying it guarantees this apply phase
             does not probe PATH or rebuild commands.
 
@@ -532,20 +546,15 @@ def _perform_mcp_update(
             return False, "pip not found on PATH"
         return False, f"could not build MCP upgrade command for {method!r}"
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+    run = run_install(tuple(cmd), timeout=timeout)
+    if run.status is InstallStatus.SUCCEEDED:
+        return True, run.output
+    if run.status is InstallStatus.STILL_RUNNING:
+        return False, (
+            f"still running after {int(timeout)}s; it continues in the background "
+            f"and applies on the next launch (log: {run.log_path})"
         )
-        if result.returncode == 0:
-            return True, (result.stdout or "").strip()
-        return False, (result.stderr or "").strip() or "upgrade subprocess failed"
-    except subprocess.TimeoutExpired:
-        return False, f"upgrade timed out after {timeout}s"
-    except OSError as exc:
-        return False, f"subprocess error: {exc}"
+    return False, run.output or "upgrade subprocess failed"
 
 
 def build_mcp_upgrade_command(method: str) -> list[str] | None:
@@ -928,7 +937,11 @@ class VersionService:
                 {
                     "kbagent": {"updated": bool, "current_version": str,
                                 "latest_version": str|None, "message": str,
-                                "output": str|None},
+                                "output": str|None,
+                                # Both below distinguish "not updated YET" from
+                                # "failed" -- neither is an error:
+                                "deferred": bool,      # handed to the helper
+                                "still_running": bool},  # outran the wait
                     "mcp": {"updated": bool|None, "current_version": str|None,
                             "latest_version": str|None, "install_method": str,
                             "message": str, "output": str|None},
@@ -984,6 +997,18 @@ class VersionService:
                 f"kbagent v{kbagent_result.get('current_version')}"
                 f" -> v{kbagent_result.get('latest_version')}"
             )
+        elif kbagent_result.get("deferred"):
+            # Scheduled, not failed: the install runs once this process exits.
+            parts.append(
+                f"kbagent v{kbagent_result.get('current_version')}"
+                f" -> v{kbagent_result.get('latest_version')} (scheduled)"
+            )
+        elif kbagent_result.get("still_running"):
+            # Outran our patience, not our expectations -- it was never killed.
+            parts.append(
+                f"kbagent v{kbagent_result.get('current_version')}"
+                f" -> v{kbagent_result.get('latest_version')} (still installing)"
+            )
         elif kbagent_result.get("up_to_date"):
             parts.append(f"kbagent v{kbagent_result.get('current_version')} (already up to date)")
         elif kbagent_result.get("current_version"):
@@ -1007,7 +1032,15 @@ class VersionService:
 
     @staticmethod
     def _update_kbagent(plan: KbagentUpdatePlan) -> dict[str, Any]:
-        """Apply a precomputed terminal self-reinstall without new probes."""
+        """Apply a precomputed terminal self-reinstall without new probes.
+
+        Where the reinstall runs is platform-dependent (issue #528). On Windows
+        an in-place ``uv tool install`` deletes the very environment this
+        process is executing from, cannot finish, and leaves it gutted -- so the
+        install is handed to a detached helper that waits for kbagent to exit.
+        POSIX keeps the inline install, which is safe because unlinking an open
+        file leaves the running process's inode intact.
+        """
         old_version = plan.current_version
         kbagent_latest = plan.latest_version
         up_to_date = plan.up_to_date
@@ -1036,57 +1069,88 @@ class VersionService:
                 "recovery_command": plan.recovery_command,
             }
 
-        try:
-            result = subprocess.run(
-                list(plan.command),
-                capture_output=True,
-                text=True,
-                timeout=get_update_timeout(),
+        if should_defer():
+            scheduled = request_deferred_update(
+                DeferredUpdateRequest(
+                    from_version=old_version,
+                    target_version=kbagent_latest or old_version,
+                    install_command=plan.command,
+                    recovery_command=plan.recovery_command,
+                )
             )
-            if result.returncode == 0:
+            if scheduled:
                 return {
                     "planned": True,
-                    "updated": True,
+                    "updated": False,
+                    "deferred": True,
                     "up_to_date": False,
                     "current_version": old_version,
                     "latest_version": kbagent_latest,
-                    "message": f"Updated kbagent from v{old_version} to v{kbagent_latest}. "
-                    "Restart your shell to use the new version.",
-                    "output": result.stdout.strip(),
+                    "message": (
+                        f"kbagent v{kbagent_latest} will be installed as soon as every kbagent "
+                        "process has exited -- replacing the environment while it is in use is "
+                        "what corrupts it on Windows. Close other kbagent processes; the result "
+                        "is reported on the next launch."
+                    ),
+                    "recovery_command": plan.recovery_command,
                 }
+            # No helper could be spawned. Running the install here anyway is the
+            # exact corruption this branch exists to avoid, so hand the user the
+            # command instead of taking the risk on their behalf.
             return {
                 "planned": True,
                 "updated": False,
-                "up_to_date": False,
-                "current_version": old_version,
-                "latest_version": kbagent_latest,
-                "message": f"Update failed: {result.stderr.strip()}",
-                "output": result.stderr.strip(),
-                "recovery_command": plan.recovery_command,
-            }
-        except subprocess.TimeoutExpired:
-            timeout_s = int(get_update_timeout())
-            return {
-                "planned": True,
-                "updated": False,
+                "deferred": False,
                 "up_to_date": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": (
-                    f"Update timed out after {timeout_s}s. Recover with: {plan.recovery_command}"
+                    "Update could not be scheduled safely while kbagent is running. "
+                    f"Install it from a shell with no kbagent running: {plan.recovery_command}"
                 ),
                 "recovery_command": plan.recovery_command,
             }
-        except OSError as exc:
+
+        run = run_install(plan.command, timeout=get_update_timeout())
+        if run.status is InstallStatus.SUCCEEDED:
             return {
                 "planned": True,
-                "updated": False,
+                "updated": True,
                 "up_to_date": False,
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
-                "message": f"Update failed: {exc}",
-                "recovery_command": plan.recovery_command,
+                "message": f"Updated kbagent from v{old_version} to v{kbagent_latest}. "
+                "Restart your shell to use the new version.",
+                "output": run.output,
             }
+        if run.status is InstallStatus.STILL_RUNNING:
+            # Not killed, still installing -- offering a recovery command here
+            # would invite a second installer into the same environment. The
+            # explicit flag keeps the summary from calling this a failure.
+            timeout_s = int(get_update_timeout())
+            return {
+                "planned": True,
+                "updated": False,
+                "still_running": True,
+                "up_to_date": False,
+                "current_version": old_version,
+                "latest_version": kbagent_latest,
+                "message": (
+                    f"Update still running after {timeout_s}s; it continues in the background "
+                    f"and applies on the next launch. Log: {run.log_path}"
+                ),
+                "output": run.output,
+            }
+        return {
+            "planned": True,
+            "updated": False,
+            "up_to_date": False,
+            "current_version": old_version,
+            "latest_version": kbagent_latest,
+            "message": f"Update failed: {run.output}",
+            "output": run.output,
+            "recovery_command": plan.recovery_command,
+        }
 
     @staticmethod
     def _update_mcp(plan: McpUpdatePlan) -> dict[str, Any]:

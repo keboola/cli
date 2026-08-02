@@ -24,6 +24,33 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.77.1": [
+        "Fix (#528): the Windows self-update no longer corrupts the uv tool environment. "
+        "`uv tool install` recreates a tool environment by REMOVING it and then building a fresh "
+        "venv at the same path -- it is not atomic and has no rollback. On POSIX that is harmless, "
+        "but on Windows uv's `kbagent.exe` trampoline holds the venv interpreter locked, so the "
+        "removal deletes what it can, hits a locked file, and aborts -- leaving a gutted venv "
+        "(`No module named 'rich._windows'`, `cannot import name 'rich_utils' from 'typer'`). "
+        "The v0.76.2 fix reordered the update but still ran the install from inside the "
+        "environment being replaced, so the corruption survived it. kbagent now hands the "
+        "reinstall to a detached helper that waits until every kbagent process has exited and "
+        "only then installs; the outcome (including a copy-paste recovery command on failure) is "
+        "reported on the next launch. POSIX keeps the proven inline install plus re-exec. "
+        "Thanks to @papousek-radan for three rounds of precise Windows reports.",
+        "Fix (#528): a slow install is no longer killed mid-write. Every update path used "
+        "`subprocess.run(timeout=...)`, which terminates the child when the deadline passes -- on "
+        "Windows a hard `TerminateProcess` of uv part-way through recreating a venv, producing "
+        "exactly the same half-deleted environment a file lock does. The deadline now bounds only "
+        "how long kbagent waits; the installer is left to finish the transaction it started, and "
+        "the banner says so instead of offering a recovery command that would start a second "
+        "installer against the same environment. This covers the keboola-mcp-server upgrade too: "
+        "that environment is not the one kbagent runs from, so no lock is involved, but a killed "
+        "installer leaves it just as broken and `kbagent tool call` is what stops working. "
+        "Read-only version probes still time out normally -- killing a probe is harmless.",
+        "New (#528): `KBAGENT_DEFER_UPDATE` forces the out-of-process update path on (`1`) or off "
+        "(`0`), overriding the platform default. Intended for reproducing the deferred flow on "
+        "POSIX and as an escape hatch on Windows.",
+    ],
     "0.77.0": [
         "New (#505): `kbagent config update` and `kbagent config row-update` accept "
         "`--change-description TEXT`, which writes the new config version's "

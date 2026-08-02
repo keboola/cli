@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import time
 from importlib.metadata import distribution
@@ -47,6 +46,16 @@ from .services.version_service import (
     prepare_kbagent_update_plan,
     prepare_mcp_update_plan,
     resolve_kbagent_wheel_url,
+)
+from .update_runner import (
+    DeferredUpdateReport,
+    DeferredUpdateRequest,
+    DeferredUpdateStatus,
+    InstallStatus,
+    collect_finished_deferred_update,
+    request_deferred_update,
+    run_install,
+    should_defer,
 )
 
 logger = logging.getLogger(__name__)
@@ -286,8 +295,9 @@ def _perform_update(
 
     Returns:
         :class:`UpdateOutcome`: ``SUCCESS`` on a clean install, ``TIMEOUT`` when
-        the install subprocess outran :func:`get_update_timeout` (a slow git+
-        build -- retried next run, not a real failure), ``FAILED`` otherwise.
+        the install outran :func:`get_update_timeout` -- it is still running and
+        will finish on its own, so the next launch picks it up -- and ``FAILED``
+        otherwise.
     """
     # ``command`` is supplied by the startup planner. Keep the fallback only
     # for direct legacy callers; it must never be used after another stage has
@@ -300,18 +310,15 @@ def _perform_update(
     if cmd is None:
         return UpdateOutcome.FAILED
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=get_update_timeout(),
-        )
-        return UpdateOutcome.SUCCESS if result.returncode == 0 else UpdateOutcome.FAILED
-    except subprocess.TimeoutExpired:
+    # Deliberately does NOT kill the installer when the deadline passes -- see
+    # ``update_runner.run_install``. A terminated uv leaves the same
+    # half-removed venv a Windows file lock does (issue #528).
+    run = run_install(tuple(cmd), timeout=get_update_timeout())
+    if run.status is InstallStatus.SUCCEEDED:
+        return UpdateOutcome.SUCCESS
+    if run.status is InstallStatus.STILL_RUNNING:
         return UpdateOutcome.TIMEOUT
-    except OSError:
-        return UpdateOutcome.FAILED
+    return UpdateOutcome.FAILED
 
 
 def _re_exec() -> None:
@@ -484,6 +491,80 @@ def _apply_prepared_mcp_update(plan: McpUpdatePlan) -> None:
         )
 
 
+def report_finished_deferred_update() -> None:
+    """Print the outcome of a deferred update scheduled by an earlier run.
+
+    The deferred path (Windows) installs from a detached helper *after* this
+    process is gone, so the process that scheduled the update can never report
+    it. Whoever starts next does -- exactly once -- and on success also shows
+    the changelog the in-place path shows after its re-exec.
+    """
+    try:
+        report = collect_finished_deferred_update()
+    except Exception:
+        logger.debug("Could not collect the deferred-update result", exc_info=True)
+        return
+    if report is None:
+        return
+    sys.stderr.write(_format_deferred_report(report))
+
+
+def _format_deferred_report(report: DeferredUpdateReport) -> str:
+    """Render a finished deferred update as one stderr block.
+
+    An abandoned update is *not* a failure and must not read like one: nothing
+    was installed because another kbagent kept running, so the environment is
+    untouched and the next launch simply tries again.
+    """
+    if report.status is DeferredUpdateStatus.SUCCEEDED:
+        message = f"Updated kbagent to v{report.target_version}.\n"
+        whats_new = format_whats_new(report.from_version, __version__) or ""
+        return message + whats_new
+    if report.status is DeferredUpdateStatus.ABANDONED:
+        return (
+            f"Background update to v{report.target_version} was skipped: another kbagent "
+            "process kept running. It will be retried.\n"
+        )
+    recovery = f" Recover with: {report.recovery_command}" if report.recovery_command else ""
+    exit_note = f" (exit code {report.exit_code})" if report.exit_code is not None else ""
+    return (
+        f"Background update to v{report.target_version} did not complete{exit_note}. "
+        f"Log: {report.log_path}.{recovery}\n"
+    )
+
+
+def _schedule_deferred_update(plan: KbagentUpdatePlan) -> None:
+    """Hand the terminal reinstall to a detached helper instead of running it here.
+
+    On Windows an in-place ``uv tool install`` deletes the venv this process is
+    executing from and cannot finish, leaving it gutted (issue #528). The helper
+    waits until no kbagent is left and only then installs, so this process just
+    keeps going on the current version -- the update lands for the next launch.
+
+    When no helper can be spawned we say so and print the exact command. Falling
+    back to an in-place install here would reintroduce the corruption.
+    """
+    target = plan.latest_version or __version__
+    if plan.command is None:
+        return
+    request = DeferredUpdateRequest(
+        from_version=__version__,
+        target_version=target,
+        install_command=plan.command,
+        recovery_command=plan.recovery_command,
+    )
+    if request_deferred_update(request):
+        sys.stderr.write(
+            f"Updating kbagent v{__version__} -> v{target} in the background; "
+            "it applies once every kbagent process has exited.\n"
+        )
+        return
+    sys.stderr.write(
+        f"kbagent v{target} is available but cannot be installed safely while kbagent is "
+        f"running. Install it with: {plan.recovery_command}\n"
+    )
+
+
 def _prepare_auto_kbagent_plan(latest_version: str | None) -> KbagentUpdatePlan:
     """Adapt the shared plan to the startup comparison seam used by tests."""
     prepared = prepare_kbagent_update_plan(latest_version)
@@ -538,6 +619,12 @@ def maybe_auto_update() -> None:
         if _AUTO_UPDATE_RAN:
             return
         _AUTO_UPDATE_RAN = True
+
+        # A deferred update scheduled by an earlier run installs after that run
+        # exits, so its outcome has to be reported by someone else. Do it before
+        # the skip gates: the user is owed the result -- especially a failure and
+        # its recovery command -- even on a run that will not update anything.
+        report_finished_deferred_update()
 
         # Wide gates (dev install / opt-out / update|version commands)
         # skip BOTH stages -- there is nothing reasonable to do.
@@ -607,6 +694,14 @@ def maybe_auto_update() -> None:
             )
             return
 
+        # Where the reinstall runs is the whole fix for issue #528: an in-place
+        # `uv tool install` deletes the venv this process runs from, which
+        # Windows cannot survive. Defer there; keep the proven inline install +
+        # re-exec on POSIX, where replacing an open file is safe.
+        if should_defer():
+            _schedule_deferred_update(kbagent_plan)
+            return
+
         sys.stderr.write(f"Updating kbagent v{__version__} -> v{kbagent_plan.latest_version}...\n")
         outcome = _perform_update(
             kbagent_plan.latest_version or __version__, command=kbagent_plan.command
@@ -617,9 +712,12 @@ def maybe_auto_update() -> None:
             _re_exec()
             return
         if outcome is UpdateOutcome.TIMEOUT:
+            # The installer was NOT killed -- it is still working. Saying
+            # "recover with ..." here would invite the user to start a second
+            # installer against the same environment.
             sys.stderr.write(
-                f"Update timed out after {int(get_update_timeout())}s. Recover with: "
-                f"{kbagent_plan.recovery_command}\n"
+                f"Update still running after {int(get_update_timeout())}s; it continues in the "
+                "background and applies on the next launch.\n"
             )
         else:
             sys.stderr.write(

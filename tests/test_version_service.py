@@ -1,6 +1,7 @@
 """Tests for VersionService - version detection and update checks."""
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ from keboola_agent_cli.services.version_service import (
     get_update_timeout,
     resolve_kbagent_wheel_url,
 )
+from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
 
 class TestIsUvxAvailable:
@@ -579,40 +581,47 @@ class TestDetectMcpInstallMethod:
 # ---------------------------------------------------------------------------
 
 
+def _mcp_install_run(status: InstallStatus, output: str, exit_code: int | None = 0) -> InstallRun:
+    """An :class:`InstallRun` stand-in for a mocked MCP upgrade."""
+    return InstallRun(
+        status=status, exit_code=exit_code, output=output, log_path=Path("update.log")
+    )
+
+
 class TestPerformMcpUpdate:
     """Tests for ``_perform_mcp_update``."""
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_uv_tool_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_uv_tool_success(self, mock_install: MagicMock, mock_which: MagicMock) -> None:
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "upgraded")
         ok, info = _perform_mcp_update(method="uv_tool")
         assert ok is True
         assert "upgraded" in info
         # Verify the command shape we are about to run.
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "tool" in cmd and "upgrade" in cmd and MCP_PACKAGE_NAME in cmd
         # issue #324: the pre-release opt-in is mandatory -- without it uv
         # backtracks to a stale MCP (toon-format~=0.9.0b1 pin) and exits 0.
         assert "--prerelease=allow" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
-    def test_pip_env_success(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_pip_env_success(self, mock_install: MagicMock, mock_which: MagicMock) -> None:
         mock_which.return_value = "/usr/local/bin/pip"
-        mock_run.return_value = MagicMock(returncode=0, stdout="upgraded via pip", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "upgraded via pip")
         ok, _info = _perform_mcp_update(method="pip_env")
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "install" in cmd and "--upgrade" in cmd
         # issue #324: pip's pre-release opt-in flag is --pre.
         assert "--pre" in cmd
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    @patch("keboola_agent_cli.services.version_service.run_install")
     def test_uvx_promotes_to_uv_tool_install(
-        self, mock_run: MagicMock, mock_which: MagicMock
+        self, mock_install: MagicMock, mock_which: MagicMock
     ) -> None:
         """Bug B fix from issue #263: uvx-cache install is promoted to a
         persistent ``uv tool install --upgrade``.
@@ -628,10 +637,10 @@ class TestPerformMcpUpdate:
         runs use the faster ``uv_tool`` detection path.
         """
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="installed", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "installed")
         ok, _info = _perform_mcp_update(method="uvx")
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert "tool" in cmd and "install" in cmd and "--upgrade" in cmd
         assert MCP_PACKAGE_NAME in cmd
         # The broken --version arg must be GONE from the uvx upgrade path.
@@ -652,15 +661,22 @@ class TestPerformMcpUpdate:
         assert "not installed" in info
 
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch(
-        "keboola_agent_cli.services.version_service.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="x", timeout=MCP_UPGRADE_TIMEOUT),
-    )
-    def test_timeout(self, mock_run: MagicMock, mock_which: MagicMock) -> None:
+    @patch("keboola_agent_cli.services.version_service.run_install")
+    def test_slow_upgrade_is_left_running_not_killed(
+        self, mock_install: MagicMock, mock_which: MagicMock
+    ) -> None:
+        """Issue #528: terminating uv mid-write half-recreates the MCP env.
+
+        The MCP environment is not the one kbagent runs from, so no file lock
+        is involved -- but a killed installer leaves it just as broken, and
+        `kbagent tool call` is what stops working.
+        """
         mock_which.return_value = "/usr/local/bin/uv"
+        mock_install.return_value = _mcp_install_run(InstallStatus.STILL_RUNNING, "", None)
         ok, info = _perform_mcp_update(method="uv_tool", timeout=MCP_UPGRADE_TIMEOUT)
         assert ok is False
-        assert "timed out" in info
+        assert "still running" in info
+        assert "timed out" not in info
 
 
 # ---------------------------------------------------------------------------
@@ -766,12 +782,17 @@ class TestSelfUpdateTwoStage:
             events.append("mcp_probe")
             return "2.0.0"
 
-        def run(command: list[str], **kwargs: object) -> MagicMock:
+        def install(command: tuple[str, ...], **kwargs: object) -> InstallRun:
             nonlocal mutated
-            assert command == ["uv", "tool", "install"]
+            assert command == ("uv", "tool", "install")
             mutated = True
             events.append("kbagent")
-            return MagicMock(returncode=1, stdout="", stderr="locked")
+            return InstallRun(
+                status=InstallStatus.FAILED,
+                exit_code=1,
+                output="locked",
+                log_path=Path("update.log"),
+            )
 
         monkeypatch.setattr(
             "keboola_agent_cli.services.version_service.prepare_update_plan", prepare
@@ -782,7 +803,10 @@ class TestSelfUpdateTwoStage:
         monkeypatch.setattr(
             "keboola_agent_cli.services.version_service._get_local_mcp_version", probe_mcp
         )
-        monkeypatch.setattr("keboola_agent_cli.services.version_service.subprocess.run", run)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.should_defer", lambda: False
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", install)
 
         result = VersionService().self_update()
 
@@ -790,6 +814,91 @@ class TestSelfUpdateTwoStage:
         assert result["mcp"]["updated"] is True
         assert result["kbagent"]["updated"] is False
         assert result["kbagent"]["recovery_command"].endswith("exact")
+
+
+class TestSelfUpdateDefersOnWindows:
+    """`kbagent update` must not replace the venv it is running from (#528)."""
+
+    @staticmethod
+    def _plan() -> UpdatePlan:
+        return UpdatePlan(
+            kbagent=KbagentUpdatePlan(
+                current_version="1.0.0",
+                latest_version="2.0.0",
+                up_to_date=False,
+                command=("uv", "tool", "install", "--force", "--reinstall", "keboola-cli @ x"),
+                recovery_command="uv tool install --force --reinstall 'keboola-cli @ x'",
+            ),
+            mcp=McpUpdatePlan(
+                current_version="1.0.0",
+                latest_version="1.0.0",
+                install_method="uv_tool",
+                up_to_date=True,
+                command=None,
+            ),
+        )
+
+    def test_schedules_helper_and_never_installs_inline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The install is handed to the detached helper, not run here.
+
+        Running it inline is what deletes the live environment mid-flight and
+        leaves a gutted venv behind, so `run_install` must never be reached.
+        """
+        requests: list[DeferredUpdateRequest] = []
+
+        def schedule(request: DeferredUpdateRequest) -> bool:
+            requests.append(request)
+            return True
+
+        def refuse_inline(*args: object, **kwargs: object) -> InstallRun:
+            raise AssertionError("the installer must not run inside the target environment")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.prepare_update_plan",
+            lambda **_: self._plan(),
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.should_defer", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.request_deferred_update", schedule
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", refuse_inline)
+
+        result = VersionService().self_update()
+
+        assert len(requests) == 1
+        assert requests[0].target_version == "2.0.0"
+        assert requests[0].install_command == self._plan().kbagent.command
+        assert result["kbagent"]["deferred"] is True
+        assert result["kbagent"]["updated"] is False
+        # A scheduled update is not a failure and must not be summarised as one.
+        assert "FAILED" not in result["message"]
+        assert "scheduled" in result["message"]
+
+    def test_unschedulable_hands_the_user_the_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No helper -> tell the user, never fall back to the unsafe install."""
+
+        def refuse_inline(*args: object, **kwargs: object) -> InstallRun:
+            raise AssertionError("the installer must not run inside the target environment")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.prepare_update_plan",
+            lambda **_: self._plan(),
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.should_defer", lambda: True)
+        monkeypatch.setattr(
+            "keboola_agent_cli.services.version_service.request_deferred_update", lambda _: False
+        )
+        monkeypatch.setattr("keboola_agent_cli.services.version_service.run_install", refuse_inline)
+
+        result = VersionService().self_update()
+
+        assert result["kbagent"]["deferred"] is False
+        assert result["kbagent"]["updated"] is False
+        assert result["kbagent"]["recovery_command"] in result["kbagent"]["message"]
 
     @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
     @patch("keboola_agent_cli.services.version_service._fetch_mcp_latest_version")
@@ -1312,21 +1421,21 @@ class TestMcpPrereleaseOptIn:
         ],
     )
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    @patch("keboola_agent_cli.services.version_service.subprocess.run")
+    @patch("keboola_agent_cli.services.version_service.run_install")
     def test_internal_upgrade_command_opts_into_prereleases(
         self,
-        mock_run: MagicMock,
+        mock_install: MagicMock,
         mock_which: MagicMock,
         method: str,
         expected_flag: str,
     ) -> None:
         mock_which.return_value = "/usr/local/bin/uv"
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        mock_install.return_value = _mcp_install_run(InstallStatus.SUCCEEDED, "ok")
 
         ok, _info = _perform_mcp_update(method=method)
 
         assert ok is True
-        cmd = mock_run.call_args.args[0]
+        cmd = mock_install.call_args.args[0]
         assert expected_flag in cmd, f"{method} command missing {expected_flag}: {cmd}"
         assert MCP_PACKAGE_NAME in cmd
 
@@ -1419,3 +1528,45 @@ class TestComposeUpdateSummary:
         assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
         assert VersionService._summarize_failure_tail("") == "update failed"
         assert VersionService._summarize_failure_tail(None) == "update failed"
+
+
+class TestSummaryDistinguishesNotYetFromFailed:
+    """ "Not updated" has three meanings; only one of them is a failure (#528)."""
+
+    @staticmethod
+    def _kbagent(**overrides: object) -> dict:
+        base = {
+            "planned": True,
+            "updated": False,
+            "up_to_date": False,
+            "current_version": "0.77.0",
+            "latest_version": "0.77.1",
+            "message": "...",
+        }
+        base.update(overrides)
+        return base
+
+    @staticmethod
+    def _mcp_up_to_date() -> dict:
+        return {"updated": False, "up_to_date": True, "current_version": "1.0.0"}
+
+    def test_scheduled_is_not_a_failure(self) -> None:
+        summary = VersionService._compose_update_summary(
+            self._kbagent(deferred=True), self._mcp_up_to_date()
+        )
+        assert "(scheduled)" in summary
+        assert "FAILED" not in summary
+
+    def test_still_running_is_not_a_failure(self) -> None:
+        """It was never killed -- calling it FAILED contradicts the banner."""
+        summary = VersionService._compose_update_summary(
+            self._kbagent(still_running=True), self._mcp_up_to_date()
+        )
+        assert "(still installing)" in summary
+        assert "FAILED" not in summary
+
+    def test_a_real_failure_is_still_reported_as_one(self) -> None:
+        summary = VersionService._compose_update_summary(
+            self._kbagent(message="Update failed: locked"), self._mcp_up_to_date()
+        )
+        assert "FAILED" in summary
