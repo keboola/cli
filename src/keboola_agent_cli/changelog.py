@@ -65,7 +65,6 @@ CHANGELOG: dict[str, list[str]] = {
         "that a frozen kbagent only ever spawns as a subprocess, and a pure-binary user "
         "with no Python is unaffected because install-method detection returns `none`. "
         "uv / pip installs behave exactly as before.",
-
     ],
     "0.78.0": [
         "Fix (#546): `kbagent --json` no longer crashes with `UnicodeEncodeError` on Windows "

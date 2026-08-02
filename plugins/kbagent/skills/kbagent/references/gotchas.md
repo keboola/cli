@@ -3152,3 +3152,29 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   a separate Python distribution the binary only spawns as a subprocess. If the
   user has no Python tooling, install-method detection returns `none` and the
   stage does nothing.
+
+## `--json` is written as UTF-8, independent of the console codepage (since v0.78.0)
+
+`--json` output no longer goes through the terminal's text encoder. It is
+written straight to `sys.stdout.buffer` as UTF-8, so the bytes you parse never
+depend on the active console codepage.
+
+- **What this fixes (#546).** On a default Czech / Polish / Hungarian Windows
+  console (cp1250), any non-ASCII character in the payload raised
+  `UnicodeEncodeError` and killed the command -- an arrow in a flow name was
+  enough to make `kbagent --json flow list` unusable. The crash hit the two
+  pydantic paths (`model_dump_json` emits raw non-ASCII); `json.dumps` paths
+  escaped to `\uXXXX` under its `ensure_ascii` default and so survived.
+- **Covers all machine output**, not just the success envelope: the error
+  envelope, the `kbagent --json agent run --stream` NDJSON event lines (which
+  use `ensure_ascii=False` on purpose so event text stays readable), and
+  `kbagent http`'s JSON printer.
+- **Always decode as UTF-8.** Do not decode with `locale.getpreferredencoding()`
+  on Windows -- that is cp1250 and will mangle or fail on the same characters
+  the fix was written for.
+- **Windows line endings changed for JSON only**: machine output now ends `LF`,
+  not `CRLF`, because the binary buffer does no newline translation. Human
+  (Rich) output is unaffected. No JSON/NDJSON parser cares, but a test that
+  string-compares raw stdout bytes on Windows might.
+- **Captured or replaced streams fall back to the plain text write** (there is
+  no binary buffer to bypass), so in-process test harnesses behave as before.
