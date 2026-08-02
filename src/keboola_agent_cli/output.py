@@ -14,6 +14,33 @@ from rich.text import Text
 from .models import ErrorResponse, SuccessResponse
 
 
+def write_machine_output(text: str) -> None:
+    """Write a machine-readable line to stdout as UTF-8, whatever the console is.
+
+    ``--json`` exists to be piped into another program, so its bytes must not
+    depend on the terminal's active codepage. On a default Czech / Polish /
+    Hungarian Windows console (cp1250), ``sys.stdout.write`` raised
+    ``UnicodeEncodeError`` on any non-ASCII character in the payload -- an arrow
+    in a flow name was enough to make ``kbagent --json flow list`` unusable
+    (issue #546). Pydantic's ``model_dump_json`` emits raw non-ASCII, unlike
+    ``json.dumps``, whose ``ensure_ascii`` default escapes it away.
+
+    Writing through ``sys.stdout.buffer`` bypasses the text layer's encoder
+    entirely, so the codepage never gets a say. The text layer is flushed first
+    so anything already written through it keeps its place in the stream. A
+    stdout with no binary buffer (captured or replaced streams) has no encoder
+    to bypass, so the plain write is already correct there.
+    """
+    payload = text + "\n"
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(payload)
+        return
+    sys.stdout.flush()
+    buffer.write(payload.encode("utf-8"))
+    buffer.flush()
+
+
 class OutputFormatter:
     """Formats CLI output as either JSON (for machines/agents) or Rich (for humans).
 
@@ -54,7 +81,7 @@ class OutputFormatter:
         """
         if self.json_mode:
             response = SuccessResponse(status="ok", data=data)
-            sys.stdout.write(response.model_dump_json(indent=2) + "\n")
+            write_machine_output(response.model_dump_json(indent=2))
         else:
             if human_formatter is not None:
                 human_formatter(self.console, data)
@@ -99,7 +126,7 @@ class OutputFormatter:
                 "status": "error",
                 "error": err.model_dump(exclude_none=True),
             }
-            sys.stdout.write(json.dumps(error_envelope, indent=2) + "\n")
+            write_machine_output(json.dumps(error_envelope, indent=2))
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")
 
@@ -111,7 +138,7 @@ class OutputFormatter:
         """
         if self.json_mode:
             response = SuccessResponse(status="ok", data={"message": message})
-            sys.stdout.write(response.model_dump_json(indent=2) + "\n")
+            write_machine_output(response.model_dump_json(indent=2))
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
 
