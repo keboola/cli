@@ -23,7 +23,7 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, ErrorCode
-from ..output import OutputFormatter
+from ..output import OutputFormatter, write_machine_output
 from ..server.agents_store import AgentAction, Trigger
 from ..services.agent_service import AgentService
 from ._helpers import check_cli_permission, get_formatter, get_service
@@ -394,8 +394,11 @@ def _render_stream_event(formatter: OutputFormatter, evt: dict[str, Any]) -> Non
     multi-line summary with exit code, elapsed time, response preview.
     """
     if formatter.json_mode:
-        sys.stdout.write(json.dumps(evt, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        # `ensure_ascii=False` keeps the event text readable, which means raw
+        # non-ASCII reaches stdout -- so it must not go through the console's
+        # encoder (issue #546). `write_machine_output` also flushes, which a
+        # stream consumer depends on.
+        write_machine_output(json.dumps(evt, ensure_ascii=False))
         return
     event = evt.get("event", "?")
     data = evt.get("data") or {}

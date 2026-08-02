@@ -3,9 +3,11 @@
 import io
 import json
 import sys
+from collections.abc import Callable
 from io import StringIO
 from typing import cast
 
+import pytest
 from rich.console import Console
 
 from keboola_agent_cli.output import (
@@ -1100,14 +1102,16 @@ class TestMachineOutputIsAlwaysUtf8:
         """A stdout whose text layer cannot encode the payload, like cp1250."""
         return io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
 
-    def _capture(self, monkeypatch, action) -> bytes:
+    def _capture(self, monkeypatch: pytest.MonkeyPatch, action: Callable[[], None]) -> bytes:
         stream = self._cp1250_stdout()
         monkeypatch.setattr(sys, "stdout", stream)
         action()
         stream.flush()
         return cast(io.BytesIO, stream.buffer).getvalue()
 
-    def test_output_survives_a_codepage_that_cannot_encode_the_data(self, monkeypatch) -> None:
+    def test_output_survives_a_codepage_that_cannot_encode_the_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         formatter = OutputFormatter(json_mode=True)
 
         written = self._capture(monkeypatch, lambda: formatter.output({"name": self.ARROW_NAME}))
@@ -1115,14 +1119,14 @@ class TestMachineOutputIsAlwaysUtf8:
         # Bytes are UTF-8 and round-trip, rather than being lost or escaped.
         assert json.loads(written.decode("utf-8"))["data"]["name"] == self.ARROW_NAME
 
-    def test_success_survives_it_too(self, monkeypatch) -> None:
+    def test_success_survives_it_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
         formatter = OutputFormatter(json_mode=True)
 
         written = self._capture(monkeypatch, lambda: formatter.success(self.ARROW_NAME))
 
         assert json.loads(written.decode("utf-8"))["data"]["message"] == self.ARROW_NAME
 
-    def test_error_survives_it_too(self, monkeypatch) -> None:
+    def test_error_survives_it_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Passes pre-fix too -- `json.dumps` escapes the arrow away.
 
         Kept as the guard on the invariant: it starts failing the moment the
@@ -1136,7 +1140,9 @@ class TestMachineOutputIsAlwaysUtf8:
 
         assert self.ARROW_NAME in json.loads(written.decode("utf-8"))["error"]["message"]
 
-    def test_a_text_stream_without_a_binary_buffer_still_works(self, monkeypatch) -> None:
+    def test_a_text_stream_without_a_binary_buffer_still_works(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Captured/replaced stdout has no encoder to bypass -- write plainly."""
         stream = StringIO()
         monkeypatch.setattr(sys, "stdout", stream)
@@ -1145,7 +1151,9 @@ class TestMachineOutputIsAlwaysUtf8:
 
         assert stream.getvalue() == '{"ok": true}\n'
 
-    def test_human_mode_output_written_earlier_keeps_its_place(self, monkeypatch) -> None:
+    def test_human_mode_output_written_earlier_keeps_its_place(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Flushing the text layer first stops the two writers reordering."""
         stream = self._cp1250_stdout()
         monkeypatch.setattr(sys, "stdout", stream)
@@ -1155,3 +1163,44 @@ class TestMachineOutputIsAlwaysUtf8:
         stream.flush()
 
         assert cast(io.BytesIO, stream.buffer).getvalue() == b"first\nsecond\n"
+
+
+class TestStreamedAgentEventsAreUtf8:
+    """`--json ... --stream` writes NDJSON of its own, outside OutputFormatter.
+
+    `_render_stream_event` builds each line with `json.dumps(..., ensure_ascii
+    =False)` -- deliberately, so event text stays readable -- which means raw
+    non-ASCII reaches stdout. That is precisely the property that crashes on a
+    cp1250 console, so this path needs the same UTF-8 write as the formatter
+    (issue #546).
+    """
+
+    def test_event_with_non_ascii_does_not_crash_on_a_cp1250_console(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from keboola_agent_cli.commands.agent import _render_stream_event
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
+        monkeypatch.setattr(sys, "stdout", stream)
+        formatter = OutputFormatter(json_mode=True)
+
+        _render_stream_event(formatter, {"event": "log", "data": {"msg": "načítám → hotovo"}})
+        stream.flush()
+
+        written = cast(io.BytesIO, stream.buffer).getvalue()
+        assert json.loads(written.decode("utf-8"))["data"]["msg"] == "načítám → hotovo"
+
+    def test_each_event_is_flushed_so_consumers_see_it_immediately(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stream consumer reads line by line; buffering would stall it."""
+        from keboola_agent_cli.commands.agent import _render_stream_event
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
+        monkeypatch.setattr(sys, "stdout", stream)
+        formatter = OutputFormatter(json_mode=True)
+
+        _render_stream_event(formatter, {"event": "init", "data": {}})
+
+        # Readable without an explicit flush by the test.
+        assert cast(io.BytesIO, stream.buffer).getvalue().endswith(b"\n")
