@@ -358,6 +358,46 @@ DEFERRED_UPDATE_MAX_WAIT_SECONDS: int = 900
 # lost (helper killed, machine rebooted mid-wait) and reported once.
 DEFERRED_UPDATE_STALE_SECONDS: int = 86400
 
+# --- Native (frozen / PyInstaller) distribution ---
+# kbagent also ships as a self-contained PyInstaller binary with NO Python
+# runtime (see build/package/ and .github/workflows/release-kbagent.yml). Such
+# a binary is placed by a native package manager -- Chocolatey, WinGet,
+# Homebrew, apt, dnf -- or unpacked by hand from a signed archive. It is NOT a
+# uv/pip tool environment, so neither the inline nor the deferred self-update
+# path above may run there: `uv tool install` would install a SECOND, unrelated
+# copy of kbagent that can shadow the real binary on PATH while leaving it
+# untouched (see frozen_dist.py).
+#
+# Package identity across every native channel. `keboola-cli2` is the
+# Chocolatey package id, the Homebrew formula name (tap
+# keboola/homebrew-keboola-cli2) AND the deb/rpm package name -- one literal,
+# because the release workflow uses one name everywhere. The BINARY is still
+# `kbagent`; this is the PACKAGE name.
+NATIVE_PACKAGE_NAME: str = "keboola-cli2"
+# WinGet uses its own Publisher.Package identifier form, not the package name.
+NATIVE_WINGET_PACKAGE_ID: str = "Keboola.KeboolaCLI2"
+# Every per-OS archive (.zip + .sha256) and the .deb / .rpm are attached to the
+# GitHub Release, so the releases page is a always-valid, browsable fallback for
+# a hand-unpacked install whose channel we cannot identify.
+NATIVE_RELEASES_URL: str = f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/latest"
+
+# Path markers used to identify which channel placed the running binary. Matched
+# as substrings against the binary's own path, lower-cased and with backslashes
+# normalized to forward slashes, so the Windows markers are testable from any OS.
+NATIVE_CHOCOLATEY_PATH_MARKERS: tuple[str, ...] = ("/chocolatey/",)
+NATIVE_WINGET_PATH_MARKERS: tuple[str, ...] = ("/winget/packages/", "/winget/links/")
+# Homebrew keeps the real file under <prefix>/Cellar/... and symlinks it into
+# <prefix>/bin. Both forms are matched because sys.executable may report either.
+NATIVE_HOMEBREW_PATH_MARKERS: tuple[str, ...] = (
+    "/cellar/",
+    "/opt/homebrew/",
+    "/linuxbrew/",
+)
+# nfpm installs to /usr/bin/kbagent (see build/package/nfpm.yaml). Only consulted
+# on Linux -- deb/rpm do not exist elsewhere, and on macOS /usr/local/bin is a
+# hand-unpacked archive, not a system package.
+NATIVE_SYSTEM_BIN_PREFIXES: tuple[str, ...] = ("/usr/bin/", "/usr/local/bin/")
+
 # --- AI Service ---
 AI_SERVICE_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 

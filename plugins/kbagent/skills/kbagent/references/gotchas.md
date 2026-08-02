@@ -3112,3 +3112,43 @@ embeds the source `table` object), `snapshot-delete` (destructive: forecloses
 restores, source tables untouched; batch-tolerant, exit 1 on any failure).
 Snapshot create and restore are async storage jobs -- the CLI polls to
 completion, so the receipt's `table.rowsCount` is authoritative.
+
+## The standalone binary never self-updates; recommend its own channel (since v0.79.0)
+
+kbagent ships through two channels: a **Python distribution** (`uv tool install`
+/ `pip`) and a **self-contained PyInstaller binary** with no Python runtime,
+delivered by Chocolatey, WinGet, Homebrew, apt, dnf, or a signed zip. They are
+upgraded in completely different ways, and the wrong advice is actively harmful.
+
+- **Never tell a native-binary user to run `uv tool install` (or `pip install`,
+  or `kbagent update`).** That does not upgrade the running binary at all -- it
+  creates a SECOND, unrelated kbagent in the uv tool directory, which usually
+  precedes the package manager's directory on `PATH`. The user silently starts
+  running a different install than the one `choco` / `brew` / `apt` tracks,
+  while the packaged binary stays stale. With no Python on the machine it just
+  fails.
+- **kbagent detects this itself now.** A frozen build is identified via
+  `sys.frozen` / `sys._MEIPASS`, and the channel from the binary's own path.
+  The startup auto-update hook prints a notification instead of reinstalling
+  (throttled to once per version-cache TTL), and `kbagent update` refuses with
+  the right command rather than running uv. This includes the deferred Windows
+  helper from v0.78.0 -- the guard sits ahead of the `should_defer()` branch, so
+  a frozen binary is never scheduled for an install it cannot receive either.
+- **Read the channel out of `kbagent version --json`.** A frozen build carries
+  an additive `kbagent.install_channel` key (`chocolatey` / `winget` /
+  `homebrew` / `debian` / `rpm` / `system` / `archive`) and `upgrade_command`
+  holds that channel's command. The key is **absent** on uv/pip installs -- so
+  `install_channel` present is the reliable "this is a native binary" signal.
+  Do not infer it from the version string; a frozen binary reports a perfectly
+  normal version (PyInstaller bundles the dist metadata, so there is no
+  `0.0.0-dev` tell).
+- **Upgrade commands by channel:** `choco upgrade keboola-cli2` ·
+  `winget upgrade Keboola.KeboolaCLI2` · `brew upgrade keboola-cli2` ·
+  `sudo apt-get install --only-upgrade keboola-cli2` ·
+  `sudo dnf upgrade keboola-cli2` · hand-unpacked archive -> re-download from
+  the GitHub release page. Note the **package** is `keboola-cli2` while the
+  **binary** is `kbagent`; the PyPI distribution is a third name, `keboola-cli`.
+- **keboola-mcp-server still auto-updates on a frozen build**, by design: it is
+  a separate Python distribution the binary only spawns as a subprocess. If the
+  user has no Python tooling, install-method detection returns `none` and the
+  stage does nothing.
