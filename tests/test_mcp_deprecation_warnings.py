@@ -403,3 +403,60 @@ class TestAgentMcpToolDeprecation:
         )
         assert updated.exit_code == 0, updated.output
         assert "deprecation" not in json.loads(updated.stdout)["data"]
+
+
+class TestRemovalTargetIsNamedEverywhere:
+    """Every deprecation surface must quote the same removal version and date.
+
+    Until 0.80.0 the notices said only "a future release". A deprecation
+    without a date is not a window -- users have nothing to plan against, and
+    `agent --type mcp_tool` tasks are persisted in agents.json, so their owner
+    is only present to hear the deadline at creation time.
+    """
+
+    def test_constants_agree_with_the_announced_target(self) -> None:
+        from keboola_agent_cli.mcp_parity import (
+            MCP_REMOVAL_TARGET_DATE,
+            MCP_REMOVAL_VERSION,
+        )
+
+        assert MCP_REMOVAL_VERSION == "0.85.0"
+        assert MCP_REMOVAL_TARGET_DATE == "end of August 2026"
+
+    def test_every_warning_names_the_version(self) -> None:
+        from keboola_agent_cli.commands.agent import MCP_TOOL_ACTION_DEPRECATION
+        from keboola_agent_cli.commands.tool import TOOL_LIST_DEPRECATION
+        from keboola_agent_cli.mcp_parity import (
+            MCP_REMOVAL_VERSION,
+            MCP_TOOL_PARITY,
+            deprecation_message,
+        )
+
+        surfaces = {
+            "tool list banner": TOOL_LIST_DEPRECATION,
+            "agent mcp_tool warning": MCP_TOOL_ACTION_DEPRECATION,
+            "tool call (mapped)": deprecation_message(sorted(MCP_TOOL_PARITY)[0]),
+            "tool call (unmapped)": deprecation_message("no_such_upstream_tool"),
+        }
+        for name, text in surfaces.items():
+            assert MCP_REMOVAL_VERSION in text, f"{name} does not name the removal version"
+
+    def test_mcp_parity_stays_stdlib_only(self) -> None:
+        """The canary loads this module by path on a bare python3.
+
+        `scripts/check_mcp_parity.py` bypasses the package (constants.py pulls
+        in httpx), so a third-party or relative import here turns the weekly
+        canary red -- which is exactly what happened while writing this.
+        """
+        import ast
+        from pathlib import Path
+
+        source = Path("src/keboola_agent_cli/mcp_parity.py").read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0, f"relative import of {node.module!r} breaks the canary"
+                assert (node.module or "").split(".")[0] in {
+                    "dataclasses",
+                    "typing",
+                    "__future__",
+                }, f"non-stdlib import {node.module!r} breaks the canary"
