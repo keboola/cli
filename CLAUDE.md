@@ -664,6 +664,11 @@ kbagent update [--beta]
 # source build; falls back to git+ when absent). Env `KBAGENT_UPDATE_TIMEOUT` (integer
 # seconds, default 300) raises the self-update subprocess timeout for the slow git+
 # fallback on WSL. Bootstrap install: `curl -LsSf .../main/install.sh | sh`.
+# Since 0.79.0 a STANDALONE (PyInstaller) binary (choco/winget/brew/apt/dnf/zip) refuses
+# the kbagent self-update stage and reports that channel's own command instead -- a uv/pip
+# reinstall would install a SECOND, unrelated kbagent that shadows it on PATH. `version
+# --json` gains additive `install_channel` + `upgrade_hint`; `upgrade_command` is empty for
+# a hand-unpacked archive. The keboola-mcp-server stage still runs (separate distribution).
 # Since 0.76.2 self-update completes discovery first, updates MCP before the terminal
 # exact-version full kbagent reinstall, then immediately re-executes; failures print a
 # copy-paste recovery command.

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from keboola_agent_cli.constants import MCP_UPGRADE_TIMEOUT
+from keboola_agent_cli.frozen_dist import FrozenChannel, FrozenDistribution
 from keboola_agent_cli.services.version_service import (
     MCP_BINARY_NAME,
     MCP_PACKAGE_NAME,
@@ -26,6 +27,7 @@ from keboola_agent_cli.services.version_service import (
     _uv_tool_list_has_mcp,
     build_kbagent_upgrade_command,
     get_update_timeout,
+    prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
 )
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
@@ -1570,3 +1572,230 @@ class TestSummaryDistinguishesNotYetFromFailed:
             self._kbagent(message="Update failed: locked"), self._mcp_up_to_date()
         )
         assert "FAILED" in summary
+
+
+class TestFrozenBuildSelfUpdateGuard:
+    """`kbagent update` / `kbagent version` on a native PyInstaller binary.
+
+    Unlike the startup hook -- which was accidentally suppressed for frozen
+    builds by the bundled editable ``direct_url.json`` -- this path had NO guard
+    at all: ``build_kbagent_upgrade_command`` happily returned
+    ``uv tool install --force --reinstall`` inside a real frozen binary
+    (reproduced empirically). That installs a second, unrelated kbagent which
+    shadows the packaged one on PATH.
+    """
+
+    CHOCO_DIST = FrozenDistribution(
+        channel=FrozenChannel.CHOCOLATEY,
+        binary_path=r"C:\ProgramData\chocolatey\lib\keboola-cli2\tools\kbagent.exe",
+        upgrade_command="choco upgrade keboola-cli2",
+        upgrade_hint="upgrade it with: choco upgrade keboola-cli2",
+    )
+    ARCHIVE_DIST = FrozenDistribution(
+        channel=FrozenChannel.ARCHIVE,
+        binary_path="/home/me/bin/kbagent",
+        upgrade_command=None,
+        upgrade_hint="re-download the signed archive from https://example.invalid/releases",
+    )
+
+    @staticmethod
+    def _patch_frozen(distribution):
+        return patch(
+            "keboola_agent_cli.services.version_service.detect_frozen_distribution",
+            return_value=distribution,
+        )
+
+    def test_plan_carries_channel_and_builds_no_install_command(self):
+        """No uv/pip command may be produced for a frozen build."""
+        with self._patch_frozen(self.CHOCO_DIST):
+            plan = prepare_kbagent_update_plan("99.0.0")
+        assert plan.frozen_distribution is self.CHOCO_DIST
+        assert plan.command is None
+        # recovery_command is a uv command too -- it must not be offered either.
+        assert plan.recovery_command is None
+        assert plan.up_to_date is False
+
+    def test_plan_skips_the_wheel_url_probe(self):
+        """The HEAD probe only exists to build a command we refuse to run."""
+        with (
+            self._patch_frozen(self.CHOCO_DIST),
+            patch(
+                "keboola_agent_cli.services.version_service.resolve_kbagent_wheel_url"
+            ) as mock_probe,
+        ):
+            prepare_kbagent_update_plan("99.0.0")
+        mock_probe.assert_not_called()
+
+    def test_update_refuses_and_names_the_channel(self):
+        """`kbagent update` must install nothing at all on a frozen build.
+
+        Asserted against BOTH install paths deliberately. Since issue #528 the
+        install no longer goes through ``subprocess.run`` here -- it goes
+        through ``run_install`` inline, or ``request_deferred_update`` on
+        Windows -- so a test that only watched ``subprocess.run`` would pass
+        vacuously while the deferred helper happily scheduled a `uv tool
+        install` over a Chocolatey binary.
+        """
+        with self._patch_frozen(self.CHOCO_DIST):
+            plan = prepare_kbagent_update_plan("99.0.0")
+        with (
+            patch("keboola_agent_cli.services.version_service.run_install") as mock_install,
+            patch(
+                "keboola_agent_cli.services.version_service.request_deferred_update"
+            ) as mock_defer,
+            patch(
+                "keboola_agent_cli.services.version_service.should_defer", return_value=True
+            ) as mock_should_defer,
+            patch("keboola_agent_cli.services.version_service.subprocess.run") as mock_run,
+        ):
+            result = VersionService._update_kbagent(plan)
+        mock_install.assert_not_called()
+        mock_defer.assert_not_called()
+        mock_run.assert_not_called()
+        # Returned before the platform even got a say -- should_defer() is
+        # forced True above precisely so a wrong branch order would show up.
+        mock_should_defer.assert_not_called()
+        assert result["updated"] is False
+        assert result["install_channel"] == "chocolatey"
+        assert result["upgrade_command"] == "choco upgrade keboola-cli2"
+        assert "choco upgrade keboola-cli2" in result["message"]
+        assert "uv tool install" not in result["message"]
+
+    def test_update_of_archive_install_points_at_the_release_page(self):
+        """A channel with no single command still gets an actionable message."""
+        with self._patch_frozen(self.ARCHIVE_DIST):
+            plan = prepare_kbagent_update_plan("99.0.0")
+        result = VersionService._update_kbagent(plan)
+        assert result["upgrade_command"] is None
+        assert "re-download the signed archive" in result["message"]
+        assert "uv tool install" not in result["message"]
+
+    def test_up_to_date_frozen_binary_short_circuits_first(self):
+        """Being current still wins over the frozen branch."""
+        plan = KbagentUpdatePlan(
+            current_version="1.0.0",
+            latest_version="1.0.0",
+            up_to_date=True,
+            command=None,
+            recovery_command=None,
+            frozen_distribution=self.CHOCO_DIST,
+        )
+        result = VersionService._update_kbagent(plan)
+        assert result["up_to_date"] is True
+        assert "already up to date" in result["message"]
+
+    def test_summary_does_not_report_a_refusal_as_a_failure(self):
+        """`updated=False` here means "not ours to do", not "it broke".
+
+        Without a dedicated branch this falls through to the generic
+        "update FAILED" arm of _compose_update_summary.
+        """
+        with self._patch_frozen(self.CHOCO_DIST):
+            plan = prepare_kbagent_update_plan("99.0.0")
+        kbagent_result = VersionService._update_kbagent(plan)
+        summary = VersionService._compose_update_summary(kbagent_result, {})
+        assert "FAILED" not in summary
+        assert "choco upgrade keboola-cli2" in summary
+        assert "99.0.0" in summary
+
+    def test_non_frozen_plan_still_builds_the_uv_command(self):
+        """Regression guard: the Python-distribution path is untouched."""
+        with (
+            self._patch_frozen(None),
+            patch(
+                "keboola_agent_cli.services.version_service.resolve_kbagent_wheel_url",
+                return_value=None,
+            ),
+        ):
+            plan = prepare_kbagent_update_plan("99.0.0")
+        assert plan.frozen_distribution is None
+        assert plan.command is not None
+        assert plan.recovery_command is not None
+
+
+class TestFrozenBuildVersionOutput:
+    """`kbagent version` must advertise the channel command, not uv."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_probes(self):
+        with (
+            patch(
+                "keboola_agent_cli.services.version_service._get_local_mcp_version",
+                return_value="1.46.0",
+            ),
+            patch(
+                "keboola_agent_cli.services.version_service._detect_mcp_install_method",
+                return_value="uv_tool",
+            ),
+            patch(
+                "keboola_agent_cli.services.version_service._fetch_mcp_latest_version",
+                return_value="1.46.0",
+            ),
+            patch(
+                "keboola_agent_cli.services.version_service._fetch_kbagent_latest_version",
+                return_value="99.0.0",
+            ),
+            patch("keboola_agent_cli.auto_update._write_cache"),
+        ):
+            yield
+
+    def test_frozen_advertises_the_channel_command(self):
+        with patch(
+            "keboola_agent_cli.services.version_service.detect_frozen_distribution",
+            return_value=TestFrozenBuildSelfUpdateGuard.CHOCO_DIST,
+        ):
+            result = VersionService().get_versions()
+        kbagent = result["kbagent"]
+        assert kbagent["upgrade_command"] == "choco upgrade keboola-cli2"
+        assert kbagent["install_channel"] == "chocolatey"
+        assert "uv tool install" not in kbagent["upgrade_command"]
+
+    def test_frozen_archive_keeps_prose_out_of_upgrade_command(self):
+        """`upgrade_command` must stay runnable-or-empty, never a sentence.
+
+        The gotchas entry tells consumers they may shell out to
+        `upgrade_command`; handing them "re-download the signed archive
+        from https://..." would make them execute prose. Channels with no
+        single command carry it in `upgrade_hint` instead.
+        """
+        with patch(
+            "keboola_agent_cli.services.version_service.detect_frozen_distribution",
+            return_value=TestFrozenBuildSelfUpdateGuard.ARCHIVE_DIST,
+        ):
+            result = VersionService().get_versions()
+        kbagent = result["kbagent"]
+        assert kbagent["upgrade_command"] == ""
+        assert "re-download the signed archive" in kbagent["upgrade_hint"]
+        assert kbagent["install_channel"] == "archive"
+
+    def test_offline_refusal_does_not_print_vnone(self):
+        """The release lookup can fail; the summary must not say "-> vNone"."""
+        plan = KbagentUpdatePlan(
+            current_version="1.0.0",
+            latest_version=None,
+            up_to_date=None,
+            command=None,
+            recovery_command=None,
+            frozen_distribution=TestFrozenBuildSelfUpdateGuard.CHOCO_DIST,
+        )
+        summary = VersionService._compose_update_summary(VersionService._update_kbagent(plan), {})
+        assert "vNone" not in summary
+        assert "latest version unknown" in summary
+        assert "choco upgrade keboola-cli2" in summary
+
+    def test_non_frozen_json_shape_is_unchanged(self):
+        """The additive key must not appear for uv/pip installs."""
+        with (
+            patch(
+                "keboola_agent_cli.services.version_service.detect_frozen_distribution",
+                return_value=None,
+            ),
+            patch(
+                "keboola_agent_cli.services.version_service.resolve_kbagent_wheel_url",
+                return_value=None,
+            ),
+        ):
+            result = VersionService().get_versions()
+        assert "install_channel" not in result["kbagent"]
+        assert "upgrade_hint" not in result["kbagent"]
+        assert "uv tool install" in result["kbagent"]["upgrade_command"]

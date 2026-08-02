@@ -92,7 +92,17 @@ def _format_version_panel(console: Console, data: dict) -> None:
 
     if kbagent.get("up_to_date") is False and kbagent.get("latest_version"):
         text.append(f"    -> v{kbagent['latest_version']} available", style="yellow")
-        text.append("  (run: kbagent update)", style="dim")
+        # `install_channel` is present only for a frozen native binary, where
+        # `kbagent update` deliberately refuses to act -- pointing the user at
+        # it would just send them one step further down a dead end. The service
+        # already put that channel's real command in `upgrade_command`.
+        if kbagent.get("install_channel"):
+            # `upgrade_command` is empty for channels with no single runnable
+            # command (hand-unpacked archive); the hint sentence covers those.
+            action = kbagent.get("upgrade_command") or kbagent.get("upgrade_hint", "")
+            text.append(f"  ({action})", style="dim")
+        else:
+            text.append("  (run: kbagent update)", style="dim")
     elif kbagent.get("up_to_date") is True:
         text.append("    up to date", style="green")
 

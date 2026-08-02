@@ -25,6 +25,7 @@ from keboola_agent_cli.auto_update import (
     report_finished_deferred_update,
 )
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UPGRADE_TIMEOUT
+from keboola_agent_cli.frozen_dist import FrozenChannel, FrozenDistribution
 from keboola_agent_cli.services.version_service import KbagentUpdatePlan, McpUpdatePlan
 from keboola_agent_cli.update_runner import (
     DeferredUpdateReport,
@@ -1315,3 +1316,248 @@ class TestReportFinishedDeferredUpdate:
         auto_update_module._AUTO_UPDATE_RAN = False
         maybe_auto_update()
         mock_report.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Frozen (PyInstaller) build guard
+# ---------------------------------------------------------------------------
+
+
+class TestFrozenBuildGuard:
+    """The startup hook must never uv/pip-reinstall a native binary.
+
+    A frozen kbagent comes from Chocolatey / WinGet / Homebrew / apt / dnf. The
+    normal Stage 1 reinstall would create a SEPARATE uv tool environment that
+    shadows the real binary on PATH while leaving it stale, so Stage 1 is
+    replaced by a notification naming that channel's own upgrade command.
+
+    These tests are the guard's only protection: before this change the hook was
+    suppressed for frozen builds purely by accident (CI freezes from an editable
+    install, so the bundled ``direct_url.json`` made ``_is_dev_install()`` return
+    True). Freezing from a non-editable install flips that and the reinstall
+    fires -- reproduced against real PyInstaller binaries.
+    """
+
+    CHOCO_DIST = FrozenDistribution(
+        channel=FrozenChannel.CHOCOLATEY,
+        binary_path=r"C:\ProgramData\chocolatey\lib\keboola-cli2\tools\kbagent.exe",
+        upgrade_command="choco upgrade keboola-cli2",
+        upgrade_hint="upgrade it with: choco upgrade keboola-cli2",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _isolated_flow(self):
+        """Drive the orchestrator down the active path with MCP stubbed out."""
+        auto_update_module._AUTO_UPDATE_RAN = False
+        with (
+            patch("keboola_agent_cli.auto_update._should_skip_all", return_value=False),
+            patch("keboola_agent_cli.auto_update._should_skip_kbagent_stage", return_value=False),
+            patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value=None),
+            patch("keboola_agent_cli.auto_update.prepare_mcp_update_plan"),
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update"),
+            patch("keboola_agent_cli.auto_update._write_cache"),
+        ):
+            yield
+
+    def _run_frozen(self, *, cached: bool, latest: str | None = "99.0.0"):
+        """Run the hook as a frozen Chocolatey binary; return the patch mocks."""
+        cache = {"last_check": time.time(), "latest_version": latest} if cached else None
+        with (
+            patch(
+                "keboola_agent_cli.auto_update.detect_frozen_distribution",
+                return_value=self.CHOCO_DIST,
+            ),
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=cache),
+            patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=cached),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
+                return_value=latest,
+            ),
+            patch("keboola_agent_cli.auto_update._prepare_auto_kbagent_plan") as mock_plan,
+            patch("keboola_agent_cli.auto_update._perform_update") as mock_perform,
+            patch("keboola_agent_cli.auto_update._re_exec") as mock_reexec,
+            patch("keboola_agent_cli.auto_update._schedule_deferred_update") as mock_defer,
+            patch("keboola_agent_cli.auto_update.should_defer", return_value=True),
+        ):
+            maybe_auto_update()
+        return mock_plan, mock_perform, mock_reexec, mock_defer
+
+    def test_frozen_never_installs_and_never_re_execs(self, capsys):
+        """The core guarantee: nothing installed, nothing re-exec'd, nothing scheduled.
+
+        ``should_defer()`` is forced True inside the helper, so if the frozen
+        branch ever slipped below the issue #528 deferral the Windows helper
+        would be scheduled here and this test would catch it.
+        """
+        mock_plan, mock_perform, mock_reexec, mock_defer = self._run_frozen(cached=False)
+        mock_perform.assert_not_called()
+        mock_reexec.assert_not_called()
+        mock_defer.assert_not_called()
+        # Planning is short-circuited too -- it would spend a wheel-URL HEAD
+        # probe on every startup building a command we refuse to run.
+        mock_plan.assert_not_called()
+
+    def test_frozen_notification_names_the_real_channel(self, capsys):
+        self._run_frozen(cached=False)
+        stderr = capsys.readouterr().err
+        assert "choco upgrade keboola-cli2" in stderr
+        assert "99.0.0" in stderr
+        # The exact bug this guards against.
+        assert "uv tool install" not in stderr
+
+    def test_frozen_notification_throttled_to_one_per_cache_ttl(self, capsys):
+        """A banner that cannot resolve itself must not print on every command.
+
+        Unlike the normal path there is no re-exec to end the loop, so without
+        throttling every kbagent invocation would nag until the user upgrades.
+        """
+        self._run_frozen(cached=True)
+        assert capsys.readouterr().err == ""
+
+    def test_frozen_and_current_is_silent(self, capsys):
+        """No banner when the native binary is already the latest release."""
+        from keboola_agent_cli import __version__
+
+        self._run_frozen(cached=False, latest=__version__)
+        assert capsys.readouterr().err == ""
+
+    def test_frozen_with_unknown_latest_is_silent(self, capsys):
+        """Offline: a version banner with nothing actionable behind it is noise."""
+        self._run_frozen(cached=False, latest=None)
+        assert capsys.readouterr().err == ""
+
+    def test_frozen_still_updates_mcp(self):
+        """Documented decision: Stage 2 runs on frozen builds.
+
+        keboola-mcp-server is a separate Python distribution that a frozen
+        kbagent only ever spawns as a subprocess, so upgrading it neither
+        touches nor depends on the frozen binary.
+        """
+        with (
+            patch(
+                "keboola_agent_cli.auto_update.detect_frozen_distribution",
+                return_value=self.CHOCO_DIST,
+            ),
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
+                return_value="99.0.0",
+            ),
+            patch("keboola_agent_cli.auto_update._perform_update"),
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update") as mock_mcp,
+        ):
+            maybe_auto_update()
+        mock_mcp.assert_called_once()
+
+    def test_non_frozen_install_is_unaffected(self, capsys):
+        """Regression guard: the uv/pip path must still self-update and re-exec."""
+        plan = KbagentUpdatePlan(
+            current_version="0.1.0",
+            latest_version="99.0.0",
+            up_to_date=False,
+            command=("uv", "tool", "install", "--force", "--reinstall", "keboola-cli"),
+            recovery_command="uv tool install --force --reinstall keboola-cli",
+        )
+        with (
+            patch(
+                "keboola_agent_cli.auto_update.detect_frozen_distribution",
+                return_value=None,
+            ),
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
+                return_value="99.0.0",
+            ),
+            patch("keboola_agent_cli.auto_update._prepare_auto_kbagent_plan", return_value=plan),
+            patch(
+                "keboola_agent_cli.auto_update._perform_update",
+                return_value=UpdateOutcome.SUCCESS,
+            ) as mock_perform,
+            patch("keboola_agent_cli.auto_update._re_exec") as mock_reexec,
+        ):
+            maybe_auto_update()
+        mock_perform.assert_called_once()
+        mock_reexec.assert_called_once()
+
+
+class TestFrozenBuildIsNotADevInstall:
+    """A frozen binary must never be mistaken for a developer checkout.
+
+    This is the gap that made the whole frozen guard invisible on the artifacts
+    CI actually ships. `--collect-all keboola_agent_cli` bundles the entire
+    `.dist-info`, and the release workflow freezes from a `uv run` editable
+    sync -- so every shipped binary carries `direct_url.json` with
+    `"editable": true`. `_is_dev_install()` read that and returned True,
+    `_should_skip_all()` bailed out of `maybe_auto_update()` before the frozen
+    branch, and the notification meant for exactly those users never printed.
+    The bundled marker describes the BUILD MACHINE, not the running one.
+    """
+
+    @staticmethod
+    def _editable_dist() -> MagicMock:
+        dist = MagicMock()
+        dist.read_text.return_value = json.dumps(
+            {"url": "file:///build/machine", "dir_info": {"editable": True}}
+        )
+        return dist
+
+    def test_frozen_overrides_the_bundled_editable_marker(self):
+        with (
+            patch("keboola_agent_cli.auto_update.is_frozen_build", return_value=True),
+            patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
+            patch("keboola_agent_cli.auto_update.distribution", return_value=self._editable_dist()),
+        ):
+            assert _is_dev_install() is False
+
+    def test_frozen_overrides_the_dev_version_fallback(self):
+        """Metadata missing entirely is still a shipped artifact, not a dev tree."""
+        with (
+            patch("keboola_agent_cli.auto_update.is_frozen_build", return_value=True),
+            patch("keboola_agent_cli.auto_update.__version__", "0.0.0-dev"),
+        ):
+            assert _is_dev_install() is False
+
+    def test_non_frozen_editable_is_still_a_dev_install(self):
+        """The original behaviour must survive for real developer checkouts."""
+        with (
+            patch("keboola_agent_cli.auto_update.is_frozen_build", return_value=False),
+            patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
+            patch("keboola_agent_cli.auto_update.distribution", return_value=self._editable_dist()),
+        ):
+            assert _is_dev_install() is True
+
+    def test_notification_survives_the_real_shipped_configuration(self, capsys):
+        """End-to-end: editable marker + frozen build still reaches the banner.
+
+        Exercises the REAL `_should_skip_all()` / `_is_dev_install()` chain
+        rather than stubbing it, because stubbing that chain is precisely what
+        hid the bug.
+        """
+        auto_update_module._AUTO_UPDATE_RAN = False
+        dist = FrozenDistribution(
+            channel=FrozenChannel.CHOCOLATEY,
+            binary_path=r"C:\ProgramData\chocolatey\lib\keboola-cli2\tools\kbagent.exe",
+            upgrade_command="choco upgrade keboola-cli2",
+            upgrade_hint="upgrade it with: choco upgrade keboola-cli2",
+        )
+        with (
+            patch("keboola_agent_cli.auto_update.is_frozen_build", return_value=True),
+            patch("keboola_agent_cli.auto_update.distribution", return_value=self._editable_dist()),
+            patch("keboola_agent_cli.auto_update.detect_frozen_distribution", return_value=dist),
+            patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
+            patch("sys.argv", ["kbagent", "config", "list"]),
+            patch(
+                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
+                return_value="99.0.0",
+            ),
+            patch("keboola_agent_cli.auto_update._fetch_mcp_latest_version", return_value=None),
+            patch("keboola_agent_cli.auto_update.prepare_mcp_update_plan"),
+            patch("keboola_agent_cli.auto_update._apply_prepared_mcp_update"),
+            patch("keboola_agent_cli.auto_update._write_cache"),
+            patch("keboola_agent_cli.auto_update._perform_update") as mock_perform,
+        ):
+            maybe_auto_update()
+        stderr = capsys.readouterr().err
+        assert "choco upgrade keboola-cli2" in stderr
+        assert "uv tool install" not in stderr
+        mock_perform.assert_not_called()

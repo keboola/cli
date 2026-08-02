@@ -30,6 +30,7 @@ from .constants import (
     VERSION_CACHE_FILENAME,
     VERSION_CHECK_TIMEOUT,
 )
+from .frozen_dist import FrozenDistribution, detect_frozen_distribution, is_frozen_build
 from .services.version_service import (
     MCP_PACKAGE_NAME,
     MCP_UV_PRERELEASE_FLAG,
@@ -179,7 +180,21 @@ def _is_dev_install() -> bool:
     Returns True if:
     - __version__ is '0.0.0-dev' (PackageNotFoundError fallback), or
     - The package was installed in editable mode (PEP 660 direct_url.json).
+
+    A frozen (PyInstaller) build is NEVER a dev tree, whatever its bundled
+    metadata claims -- and the claim is routinely wrong. The release workflow
+    freezes from a ``uv run`` sync, which installs the project editable, and
+    ``--collect-all keboola_agent_cli`` copies the whole ``.dist-info`` into the
+    binary *including* ``direct_url.json`` with ``"editable": true``. Every
+    shipped binary therefore looked like a developer checkout here, which
+    silently disabled the entire startup hook -- including the frozen-build
+    notification that is supposed to replace the self-update for exactly those
+    users (see :mod:`keboola_agent_cli.frozen_dist`). The check must come first:
+    the bundled marker describes the BUILD MACHINE, not the machine running it.
     """
+    if is_frozen_build():
+        return False
+
     if __version__ == "0.0.0-dev":
         return True
 
@@ -565,6 +580,31 @@ def _schedule_deferred_update(plan: KbagentUpdatePlan) -> None:
     )
 
 
+def _notify_frozen_update_available(
+    distribution: FrozenDistribution, latest_version: str | None
+) -> None:
+    """Report a new release to a native-binary user instead of self-updating.
+
+    Replaces Stage 1 for frozen (PyInstaller) builds. Neither the inline
+    reinstall nor the deferred Windows helper can upgrade a Chocolatey /
+    Homebrew / apt / dnf install -- both would create an unrelated second copy
+    that shadows the real binary on PATH (see
+    :mod:`keboola_agent_cli.frozen_dist`). So we only tell the user, naming the
+    command their own channel actually accepts.
+
+    Silent when already current or when the latest version is unknown (offline,
+    or the re-exec guard suppressed the fetch): a version banner with nothing
+    actionable behind it is noise.
+    """
+    if _is_up_to_date(__version__, latest_version) is not False:
+        return
+    sys.stderr.write(
+        f"kbagent v{__version__} -> v{latest_version} available. Self-update is "
+        f"disabled for the standalone binary ({distribution.channel.value}); "
+        f"{distribution.upgrade_hint}\n"
+    )
+
+
 def _prepare_auto_kbagent_plan(latest_version: str | None) -> KbagentUpdatePlan:
     """Adapt the shared plan to the startup comparison seam used by tests."""
     prepared = prepare_kbagent_update_plan(latest_version)
@@ -593,6 +633,19 @@ def maybe_auto_update() -> None:
        method (``uv tool upgrade`` / ``pip install -U`` / ``uvx --refresh``).
        No re-exec is needed: the MCP server is spawned by ``tool call``
        commands and the next spawn picks up the new version.
+
+    **Frozen (PyInstaller) builds replace Stage 1 with a notification.** A
+    native binary from Chocolatey / WinGet / Homebrew / apt / dnf is not a
+    uv-managed tool environment, so neither the inline reinstall nor the
+    deferred Windows helper applies -- both would install an unrelated second
+    copy instead of upgrading the running one (full rationale in
+    :mod:`keboola_agent_cli.frozen_dist`). **Stage 2 still runs there**, and
+    that is deliberate: ``keboola-mcp-server`` is a *separate* Python
+    distribution that a frozen kbagent only ever spawns as a subprocess, so
+    upgrading it neither touches nor depends on the frozen binary. A pure
+    binary user with no Python at all is unaffected either way --
+    :func:`_detect_mcp_install_method` returns ``"none"`` and the stage
+    short-circuits without installing anything.
 
     Critical invariant: **the re-exec'd process (KBAGENT_SKIP_UPDATE=1)
     skips ONLY Stage 1**. Stage 2 always runs, so a kbagent self-upgrade
@@ -636,6 +689,12 @@ def maybe_auto_update() -> None:
         cached_kbagent = cache.get("latest_version") if cache else None
         cached_mcp = cache.get("mcp_latest_version") if cache else None
         skip_kbagent_stage = _should_skip_kbagent_stage()
+        # A frozen (PyInstaller) binary is upgraded by the package manager that
+        # placed it, never by us. Detected BEFORE planning so the wheel-URL HEAD
+        # probe inside prepare_kbagent_update_plan is skipped as well -- that
+        # would be a wasted network round-trip on every single startup, for a
+        # command this process is never allowed to run.
+        frozen_dist = detect_frozen_distribution()
         use_cached_kbagent = cache_is_fresh and isinstance(cached_kbagent, str)
         use_cached_mcp = cache_is_fresh and isinstance(cached_mcp, str)
         latest_version = (
@@ -659,7 +718,7 @@ def maybe_auto_update() -> None:
         mcp_plan = prepare_mcp_update_plan(mcp_latest)
         kbagent_plan = (
             _prepare_auto_kbagent_plan(latest_version)
-            if not skip_kbagent_stage
+            if not skip_kbagent_stage and frozen_dist is None
             else KbagentUpdatePlan(__version__, latest_version, True, None, None)
         )
 
@@ -684,6 +743,22 @@ def maybe_auto_update() -> None:
                 ),
                 mcp_install_method=mcp_plan.install_method,
             )
+
+        # Frozen builds: Stage 1 becomes a notification. Deliberately placed
+        # AFTER the MCP stage and the cache write -- both stay fully active (see
+        # this function's docstring for why MCP is still updated), and letting
+        # the TTL tick is what throttles the banner below. Placed BEFORE the
+        # `should_defer()` branch further down, so the deferred Windows helper
+        # is never scheduled for a binary it cannot install over either.
+        if frozen_dist is not None:
+            # Only on a run that actually refreshed the cache, i.e. at most once
+            # per AUTO_UPDATE_CHECK_INTERVAL. Unlike the normal path this banner
+            # cannot resolve itself by re-exec'ing, so without throttling it
+            # would print on every kbagent invocation until the user upgrades --
+            # pure noise in any script that shells out to kbagent in a loop.
+            if not use_cached_kbagent:
+                _notify_frozen_update_available(frozen_dist, latest_version)
+            return
 
         if kbagent_plan.up_to_date is not False:
             return

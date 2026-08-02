@@ -24,6 +24,49 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.79.0": [
+        "Fix: the standalone `kbagent` binary no longer tries to update itself with "
+        "`uv tool install`. kbagent ships both as a Python distribution and as a "
+        "self-contained PyInstaller binary delivered by Chocolatey, WinGet, Homebrew, apt, "
+        "dnf or a signed zip, but nothing detected the difference -- so both update paths "
+        "planned a uv/pip reinstall, which cannot upgrade a package-manager-owned binary. "
+        "It installs a SECOND, unrelated kbagent into the uv tool directory, which usually "
+        "precedes the package manager's directory on PATH: the user silently starts running "
+        "a different install than the one `choco` / `brew` / `apt` tracks, while the real "
+        "binary stays stale. With no Python on the machine it simply fails on every startup. "
+        "`sys.frozen` / `sys._MEIPASS` is now detected explicitly and the channel is "
+        "identified from the running binary's own path, so the self-update is replaced by a "
+        "notification carrying the command that channel actually accepts -- "
+        "`choco upgrade keboola-cli2`, `winget upgrade Keboola.KeboolaCLI2`, "
+        "`brew upgrade keboola-cli2`, `sudo apt-get install --only-upgrade keboola-cli2`, "
+        "`sudo dnf upgrade keboola-cli2`, or the GitHub release page for a hand-unpacked "
+        "archive. An unattributable path degrades to the release page rather than guessing. "
+        "This covers the deferred Windows helper added in 0.78.0 too: the guard sits ahead "
+        "of the `should_defer()` branch, so a frozen binary is never scheduled for an "
+        "install it cannot receive. uv / pip installs behave exactly as before.",
+        "Fix: a frozen binary is no longer mistaken for a developer checkout, which had "
+        "been silently disabling the startup update check inside every shipped artifact. "
+        "The release workflow freezes with `pyinstaller --collect-all keboola_agent_cli`, "
+        "and `collect_all()` is a superset of `--copy-metadata`, so the whole `.dist-info` "
+        "is bundled -- including `direct_url.json`, which records how the project was "
+        "installed on the BUILD machine. CI freezes from an editable `uv run` sync, so that "
+        'file says `"editable": true` inside every released binary and the dev-install '
+        "probe returned True for all of them. A frozen build is now never treated as a dev "
+        "tree, whatever its bundled metadata claims.",
+        "New: `kbagent update` on a standalone binary reports the channel's own upgrade "
+        "command instead of running uv, and no longer misreports that deliberate refusal as "
+        "a failed update. `kbagent version` advertises the same command in place of "
+        "`(run: kbagent update)`. Both add `install_channel` and `upgrade_hint` keys under "
+        "`kbagent` in `--json`; `upgrade_command` stays runnable-or-empty (it is empty for a "
+        "hand-unpacked archive, where the sentence lives in `upgrade_hint`), so a consumer "
+        "shelling out to it never executes prose. All three keys are absent for uv / pip "
+        "installs, leaving their JSON shape byte-identical.",
+        "Note: `keboola-mcp-server` still auto-updates on a frozen build, by design. It is a "
+        "separate Python distribution that the binary only ever spawns as a subprocess, so "
+        "upgrading it neither touches nor depends on the frozen kbagent. A pure-binary user "
+        "with no Python tooling is unaffected either way -- install-method detection returns "
+        "`none` and the stage does nothing.",
+    ],
     "0.78.0": [
         "Fix (#546): `kbagent --json` no longer crashes with `UnicodeEncodeError` on Windows "
         "consoles using a non-UTF-8 codepage (cp1250 on Czech/Polish/Hungarian Windows). Any "

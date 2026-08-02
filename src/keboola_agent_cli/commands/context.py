@@ -1467,6 +1467,13 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     matching command. Both stages always run, regardless of whether kbagent
     itself needed an upgrade. The same flow runs automatically on every
     kbagent startup -- the explicit `update` command forces a fresh check.
+    Since 0.79.0 a STANDALONE (PyInstaller) binary -- Chocolatey / WinGet /
+    Homebrew / apt / dnf / signed zip -- refuses the kbagent stage and reports
+    that channel's own upgrade command instead; a uv/pip reinstall there
+    installs a SECOND, unrelated kbagent rather than upgrading the packaged
+    one. `version --json` then carries kbagent.install_channel and
+    kbagent.upgrade_hint; upgrade_command is empty for a hand-unpacked
+    archive. The MCP stage still runs -- it is a separate distribution.
     --beta (since 0.42.0) opts into pre-release versions (PEP 440 betas/rc,
     e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
     /releases/latest endpoint, which excludes prereleases server-side --

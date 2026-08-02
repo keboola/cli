@@ -33,6 +33,7 @@ from ..constants import (
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
+from ..frozen_dist import FrozenDistribution, detect_frozen_distribution
 from ..update_runner import (
     DeferredUpdateRequest,
     InstallStatus,
@@ -57,6 +58,15 @@ class KbagentUpdatePlan:
     up_to_date: bool | None
     command: tuple[str, ...] | None
     recovery_command: str | None
+    #: Set only when running as a frozen (PyInstaller) native binary, in which
+    #: case ``command`` and ``recovery_command`` are deliberately None: a uv/pip
+    #: reinstall cannot upgrade a Chocolatey / Homebrew / apt / dnf install and
+    #: would create an unrelated second copy instead (see
+    #: :mod:`keboola_agent_cli.frozen_dist`). Consumers must report this
+    #: channel's own upgrade command rather than attempting the install --
+    #: including the deferred Windows path, which is equally inapplicable.
+    #: Defaulted so the existing positional constructions stay valid.
+    frozen_distribution: FrozenDistribution | None = None
 
 
 @dataclass(frozen=True)
@@ -728,10 +738,21 @@ def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
 def prepare_kbagent_update_plan(
     latest_version: str | None, *, include_prerelease: bool = False
 ) -> KbagentUpdatePlan:
-    """Prepare the terminal self-reinstall without mutating any environment."""
+    """Prepare the terminal self-reinstall without mutating any environment.
+
+    For a frozen (PyInstaller) binary no install command is produced at all --
+    neither ``command`` nor ``recovery_command``. Both would be uv/pip
+    invocations that install a *separate* copy rather than upgrading the running
+    binary, so the plan instead carries the detected
+    :class:`~keboola_agent_cli.frozen_dist.FrozenDistribution` and callers report
+    that channel's upgrade command. A ``command`` of None also means the
+    deferred Windows helper is never handed anything to install. The wheel-URL
+    HEAD probe is skipped too, since its only purpose is building that command.
+    """
     up_to_date = _is_up_to_date(__version__, latest_version)
+    frozen_distribution = detect_frozen_distribution()
     command: tuple[str, ...] | None = None
-    if up_to_date is False and latest_version is not None:
+    if up_to_date is False and latest_version is not None and frozen_distribution is None:
         wheel_url = resolve_kbagent_wheel_url(latest_version)
         built = build_kbagent_upgrade_command(
             prerelease=include_prerelease,
@@ -745,8 +766,11 @@ def prepare_kbagent_update_plan(
         up_to_date=up_to_date,
         command=command,
         recovery_command=(
-            _recovery_command(command, latest_version) if up_to_date is False else None
+            _recovery_command(command, latest_version)
+            if up_to_date is False and frozen_distribution is None
+            else None
         ),
+        frozen_distribution=frozen_distribution,
     )
 
 
@@ -878,28 +902,50 @@ class VersionService:
         # latest_version advertised a beta tag -- silently landing on the
         # wrong version.
         kbagent_target_version = kbagent_latest
-        # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
-        # prebuilt-wheel install command when the asset exists, so a programmatic
-        # consumer copy-pasting `upgrade_command` from `kbagent version --json`
-        # gets the fast path too instead of a slow git+ source build.
-        kbagent_wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
-        kbagent_upgrade_cmd = build_kbagent_upgrade_command(
-            prerelease=include_prerelease,
-            target_version=kbagent_target_version,
-            wheel_url=kbagent_wheel_url,
-        )
-        kbagent_upgrade_str = (
-            " ".join(kbagent_upgrade_cmd)
-            if kbagent_upgrade_cmd is not None
-            else f"uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}"
-        )
+        # A frozen native binary is upgraded by the package manager that placed
+        # it. Advertising the uv/pip command here would hand every Chocolatey /
+        # Homebrew / apt / dnf user a copy-pasteable way to install a SECOND,
+        # unrelated kbagent (see frozen_dist.py) -- so the channel's own command
+        # replaces it, and the wheel-URL HEAD probe is skipped as dead weight.
+        frozen_distribution = detect_frozen_distribution()
+        if frozen_distribution is not None:
+            # Keep `upgrade_command` a RUNNABLE command or nothing. A consumer
+            # that shells out to it verbatim -- the use the gotchas entry
+            # documents -- must never be handed the prose hint. Channels with no
+            # single command (hand-unpacked archive, unidentified system
+            # package) carry the sentence in `upgrade_hint` instead.
+            kbagent_upgrade_str = frozen_distribution.upgrade_command or ""
+        else:
+            # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
+            # prebuilt-wheel install command when the asset exists, so a programmatic
+            # consumer copy-pasting `upgrade_command` from `kbagent version --json`
+            # gets the fast path too instead of a slow git+ source build.
+            kbagent_wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
+            kbagent_upgrade_cmd = build_kbagent_upgrade_command(
+                prerelease=include_prerelease,
+                target_version=kbagent_target_version,
+                wheel_url=kbagent_wheel_url,
+            )
+            kbagent_upgrade_str = (
+                " ".join(kbagent_upgrade_cmd)
+                if kbagent_upgrade_cmd is not None
+                else f"uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}"
+            )
+        kbagent_entry: dict[str, Any] = {
+            "version": __version__,
+            "latest_version": kbagent_latest,
+            "up_to_date": kbagent_up_to_date,
+            "upgrade_command": kbagent_upgrade_str,
+        }
+        # Additive keys, present ONLY on a frozen build, so the JSON shape every
+        # existing uv/pip consumer sees stays byte-identical. `upgrade_hint` is
+        # always a human sentence; `upgrade_command` is empty when the channel
+        # has no single runnable command.
+        if frozen_distribution is not None:
+            kbagent_entry["install_channel"] = frozen_distribution.channel.value
+            kbagent_entry["upgrade_hint"] = frozen_distribution.upgrade_hint
         return {
-            "kbagent": {
-                "version": __version__,
-                "latest_version": kbagent_latest,
-                "up_to_date": kbagent_up_to_date,
-                "upgrade_command": kbagent_upgrade_str,
-            },
+            "kbagent": kbagent_entry,
             "dependencies": [
                 mcp_entry,
             ],
@@ -1011,6 +1057,21 @@ class VersionService:
             )
         elif kbagent_result.get("up_to_date"):
             parts.append(f"kbagent v{kbagent_result.get('current_version')} (already up to date)")
+        elif kbagent_result.get("install_channel"):
+            # Frozen native binary -- behind, but NOT a failed update: we never
+            # attempted one. Must precede the failure branch below, which would
+            # otherwise report this deliberate refusal as "update FAILED".
+            channel = kbagent_result.get("install_channel")
+            action = kbagent_result.get("upgrade_command") or "see the release page"
+            latest = kbagent_result.get("latest_version")
+            # `latest` is None when the release lookup failed (offline). The
+            # refusal is still worth reporting -- the user asked for an update
+            # and got none -- but "-> vNone available" is not.
+            target = f" -> v{latest} available" if latest else " (latest version unknown)"
+            parts.append(
+                f"kbagent v{kbagent_result.get('current_version')}{target} "
+                f"(standalone {channel} binary; {action})"
+            )
         elif kbagent_result.get("current_version"):
             tail = cls._summarize_failure_tail(kbagent_result.get("message"))
             parts.append(f"kbagent v{kbagent_result.get('current_version')} update FAILED: {tail}")
@@ -1053,6 +1114,29 @@ class VersionService:
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": f"kbagent v{old_version} is already up to date.",
+            }
+
+        # Frozen binary: refuse the self-update and name the real channel. This
+        # MUST precede BOTH branches below. The `command is None` branch would
+        # tell the user to run `uv tool install --force --reinstall`, and the
+        # deferred-helper branch after it is equally inapplicable -- neither can
+        # upgrade a Chocolatey / Homebrew / apt / dnf install, they just create a
+        # second, unrelated kbagent that shadows theirs on PATH.
+        if plan.frozen_distribution is not None:
+            frozen = plan.frozen_distribution
+            return {
+                "planned": True,
+                "updated": False,
+                "up_to_date": up_to_date,
+                "current_version": old_version,
+                "latest_version": kbagent_latest,
+                "install_channel": frozen.channel.value,
+                "upgrade_command": frozen.upgrade_command,
+                "message": (
+                    f"kbagent v{old_version} is a standalone binary installed via "
+                    f"{frozen.channel.value}; it cannot update itself -- "
+                    f"{frozen.upgrade_hint}"
+                ),
             }
 
         if plan.command is None:
