@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes parity-check command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-mcp install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes loc-check loc-report loc-baseline parity-check command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -92,6 +92,15 @@ version-check: ## Check version-bearing files match pyproject.toml (fails if mis
 		exit 1; \
 	fi
 
+loc-check: ## Check per-layer file-size budgets in CODE LINES (docstrings/comments excluded)
+	uv run python scripts/check_file_size.py
+
+loc-report: ## List every module by code lines, largest first
+	uv run python scripts/check_file_size.py --report
+
+loc-baseline: ## Re-record grandfathered over-budget files (run AFTER a split, never to silence growth)
+	uv run python scripts/check_file_size.py --update-baseline
+
 changelog: ## Generate changelog skeleton from GitHub releases
 	uv run python scripts/generate_changelog.py
 
@@ -115,7 +124,7 @@ hooks: ## Install git pre-commit hook (lint + format on staged files)
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check typecheck skill-check version-check command-sync-check changelog-check check-error-codes test ## Run all checks (lint + format + typecheck + skill + version + command-sync + changelog + error-codes + test)
+check: lint format-check typecheck skill-check version-check command-sync-check changelog-check check-error-codes loc-check test ## Run all checks (lint + format + typecheck + skill + version + command-sync + changelog + error-codes + file-size + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -90,6 +90,15 @@ jobs:
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).
         run: uv run python scripts/check_error_codes.py
 
+      - name: File-size budget check
+        # Enforces the CONTRIBUTING.md per-layer budgets in CODE LINES
+        # (docstrings/comments excluded, so documenting a module is free).
+        # Files already over their hard ceiling are grandfathered in
+        # scripts/file_size_baseline.json and may only shrink -- this catches
+        # NEW oversized modules and growth of the existing ones, which review
+        # reliably misses because a diff never shows the resulting file size.
+        run: uv run python scripts/check_file_size.py
+
   # ────────────────────────────────────────────────────────────────────────
   # Test suite across every supported interpreter. pyproject declares
   # `requires-python = ">=3.12"`, so the matrix is 3.12 + 3.13 (3.10/3.11 are

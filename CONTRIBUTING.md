@@ -182,15 +182,32 @@ If a new category appears, **add it to `ErrorCode`** and `_ERROR_CODE_TO_TYPE` i
 
 ### File-size budgets -- split when concerns drift
 
-Hard ceiling per file:
+Budgets are measured in **code lines**, not raw line count. Docstrings, comments and blank lines do **not** count.
+
+```bash
+make loc-check      # the gate; part of `make check`
+make loc-report     # every module by code lines, largest first
+make loc-baseline   # re-record grandfathered files AFTER a split
+```
 
 | Layer | Soft ceiling | Hard ceiling |
 |-------|--------------|--------------|
-| `commands/*.py` | 800 LOC | 1200 LOC |
-| `services/*.py` | 1000 LOC | 1500 LOC |
-| `client/*.py` (per module) / `manage_client.py` | 1500 LOC | 2000 LOC |
+| `commands/*.py` | 800 | 1200 |
+| `services/*.py` | 1000 | 1500 |
+| `client/*.py` (per module) / `manage_client.py` | 1500 | 2000 |
+| `server/*.py` | 800 | 1200 |
+| `sync/*.py` | 1000 | 1500 |
+| everything else in the package | 1000 | 1500 |
 
-When a file crosses the **soft** ceiling, the next PR that adds material to it should split first. When a file crosses the **hard** ceiling, splitting is required before merging more functionality into it.
+**Why code lines and not LOC.** This codebase deliberately writes long rationale-carrying docstrings -- they are the reason it stays navigable, for humans and for the AI agents that work in it. A raw-LOC budget taxes exactly that and pushes toward *less* explanation, which is backwards. The gap is not marginal: `services/version_service.py` is 1252 lines but 705 lines of code (36% prose), and `constants.py` is 574 lines but 190 lines of code (56% prose). Run `make loc-report` for the current numbers rather than trusting these.
+
+The line the metric draws: a **docstring** (the bare leading string of a module, class or function) is prose and is exempt. A string **assigned to a name** -- a SQL block, a template, the `CHANGELOG` tables -- is data, is counted, and cannot be used to hide content from the budget.
+
+**Soft vs hard.** Crossing the **soft** ceiling means the next PR that adds material to the file should split it first; `loc-check` prints a warning but stays green. Crossing the **hard** ceiling fails the check: split before merging more functionality.
+
+**The grandfather ratchet.** Files that were already over their hard ceiling when the gate landed are recorded in `scripts/file_size_baseline.json` at their then-current size. They are allowed to stay that big but **may only shrink** -- growing one fails `loc-check`. That is what lets the gate block on day one without demanding a repo-wide refactor first: it stops new debt and stops existing debt getting worse. After you split a baselined file, run `make loc-baseline` to re-record it. Never run it to silence a file you just grew -- the diff makes that obvious in review.
+
+Two files are exempt outright (`scripts/check_file_size.py` `_EXEMPT`): `changelog.py` and `commands/context.py` are documentation payloads that happen to live in `.py` files, and a ceiling on them would only push prose out of the repo. Keep that list short -- an exemption is an admission the budget does not model the file.
 
 How to split:
 - A client mixing multiple Keboola subsystems (Storage, Queue, Sandboxes, ...) → split by **endpoint family** into a package, e.g. `client/storage_tables.py`, `client/queue.py`, `client/configs.py`, composed into one class via mixins. Keep `BaseHttpClient` shared. (This is exactly what `client.py` -> the `client/` package was in #520.)

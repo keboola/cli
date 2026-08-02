@@ -1,0 +1,11 @@
+{
+  "_comment": "Grandfathered files over their CONTRIBUTING.md hard ceiling, in CODE LINES (see scripts/check_file_size.py). They may only shrink. Regenerate with `make loc-baseline` after a split -- never to silence a file you just grew.",
+  "files": {
+    "commands/config.py": 2007,
+    "commands/lineage.py": 1271,
+    "commands/storage.py": 2246,
+    "services/data_app_service.py": 1726,
+    "services/storage_service.py": 1733,
+    "services/sync_service.py": 1655
+  }
+}
