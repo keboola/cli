@@ -1,5 +1,6 @@
 """Tests for OutputFormatter with JSON and Rich dual mode."""
 
+import io
 import json
 import sys
 from io import StringIO
@@ -20,6 +21,7 @@ from keboola_agent_cli.output import (
     format_query_results,
     format_tool_result,
     format_tools_table,
+    write_machine_output,
 )
 
 
@@ -1074,3 +1076,82 @@ class TestFormatQueryResults:
         assert "Results:" in output
         assert "id,name" in output
         assert "alice" in output
+
+
+class TestMachineOutputIsAlwaysUtf8:
+    """`--json` must not depend on the console codepage (issue #546).
+
+    On a default Czech/Polish/Hungarian Windows console (cp1250) a single
+    non-ASCII character in the data -- an arrow in a flow name was the real
+    report -- made `kbagent --json flow list` raise UnicodeEncodeError instead
+    of printing JSON. The codepage is simulated here, so these run everywhere.
+
+    Only the two pydantic paths reproduce the crash: `model_dump_json` emits
+    raw non-ASCII, whereas `json.dumps` escapes it to `\\uXXXX` under its
+    `ensure_ascii` default. The `error()` test below therefore pins the
+    invariant rather than the bug -- it is what fails if anyone later turns
+    `ensure_ascii` off.
+    """
+
+    ARROW_NAME = "extract → transform"
+
+    @staticmethod
+    def _cp1250_stdout() -> io.TextIOWrapper:
+        """A stdout whose text layer cannot encode the payload, like cp1250."""
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1250", newline="")
+
+    def _capture(self, monkeypatch, action) -> bytes:
+        stream = self._cp1250_stdout()
+        monkeypatch.setattr(sys, "stdout", stream)
+        action()
+        stream.flush()
+        return cast(io.BytesIO, stream.buffer).getvalue()
+
+    def test_output_survives_a_codepage_that_cannot_encode_the_data(self, monkeypatch) -> None:
+        formatter = OutputFormatter(json_mode=True)
+
+        written = self._capture(monkeypatch, lambda: formatter.output({"name": self.ARROW_NAME}))
+
+        # Bytes are UTF-8 and round-trip, rather than being lost or escaped.
+        assert json.loads(written.decode("utf-8"))["data"]["name"] == self.ARROW_NAME
+
+    def test_success_survives_it_too(self, monkeypatch) -> None:
+        formatter = OutputFormatter(json_mode=True)
+
+        written = self._capture(monkeypatch, lambda: formatter.success(self.ARROW_NAME))
+
+        assert json.loads(written.decode("utf-8"))["data"]["message"] == self.ARROW_NAME
+
+    def test_error_survives_it_too(self, monkeypatch) -> None:
+        """Passes pre-fix too -- `json.dumps` escapes the arrow away.
+
+        Kept as the guard on the invariant: it starts failing the moment the
+        error envelope stops escaping non-ASCII.
+        """
+        formatter = OutputFormatter(json_mode=True)
+
+        written = self._capture(
+            monkeypatch, lambda: formatter.error(self.ARROW_NAME, error_code="ERROR")
+        )
+
+        assert self.ARROW_NAME in json.loads(written.decode("utf-8"))["error"]["message"]
+
+    def test_a_text_stream_without_a_binary_buffer_still_works(self, monkeypatch) -> None:
+        """Captured/replaced stdout has no encoder to bypass -- write plainly."""
+        stream = StringIO()
+        monkeypatch.setattr(sys, "stdout", stream)
+
+        write_machine_output('{"ok": true}')
+
+        assert stream.getvalue() == '{"ok": true}\n'
+
+    def test_human_mode_output_written_earlier_keeps_its_place(self, monkeypatch) -> None:
+        """Flushing the text layer first stops the two writers reordering."""
+        stream = self._cp1250_stdout()
+        monkeypatch.setattr(sys, "stdout", stream)
+
+        sys.stdout.write("first\n")
+        write_machine_output("second")
+        stream.flush()
+
+        assert cast(io.BytesIO, stream.buffer).getvalue() == b"first\nsecond\n"
