@@ -303,8 +303,15 @@ class SessionTokenProvider:
         from stampeding straight back into a request we have only just walked
         away from; it deliberately does not try to outlast the server's grace
         window, because a presentation past that window is what turns a forgiven
-        replay into family revocation. A completed request -- success or a server
-        error -- carries no such risk and releases immediately.
+        replay into family revocation.
+
+        Every other outcome releases: a request that reached a verdict -- success,
+        a server error, a body the decoder choked on, an interrupt -- is no longer
+        in flight, so holding the claim would only stall the next command for the
+        rest of the TTL. The release is therefore keyed on "not abandoned" rather
+        than on a list of exception types, because the failure that matters here
+        is the one nobody anticipated: an exception outside the expected set would
+        otherwise leave a claim standing that no process can release.
         """
         try:
             token = self._perform_refresh(session)
@@ -313,7 +320,7 @@ class SessionTokenProvider:
                 self._stack_url, holder=self._holder_id, ttl=AUTH_REFRESH_ABANDON_GRACE
             )
             raise
-        except KeboolaApiError:
+        except BaseException:
             self._state_store.release_refresh_lease(self._stack_url, holder=self._holder_id)
             raise
         self._state_store.release_refresh_lease(self._stack_url, holder=self._holder_id)

@@ -749,6 +749,31 @@ class TestRefreshLease:
 
         assert provider.get_access_token() == "kbc_at_rotated_1"
 
+    def test_an_unexpected_exception_still_releases_the_lease(self, tmp_path: Path) -> None:
+        """A claim nobody can release is worse than the error that caused it.
+
+        Only `_AbandonedRefresh` means the token may still be in flight. Anything
+        else -- a decoder that choked on the body, an interrupt, a bug -- reached a
+        verdict, so the claim must go. Keying the release on a list of expected
+        exception types leaves the unanticipated one holding the lease for the
+        whole TTL, stalling every command against the stack meanwhile.
+        """
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=-10)
+
+        class _ExplodingAuthClient(_FakeAuthClient):
+            def refresh(self, refresh_token: str) -> CliTokenResponse:
+                raise RecursionError("maximum recursion depth exceeded while decoding")
+
+        provider = SessionTokenProvider(
+            STACK_URL, store, client_factory=lambda _url: _ExplodingAuthClient()
+        )
+
+        with pytest.raises(RecursionError):
+            provider.get_access_token()
+
+        assert store.get_refresh_lease(STACK_URL) is None
+
     def test_a_lease_from_a_fast_clock_does_not_wedge_the_stack(self, tmp_path: Path) -> None:
         """The self-healing property must not depend on the writer's clock being right.
 

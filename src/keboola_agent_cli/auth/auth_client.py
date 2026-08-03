@@ -21,6 +21,7 @@ the server reports in a form that proves nothing rotated. See their docstrings.
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any, NoReturn
 from urllib.parse import urlencode
@@ -151,10 +152,18 @@ def _error_string_code(response: httpx.Response) -> str | None:
     in front of the endpoint: top-level ``code``, top-level ``stringCode``, or
     nested ``exception.code``. A body that is not JSON, or not an object, has no
     code -- callers must treat `None` as "unclassifiable", never as a match.
+
+    `RecursionError` joins `ValueError` because the two ways a body can defeat
+    the decoder are not in the same exception hierarchy: malformed input raises
+    `json.JSONDecodeError` (a `ValueError`), while input nested past the
+    interpreter's recursion limit raises `RecursionError` (a `RuntimeError`).
+    Letting the second escape would propagate out of the refresh call as neither
+    `_AbandonedRefresh` nor `KeboolaApiError`, so the lease holder could not
+    classify it and would leave its claim standing until the TTL expired.
     """
     try:
         body = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(body, dict):
         return None
@@ -182,7 +191,8 @@ def _contention_retry_delay(response: httpx.Response) -> float | None:
     `Retry-After` is honoured when present and parseable, clamped to
     `AUTH_REFRESH_CONTENTION_MAX_DELAY` because the wait happens inside the
     caller's wall-clock ceiling; a longer wait would only get the attempt
-    abandoned mid-sleep.
+    abandoned mid-sleep. The returned delay is always a finite, non-negative
+    number of seconds, so the caller can hand it straight to `time.sleep`.
     """
     if response.status_code != 503:
         return None
@@ -196,6 +206,12 @@ def _contention_retry_delay(response: httpx.Response) -> float | None:
         # An HTTP-date `Retry-After` is legal but the server sends seconds; treat
         # anything unparseable as "no guidance" rather than as a reason to skip
         # a retry the response has already proven safe.
+        requested = AUTH_REFRESH_CONTENTION_DEFAULT_DELAY
+    if not math.isfinite(requested):
+        # `float()` accepts "nan" and "inf". Clamping cannot repair a NaN --
+        # every comparison against it is False, so both `min` and `max` pass it
+        # through -- and `time.sleep(nan)` raises, turning a recoverable
+        # deadlock into an uncaught error the lease holder cannot classify.
         requested = AUTH_REFRESH_CONTENTION_DEFAULT_DELAY
     return min(max(requested, 0.0), AUTH_REFRESH_CONTENTION_MAX_DELAY)
 

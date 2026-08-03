@@ -11,6 +11,8 @@ contract including its never-raises uncertain-result path.
 from __future__ import annotations
 
 import json
+import math
+import sys
 import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -910,6 +912,62 @@ class TestRefreshContentionRetry:
 
         assert slept == [AUTH_REFRESH_CONTENTION_DEFAULT_DELAY]
         assert len(httpx_mock.get_requests()) == 2
+
+    @pytest.mark.parametrize("retry_after", ["nan", "inf", "-inf", "1e400", "-5"])
+    def test_a_non_finite_retry_after_never_reaches_sleep(
+        self, httpx_mock, monkeypatch, retry_after: str
+    ) -> None:
+        """`float()` accepts "nan" and "inf", and clamping cannot repair a NaN.
+
+        Every comparison against NaN is False, so `min`/`max` pass it straight
+        through and `time.sleep(nan)` raises -- an uncaught error out of the
+        refresh call, which the lease holder cannot classify. The delay handed to
+        `sleep` must always be a finite, non-negative number.
+        """
+        slept: list[float] = []
+        monkeypatch.setattr(auth_client_module.time, "sleep", slept.append)
+        httpx_mock.add_response(**_contention_response(retry_after=retry_after))
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(slept) == 1
+        assert math.isfinite(slept[0])
+        assert 0.0 <= slept[0] <= AUTH_REFRESH_CONTENTION_MAX_DELAY
+        # Real sleep, not the fake: a NaN would raise here rather than assert.
+        time.sleep(slept[0] * 0)
+
+    def test_a_json_body_nested_past_the_recursion_limit_is_not_retried(self, httpx_mock) -> None:
+        """Malformed and too-deep bodies defeat the decoder via different exceptions.
+
+        `json.JSONDecodeError` is a `ValueError`; exceeding the recursion limit
+        raises `RecursionError`, a `RuntimeError`. Letting the second escape
+        propagates out of the refresh call as neither `_AbandonedRefresh` nor
+        `KeboolaApiError`, so the lease holder cannot classify it.
+        """
+        depth = sys.getrecursionlimit() * 20
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            status_code=503,
+            headers={"Content-Type": "application/json"},
+            content=b"[" * depth + b"]" * depth,
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
 
     def test_a_non_json_503_body_is_not_retried(self, httpx_mock) -> None:
         """An unclassifiable body is not a match -- HTML from a proxy must not retry."""
