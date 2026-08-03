@@ -10,6 +10,8 @@ Inherits shared retry/error logic from BaseHttpClient.
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+
 from .constants import DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -24,16 +26,21 @@ class ManageClient(BaseHttpClient):
     Inherits _do_request() and _raise_api_error() from BaseHttpClient.
     """
 
-    def __init__(self, stack_url: str, manage_token: str) -> None:
+    def __init__(
+        self, stack_url: str, manage_token: str, *, http_auth: httpx.Auth | None = None
+    ) -> None:
         self._stack_url = stack_url.rstrip("/")
-        headers = {
-            "X-KBC-ManageApiToken": manage_token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-KBC-ManageApiToken"] = manage_token
+        # See KeboolaClient/_CoreClient: when bearer auth is active the
+        # sentinel/placeholder value must never be sent as a header.
         super().__init__(
             base_url=self._stack_url,
             token=manage_token,
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> "ManageClient":

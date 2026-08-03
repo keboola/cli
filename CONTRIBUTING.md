@@ -399,6 +399,7 @@ before the PR is mergeable.
 - [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
 - [ ] **No new `tuple[...]` returns** -- multi-value returns use a `@dataclass` ([Code Quality Patterns](#code-quality-patterns))
 - [ ] **No raw error-code strings** -- `make check-error-codes` enforces `ErrorCode` enum usage
+- [ ] **Session sentinels stay guarded** -- `make check-sentinel-guards` enforces it; if you added an HTTP client, declare `SESSION_AUTH_FEATURE` (or record why it is bearer-capable), and if you added a guard, add the matching entry to `SESSION_UNSUPPORTED_FEATURES`
 - [ ] **File-size budgets respected** -- see the table in [Code Quality Patterns](#code-quality-patterns); split before crossing the hard ceiling
 
 ### UX considerations
@@ -677,13 +678,14 @@ foot-gun.
 ## Running CI Locally
 
 ```bash
-make check              # CI parity: lint + format + typecheck + skill + version + command-sync + changelog + error-codes + test
+make check              # CI parity: lint + format + typecheck + skill + version + command-sync + changelog + error-codes + sentinel-guards + test
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
+make check-sentinel-guards # Verify no kbc-session:// sentinel path is unguarded
 make skill-gen          # Regenerate SKILL.md from CLI command metadata
 ```
 

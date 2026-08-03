@@ -80,6 +80,8 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
 
 `Client(...)` raises `ValueError` immediately if `url` or `token` is empty — fail-fast, no silent default.
 
+The SDK requires a **static Storage token**. A browser-login (session) project stores the sentinel `kbc-session://{project_id}` in place of a token, and passing that sentinel raises `SessionAuthUnsupportedError` (carrying `error_code` `AUTH_NOT_SUPPORTED_ON_STACK`) from the constructor; since neither it nor its `ConfigError` base is in `__all__`, catch it as `keboola_agent_cli.errors.ConfigError` (an uncommitted import path) or let it propagate. Register the project with a static token for SDK use — see [auth.md](auth.md) for the full list of surfaces sessions do not reach.
+
 To scope every call to a dev branch, pass `branch_id`:
 
 ```python

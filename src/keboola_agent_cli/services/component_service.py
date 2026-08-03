@@ -25,7 +25,11 @@ AiClientFactory = Callable[[str, str], AiServiceClient]
 
 
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Create an AiServiceClient with the given stack URL and token."""
+    """Create an AiServiceClient with the given stack URL and token.
+
+    Static-token-only (v1 scope is Storage + Manage); the client's
+    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
+    """
     return AiServiceClient(stack_url=stack_url, token=token)
 
 

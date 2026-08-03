@@ -25,10 +25,15 @@ class _StreamMixin(_CoreClient):
 
         The Stream control plane lives on a sibling host (``stream.<region>``)
         and authenticates with the same Storage token, so it is reachable from
-        the same ``(stack_url, token)`` this client already holds.
+        the same ``(stack_url, token)`` this client already holds. The bearer-auth
+        hook goes with it: in session mode ``self._token`` is empty, so without it
+        the sub-client would send an empty ``X-StorageApi-Token`` and draw an
+        opaque 401 instead of authenticating.
         """
         if self._stream_client is None:
-            self._stream_client = StreamClient(stack_url=self._stack_url, token=self._token)
+            self._stream_client = StreamClient(
+                stack_url=self._stack_url, token=self._token, http_auth=self._http_auth
+            )
         return self._stream_client
 
     @staticmethod

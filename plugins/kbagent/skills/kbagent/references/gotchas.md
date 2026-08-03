@@ -11,6 +11,167 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
+
+- **`kbagent auth login` requires a human at a browser (or a device to type a
+  code into) -- there is no headless/unattended path.** Never invoke it from
+  an unattended AI agent task; if a user asks an agent to "log in", the agent
+  must tell the user to run `auth login` themselves in their own terminal.
+  Session tokens are deliberately not readable through the CLI once issued.
+- **PKCE is the default; the device flow is a fallback, not a mode switch.**
+  The CLI tries the browser (PKCE authorization-code) flow first and falls
+  back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
+  usable loopback browser, a callback timeout, or an SSH/container/WSL
+  heuristic. `--device-code` forces the device flow unconditionally. Once the
+  browser callback succeeds (the authorization code was received), there is
+  **no** fallback -- an exchange failure past that point is terminal.
+- **A session is USER-scoped, not project-scoped.** One `auth login` covers
+  every project the signed-in user can access; which project a given command
+  talks to is still chosen the normal way (`--project` / `KBAGENT_PROJECT` /
+  pin) and is bound to the request via `X-KBC-ProjectId`, not by re-logging-in.
+- **`--register-projects` writes a SENTINEL, not a real token.**
+  `config.json`'s `token` field becomes the literal string
+  `kbc-session://{project_id}` for a session-registered project alias --
+  `config.json`'s schema and `CURRENT_CONFIG_VERSION` are UNCHANGED (still 1).
+  Seeing that string in `project list --json` or a raw `config.json` read is
+  expected, not a corrupted token. An existing alias already pointing at the
+  same project+stack is left untouched (`status: "exists"`). A *suggested*
+  alias never collides in the first place -- it is computed against every
+  existing `config.json` key and suffixes `-{project_id}` past any clash -- so
+  `status: "skipped"` only arises when you force a taken alias with
+  `--alias ID=ALIAS`, or request a second alias for an already-registered
+  project. An existing entry is never overwritten either way.
+- **Registered aliases derive from the project NAME, never the numeric
+  project id -- `--project 9840` will never resolve.** `login`'s
+  accessible-projects table shows a numeric `id`, but the alias
+  `--register-projects` (or `auth register-projects`, or the login picker)
+  writes is a slug of the project *name* (e.g. `jirka-bq-sox`), suffixed
+  with `-{project_id}` only on a name collision. Passing the raw id as
+  `--project` is the single most common mistake right after a first login;
+  the fix is `kbagent project list` to see the real alias, not re-running
+  login. `kbagent auth register-projects [--stack] [--all] [--project-id ID
+  ...] [--alias ID=ALIAS ...] [--yes]` (0.80.0+) registers an EXISTING
+  session's projects without re-logging-in -- `--all`/`--project-id` are
+  non-interactive and safe for an agent to run once a human has confirmed
+  the session is live; omitting both starts an interactive arrow-key +
+  spacebar checkbox picker (every not-yet-registered project preselected,
+  `a` toggles all, `enter` accepts) followed by a single `Edit aliases?`
+  confirm (default no) that only opens a per-project alias prompt if opted
+  into -- falls back to the original typed `numbers`/`ranges`/`all`/`none`
+  prompt on a piped stdin or a terminal without real interactive
+  capabilities. Either form needs a real terminal and is NOT for
+  unattended/agent use -- it fails fast in a non-TTY or `--json` context
+  instead of hanging on a prompt. Two
+  accessible projects sharing the same name each get a distinct suggested
+  alias (via the `-{project_id}` suffix) instead of the second one being
+  silently skipped, unlike the original 0.80.0 `--register-projects` batch
+  path. Collision handling matches `--register-projects` above: never
+  overwrites an existing `config.json` entry.
+- **v1 wires bearer sessions through the Storage + Manage paths.** Everything
+  else recognises the `kbc-session://` sentinel and fails FAST with
+  `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, rather than
+  silently sending the sentinel string as if it were a real credential. The
+  authoritative list is `SESSION_UNSUPPORTED_FEATURES` in
+  `services/_auth_registration.py`. `auth login` and `auth register-projects`
+  print it and both ship it in `--json` as the additive key
+  `session_unsupported_features` (`auth status` does **not** carry it), so read
+  it from there instead of reconstructing it from memory:
+  `kai`; `semantic-layer` (Metastore); `data-app` (Data Science);
+  `stream` (Data Streams); `tool` (MCP subprocess); `sharing` unless a master
+  token is in the environment; the AI Service paths (`docs query`,
+  `config examples`, `config new`, `component detail`/`search`,
+  `flow new`/`update`/`validate`); the Scheduler Service paths
+  (`flow schedule`, `flow schedule-remove`); and the importable SDK
+  (`lib.Client`). If a task needs one of those, register the same project again
+  with a static Storage token (`project add --project <alias2> --token ...`)
+  instead of fighting the guard.
+- **Two surfaces people wrongly expect on that list.** `dev-portal` is
+  unaffected -- it authenticates with its own Developer Portal identity
+  (`dev-portal identity add`), never a project token, so a session project
+  changes nothing there. And `flow` splits: `flow list` / `flow detail` are
+  plain Storage calls that work, while `flow new` / `flow update` /
+  `flow validate --project` fetch the live schema from the AI Service and so
+  fail -- they do NOT degrade to the semantic-only validation they fall back to
+  when a schema fetch merely errors.
+- **`config new` depends on the flag shape, not just `--no-validate`.** The
+  scaffold step calls the AI Service unconditionally, and it runs unless BOTH
+  `--push` and `--no-files` are set. So plain `config new` and
+  `config new --push` fail on a session project regardless of `--no-validate`.
+  Only `config new --push --no-files` skips the scaffold; that shape then still
+  hits the AI Service if you pass an explicit `--configuration` without
+  `--no-validate`, because body validation is the other AI call. Working
+  combination on a session project: `--push --no-files` plus either
+  `--no-validate` or no explicit body.
+- **`kbagent serve` DOES serve session projects -- it is not on the fail-fast
+  list.** It delegates to the same already-guarded services, so the REST API
+  and web UI work against a sentinel-token project. Two things follow that are
+  easy to get wrong: a session is a USER credential, so anyone holding
+  `KBAGENT_SERVE_TOKEN` acts as the signed-in user for every session-backed
+  project the server exposes (treat that token as equivalent to the user's own
+  credential, or serve static-token projects instead); and when the session
+  expires at runtime the server answers **HTTP 401 with
+  `error_code: SESSION_EXPIRED`**, which no request payload can fix -- a
+  browser login only completes on the host, so a human has to run
+  `kbagent auth login` there.
+- **`project refresh` and `org setup --refresh` SKIP session projects, and
+  `--force` does not override that.** There is no static token to replace: the
+  credential lives in `auth.json` and its access token rotates on its own. The
+  project appears under `skipped` with that reason instead of raising or being
+  silently converted. A deliberate single-project conversion to a static token
+  is `project edit --token` (next bullet).
+- **`project edit --token` on a session project is allowed, warns, and
+  converts.** The project becomes a static-token project, which means
+  `auth logout --remove-projects` will no longer clean that alias up -- use
+  `project remove` when done with it. The warning text is identical in
+  `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
+  array, so a consumer must not assume the key is absent.
+- **`auth logout --remove-projects` needs the `admin` permission class, the
+  bare `auth logout` only `write`** (since v0.80.0). The flag deletes
+  `config.json` entries, the same observable effect as `project remove`, so a
+  policy denying `cli:admin` blocks the flag while still letting the session be
+  ended. `permissions list` shows it as its own row,
+  `auth.logout --remove-projects`.
+- **To find out which credential mode a project uses, read `auth_mode` --
+  never parse the token.** `kbagent project list --json | jq '.data[].auth_mode'`
+  (also on `project status` and `project info`, and over HTTP on `/projects`,
+  `/projects/status`, `/projects/{alias}/info`). Exactly two values, `session`
+  and `static`; the field is **always present and never empty**, including on a
+  row synthesized for a project whose connection failed, so branch on it rather
+  than testing for absence. The human tables show it as an `Auth` column
+  (`project list`: before `Token`; `project status`: after `Status`) and
+  `project info` as an `Auth` row above the Token rows. A session project's
+  human `Token` cell is a dash -- the sentinel is not a credential and masked
+  (`kbc-...9840`) it reads like a truncated real token. **`--json` `token` is
+  unchanged** (`mask_token(...)`): that contract did not move, so do not expect
+  a dash there. `project current` / `project add` / `project edit` carry no
+  `auth_mode` by design -- `current` answers which alias is effective (and can
+  report a `KBAGENT_PROJECT` override naming an alias absent from the config),
+  the other two are write confirmations.
+- **A session refresh that times out is a NETWORK error (exit 4), not a
+  session error (exit 3) or a config error (exit 5).** `TIMEOUT` /
+  `CONNECTION_ERROR` mean the auth service was slow or unreachable, not that
+  the login died -- do not tell the user to log in again. The refresh is a
+  single attempt under a short budget by design (a retry would re-present the
+  same refresh token, which is exactly the replay the server's grace window
+  forgives), so the remedy is simply to re-run the command. Only
+  `SESSION_EXPIRED` / `SESSION_NOT_FOUND` mean "log in again".
+- **An older (pre-0.80.0) kbagent build has no sentinel awareness at all.** A
+  session-registered project opened on an old CLI gets an opaque 401 on a
+  plain `X-StorageApi-Token` call; a few consumers that treat the token as
+  *data* rather than a header (`semantic-layer token --encrypt`, `kai`,
+  `sharing`'s master-token fallback) fail differently still. Upgrade first --
+  do not try to work around it.
+- **Tokens are plaintext in `auth.json` (0600), a sibling of `config.json`.**
+  Deliberate RFC 8628 deviation, same posture as the static tokens already in
+  `config.json` (see `docs/programmatic-auth-login-plan.md` section 4.2). CI
+  and any headless/unattended runner should keep using a static Storage token
+  -- browser login has no non-interactive path by design.
+- **Feature-flagged per stack.** A 404 from any `auth` endpoint means browser
+  login is not enabled on that stack (not a wrong URL or a bug) -- the CLI
+  reports it as `AUTH_NOT_SUPPORTED_ON_STACK` and suggests a static token.
+- See `auth-workflow.md` for the end-to-end login -> register -> status ->
+  logout walkthrough and PKCE-vs-device troubleshooting.
+
 ## MCP passthrough is DEPRECATED; REMOVED in v0.85.0 (since v0.74.0)
 
 - **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
@@ -1582,6 +1743,17 @@ One project failing does not block others. Check the `errors` array:
 }
 ```
 
+**`error_code` survives the catch-all handler -- branch on it, never on the
+message (since v0.80.0).** In `data-app list`, `tool list`, `tool call` and
+`flow list`, a per-project failure that already carries a code keeps it instead
+of being relabelled `UNEXPECTED_ERROR` / `MCP_ERROR`. So a browser-login
+(session) project hitting an unsupported surface reports
+`error_code: "AUTH_NOT_SUPPORTED_ON_STACK"` for that one project while the
+others succeed, which is the hook for auto-remediating (register a static-token
+alias) without parsing prose. Only an exception carrying no code at all falls
+back, and then its message is deliberately truncated because its content is
+unknown -- do not try to parse a fallback message.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -1589,8 +1761,8 @@ One project failing does not block others. Check the `errors` array:
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
-| 3 | Authentication error (invalid or expired token) |
-| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running) |
+| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0) |
+| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
 | 5 | Configuration error (corrupt config, missing alias) |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled (since 0.22.0). Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |

@@ -25,16 +25,21 @@ from ..stream_client import StreamClient
 class _CoreClient(BaseHttpClient):
     """Shared plumbing base for the Keboola client mixins."""
 
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
+        # When http_auth is set, the token is a bearer-session sentinel, not a
+        # real Storage token -- an empty/sentinel value must never go on the
+        # wire as X-StorageApi-Token, so the header is omitted entirely and
+        # BearerAuth stamps Authorization: Bearer on every request instead.
         super().__init__(
             base_url=self._stack_url,
             token=token,
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
+            http_auth=http_auth,
         )
         self._queue_client: httpx.Client | None = None
         self._query_client: httpx.Client | None = None
@@ -109,6 +114,10 @@ class _CoreClient(BaseHttpClient):
                 base_url=base_url,
                 timeout=DEFAULT_TIMEOUT,
                 headers=self._client._headers.copy() if headers is None else headers,
+                # Propagate the bearer-auth hook so queue / query / encryption /
+                # sync-actions sub-clients don't silently fall back to no auth
+                # when the main client is running in session (bearer) mode.
+                auth=self._http_auth,
             )
             setattr(self, attr, client)
         return client

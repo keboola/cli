@@ -23,7 +23,12 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
-from .base import ResolvedProjectCredentials, resolve_project_credentials
+from .base import (
+    ResolvedProjectCredentials,
+    default_client_factory,
+    make_client_factory,
+    resolve_project_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +36,15 @@ KeboolaClientFactory = Callable[[str, str], KeboolaClient]
 
 
 def default_token_client_factory(stack_url: str, token: str) -> KeboolaClient:
-    """Construct a :class:`KeboolaClient` bound to ``stack_url`` + ``token``."""
-    return KeboolaClient(stack_url=stack_url, token=token)
+    """Construct a :class:`KeboolaClient` bound to ``stack_url`` + ``token``.
+
+    Delegates to :func:`services.base.default_client_factory` so this stays
+    a static-token-only builder (fails fast on a session sentinel) while
+    keeping its own name for callers/tests that inject it explicitly. Real
+    usage goes through :class:`TokenService`'s bearer-aware default
+    (``make_client_factory``) instead.
+    """
+    return default_client_factory(stack_url, token)
 
 
 class TokenService:
@@ -44,7 +56,7 @@ class TokenService:
         client_factory: KeboolaClientFactory | None = None,
     ) -> None:
         self._config_store = config_store
-        self._client_factory = client_factory or default_token_client_factory
+        self._client_factory = client_factory or make_client_factory(config_store)
 
     def create_scoped_token(
         self,

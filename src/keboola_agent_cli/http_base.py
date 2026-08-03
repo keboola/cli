@@ -62,7 +62,20 @@ class BaseHttpClient:
 
     Subclasses must call super().__init__() with base_url, token, headers,
     and optional timeout.
+
+    ``http_auth`` is an additive, keyword-only ``httpx.Auth`` hook (e.g.
+    ``auth.token_provider.BearerAuth``) passed straight through to the
+    underlying ``httpx.Client``. It defaults to ``None``, which is
+    byte-identical to the client's behaviour before this parameter existed:
+    static-token callers are completely unaffected.
     """
+
+    # Name of the surface this client speaks to, for subclasses that only
+    # understand a static Storage token. ``None`` means the client supports
+    # bearer sessions (KeboolaClient / ManageClient / AuthClient) and must not be
+    # guarded. Set it and the sentinel can no longer reach the wire through a
+    # constructor whose caller forgot to guard it.
+    SESSION_AUTH_FEATURE: str | None = None
 
     def __init__(
         self,
@@ -70,12 +83,19 @@ class BaseHttpClient:
         token: str,
         headers: dict[str, str],
         timeout: httpx.Timeout | None = None,
+        *,
+        http_auth: httpx.Auth | None = None,
     ) -> None:
+        from .auth.sentinel import require_static_token
         from .constants import DEFAULT_TIMEOUT
+
+        if http_auth is None and self.SESSION_AUTH_FEATURE is not None:
+            require_static_token(token, feature=self.SESSION_AUTH_FEATURE)
 
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._masked_token = mask_token(token)
+        self._http_auth = http_auth
         # Sign every request centrally so all subclasses share one UA string
         # (and OS/version enrichment) instead of hardcoding it five times.
         headers["User-Agent"] = build_user_agent()
@@ -86,6 +106,7 @@ class BaseHttpClient:
             base_url=self._base_url,
             timeout=timeout or DEFAULT_TIMEOUT,
             headers=headers,
+            auth=http_auth,
         )
 
     @staticmethod

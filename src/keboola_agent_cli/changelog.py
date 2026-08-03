@@ -25,6 +25,99 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.80.0": [
+        "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
+        "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "
+        "authorization-code (opens a browser) by default, falling back to the RFC 8628 device "
+        "flow ONLY on a pre-exchange failure (no usable browser, callback timeout, SSH/container/"
+        "WSL detected); `--device-code` forces the device flow. `status` reports session health "
+        "(live/refreshed/degraded/expired/missing) and proactively refreshes a stale access token. "
+        "`logout` revokes the refresh token server-side and clears the local session.",
+        'New: `auth login` issues a USER-scoped "programmatic session" (a short-lived `kbc_at_*` '
+        "access token plus a rotating `kbc_rt_*` refresh token) stored in a new `auth.json` file "
+        "(0600), a sibling of `config.json` -- config.json's own schema and `CURRENT_CONFIG_VERSION` "
+        "are unchanged. `--register-projects` writes each accessible project into `config.json` "
+        "under the sentinel token `kbc-session://{project_id}` instead of a real token.",
+        "New: `kbagent auth register-projects [--stack] [--all] [--project-id ID ...] "
+        "[--alias ID=ALIAS ...] [--yes]` -- register an EXISTING session's accessible projects "
+        "as `config.json` aliases without re-running `login`. Fixes two rough edges of plain "
+        "`login`: nothing got registered unless `--register-projects` was passed, and the "
+        "suggested alias was always slugified from the project NAME, so the numeric project id "
+        "shown in the login table never worked as `--project ID`. `--all` / `--project-id` are "
+        "non-interactive (safe to script); omitting both starts an interactive arrow-key + "
+        "spacebar checkbox picker (every not-yet-registered project preselected, `a` toggles "
+        "all, `enter` accepts) followed by a single `Edit aliases?` confirm (default no) that "
+        "opens the old per-project alias prompt only if opted into -- falls back to a typed "
+        "numbers/ranges/`all`/`none` prompt on a piped stdin or a terminal without real "
+        "interactive capabilities. Either way it needs a real "
+        "terminal -- it fails fast instead of hanging when stdout is not a TTY or `--json` is "
+        "set. `auth login` (without `--register-projects`) now offers the same picker "
+        "interactively right after a successful login. Neither path ever overwrites an "
+        "existing `config.json` alias: a project already registered for the same stack is a "
+        "no-op, one used by something else is skipped with a rename hint. Two accessible "
+        "projects sharing the same name now each get a distinct suggested alias (a "
+        "`-{project_id}` suffix) instead of the second one being silently skipped, which also "
+        "changes `--register-projects`'s own collision behavior from the original release.",
+        "Note: v1 wires session auth through the Storage and Manage paths, which both the CLI "
+        "commands and `kbagent serve` reach -- serve delegates to the same already-guarded "
+        "services, so browser-login projects work over the REST surface and the web UI. Anything "
+        "outside those paths (the importable SDK `lib.Client`, the MCP subprocess, the AI / "
+        "data-science / metastore / stream / Scheduler clients, and `sharing` without a master "
+        "token) fails fast on a sentinel-token project with the new `AUTH_NOT_SUPPORTED_ON_STACK` "
+        "error code, naming the static-token fallback, instead of silently sending the sentinel "
+        "string as if it were a real credential. `auth login` and `auth register-projects` print "
+        "that list at registration time and ship it as `session_unsupported_features` in `--json`. "
+        "Over `serve`, a session that expires at runtime answers HTTP 401 with `SESSION_EXPIRED`; "
+        "note that whoever holds `KBAGENT_SERVE_TOKEN` then acts as the signed-in user, so see "
+        "`docs/web-server.md` before exposing a session project over HTTP.",
+        "Security: `auth login` REQUIRES A HUMAN AT A BROWSER (or a device to type a short code "
+        "into) -- there is no unattended/headless path, and session tokens are never exposed "
+        "through any CLI command or `--json` output. Programmatic auth is behind a per-stack "
+        'feature flag; a 404 from any auth endpoint is reported as "browser login is not enabled '
+        'on this stack yet" rather than a generic error. Static Storage tokens remain fully '
+        "supported and unchanged -- keep using them for CI/CD and any other headless use.",
+        "New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, "
+        "AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, "
+        "SESSION_NOT_FOUND. `UNEXPECTED_ERROR` and `MCP_ERROR` are now documented `ErrorCode` "
+        "members too (wire values unchanged). See docs/auth.md for the user-facing guide and "
+        "docs/error-codes.md for the catalogue.",
+        "Security: `project refresh` and `org setup --refresh` no longer convert a browser-login "
+        "(session) project into a static Storage token -- they report it as skipped, because a "
+        "session access token rotates on its own. Previously `--force`, or a session that had "
+        "already expired, minted a real static token over the sentinel, and the converted project "
+        "then survived `auth logout --remove-projects` as a long-lived credential. `project edit "
+        "--token` still converts a session project on explicit request, and now warns that the "
+        "alias will no longer be cleaned up by logout.",
+        "New: `project list`, `project status` and `project info` state each project's credential "
+        "type -- an `Auth` column (`session` / `static`) in human output and an explicit "
+        "`auth_mode` field in `--json`, always present. A session project's Token cell shows `-` "
+        "instead of the masked sentinel, which read like a truncated real token; the `--json` "
+        "`token` field is unchanged.",
+        "Fix: in multi-project commands (`data-app list`, `tool list` / `tool call`, `flow list`) "
+        "a per-project failure keeps its real `error_code` in `--json` instead of being relabelled "
+        "`UNEXPECTED_ERROR` / `MCP_ERROR`, so a browser-login project reports "
+        "`AUTH_NOT_SUPPORTED_ON_STACK` and a consumer can branch on it.",
+        "Fix: token refresh for a browser-login session uses a short single-attempt timeout, so a "
+        "slow auth service no longer makes concurrent kbagent processes fail with a false "
+        '"another process may be stuck holding the lock" (exit 5); a refresh that times out '
+        "reports a network error (exit 4). Retrying a refresh would also re-present the same "
+        "refresh token, which past the server's grace window triggers family revocation.",
+        "Fix: stack URLs canonicalize their host to lowercase, so a login and a later "
+        "status/lookup on differently-cased spellings of the same stack resolve to one session; "
+        "credentials embedded in a stack URL are dropped rather than persisted. If you had a "
+        "`https://user:pass@host` stack URL stored, that basic-auth pair stops being sent on the "
+        "next save and the stack will answer 401 -- re-add the project with the credentials "
+        "supplied the way the stack expects. Project and user "
+        "names coming from the stack are escaped before rendering, so a project name containing "
+        "Rich markup can no longer render as a clickable link in `auth status`, `auth login`, or "
+        "the project picker.",
+        "Security: `auth logout --remove-projects` now requires the `admin` permission class "
+        "because it deletes `config.json` project entries -- the same observable effect as "
+        "`project remove`. The bare `auth logout` stays in the `write` class, so a policy denying "
+        "`cli:admin` to keep an agent out of the project registry no longer leaves a way in "
+        "through `auth`, while still letting the agent end its own session.",
+        'Fix: the "not supported on session projects" error points at `kbagent project edit '
+        "--project <alias> --token <token>`, which works on an already-registered alias, instead "
+        "of `project add`, which rejects one that already exists.",
         "Note (#390): the MCP passthrough now has a named removal date -- `kbagent tool "
         "list` / `tool call` and `agent --type mcp_tool` are REMOVED in **v0.85.0**, "
         "scheduled for the **end of August 2026**. Deprecated since 0.74.0, the notice "

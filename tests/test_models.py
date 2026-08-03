@@ -12,6 +12,7 @@ from keboola_agent_cli.models import (
     ProjectConfig,
     SuccessResponse,
     TokenVerifyResponse,
+    normalize_stack_url,
 )
 
 
@@ -343,6 +344,61 @@ class TestStackUrlValidation:
             token="901-token",
         )
         assert config.stack_url == "https://connection.europe-west3.gcp.keboola.com"
+
+
+class TestStackUrlCanonicalization:
+    """The returned string is used as a dict key, so one stack must yield one key.
+
+    `auth.json`'s `sessions` map and the session-token provider registry are both
+    keyed on this value directly, so a host spelled two ways would otherwise
+    become two sessions: a login as `Connection.Keboola.Com` invisible to a later
+    `connection.keboola.com` lookup.
+    """
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "Connection.Keboola.Com",
+            "CONNECTION.KEBOOLA.COM",
+            "https://Connection.Keboola.Com",
+            "https://CONNECTION.keboola.com/admin/projects/10105/dashboard",
+            "  https://Connection.KEBOOLA.com/  ",
+        ],
+    )
+    def test_every_spelling_of_one_host_collapses_to_one_key(self, spelling: str) -> None:
+        assert normalize_stack_url(spelling) == "https://connection.keboola.com"
+
+    def test_explicit_port_is_preserved(self) -> None:
+        """A non-default port distinguishes two real endpoints; only the host folds."""
+        assert (
+            normalize_stack_url("https://Connection.Keboola.Com:8443/admin")
+            == "https://connection.keboola.com:8443"
+        )
+
+    def test_credentials_in_the_url_are_dropped(self) -> None:
+        """`project list` echoes the stored stack URL to the terminal, so a
+        `user:password@` must never survive into the persisted value. Basic auth
+        was never how this API authenticates -- the token is a header."""
+        assert (
+            normalize_stack_url("https://User:Pass@Connection.Keboola.Com")
+            == "https://connection.keboola.com"
+        )
+
+    def test_ipv6_literal_keeps_its_brackets(self) -> None:
+        """`urlparse().hostname` strips the brackets that URL syntax requires."""
+        assert normalize_stack_url("https://[FE80::1]:8443/x") == "https://[fe80::1]:8443"
+
+    def test_unparseable_port_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid port"):
+            normalize_stack_url("https://connection.keboola.com:notaport")
+
+    def test_lowercasing_survives_a_config_round_trip(self) -> None:
+        """The field validator runs on load too, so an existing config.json with a
+        mixed-case host normalizes itself without a migration."""
+        loaded = ProjectConfig.model_validate(
+            {"stack_url": "https://Connection.Keboola.Com", "token": "901-token"}
+        )
+        assert loaded.stack_url == "https://connection.keboola.com"
 
 
 class TestTokenVerifyResponseValidation:

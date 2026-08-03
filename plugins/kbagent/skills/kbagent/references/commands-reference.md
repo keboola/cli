@@ -10,17 +10,64 @@ All commands support `--json` for structured output. Multi-project flags (`--pro
 - `changelog [--limit N] [--full]` -- show recent changelog (default: last 5 versions, one-line summary per version; `--full` / `-v` expands every note). After auto-update, "What's new" is printed automatically (summarised). Manual trigger: `KBAGENT_UPDATED_FROM=0.17.0 kbagent version`
 - `context` -- print full CLI reference for AI agents
 
+## Programmatic Auth (Browser Login) (since v0.80.0)
+
+Alternative to a static Storage API token: sign in via a real browser (PKCE
+authorization-code) or, when no browser is usable, an RFC 8628 device code.
+**Requires a human at a browser/device -- never run `auth login` from an
+unattended agent task.** Issues a USER-scoped "programmatic session"
+(`kbc_at_*` access token + `kbc_rt_*` refresh token) stored in `auth.json`
+(0600), a sibling of `config.json`; `config.json`'s own schema and
+`CURRENT_CONFIG_VERSION` are unchanged.
+
+- `auth login [--stack URL|alias] [--device-code] [--register-projects]` -- sign in. `--stack` accepts a bare stack URL or an existing project alias (its stack is used); omitted, resolves from the default project's stack. `--device-code` forces the RFC 8628 flow even with a browser available. Without it, PKCE is tried first and falls back to the device flow ONLY on a pre-exchange failure (no loopback browser, callback timeout, or an SSH/container/WSL heuristic) -- once the browser callback succeeds there is no fallback. `--register-projects` writes every project the session can access into `config.json` under the sentinel token `kbc-session://{project_id}` (existing alias for the same project+stack: left alone; pointing elsewhere: skipped with a warning; two accessible projects sharing the same name now get distinct suggested aliases via a project-id suffix instead of the second one being silently skipped). Without `--register-projects`, on a TTY with human output, `login` offers the same picker interactively right after reporting success -- see `auth register-projects` below.
+- `auth status [--stack URL|alias]` -- show session state (`live`/`refreshed`/`degraded`/`expired`/`missing`), signed-in user, accessible projects, and token expiry. Proactively refreshes the access token if stale before reporting (a healthy session routinely shows an expired 1h access token next to a valid 30-day refresh token) -- `refreshed` means a rotation just happened, `live` means the cached token was still fresh.
+- `auth logout [--stack URL|alias] [--remove-projects] [--yes]` -- revoke the refresh token server-side and delete the local session from `auth.json`. `--remove-projects` also removes `config.json` aliases pointing at this session (sentinel-token projects only; a static-token project on the same stack is never touched).
+- `auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]` -- register an EXISTING session's accessible projects as `config.json` aliases, without re-running `login`. Fixes two usability gaps in plain `login`: nothing was registered unless `--register-projects` was passed, and the suggested alias was always slugified from the project NAME, so a project id like `9840` from the login table never resolved as `--project 9840`. `--all` selects every accessible project; `--project-id ID` (repeatable) selects specific ones (an inaccessible id raises a `ConfigError`); passing neither starts an interactive arrow-key + spacebar checkbox picker -- every not-yet-registered project preselected, up/down or `j`/`k` move, `space` toggles, `a` selects/deselects all, `enter` accepts, `q`/`esc`/`ctrl-c` cancels -- followed by a single `Edit aliases?` confirm (default no) that opens the old per-project alias prompt only if you opt in (each row already shows its suggested alias), then a final `typer.confirm`. On a piped stdin or a terminal without real interactive capabilities, the picker falls back to the original typed prompt (numbers / ranges `1-3` / `all` / `none`). In a non-TTY or `--json` context with neither `--all` nor `--project-id`, the command fails fast telling the caller to pass `--all` or `--project-id` instead of hanging on a prompt. `--alias ID=ALIAS` (repeatable) overrides the suggested alias for a given project id in every mode, including as the picker's prefilled default. `--yes` skips only the picker's final confirmation. Two collision rules, in both modes: a project already registered under an alias for this project+stack reports `status: "exists"` (no-op -- rename via `project edit --new-alias` instead of re-registering); an alias already claimed by a different project (or a static-token project) reports `status: "skipped"` with a rename-hint note -- an existing `config.json` entry is never overwritten. `auth login` (without `--register-projects`) now also offers this same picker interactively right after a successful login, when stdout is a TTY and `--json` was not used; otherwise it just prints the hint to run this command later, and a failure in that optional follow-up never changes `login`'s own (already-successful) exit code.
+
+v1 scope: the Storage + Manage paths. `serve` reaches them too (it delegates to
+the same already-guarded services), so a session project works over the REST API
+and web UI -- but whoever holds `KBAGENT_SERVE_TOKEN` then acts as the signed-in
+USER, and a session expiring mid-run answers HTTP 401 with
+`error_code: SESSION_EXPIRED` that only a human on the host can clear.
+
+These fail fast on a sentinel-token project with `AUTH_NOT_SUPPORTED_ON_STACK`,
+naming the static-token fallback. `SESSION_UNSUPPORTED_FEATURES` in
+`services/_auth_registration.py` is the in-code copy. `auth login` and
+`auth register-projects` print it and both ship it in `--json` as the additive
+key `session_unsupported_features` (`auth status` does **not** carry it):
+`kai`; `semantic-layer` (Metastore); `data-app` (Data Science); `stream` (Data
+Streams); `tool` (MCP subprocess); `sharing` unless a master token is in the
+environment; the AI Service paths (`docs query`, `config examples`,
+`config new`, `component detail`/`search`, `flow new`/`update`/`validate`); the
+Scheduler Service paths (`flow schedule`, `flow schedule-remove`); and the
+importable SDK (`lib.Client`).
+
+`dev-portal` is **not** on that list -- it authenticates with its own Developer
+Portal identity, never a project token. `flow` splits: `flow list` /
+`flow detail` are plain Storage calls and work.
+
+In multi-project commands (`data-app list`, `tool list`, `tool call`,
+`flow list`) a per-project failure keeps its real `error_code` in the `--json`
+`errors[]` array rather than being relabelled `UNEXPECTED_ERROR` / `MCP_ERROR`,
+so a session project on an unsupported surface reports
+`AUTH_NOT_SUPPORTED_ON_STACK` per project -- branch on the code to auto-remediate
+instead of matching message text. Only a code-less exception gets the fallback,
+and its message is truncated. See `auth-workflow.md` for the end-to-end
+walkthrough and troubleshooting.
+
 ## Project Management
 - `project add --project NAME --url URL --token TOKEN` -- connect a project (token verified via API)
-- `project list` -- list all connected projects (tokens masked)
+- `project list` -- list all connected projects (tokens masked). Carries `auth_mode` on every `--json` entry and an `Auth` column (before `Token`) in the human table: exactly `session` (browser login) or `static` (Storage token), **always present and never empty** -- including on a row synthesized for a project whose connection failed -- so branch on it instead of testing for absence. This is how you answer "which mode is this project in": `kbagent project list --json | jq '.data[].auth_mode'`. In the human table a session project's `Token` cell is a dash, because the stored sentinel is not a credential and masked (`kbc-...9840`) it reads like a truncated real token; the `--json` `token` value is unchanged (`mask_token(...)`, a stable contract) and the sentinel's body is the project id, which has its own column (since v0.80.0)
 - `project remove --project NAME` -- disconnect a project
-- `project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW] [--dry-run]` -- update connection details and/or rename the alias. `--new-alias` cascades through config.json (`projects` key + `default_project` if matched) and the nested sync directory `<cwd>/<old-alias>/` when present (-2 collision suffix, git-mv with shutil fallback). Lineage cache rebuild is manual (see gotchas, since v0.31.0). Combined with `--url` / `--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews everything (collision check, planned disk-rename method, lineage-cache warning) without mutating state -- same exit codes as live for validation errors
-- `project status [--project NAME]` -- test connectivity and response time
+- `project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW] [--dry-run]` -- update connection details and/or rename the alias. `--new-alias` cascades through config.json (`projects` key + `default_project` if matched) and the nested sync directory `<cwd>/<old-alias>/` when present (-2 collision suffix, git-mv with shutil fallback). Lineage cache rebuild is manual (see gotchas, since v0.31.0). Combined with `--url` / `--token` in one call, those mutations target the new alias post-rename. `--dry-run` previews everything (collision check, planned disk-rename method, lineage-cache warning) without mutating state -- same exit codes as live for validation errors. `--token` on a browser-login (session) project is allowed and converts it to a static-token project, but warns that `auth logout --remove-projects` will no longer clean that alias up (`project remove` does); `--json` carries the text in an additive top-level `warnings` array, and `--dry-run` previews the identical warning (since v0.80.0)
+- `project status [--project NAME]` -- test connectivity and response time. Same guaranteed `auth_mode` field as `project list`, with the `Auth` column right after `Status` and present on ERROR rows too (since v0.80.0)
+- `project refresh --project ALIAS | --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]` -- mint replacement Storage tokens via the Manage API for projects whose token is expired or invalid. `--force` also replaces still-valid non-expiring tokens. Browser-login (session) projects land in `skipped` with the reason that there is no static token to replace -- their credential lives in `auth.json` and rotates on its own -- and `--force` does not convert them either; use `project edit --token` for a deliberate single-project conversion (since v0.80.0)
 - `project description-get --project NAME` -- read the dashboard project description (KBC.projectDescription on the default branch). Returns `{"description": ""}` if not set, not an error
 - `project description-set --project NAME [--text STR | --file PATH | --stdin]` -- set the dashboard project description (markdown). Pass exactly one of `--text`, `--file`, or `--stdin`. Writes to `KBC.projectDescription` on the default branch -- always the main branch, regardless of any active dev branch
 - `project use ALIAS` -- pin `ALIAS` as the persistent default project. Stored as `default_project` in config.json. Overridden at runtime by `KBAGENT_PROJECT=ALIAS` (env, beats pin) and by `--project ALIAS` (CLI flag, beats both)
 - `project current` -- print the effective default project and its source (`env` / `pin` / `none`). Reports both the env override AND the persisted pin so misconfigurations are visible. Returns `{"alias": null, "source": "none"}` when neither is set
-- `project info --project NAME` -- show detailed project metadata
+- `project info --project NAME` -- show detailed project metadata. Also carries `auth_mode`, rendered as an `Auth` row above the Token rows (on a session project those rows describe the rotating access token). `project current`, `project add` and `project edit` deliberately do **not** carry `auth_mode` -- `current` answers which alias is effective (and reports a `KBAGENT_PROJECT` override that may name an alias absent from the config), the other two are write confirmations. The same keys appear over HTTP on `/projects`, `/projects/status` and `/projects/{alias}/info` (since v0.80.0)
 
 ## Project Members & Invitations (since v0.29.0)
 

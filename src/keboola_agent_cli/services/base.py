@@ -11,14 +11,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
+from ..auth.sentinel import is_session_token, parse_session_project_id, require_static_token
 from ..client import KeboolaClient
 from ..config_store import ConfigError, ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+from ..errors import ErrorCode
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[str, str], KeboolaClient]
+
+# Per-project error entries fall back to this code when the exception carries
+# none of its own. `StrEnum`, so it still serialises as the plain string
+# "UNEXPECTED_ERROR" that every multi-project service emits in its envelope.
+UNEXPECTED_ERROR_CODE = ErrorCode.UNEXPECTED_ERROR
 
 
 @dataclass(frozen=True)
@@ -72,9 +79,96 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
     return raw
 
 
+def project_error_entry(
+    alias: str,
+    exc: BaseException,
+    *,
+    fallback_code: str | ErrorCode = UNEXPECTED_ERROR_CODE,
+    message: str | None = None,
+) -> dict[str, str]:
+    """Build one per-project error entry, keeping a typed ``error_code`` intact.
+
+    A `--json` consumer branches on ``error_code``, so a code the exception
+    already carries must survive a catch-all handler: ``KeboolaApiError`` and
+    the ``ConfigError`` subclasses that set one (``SessionAuthUnsupportedError``
+    -> ``AUTH_NOT_SUPPORTED_ON_STACK``) are machine-readable contracts, not
+    unexpected failures. ``error_code`` may be an :class:`ErrorCode` member or a
+    plain string; ``str()`` normalises both to the wire form.
+
+    ``fallback_code`` applies only to an exception without a code. Such a
+    message is truncated (:func:`sanitize_unexpected_error`, CWE-209) because
+    its content is unknown; a typed error's message is curated and passes
+    through whole.
+    """
+    code = getattr(exc, "error_code", None)
+    if code:
+        return {
+            "project_alias": alias,
+            "error_code": str(code),
+            "message": message if message is not None else str(exc),
+        }
+    return {
+        "project_alias": alias,
+        "error_code": str(fallback_code),
+        "message": message if message is not None else sanitize_unexpected_error(exc),
+    }
+
+
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
-    """Create a KeboolaClient with the given stack URL and token."""
+    """Create a KeboolaClient with the given stack URL and token.
+
+    Static-token-only: fails fast with `SessionAuthUnsupportedError` on a
+    `kbc-session://` sentinel rather than sending the literal sentinel string
+    as a credential. Kept (name and signature unchanged) so existing
+    importers and tests that inject this factory directly keep working --
+    real runtime usage goes through `make_client_factory`'s bearer-aware
+    factory instead (the new `BaseService` default).
+    """
+    require_static_token(token, feature="The static-token Storage API client")
     return KeboolaClient(stack_url=stack_url, token=token)
+
+
+def make_client_factory(config_store: ConfigStore) -> ClientFactory:
+    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+
+    The factory signature stays 2-arg, so none of the ~150 existing call
+    sites change shape: a `kbc-session://{project_id}` sentinel token is
+    detected here, the project id is parsed out of the sentinel itself (the
+    one datum the 2-arg signature otherwise lacks), and the client is built
+    with `http_auth=BearerAuth(...)` instead of a static `X-StorageApi-Token`.
+    A plain static token takes the unchanged, byte-identical path.
+
+    `auth.state_store` / `auth.token_provider` are imported lazily inside the
+    returned closure (not at module level) so the static-token startup path
+    never pays for constructing the auth package's heavier dependencies
+    (filelock, httpx client machinery) -- only a session-registered project
+    ever reaches that branch.
+    """
+
+    def _factory(stack_url: str, token: str) -> KeboolaClient:
+        if not is_session_token(token):
+            return KeboolaClient(stack_url=stack_url, token=token)
+
+        project_id = parse_session_project_id(token)
+        if project_id is None:
+            raise ConfigError(
+                f"Malformed session sentinel token for stack {stack_url!r}: "
+                "the project id could not be parsed. Re-run `kbagent auth login "
+                "--register-projects` to repair the project's config entry."
+            )
+
+        from ..auth.state_store import AuthStateStore
+        from ..auth.token_provider import BearerAuth, get_session_token_provider
+
+        state_store = AuthStateStore.from_config_store(config_store)
+        provider = get_session_token_provider(stack_url, state_store)
+        return KeboolaClient(
+            stack_url=stack_url,
+            token="",
+            http_auth=BearerAuth(provider, project_id),
+        )
+
+    return _factory
 
 
 class BaseService:
@@ -94,7 +188,7 @@ class BaseService:
         client_factory: ClientFactory | None = None,
     ) -> None:
         self._config_store = config_store
-        self._client_factory = client_factory or default_client_factory
+        self._client_factory = client_factory or make_client_factory(config_store)
 
     def resolve_projects(self, aliases: list[str] | None = None) -> dict[str, ProjectConfig]:
         """Resolve project aliases to ProjectConfig instances.
@@ -166,6 +260,10 @@ class BaseService:
             Tuple of (successes, errors) where:
             - successes: list of 3+-tuples from successful workers
             - errors: list of error dicts with project_alias, error_code, message
+
+        A worker that raises instead of returning an error tuple still lands in
+        ``errors``, with its own ``error_code`` when it carries one (see
+        :func:`project_error_entry`).
         """
         if not projects:
             return [], []
@@ -190,13 +288,7 @@ class BaseService:
                         proj_alias,
                         exc,
                     )
-                    errors.append(
-                        {
-                            "project_alias": proj_alias,
-                            "error_code": "UNEXPECTED_ERROR",
-                            "message": sanitize_unexpected_error(exc),
-                        }
-                    )
+                    errors.append(project_error_entry(proj_alias, exc))
                     continue
 
                 if len(result) == 2:

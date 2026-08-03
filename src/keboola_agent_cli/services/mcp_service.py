@@ -22,6 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
+from ..auth.sentinel import require_static_token
 from ..config_store import project_not_found_error
 from ..constants import (
     DEFAULT_MCP_INIT_TIMEOUT,
@@ -35,12 +36,18 @@ from ..constants import (
     ENV_MCP_TRANSPORT,
     MCP_UV_PRERELEASE_FLAG,
 )
-from ..errors import ConfigError
+from ..errors import ConfigError, ErrorCode
 from ..models import ProjectConfig
 from ..permissions import PermissionEngine, classify_mcp_tool
-from .base import BaseService
+from .base import BaseService, project_error_entry
 
 logger = logging.getLogger(__name__)
+
+# Fallback error code for a failure that originates in the MCP layer itself
+# (transport, subprocess, protocol). A failure that already carries a typed
+# code -- e.g. AUTH_NOT_SUPPORTED_ON_STACK from the static-token guard --
+# reports that code instead, so a --json consumer can act on it.
+MCP_ERROR_CODE = ErrorCode.MCP_ERROR
 
 
 def _get_tool_timeout() -> int:
@@ -233,6 +240,8 @@ def _build_server_params(
             "Cannot find keboola-mcp-server. "
             "Install it with: pip install keboola-mcp-server (or: uvx keboola_mcp_server)"
         )
+
+    require_static_token(project.token, feature="The MCP server subprocess")
 
     env: dict[str, str] = {
         "KBC_STORAGE_TOKEN": project.token,
@@ -448,6 +457,7 @@ def _build_http_headers(
     branch_id: str | None = None,
 ) -> dict[str, str]:
     """Build HTTP headers for per-request project credentials."""
+    require_static_token(project.token, feature="The MCP HTTP transport")
     headers = {
         "X-Storage-Token": project.token,
         "X-Storage-API-URL": project.stack_url,
@@ -918,11 +928,12 @@ class McpService(BaseService):
                 return {"tools": annotated_tools, "errors": errors}
             except Exception as exc:
                 errors.append(
-                    {
-                        "project_alias": alias,
-                        "error_code": "MCP_ERROR",
-                        "message": f"Failed to list tools: {exc}",
-                    }
+                    project_error_entry(
+                        alias,
+                        exc,
+                        fallback_code=MCP_ERROR_CODE,
+                        message=f"Failed to list tools: {exc}",
+                    )
                 )
 
         return {"tools": [], "errors": errors}
@@ -1169,11 +1180,7 @@ class McpService(BaseService):
                 return {
                     "results": [],
                     "errors": [
-                        {
-                            "project_alias": resolved_alias,
-                            "error_code": "MCP_ERROR",
-                            "message": str(exc),
-                        }
+                        project_error_entry(resolved_alias, exc, fallback_code=MCP_ERROR_CODE)
                     ],
                 }
 
@@ -1279,13 +1286,7 @@ class McpService(BaseService):
         except Exception as exc:
             return {
                 "results": [],
-                "errors": [
-                    {
-                        "project_alias": resolved_alias,
-                        "error_code": "MCP_ERROR",
-                        "message": str(exc),
-                    }
-                ],
+                "errors": [project_error_entry(resolved_alias, exc, fallback_code=MCP_ERROR_CODE)],
             }
 
     def _call_read_tool(
@@ -1354,13 +1355,7 @@ class McpService(BaseService):
 
         for alias, outcome in zip(aliases, outcomes, strict=False):
             if isinstance(outcome, BaseException):
-                errors.append(
-                    {
-                        "project_alias": alias,
-                        "error_code": "MCP_ERROR",
-                        "message": str(outcome),
-                    }
-                )
+                errors.append(project_error_entry(alias, outcome, fallback_code=MCP_ERROR_CODE))
             else:
                 outcome["project_alias"] = alias
                 all_results.append(outcome)

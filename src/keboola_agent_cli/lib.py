@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .auth.sentinel import require_static_token
 from .client import KeboolaClient, _collect_inline_results
 from .constants import (
     DEFAULT_JOB_MODE,
@@ -248,6 +249,7 @@ class Client:
             raise ValueError("url is required")
         if not token:
             raise ValueError("token is required")
+        require_static_token(token, feature="The importable SDK Client")
         self._client = KeboolaClient(stack_url=url, token=token)
         self._resolved_branch_id = branch_id
         self._idempotency_store = idempotency_store

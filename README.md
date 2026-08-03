@@ -166,7 +166,9 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 
 ## Setup options
 
-Three ways to register projects, depending on what you have.
+Four ways to register projects, depending on what you have. If you are a human
+at a terminal with a browser, start with **browser login** (last one below);
+the token-based options are the ones to use for CI and anything unattended.
 
 **Single project** — you have a Storage API token from the UI:
 ```bash
@@ -193,6 +195,22 @@ KBC_MANAGE_API_TOKEN=your-org-admin-manage-token \
   kbagent --allow-env-manage-token org setup --org-id 123 --url https://connection.keboola.com --yes
 ```
 
+**Browser login** — you have no token and a browser on this machine (since 0.80.0):
+```bash
+# Opens a browser (PKCE), or prints a code to type in on another device.
+kbagent auth login --stack https://connection.keboola.com
+
+# Then pick which of the accessible projects to register locally.
+kbagent auth register-projects            # interactive picker
+kbagent auth register-projects --all      # non-interactive
+```
+> **Needs a human at a browser.** There is no headless path, so never run
+> `auth login` from an unattended AI-agent task or a CI step — use a static
+> Storage token there. Session-registered projects also do not work with every
+> command (MCP tools, Kai, data apps, semantic layer, streams, the Python SDK
+> need a static token). Details, capability matrix and error codes:
+> [docs/auth.md](docs/auth.md).
+
 Run `kbagent doctor` to verify setup (token validity, CLI version, MCP server, Claude Code plugin install).
 
 > **Step-by-step guide with dry-runs, token descriptions, expiry, and
@@ -204,6 +222,7 @@ Full command reference with flags: [SKILL.md](plugins/kbagent/skills/kbagent/SKI
 
 ```
 kbagent search      QUERY [--type table|bucket|config|flow|data-app|transformation]   # cross-project search (0.30.0)
+kbagent auth        login | status | register-projects | logout   # browser login, needs a human (0.80.0)
 kbagent project     add | list | remove | edit | status | refresh | info | use | current
                     description-get | description-set
                     invite | member-list | member-remove | member-set-role
@@ -260,6 +279,7 @@ kbagent             init | context | doctor | version | update | changelog
 | Guide | What it covers |
 |-------|---------------|
 | [Tutorial](docs/TUTORIAL.md) | End-to-end walkthrough: register projects (1, N, whole org), global vs local config, plugin install, using the specialist subagent and `/keboola` slash command. |
+| [Browser login](docs/auth.md) | `kbagent auth login` / `status` / `register-projects` / `logout`: the two credential models, what works on a session-registered project, error codes, and the accepted risks of serving one over HTTP. |
 | [User Guide](docs/guide.md) | Configuration, permissions, per-directory isolation, workflows |
 | [Python SDK](docs/sdk.md) | The in-process importable `Client`: method reference, typed result models, `py.typed`, idempotent jobs, gotchas, and how to extend the SDK. Demo: [`examples/storage_tui/`](examples/storage_tui/). |
 | [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |

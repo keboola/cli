@@ -616,3 +616,162 @@ ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
 DIFF_MAX_DEPTH: int = 3  # max nesting depth for deep_diff detail output
 DIFF_MAX_LINES: int = 20  # max number of diff detail lines per config change
 ENCRYPTED_PLACEHOLDER: str = "<ENCRYPTED>"  # placeholder for encrypted values during comparison
+
+# --- Programmatic Auth (browser login: PKCE + device authorization) ---
+# Keboola Connection issues a "programmatic session": a short-lived access token
+# (kbc_at_*) plus a rotating refresh token (kbc_rt_*), used as
+# `Authorization: Bearer` + `X-KBC-ProjectId` against Storage and Manage.
+# See docs/programmatic-auth-login-plan.md.
+
+AUTH_CLIENT_ID: str = "keboola-cli"
+
+# Sibling state file next to config.json. Session metadata AND the tokens live
+# here in cleartext at 0600 -- the same posture as the static Storage tokens
+# already in config.json (deliberate RFC deviation, plan section 4.2).
+AUTH_STATE_FILENAME: str = "auth.json"
+AUTH_STATE_LOCK_FILENAME: str = "auth.json.lock"
+AUTH_STATE_VERSION: int = 1
+
+# Sentinel written into ProjectConfig.token for a session-registered project.
+# Keeps config.json's schema (and CURRENT_CONFIG_VERSION) unchanged so older
+# kbagent builds still load the file.
+SESSION_TOKEN_PREFIX: str = "kbc-session://"
+
+# Server endpoints, relative to the stack base URL.
+AUTH_PKCE_AUTHORIZE_PATH: str = "/admin/auth/pkce/authorize"
+AUTH_PKCE_TOKEN_PATH: str = "/v1/auth/pkce/token"
+AUTH_DEVICE_PATH: str = "/v1/auth/device"
+AUTH_DEVICE_TOKEN_PATH: str = "/v1/auth/device/token"
+AUTH_TOKEN_REFRESH_PATH: str = "/v1/auth/token/refresh"
+AUTH_TOKEN_INTROSPECT_PATH: str = "/v1/auth/token/introspect"
+AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
+# Session management by id -- DELETE {AUTH_SESSIONS_PATH}/{session_id} kills a
+# specific server session (used to retry a recorded orphan during logout,
+# which only ever has a session id on hand, never that session's refresh
+# token -- see plan review B-1/B-2).
+AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
+
+AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
+AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down
+AUTH_DEVICE_SLOW_DOWN_INCREMENT: int = 5  # bump when the server sends no interval
+
+# Refresh the access token this many seconds BEFORE it expires, so a request
+# never starts with a token that dies mid-flight.
+AUTH_REFRESH_MARGIN: int = 120
+# Cross-process advisory lock (filelock) acquisition timeout for auth.json.
+AUTH_LOCK_TIMEOUT: float = 30.0
+
+# Timeout for the token-refresh request alone. Tighter than DEFAULT_TIMEOUT on
+# every phase: a refresh that takes longer than this is useless anyway.
+AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write=2.0, pool=2.0)
+# Hard ceiling on the wall clock a whole refresh call may take, ENFORCED by
+# `SessionTokenProvider._refresh_within_budget` around the call rather than
+# inferred from AUTH_REFRESH_TIMEOUT: httpx applies `read` and `write` per I/O
+# operation, not per request, and exposes no total-duration option, so a server
+# that trickles a response one chunk at a time stays inside those per-phase
+# deadlines indefinitely. The value is the sum of the phases -- the lowest
+# ceiling that cannot fire before a single attempt has had each of its own
+# chances. It bounds the call, not each attempt: `AuthClient.refresh` stays
+# outside `BaseHttpClient`'s retry loop, and its one narrow replay (a rotation
+# deadlock, see AUTH_REFRESH_CONTENTION_RETRIES) shares this budget rather than
+# extending it, so a replay that no longer fits is abandoned like any other
+# overrun and left to the next command.
+AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
+    phase
+    for phase in (
+        AUTH_REFRESH_TIMEOUT.connect,
+        AUTH_REFRESH_TIMEOUT.read,
+        AUTH_REFRESH_TIMEOUT.write,
+        AUTH_REFRESH_TIMEOUT.pool,
+    )
+    if phase is not None
+)
+
+# The one refresh failure that is safe to retry in place. A rotation that
+# deadlocks on `bi_programmaticSessions` / `bi_manageTokens` is rolled back
+# whole, so nothing rotated and the submitted token is still the session's
+# CURRENT one -- re-presenting it is an ordinary refresh, not the replay a retry
+# normally would be. The server says so itself: it answers `503` with this string
+# code and a `Retry-After`, and its own documentation asks the client to replay
+# the request. Identified by the code rather than by the status alone, because a
+# plain 503 (proxy, load shedding) carries no such proof.
+#
+# The body key varies with the serializer in front of the endpoint (`code`,
+# `stringCode`, or nested `exception.code`), so readers must try all three.
+AUTH_REFRESH_CONTENTION_STRING_CODE: str = "auth.token.refreshContention"
+# One retry only. Deadlock contention that survives a second attempt is not
+# transient any more, and the caller's own retry -- the next command, with the
+# token still current -- is a better place for it than a lease held longer.
+AUTH_REFRESH_CONTENTION_RETRIES: int = 1
+# `Retry-After` is honoured but clamped: the retry runs inside
+# `AUTH_REFRESH_MAX_WALL_CLOCK`, so a server asking for longer than this would
+# only get the attempt abandoned mid-sleep. Anything above the clamp is better
+# served by the next command than by stalling this one.
+AUTH_REFRESH_CONTENTION_MAX_DELAY: float = 2.0
+# Used when the header is absent or unparseable. Mirrors the server's own
+# `DEADLOCK_RETRY_AFTER_SECONDS`, which is what it sends in practice.
+AUTH_REFRESH_CONTENTION_DEFAULT_DELAY: float = 1.0
+
+# Refresh-lease parameters. The lease -- not the file lock -- is what keeps two
+# requests from presenting the same refresh token at once, which is the shape
+# that triggers server-side family revocation. `auth.json.lock` is therefore
+# held only for local reads and writes, never across the network call.
+#
+# TTL covers one whole attempt, so it must not expire while the holder is still
+# legitimately working.
+AUTH_REFRESH_LEASE_TTL: float = AUTH_REFRESH_MAX_WALL_CLOCK + 2.0
+# When the ceiling fires, the request may still be in flight and its token still
+# live on the wire, so the lease is EXTENDED rather than released -- but only
+# briefly, as an anti-stampede pause, NOT to outlast the server's grace window.
+#
+# Waiting out that window is the one thing this value must not do. The server
+# opens its refresh transaction with `SELECT ... FOR UPDATE` on the session row,
+# so a second presentation of the same token blocks until the first commits and
+# is then answered from the rotation cache -- an idempotent replay, whichever
+# request lands first. What it does not forgive is a presentation after the
+# window closes, and the window is measured from the instant the SERVER rotated,
+# not from the instant we gave up. Every second spent here is therefore taken
+# from a budget we cannot see: the window is a stack-side setting
+# (`PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS`, default 30 s, floor 1 s) reported on
+# no response, and a replay is served from cache without restarting it. Retrying
+# promptly is what gives the recovery its best chance under an unknown window.
+#
+# It is not a guarantee, and the limit is worth naming: the earliest a retry can
+# land is AUTH_REFRESH_MAX_WALL_CLOCK plus this pause, so recovery from an
+# abandoned refresh is only reliable on a stack whose window comfortably exceeds
+# that sum. Below it the retry arrives past the window and the user re-logs in.
+# No value here can close that gap -- the ceiling alone already exceeds the
+# documented floor, and it fires before we know there is anything to retry -- so
+# the remedy for a stack that shrinks its window is a shorter ceiling, not a
+# shorter pause.
+AUTH_REFRESH_ABANDON_GRACE: float = 3.0
+# How long a caller that lost the lease waits for the holder's rotated pair
+# before giving up. Not bounded by AUTH_LOCK_TIMEOUT -- a waiter holds no file
+# lock -- but must exceed AUTH_REFRESH_LEASE_TTL so a normal attempt is awaited
+# to completion instead of being reported as contention.
+AUTH_REFRESH_WAIT_TIMEOUT: float = AUTH_REFRESH_LEASE_TTL + 4.0
+AUTH_REFRESH_POLL_INTERVAL: float = 0.2
+# A lease crosses process boundaries, so its expiry has to be a wall-clock
+# instant -- and the clock that wrote it may have been wrong. An expiry further
+# out than any TTL this code ever grants cannot have come from a correct clock, so
+# a reader treats it as unusable rather than honouring it: otherwise a claim
+# written by a host whose clock ran an hour fast would lock every later process
+# out of the stack for that hour, with no recovery short of logging out. Twice
+# the longest grant, to leave room for ordinary clock jitter -- taken over both
+# TTLs, because a horizon below either of them would reject the very claims this
+# code writes and wedge the stack in the opposite direction.
+AUTH_REFRESH_LEASE_MAX_HORIZON: float = max(AUTH_REFRESH_LEASE_TTL, AUTH_REFRESH_ABANDON_GRACE) * 2
+
+# The backend closes the PKCE callback window at
+# AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit
+# waiting for a callback the server can no longer deliver. Tracks the backend value.
+AUTH_CALLBACK_TIMEOUT: float = 115.0
+
+# CSPRNG sizes: token_urlsafe(48) -> 64 chars (384 bit), inside RFC 7636's
+# 43..128 range; state gets 256 bit.
+AUTH_PKCE_VERIFIER_BYTES: int = 48
+AUTH_PKCE_STATE_BYTES: int = 32
+
+# Token value prefixes, used only for masking/validation -- never for auth logic.
+AUTH_ACCESS_TOKEN_PREFIX: str = "kbc_at_"
+AUTH_REFRESH_TOKEN_PREFIX: str = "kbc_rt_"

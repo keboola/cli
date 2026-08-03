@@ -92,9 +92,19 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
       (local --timeout elapsed and we successfully cancelled the remote
       job; scripts can distinguish "we killed it" from "it failed on its own")
+    - SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3
+      (programmatic-auth session problems are authentication errors too --
+      `kbagent auth login` is the remedy in every case)
+    - AUTH_FLOW_TIMEOUT -> 4 (the login flow itself timed out; retryable)
     - Everything else -> 1 (general error)
     """
     if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
+        return 3
+    if exc.error_code in (
+        ErrorCode.SESSION_EXPIRED,
+        ErrorCode.SESSION_NOT_FOUND,
+        ErrorCode.AUTH_FLOW_DENIED,
+    ):
         return 3
     if exc.error_code in (
         "TIMEOUT",
@@ -102,6 +112,8 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
         "RETRY_EXHAUSTED",
         "QUEUE_JOB_TIMEOUT",
     ):
+        return 4
+    if exc.error_code == ErrorCode.AUTH_FLOW_TIMEOUT:
         return 4
     if exc.error_code == "JOB_TIMEOUT_TERMINATED":
         return EXIT_JOB_TIMEOUT_TERMINATED
@@ -158,7 +170,20 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
     if subcommand is None:
         return
 
-    operation = f"{group_name}.{subcommand}"
+    check_cli_operation(ctx, f"{group_name}.{subcommand}")
+
+
+def check_cli_operation(ctx: typer.Context, operation: str) -> None:
+    """Check one named operation against the active policy.
+
+    Use for a check the group callback cannot express, where a flag carries a
+    higher risk class than its command (see `permissions.FLAG_ESCALATIONS`).
+    The callback has already cleared the bare command by the time a command
+    body runs, so this is an additional gate, not a replacement.
+    """
+    engine = ctx.obj.get("permission_engine")
+    if engine is None or not engine.active:
+        return
 
     try:
         engine.check_or_raise(operation)

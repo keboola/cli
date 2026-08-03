@@ -47,7 +47,11 @@ _SECRET_MASK = "***"
 
 
 def default_stream_client_factory(stack_url: str, token: str) -> StreamClient:
-    """Construct a :class:`StreamClient` bound to ``stack_url`` + ``token``."""
+    """Construct a :class:`StreamClient` bound to ``stack_url`` + ``token``.
+
+    Static-token-only (v1 scope is Storage + Manage); the client's
+    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
+    """
     return StreamClient(stack_url=stack_url, token=token)
 
 

@@ -595,6 +595,7 @@ source = { editable = "." }
 dependencies = [
     { name = "croniter" },
     { name = "cryptography" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "kai-client" },
@@ -633,6 +634,7 @@ requires-dist = [
     { name = "croniter", specifier = ">=2.0" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
+    { name = "filelock", specifier = ">=3.13" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "kai-client", specifier = ">=0.11.0" },

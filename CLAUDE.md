@@ -242,6 +242,15 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
 
+18. **Session-sentinel guards are CI-enforced.** `make check-sentinel-guards`
+    (in `make check`) rejects three kinds of drift: a `config.json` credential
+    write that is not sentinel-aware, a `BaseHttpClient` subclass that neither
+    declares `SESSION_AUTH_FEATURE` nor is recorded as bearer-capable, and a
+    `require_static_token` guard missing from `SESSION_UNSUPPORTED_FEATURES`
+    (`services/_auth_registration.py`) -- the tuple `auth login` /
+    `auth register-projects` disclose and every doc surface defers to. Run
+    `python scripts/check_sentinel_guards.py --list` to see the inventory.
+
 ## Claude Code Plugin (Marketplace)
 
 This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
@@ -279,6 +288,50 @@ plugins/kbagent/
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --deny-writes, --deny-destructive, --allow-env-manage-token
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
+
+kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+kbagent auth status [--stack URL|alias]
+kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
+kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
+# auth (since 0.80.0): browser-based login -- PKCE authorization-code by default (falls back to the
+#   RFC 8628 device flow ONLY on a pre-exchange failure: no loopback browser, callback timeout, or an
+#   SSH/container/WSL heuristic; --device-code forces it). REQUIRES A HUMAN AT A BROWSER -- never attempt
+#   from an unattended AI agent task; use a static Storage token for CI/headless instead. Issues a
+#   USER-scoped "programmatic session" (kbc_at_* access token + kbc_rt_* refresh token) stored in
+#   auth.json (0600), a sibling of config.json -- config.json's schema and CURRENT_CONFIG_VERSION are
+#   unchanged. --register-projects writes each accessible project into config.json with the sentinel
+#   token `kbc-session://{project_id}`. v1 scope is the Storage + Manage paths: the CLI commands and
+#   `serve` both reach them, because `serve` delegates to the same already-guarded services (see
+#   server/dependencies.py). Everything outside those paths fails fast on a sentinel-token project
+#   (AUTH_NOT_SUPPORTED_ON_STACK) naming the static-token fallback; the authoritative list is
+#   SESSION_UNSUPPORTED_FEATURES in services/_auth_registration.py, shipped to callers as
+#   `session_unsupported_features` in --json -- do not re-derive it by hand. `dev-portal` is NOT on it
+#   (it authenticates with its own identity, never a project token). Over `serve`, a session that
+#   expires at runtime answers HTTP 401 with
+#   error_code SESSION_EXPIRED -- a browser login only completes on the host. Serving session projects
+#   means whoever holds KBAGENT_SERVE_TOKEN acts as the signed-in USER; see docs/web-server.md.
+#   New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED,
+#   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
+# `auth register-projects` (0.80.0+): fixes the usability gap where nothing was registered unless
+#   --register-projects was passed at login, and where the alias offered was a slug of the project
+#   NAME (never the numeric id, so `--project 9840` never resolves). Lists every project the session
+#   can access with a collision-free suggested alias, then lets the caller pick which to register.
+#   --all selects every candidate; --project-id ID (repeatable) selects specific ones (unknown id ->
+#   ConfigError); omitting both runs an interactive arrow-key + spacebar checkbox picker (every
+#   not-yet-registered project preselected, [a] toggles all, [enter] accepts) followed by a single
+#   "Edit aliases?" confirm (default No) that opens the old per-project alias prompt only if opted
+#   into -- each row already shows its suggested alias. On a piped stdin or a terminal without real
+#   interactive capabilities, it falls back to the original numbers/ranges/'all'/'none' typed prompt.
+#   In a non-TTY or --json context with neither --all nor --project-id, it fails fast telling the
+#   caller to pass --all or --project-id. --alias ID=ALIAS (repeatable) overrides the
+#   suggested alias in every mode. --yes skips only the picker's final confirmation. Never overwrites
+#   an existing alias: same project+stack already registered -> status "exists" (no-op); alias taken by
+#   something else -> status "skipped" with a rename hint. `auth login` (no --register-projects) also
+#   offers this same picker interactively right after a successful login when stdout is a TTY and
+#   --json was not used; otherwise it just prints the `auth register-projects` hint. Same picker fix
+#   applies retroactively to `auth login --register-projects` (now suffixes on an alias collision
+#   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
+#   section 4.5 for the full design.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

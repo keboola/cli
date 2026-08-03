@@ -43,6 +43,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `USAGE_ERROR` | Incorrect CLI flag combination or missing required argument |
 | `MISSING_PARAMETER` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | Catch-all for unclassified errors |
+| `UNEXPECTED_ERROR` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
 | `HTTP_ERROR` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
 | `INTERNAL_ERROR` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
 
@@ -162,3 +163,22 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `DP_APP_NOT_FOUND` | Developer Portal app not found under the vendor |
 | `DP_PUBLISH_REQUIREMENTS_MISSING` | App is missing required fields for publishing (fix via `dev-portal patch` first) |
 | `DP_ICON_UPLOAD_FAILED` | Uploading the app icon to the Developer Portal failed |
+
+### MCP
+
+| Code | Description |
+|---|---|
+| `MCP_ERROR` | The MCP layer itself failed (transport, subprocess, or protocol), as opposed to the tool returning an error result |
+
+### Programmatic Auth (browser login)
+
+| Code | Description |
+|---|---|
+| `AUTH_NOT_SUPPORTED_ON_STACK` | Browser login is not enabled on this Keboola stack, or the code path only understands static Storage tokens (`kbc-session://` sentinel rejected) |
+| `AUTH_FLOW_TIMEOUT` | The PKCE callback or device-authorization poll deadline elapsed before the user completed login |
+| `AUTH_FLOW_DENIED` | The user (or the authorization server) denied the login request |
+| `AUTH_FLOW_EXPIRED` | The device code / authorization code expired before it was used |
+| `AUTH_BROWSER_UNAVAILABLE` | No usable browser was found for the PKCE loopback flow (falls back to device authorization) |
+| `AUTH_STATE_MISMATCH` | The PKCE callback's `state` parameter did not match the one generated at login start |
+| `SESSION_EXPIRED` | The programmatic-auth session's refresh token expired or was revoked; run `kbagent auth login` again |
+| `SESSION_NOT_FOUND` | No programmatic-auth session is persisted for this stack; run `kbagent auth login` |

@@ -327,3 +327,122 @@ def test_jobs_run_mode_debug_reaches_service(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert job_service.run_job.call_args.kwargs["mode"] == "debug"
+
+
+# ── Session-credential failures map to 401, not 502 (programmatic auth) ──
+#
+# `serve` supports session-registered (browser-login) projects for the Storage
+# and Manage paths, so a session that expires mid-daemon is a real runtime
+# state, not a theoretical one. It is the caller's authentication problem, and
+# only an operator at the host can fix it -- a browser login cannot be run for
+# a REST caller. Anything else (a genuine upstream fault) keeps its 502.
+
+
+def _client_with_failing_job_service(tmp_path: Path, exc: Exception) -> TestClient:
+    """Build the app with a JobService whose `list_jobs` raises `exc`.
+
+    Routes the exception through the real registered exception handlers rather
+    than calling them directly, so the assertions cover the status/envelope a
+    REST caller actually receives.
+    """
+    from unittest.mock import MagicMock
+
+    from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+
+    app = create_app(config_dir=str(tmp_path), auth_token="test-token")
+    job_service = MagicMock()
+    job_service.list_jobs.side_effect = exc
+    registry = ServiceRegistry.__new__(ServiceRegistry)
+    registry.job = job_service  # type: ignore[attr-defined]
+    app.dependency_overrides[get_registry] = lambda: registry
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_expired_session_returns_401_session_expired(tmp_path: Path) -> None:
+    """A SESSION_EXPIRED KeboolaApiError answers 401 and names the host remedy."""
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    exc = KeboolaApiError(
+        message="Your Keboola login for https://connection.keboola.com expired.",
+        error_code=ErrorCode.SESSION_EXPIRED,
+        retryable=False,
+    )
+    with _client_with_failing_job_service(tmp_path, exc) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 401, res.text
+    body = res.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "SESSION_EXPIRED"
+    # The remedy has to point at the host running serve: the daemon cannot
+    # open a browser login on a remote caller's behalf.
+    assert "kbagent auth login" in body["error"]["message"]
+    assert "host running `kbagent serve`" in body["error"]["message"]
+
+
+def test_missing_session_returns_401_session_not_found(tmp_path: Path) -> None:
+    """SESSION_NOT_FOUND shares the 401 mapping -- same remedy, same operator."""
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    exc = KeboolaApiError(
+        message="No active Keboola session for https://connection.keboola.com.",
+        error_code=ErrorCode.SESSION_NOT_FOUND,
+        retryable=False,
+    )
+    with _client_with_failing_job_service(tmp_path, exc) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 401, res.text
+    assert res.json()["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_non_session_api_error_keeps_502(tmp_path: Path) -> None:
+    """A KeboolaApiError that is not session-related still maps to 502.
+
+    Guards the narrowness of the 401 branch: only session-credential codes are
+    reclassified, so an upstream Storage/Queue failure keeps announcing itself
+    as a gateway problem.
+    """
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    exc = KeboolaApiError(
+        message="Storage API is unavailable.",
+        error_code=ErrorCode.API_ERROR,
+        retryable=True,
+    )
+    with _client_with_failing_job_service(tmp_path, exc) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 502, res.text
+    assert res.json()["error"]["code"] == "API_ERROR"
+    assert "host running `kbagent serve`" not in res.json()["error"]["message"]
+
+
+def test_config_error_keeps_400(tmp_path: Path) -> None:
+    """`ConfigError` keeps its own 400 mapping, unaffected by the 401 branch."""
+    from keboola_agent_cli.errors import ConfigError
+
+    with _client_with_failing_job_service(tmp_path, ConfigError("no such project")) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "CONFIG_ERROR"
+
+
+def test_sentinel_unsupported_path_keeps_its_error_code(tmp_path: Path) -> None:
+    """A sentinel project on an unsupported path reports AUTH_NOT_SUPPORTED_ON_STACK.
+
+    `SessionAuthUnsupportedError` is a `ConfigError`, so it takes the 400 every
+    configuration problem does -- but a REST caller has to be able to tell "this
+    path does not accept browser-login projects" apart from a generic config
+    problem, which is what the code carries.
+    """
+    from keboola_agent_cli.errors import SessionAuthUnsupportedError
+
+    exc = SessionAuthUnsupportedError("The MCP server subprocess")
+    with _client_with_failing_job_service(tmp_path, exc) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
+    assert "static Storage token" in res.json()["error"]["message"]

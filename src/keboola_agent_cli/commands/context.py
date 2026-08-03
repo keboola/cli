@@ -54,13 +54,172 @@ observability -- all API requests will include the X-Conversation-ID header.
 
 Use `kbagent <command> --help` for full flag details and examples.
 
+### Programmatic Auth (Browser Login) (since v0.80.0)
+
+  Browser-based login (PKCE authorization-code by default; RFC 8628 device
+  authorization on SSH/containers/WSL, or with --device-code) as an
+  alternative to a long-lived static Storage API token.
+
+  IMPORTANT FOR AI AGENTS: `auth login` REQUIRES A HUMAN AT A BROWSER.
+  There is no unattended/headless path, and session tokens are deliberately
+  not readable through the CLI -- do NOT attempt this command from an
+  unattended agent task. For headless / CI / automation use, keep using a
+  static Storage token (`project add --token` or `KBAGENT_PROJECT_FROM_ENV`).
+
+  kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+    Opens the Keboola login page in a browser (or falls back to the RFC 8628
+    device flow: prints a short user_code + verification URL) and stores the
+    resulting "programmatic session" (kbc_at_* access token + kbc_rt_*
+    refresh token) in auth.json (0600), a sibling of config.json. A session
+    is USER-scoped: one login covers every project the signed-in user can
+    access; the target project for a given command is still selected the
+    usual way (--project / KBAGENT_PROJECT / pin) and bound to the request
+    via X-KBC-ProjectId. --stack accepts a stack URL or an existing project
+    alias (its stack is used). --device-code forces the device flow even on
+    a desktop with a browser. --register-projects additionally writes every
+    accessible project into config.json with the sentinel token
+    `kbc-session://{{project_id}}` (config.json schema and
+    CURRENT_CONFIG_VERSION are unchanged; an existing alias for the same
+    project+stack is left alone. A suggested alias never collides -- it is
+    computed against every existing config.json key and suffixes
+    `-{{project_id}}` past any clash -- so a "skipped" status only arises for
+    an alias you force via --alias, or a second alias for an already-registered
+    project; an existing entry is never overwritten). Without --register-projects, and on a TTY
+    with human output, login now offers the same picker interactively right
+    after reporting success -- see `auth register-projects` below for the
+    full picker/--all/--project-id/--alias contract, which this shares.
+    PKCE auto-falls-back to the device flow ONLY on a pre-exchange
+    failure (no loopback browser, callback timeout, SSH/container/WSL
+    detected) -- once the browser callback succeeds there is no fallback.
+    A 404 from any auth endpoint means browser login is not enabled on that
+    stack yet (per-stack feature flag); use a static token instead.
+
+  kbagent auth status [--stack URL|alias]
+    Show the current session's state (live/refreshed/degraded/expired/missing),
+    signed-in user, accessible projects, and token expiry. Proactively
+    refreshes the access token if it is stale -- a healthy session routinely
+    has an expired 1h access token alongside a valid 30-day refresh token.
+
+  kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
+    Revoke the refresh token server-side and delete the local session from
+    auth.json. --remove-projects also removes config.json project aliases
+    pointing at this session (sentinel-token projects only -- a static-token
+    project sharing the same stack is never touched).
+
+  kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
+    Register accessible projects as local config.json aliases from an
+    EXISTING session, without re-running login. Fixes the usability trap
+    where `login` prints an accessible-project table but nothing gets
+    registered unless --register-projects was passed, and where the
+    suggested alias is slugified from the project NAME -- the numeric
+    project id (e.g. 9840) is never a valid alias on its own.
+    --all registers every accessible project. --project-id ID (repeatable)
+    registers specific ones (an id the session cannot access raises a
+    ConfigError naming it). Omitting both starts an interactive arrow-key +
+    spacebar checkbox picker (every not-yet-registered project preselected;
+    up/down or j/k move, space toggles, 'a' selects/deselects all, enter
+    accepts, q/esc/ctrl-c cancels), then a single "Edit aliases?" confirm
+    (default no) that only opens the old per-project alias prompt if you opt
+    in -- each row already shows its suggested alias. On a piped stdin or a
+    terminal without real interactive capabilities, this falls back to the
+    original typed prompt (numbers / ranges like 1-3 / 'all' / 'none'). This
+    needs a real TTY and non-JSON output; in a non-interactive or --json
+    context with neither --all nor --project-id, the command fails fast and
+    tells you to pass one of them instead of hanging on a prompt. --alias
+    ID=ALIAS (repeatable) overrides the suggested alias for a given project
+    id in every mode, including as the picker's prefilled default. --yes
+    skips only the picker's final "register these N projects?" confirmation.
+    Never overwrites an existing config.json entry: a project already
+    registered under an alias for this project+stack reports status
+    "exists" (no-op, even if you request a different alias -- rename via
+    `project edit --new-alias` instead); an alias already claimed by a
+    DIFFERENT project or a static-token project reports status "skipped"
+    with a note, never clobbered. `auth login` (without --register-projects)
+    now also offers this same picker right after a successful login, when
+    stdout is a TTY and --json was not passed; otherwise it just prints the
+    hint to run this command later. A failure in this optional follow-up
+    never changes login's own (already-successful) exit code.
+
+  Storage posture: session tokens live in PLAINTEXT in auth.json (0600), a
+  sibling of config.json -- the same posture as the static Storage tokens
+  already kept there (deliberate RFC 8628 deviation; see
+  docs/programmatic-auth-login-plan.md section 4.2).
+
+  v1 scope: the Storage + Manage paths. `kbagent serve` reaches them too --
+  it delegates to the same already-guarded services -- so a session project
+  is usable over the REST API and web UI. Two consequences: whoever holds
+  KBAGENT_SERVE_TOKEN acts as the signed-in USER (a session is a user
+  credential, not a project one), and a session that expires while the
+  server runs answers HTTP 401 with error_code SESSION_EXPIRED, which only a
+  human on the host can fix by re-running `auth login`.
+
+  These surfaces fail fast on a sentinel-token (`kbc-session://...`) project
+  with AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback -- they
+  do not (yet) understand bearer sessions. SESSION_UNSUPPORTED_FEATURES in
+  services/_auth_registration.py is the in-code copy of this list. `auth login`
+  and `auth register-projects` print it, and both ship it in --json as the
+  additive key session_unsupported_features (`auth status` does NOT carry it):
+    - kbagent kai
+    - kbagent semantic-layer (Metastore Service)
+    - kbagent data-app (Data Science Service)
+    - kbagent stream (Data Streams Service)
+    - kbagent tool (MCP server subprocess)
+    - kbagent sharing, unless a master token is set in the environment
+    - AI Service paths: docs query, config examples, config new,
+      component detail/search, flow new/update/validate
+    - Scheduler Service paths: flow schedule, flow schedule-remove
+    - the importable SDK (keboola_agent_cli.Client)
+
+  `dev-portal` is NOT on that list: it authenticates with its own Developer
+  Portal identity (`dev-portal identity add`), never a project token, so a
+  session project changes nothing there. `flow` splits -- `flow list` /
+  `flow detail` are plain Storage calls and work.
+
+  An older kbagent build has no
+  sentinel-token support at all: it gets an opaque 401 on a plain
+  `X-StorageApi-Token` call, or a different failure on a token-as-data path
+  (e.g. semantic-layer `token --encrypt`, kai, sharing's master-token
+  fallback) -- upgrade first.
+
+  New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT,
+  AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE,
+  AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND. Exit codes:
+  SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3 (auth error);
+  AUTH_FLOW_TIMEOUT -> 4 (network error); others -> 1. A session refresh that
+  times out or cannot reach the auth service reports TIMEOUT /
+  CONNECTION_ERROR -> 4, never a session/config error: a slow auth service is
+  a network problem, so do NOT treat it as "log in again". The refresh is a
+  single attempt under a short budget by design (a retry would re-present the
+  same refresh token); just run the command again.
+
+  In multi-project commands (`data-app list`, `tool list`, `tool call`,
+  `flow list`) a per-project failure keeps its real error_code in the --json
+  `errors[]` array instead of being relabelled UNEXPECTED_ERROR / MCP_ERROR.
+  A session project on an unsupported surface therefore reports
+  error_code AUTH_NOT_SUPPORTED_ON_STACK per project -- branch on that code
+  to auto-remediate (register a static-token alias) rather than parsing the
+  message text. Only an exception carrying no code at all gets the fallback,
+  and its message is truncated because its content is unknown.
+
 ### Project Management
 
   kbagent project add --project NAME --url URL --token TOKEN
     Add a new project connection. Token verified against API.
 
   kbagent project list
-    List all connected projects (tokens always masked).
+    List all connected projects (tokens always masked). An `Auth` column
+    (before `Token`) shows how each project authenticates, and every --json
+    entry carries `auth_mode`: exactly "session" (browser login) or "static"
+    (Storage token). The field is always present and never empty, including on
+    a row synthesized for a project whose connection failed, so a consumer can
+    depend on it instead of testing for absence. This is the answer to "which
+    mode is this project in":
+      kbagent project list --json | jq '.data[].auth_mode'
+    In the human table a session project's `Token` cell is a dash: the stored
+    sentinel is not a credential, and masked (`kbc-...9840`) it reads like a
+    truncated real token. The --json `token` value is unchanged -- still
+    mask_token(...) -- because that is a stable contract; the sentinel's body
+    is the project id, which has its own column.
 
   kbagent project remove --project NAME
     Remove a project connection.
@@ -70,13 +229,24 @@ Use `kbagent <command> --help` for full flag details and examples.
     the alias and cascades the rename through config.json and the nested sync
     directory at <cwd>/<old-alias>/. Lineage cache embeds the alias in FQNs
     and is NOT auto-updated; rebuild via `kbagent lineage build` after rename.
+    Passing --token for a browser-login (session) project is allowed and
+    converts it to a static-token project, but it emits a warning: once
+    converted, `auth logout --remove-projects` no longer cleans that alias up
+    (use `project remove`). In --json mode the warning is carried in an
+    additive top-level "warnings" array; --dry-run previews the same text.
 
   kbagent project status [--project NAME]
-    Test connectivity. Shows OK/ERROR with response time.
+    Test connectivity. Shows OK/ERROR with response time. Carries the same
+    `auth_mode` field (and an `Auth` column right after `Status`) as
+    `project list`, including on an ERROR row.
 
   kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
   kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
     Refresh project tokens via Manage API. --all refreshes all projects. --force replaces non-expiring tokens.
+    Browser-login (session) projects are reported under "skipped" with the
+    reason that there is no static token to replace -- their access token
+    rotates on its own from auth.json. --force does NOT convert them either;
+    use `project edit --token` for a deliberate one-project conversion.
 
   kbagent project description-get --project NAME
     Read the Keboola dashboard project description (markdown). Backed by
@@ -99,6 +269,12 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project info --project NAME
     Return full project details: ID, name, stack URL, default backend, enabled features,
     quota limits, and usage metrics. Useful for auditing project capabilities.
+    Carries `auth_mode` too, rendered as an `Auth` row above the Token rows --
+    on a session project those describe the rotating access token.
+    `project current`, `project add` and `project edit` do NOT carry
+    `auth_mode`: `current` answers which alias is effective (and reports a
+    KBAGENT_PROJECT override that may name an alias absent from the config),
+    and the other two are write confirmations.
 
 ### Project Members & Invitations (since v0.29.0)
 
@@ -616,6 +792,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
     Bulk-onboard all org projects. Requires org-admin manage token. Idempotent.
     --refresh also refreshes tokens for already-registered projects with invalid tokens.
+    --refresh skips browser-login (session) projects with an explicit reason
+    instead of minting a static token over their sentinel.
 
   kbagent org setup --project-ids 901,9621,10539 --url URL [--dry-run] [--yes] [--refresh]
     Non-admin mode: onboard specific projects by ID. Works with Personal Access Token (PAT).

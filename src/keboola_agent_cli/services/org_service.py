@@ -9,12 +9,14 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from ..auth.sentinel import is_session_token
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..constants import DEFAULT_TOKEN_DESCRIPTION
 from ..errors import KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
+from .base import default_client_factory, make_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,15 @@ def default_manage_client_factory(stack_url: str, manage_token: str) -> ManageCl
 
 
 def default_storage_client_factory(stack_url: str, token: str) -> KeboolaClient:
-    """Create a KeboolaClient with the given stack URL and storage token."""
-    return KeboolaClient(stack_url=stack_url, token=token)
+    """Create a KeboolaClient with the given stack URL and storage token.
+
+    Delegates to :func:`services.base.default_client_factory` so this stays
+    a static-token-only builder (fails fast on a session sentinel) while
+    keeping its own name for callers/tests that inject it explicitly. Real
+    usage goes through :class:`OrgService`'s bearer-aware default
+    (``make_client_factory``) instead.
+    """
+    return default_client_factory(stack_url, token)
 
 
 def slugify(name: str) -> str:
@@ -67,7 +76,7 @@ class OrgService:
     ) -> None:
         self._config_store = config_store
         self._manage_client_factory = manage_client_factory or default_manage_client_factory
-        self._storage_client_factory = storage_client_factory or default_storage_client_factory
+        self._storage_client_factory = storage_client_factory or make_client_factory(config_store)
 
     def setup_organization(
         self,
@@ -266,6 +275,11 @@ class OrgService:
         projects with expired or invalid tokens. Already-valid tokens are
         skipped unless ``force=True``.
 
+        Browser-login (session) projects are reported under
+        ``projects_skipped`` and never touched, ``force`` included: they hold a
+        ``kbc-session://`` sentinel instead of a static token, and their real
+        credential rotates on its own.
+
         Args:
             manage_token: Manage API token (for creating new storage tokens).
             aliases: Optional list of project aliases to refresh. If None, all
@@ -331,6 +345,24 @@ class OrgService:
         projects_skipped: list[dict[str, Any]] = []
 
         for alias, project in projects_to_check:
+            # A browser-login session project has no static token to replace:
+            # its credential lives in auth.json and the access token rotates on
+            # its own. Skipping here rather than at the token-validity check
+            # keeps ``force=True`` from converting it too, and reports the
+            # outcome truthfully instead of raising.
+            if is_session_token(project.token):
+                projects_skipped.append(
+                    {
+                        "alias": alias,
+                        "project_name": project.project_name,
+                        "reason": (
+                            "Browser-login (session) project -- nothing to refresh; "
+                            "session access tokens rotate automatically."
+                        ),
+                    }
+                )
+                continue
+
             # Skip projects without project_id (cannot create tokens via Manage API)
             if project.project_id is None:
                 projects_skipped.append(

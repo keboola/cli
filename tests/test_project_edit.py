@@ -16,7 +16,10 @@ from pathlib import Path
 import pytest
 
 from helpers import make_mock_client, setup_single_project, setup_two_projects
+from keboola_agent_cli.auth.sentinel import make_session_token
+from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
 
 
@@ -493,3 +496,100 @@ class TestRenameAliasDryRun:
         # Source dir untouched, target NEVER created on disk.
         assert (sync_root / "prod" / ".keboola" / "manifest.json").exists()
         assert not (sync_root / "production").exists()
+
+
+# ---------------------------------------------------------------------------
+# --token on a browser-login (session) project -- warn and allow
+# ---------------------------------------------------------------------------
+
+
+class TestEditTokenOnSessionProject:
+    """`project edit --token` may convert a session project to a static token
+    (explicit user intent), but has to say what it changed.
+
+    The alias stops being recognised by `auth logout --remove-projects`, which
+    selects on the ``kbc-session://`` sentinel, so the conversion is reported
+    in a ``warnings`` list rather than happening quietly.
+    """
+
+    SESSION_ALIAS = "session-proj"
+    SESSION_PROJECT_ID = 9840
+    NEW_TOKEN = "901-22222-replacementTokenValue123"
+
+    def _service(self, tmp_config_dir: Path) -> ProjectService:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            self.SESSION_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(self.SESSION_PROJECT_ID),
+                project_name="Session Project",
+                project_id=self.SESSION_PROJECT_ID,
+            ),
+        )
+        store.add_project(
+            "static-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-11111-staticTokenValue1234567",
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: make_mock_client(
+                project_name="Session Project", project_id=self.SESSION_PROJECT_ID
+            ),
+        )
+
+    def test_conversion_succeeds_and_warns(self, tmp_config_dir: Path) -> None:
+        service = self._service(tmp_config_dir)
+
+        result = service.edit_project(alias=self.SESSION_ALIAS, token=self.NEW_TOKEN)
+
+        project = service._config_store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == self.NEW_TOKEN
+
+        assert len(result["warnings"]) == 1
+        warning = result["warnings"][0]
+        assert self.SESSION_ALIAS in warning
+        assert "auth logout --remove-projects" in warning
+
+    def test_dry_run_previews_the_same_warning_without_mutating(self, tmp_config_dir: Path) -> None:
+        service = self._service(tmp_config_dir)
+
+        result = service.edit_project(
+            alias=self.SESSION_ALIAS,
+            token=self.NEW_TOKEN,
+            search_root=tmp_config_dir,
+            dry_run=True,
+        )
+
+        assert result["dry_run"] is True
+        assert "auth logout --remove-projects" in result["warnings"][0]
+        project = service._config_store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(self.SESSION_PROJECT_ID)
+
+    def test_static_project_carries_no_warnings_key(self, tmp_config_dir: Path) -> None:
+        service = self._service(tmp_config_dir)
+
+        result = service.edit_project(alias="static-proj", token=self.NEW_TOKEN)
+
+        assert "warnings" not in result
+
+    def test_url_only_edit_on_session_project_carries_no_warnings_key(
+        self, tmp_config_dir: Path
+    ) -> None:
+        service = self._service(tmp_config_dir)
+
+        result = service.edit_project(
+            alias=self.SESSION_ALIAS, stack_url="https://connection.north-europe.azure.keboola.com"
+        )
+
+        assert "warnings" not in result
+        project = service._config_store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(self.SESSION_PROJECT_ID)

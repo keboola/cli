@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helpers import make_mock_client
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
@@ -468,6 +469,148 @@ class TestProjectStatus:
 
         assert result.exit_code == 0
         assert "Project Status" in result.output
+
+
+class TestProjectAuthModeColumn:
+    """`project list` / `project status` state each project's credential type.
+
+    Before this, the two modes were distinguishable only by accident: the masked
+    sentinel renders as ``kbc-...9840``, which reads like a truncated real token.
+    """
+
+    STATIC_TOKEN = "901-11111-staticTokenValue1234567"
+
+    def _mixed_config_dir(self, tmp_path: Path) -> Path:
+        """A real config dir holding one sentinel and one static project."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            "session-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+        store.add_project(
+            "static-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return config_dir
+
+    def _invoke(self, tmp_path: Path, argv: list[str]):
+        config_dir = self._mixed_config_dir(tmp_path)
+        store = ConfigStore(config_dir=config_dir)
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: make_mock_client(),
+        )
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = service
+            # Rich truncates cells at the 80-column CliRunner default; widen so
+            # substring asserts test content rather than the wrap point.
+            return runner.invoke(app, argv, env={"COLUMNS": "200"})
+
+    def test_list_json_carries_auth_mode_for_both_types(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "project", "list"])
+
+        assert result.exit_code == 0, result.output
+        by_alias = {p["alias"]: p for p in json.loads(result.stdout)["data"]}
+        assert by_alias["session-proj"]["auth_mode"] == "session"
+        assert by_alias["static-proj"]["auth_mode"] == "static"
+        # Additive: the pre-existing masked token key is untouched.
+        assert by_alias["session-proj"]["token"] == "kbc-...9840"
+
+    def test_list_human_shows_auth_column_and_hides_the_sentinel(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["project", "list"])
+
+        assert result.exit_code == 0, result.output
+        flat = " ".join(result.stdout.split())
+        assert "Auth" in flat
+        assert "session" in flat
+        assert "static" in flat
+        # The misleading masked sentinel is not rendered; the static token is.
+        assert "kbc-...9840" not in flat
+        assert "901-...4567" in flat
+
+    def test_status_json_carries_auth_mode_for_both_types(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "project", "status"])
+
+        assert result.exit_code == 0, result.output
+        by_alias = {s["alias"]: s for s in json.loads(result.stdout)["data"]}
+        assert by_alias["session-proj"]["auth_mode"] == "session"
+        assert by_alias["static-proj"]["auth_mode"] == "static"
+
+    def test_status_human_shows_auth_column(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["project", "status"])
+
+        assert result.exit_code == 0, result.output
+        flat = " ".join(result.stdout.split())
+        assert "Project Status" in flat
+        assert "Auth" in flat
+        assert "session" in flat
+        assert "static" in flat
+
+    def test_status_single_project_json(self, tmp_path: Path) -> None:
+        result = self._invoke(
+            tmp_path, ["--json", "project", "status", "--project", "session-proj"]
+        )
+
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.stdout)["data"]
+        assert len(rows) == 1
+        assert rows[0]["auth_mode"] == "session"
+
+
+class TestProjectListTokenEscaping:
+    """Every cell of the projects table is Rich-escaped (nit 14).
+
+    The only injection vector is the user's own config.json, so this pins
+    consistency rather than closing a vulnerability -- a token containing Rich
+    markup must not be interpreted as styling.
+    """
+
+    def test_markup_in_a_stored_token_is_not_interpreted(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        # mask_token keeps everything before the first dash, so the markup
+        # survives masking and reaches Table.add_row.
+        store.add_project(
+            "weird",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="[bold red]901-secret-abcdefgh",
+                project_name="Weird",
+                project_id=7,
+            ),
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = ProjectService(
+                config_store=store,
+                client_factory=lambda url, token: make_mock_client(),
+            )
+            result = runner.invoke(app, ["project", "list"], env={"COLUMNS": "200"})
+
+        assert result.exit_code == 0, result.output
+        # Rendered literally rather than swallowed as a style tag.
+        assert "[bold red]" in " ".join(result.stdout.split())
 
 
 class TestProjectUse:
@@ -4798,14 +4941,15 @@ class TestDoctor:
 
         mock_client = make_mock_client(project_name="Prod", project_id=1234)
 
+        # DoctorService now builds its factory via make_client_factory(config_store)
+        # so a kbc-session:// project gets a bearer client (0.80.0). The patched
+        # name therefore returns the *factory*, not the client.
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch(
-                "keboola_agent_cli.services.doctor_service.default_client_factory"
-            ) as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.make_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
-            MockFactory.return_value = mock_client
+            MockFactory.return_value = lambda _stack_url, _token: mock_client
 
             result = runner.invoke(app, ["--json", "doctor"])
 
@@ -4844,12 +4988,10 @@ class TestDoctor:
 
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch(
-                "keboola_agent_cli.services.doctor_service.default_client_factory"
-            ) as MockFactory,
+            patch("keboola_agent_cli.services.doctor_service.make_client_factory") as MockFactory,
         ):
             MockStore.return_value = store
-            MockFactory.return_value = fail_client
+            MockFactory.return_value = lambda _stack_url, _token: fail_client
 
             result = runner.invoke(app, ["--json", "doctor"])
 

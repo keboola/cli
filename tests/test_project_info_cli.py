@@ -239,3 +239,62 @@ class TestProjectInfoHuman:
 
         assert result.exit_code == 0
         assert "Yes" in result.output
+
+
+class TestProjectInfoAuthMode:
+    """`project info` surfaces the credential type in both output modes."""
+
+    def test_json_carries_auth_mode(self, tmp_path: Path) -> None:
+        info = {**FULL_INFO, "auth_mode": "session"}
+        service, store = _make_service_with_info(info, tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+            patch("keboola_agent_cli.cli.ProjectService", return_value=service),
+        ):
+            result = runner.invoke(
+                app,
+                ["--json", "project", "info", "--project", "prod"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["data"]["auth_mode"] == "session"
+
+    def test_human_panel_shows_an_auth_row(self, tmp_path: Path) -> None:
+        info = {**FULL_INFO, "auth_mode": "session"}
+        service, store = _make_service_with_info(info, tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+            patch("keboola_agent_cli.cli.ProjectService", return_value=service),
+        ):
+            result = runner.invoke(
+                app,
+                ["project", "info", "--project", "prod"],
+                env={"COLUMNS": "200"},
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        flat = " ".join(result.stdout.split())
+        assert "Auth" in flat
+        assert "session" in flat
+
+    def test_human_panel_shows_static_for_a_static_project(self, tmp_path: Path) -> None:
+        info = {**FULL_INFO, "auth_mode": "static"}
+        service, store = _make_service_with_info(info, tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+            patch("keboola_agent_cli.cli.ProjectService", return_value=service),
+        ):
+            result = runner.invoke(
+                app,
+                ["project", "info", "--project", "prod"],
+                env={"COLUMNS": "200"},
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "static" in " ".join(result.stdout.split())

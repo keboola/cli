@@ -5,12 +5,19 @@ import os
 import stat
 import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from keboola_agent_cli.config_store import _HAS_FCNTL, CURRENT_CONFIG_VERSION, ConfigStore
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.auth.sentinel import make_session_token
+from keboola_agent_cli.config_store import (
+    _HAS_FCNTL,
+    CURRENT_CONFIG_VERSION,
+    ConfigStore,
+    project_not_found_error,
+    validate_alias_format,
+)
+from keboola_agent_cli.errors import ConfigError, ErrorCode, SessionAuthUnsupportedError
 from keboola_agent_cli.models import AppConfig, DeveloperPortalIdentity, ProjectConfig
 
 
@@ -348,6 +355,133 @@ class TestEditProject:
 
         with pytest.raises(ConfigError, match="not found"):
             store.edit_project("nonexistent", stack_url="https://new.com")
+
+
+class TestEditProjectCredentialTypeGuard:
+    """The channel-B chokepoint: a static token must not silently replace a
+    ``kbc-session://`` sentinel.
+
+    The sentinel is what makes ``auth logout --remove-projects`` recognise a
+    project as session-owned, so overwriting it converts the project into a
+    long-lived static credential that logout stops cleaning up.
+    """
+
+    SESSION_ALIAS = "session-proj"
+    STATIC_ALIAS = "static-proj"
+    STATIC_TOKEN = "901-11111-staticTokenValue1234567"
+    REPLACEMENT_TOKEN = "901-22222-replacementTokenValue123"
+
+    def _mixed_store(self, tmp_config_dir: Path) -> ConfigStore:
+        """A store holding one session project and one static-token project."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            self.SESSION_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+        store.add_project(
+            self.STATIC_ALIAS,
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=self.STATIC_TOKEN,
+                project_name="Static Project",
+                project_id=258,
+            ),
+        )
+        return store
+
+    def test_static_token_over_sentinel_raises_without_opt_in(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            store.edit_project(self.SESSION_ALIAS, token=self.REPLACEMENT_TOKEN)
+
+        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert self.SESSION_ALIAS in exc_info.value.message
+        # A remedy, not just a refusal.
+        assert "kbagent project edit" in exc_info.value.message
+
+    def test_rejected_swap_leaves_the_sentinel_on_disk(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(SessionAuthUnsupportedError):
+            store.edit_project(
+                self.SESSION_ALIAS,
+                token=self.REPLACEMENT_TOKEN,
+                project_name="Renamed by refresh",
+            )
+
+        # Reload from disk: the whole transaction was refused, not partly applied.
+        reloaded = ConfigStore(config_dir=tmp_config_dir).get_project(self.SESSION_ALIAS)
+        assert reloaded is not None
+        assert reloaded.token == make_session_token(9840)
+        assert reloaded.project_name == "Session Project"
+
+    def test_opt_in_allows_the_swap(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(
+            self.SESSION_ALIAS,
+            allow_credential_type_change=True,
+            token=self.REPLACEMENT_TOKEN,
+        )
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == self.REPLACEMENT_TOKEN
+
+    def test_static_to_static_edit_is_unaffected(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.STATIC_ALIAS, token=self.REPLACEMENT_TOKEN)
+
+        project = store.get_project(self.STATIC_ALIAS)
+        assert project is not None
+        assert project.token == self.REPLACEMENT_TOKEN
+
+    def test_sentinel_to_sentinel_edit_needs_no_opt_in(self, tmp_config_dir: Path) -> None:
+        """Re-registering the same session project is not a credential-type change."""
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.SESSION_ALIAS, token=make_session_token(1234))
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(1234)
+
+    def test_non_token_edit_on_session_project_needs_no_opt_in(self, tmp_config_dir: Path) -> None:
+        store = self._mixed_store(tmp_config_dir)
+
+        store.edit_project(self.SESSION_ALIAS, project_name="Renamed")
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.project_name == "Renamed"
+        assert project.token == make_session_token(9840)
+
+    def test_add_project_cannot_replace_a_session_alias(self, tmp_config_dir: Path) -> None:
+        """``add_project`` needs no credential inspection: a duplicate alias is
+        rejected outright, so a sentinel can never be overwritten through it."""
+        store = self._mixed_store(tmp_config_dir)
+
+        with pytest.raises(ConfigError, match="already exists"):
+            store.add_project(
+                self.SESSION_ALIAS,
+                ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token=self.REPLACEMENT_TOKEN,
+                    project_name="Session Project",
+                    project_id=9840,
+                ),
+            )
+
+        project = store.get_project(self.SESSION_ALIAS)
+        assert project is not None
+        assert project.token == make_session_token(9840)
 
 
 class TestGetProject:
@@ -1123,3 +1257,137 @@ class TestProjectNotFoundError:
         assert "Project 'ghost' not found" in message
         assert str(tmp_config_dir / "config.json") in message
         assert "(source: local)" in message
+
+
+class TestValidateAliasFormat:
+    """`validate_alias_format` -- shared alias-format guard (0.80.0, added for the
+    `auth register-projects` picker so it and `project edit --new-alias` cannot
+    drift into accepting different character sets for the same config.json key).
+    """
+
+    def test_legal_slug_accepted(self) -> None:
+        # Must not raise for a normal filesystem-safe slug.
+        validate_alias_format("jirka-bq-sox")
+        validate_alias_format("my_project.2")
+        validate_alias_format("a")
+
+    def test_empty_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not be empty or whitespace-only"):
+            validate_alias_format("")
+
+    def test_whitespace_only_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not be empty or whitespace-only"):
+            validate_alias_format("   ")
+
+    def test_internal_whitespace_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not contain whitespace"):
+            validate_alias_format("with space")
+
+    @pytest.mark.parametrize(
+        "alias",
+        ["..", "../etc", "foo..bar", "a..", "..a"],
+        ids=[
+            "bare-dotdot",
+            "leading-traversal",
+            "middle-dotdot",
+            "trailing-dotdot",
+            "leading-dotdot",
+        ],
+    )
+    def test_dotdot_rejected_in_any_position(self, alias: str) -> None:
+        with pytest.raises(ConfigError, match=r"must not contain '\.\.'"):
+            validate_alias_format(alias)
+
+    def test_path_separator_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format("foo/bar")
+
+    def test_leading_dot_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format(".hidden")
+
+    def test_leading_dash_rejected(self) -> None:
+        with pytest.raises(ConfigError, match=r"\[A-Za-z0-9_\]\[A-Za-z0-9_\.-\]\*"):
+            validate_alias_format("-leading-dash")
+
+    def test_field_label_appears_in_every_message(self) -> None:
+        # The caller-supplied `field` lets each call site name the flag the
+        # user actually typed (e.g. --new-alias) instead of a generic "alias".
+        with pytest.raises(ConfigError, match=r"--new-alias") as excinfo:
+            validate_alias_format("", field="--new-alias")
+        assert "--new-alias" in str(excinfo.value)
+
+        with pytest.raises(ConfigError, match=r"--alias") as excinfo:
+            validate_alias_format("bad space", field="--alias")
+        assert "--alias" in str(excinfo.value)
+
+    def test_default_field_label_is_alias(self) -> None:
+        with pytest.raises(ConfigError, match="Invalid alias:"):
+            validate_alias_format("")
+
+
+class TestProjectNotFoundErrorSessionHint:
+    """`project_not_found_error`'s session-aware hint (0.80.0): a programmatic-auth
+    user has no static token to paste, so the remedy it points at is
+    `auth register-projects`, not `project add` -- but only when a session
+    actually exists (issue: real user hit "project not found" right after
+    `auth login`, with `--project 9840`, the numeric id from the login table).
+    """
+
+    def test_no_sibling_auth_json_no_hint(self, tmp_config_dir: Path) -> None:
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        message = str(error)
+        assert "auth register-projects" not in message
+        assert "Project '9840' not found" in message
+
+    def test_sibling_auth_json_with_sessions_appends_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {"https://connection.keboola.com": {}}}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        message = str(error)
+        assert "auth register-projects" in message
+        assert "not its id" in message or "not id" in message.lower()
+
+    def test_sibling_auth_json_with_empty_sessions_no_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {}}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_sibling_auth_json_missing_sessions_key_no_hint(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"version": 1}))
+
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_malformed_auth_json_is_treated_as_no_session(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text("{not valid json")
+
+        # Must never raise -- a corrupted sibling file only ever suppresses
+        # the extra hint, it must not break the primary "not found" error.
+        error = project_not_found_error("9840", tmp_config_dir / "config.json", "local")
+        assert "auth register-projects" not in str(error)
+        assert "Project '9840' not found" in str(error)
+
+    def test_mock_config_path_does_not_raise(self) -> None:
+        # Services may pass a test double whose config_path is a Mock, not a
+        # real Path -- str(Mock()) is well-defined, so this must degrade to
+        # "no session" instead of raising.
+        fake_store = Mock()
+        fake_store.config_path = Mock()
+
+        error = project_not_found_error("9840", fake_store.config_path, "local")
+        assert "auth register-projects" not in str(error)
+
+    def test_str_config_path_does_not_raise(self, tmp_config_dir: Path) -> None:
+        auth_path = tmp_config_dir / "auth.json"
+        auth_path.write_text(json.dumps({"sessions": {"https://connection.keboola.com": {}}}))
+
+        # config_path passed as a plain str (not a Path) must still resolve
+        # the sibling auth.json correctly.
+        error = project_not_found_error("9840", str(tmp_config_dir / "config.json"), "local")
+        assert "auth register-projects" in str(error)

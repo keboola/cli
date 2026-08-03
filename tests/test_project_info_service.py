@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
@@ -181,3 +182,37 @@ class TestGetInfo:
         result = service.get_info(alias="prod")
 
         assert result["default_backend"] == "bigquery"
+
+
+class TestGetInfoAuthMode:
+    """``project info`` labels the credential type of the project it describes."""
+
+    def test_static_project_reports_static(self, tmp_config_dir: Path) -> None:
+        service, _ = _make_service(tmp_config_dir, RAW_API_RESPONSE)
+
+        assert service.get_info(alias="prod")["auth_mode"] == "static"
+
+    def test_session_project_reports_session(self, tmp_config_dir: Path) -> None:
+        """The token_* fields still describe the session's rotating access token,
+        which is exactly why the mode has to be stated alongside them."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "session-proj",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(9840),
+                project_name="Session Project",
+                project_id=9840,
+            ),
+        )
+        mock_client = MagicMock()
+        mock_client.get_project_info.return_value = RAW_API_RESPONSE
+        service = ProjectService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.get_info(alias="session-proj")
+
+        assert result["auth_mode"] == "session"
+        assert result["token_id"] == "99"

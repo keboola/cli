@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from .commands.agent import agent_app
+from .commands.auth import auth_app
 from .commands.branch import branch_app
 from .commands.changelog import changelog_command
 from .commands.component import component_app
@@ -48,6 +49,7 @@ from .models import PermissionPolicy
 from .output import OutputFormatter
 from .permissions import PermissionEngine
 from .services.agent_service import AgentService
+from .services.auth_service import AuthService
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
@@ -98,6 +100,7 @@ app.command("context", rich_help_panel=_SETUP)(context_command)
 app.command("repl", rich_help_panel=_SETUP)(repl_command)
 app.command("serve", rich_help_panel=_SETUP)(serve_command)
 app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
+app.add_typer(auth_app, name="auth", rich_help_panel=_SETUP)
 
 # -- Project Management --
 _PROJ = "Project Management"
@@ -347,6 +350,7 @@ def main(
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
     agent_service = AgentService(config_store=config_store, mcp_service=mcp_service)
+    auth_service = AuthService(config_store=config_store)
 
     try:
         config = config_store.load()
@@ -405,6 +409,7 @@ def main(
     ctx.obj["version_service"] = version_service
     ctx.obj["http_forwarder_service"] = http_forwarder_service
     ctx.obj["agent_service"] = agent_service
+    ctx.obj["auth_service"] = auth_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":
