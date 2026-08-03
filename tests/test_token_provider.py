@@ -861,7 +861,11 @@ class TestLeaseConstantArithmetic:
         inside the window with room for the next command to start, or the retry
         lands past it and is punished as a proven replay -- family revocation,
         a forced re-login. `PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS` is stack-side
-        and never reported, so this pins the documented default and no more.
+        and never reported, so this pins the documented default and no more --
+        recovery is NOT reliable as a stack approaches the documented 1 s floor,
+        and no value here can make it so, because the ceiling alone already
+        exceeds that floor. The pause is what we control; keeping it small is
+        what keeps the reachable range as wide as it can be.
         """
         server_grace_default = 30.0
         # What the retry itself needs once the pause is over: a new process to
@@ -870,6 +874,16 @@ class TestLeaseConstantArithmetic:
         earliest_retry = AUTH_REFRESH_MAX_WALL_CLOCK + AUTH_REFRESH_ABANDON_GRACE
 
         assert earliest_retry + next_command_headroom <= server_grace_default
+
+    def test_the_pause_is_a_minor_term_in_the_abandon_recovery_window(self) -> None:
+        """The ceiling, not the pause, is what decides how short a window still recovers.
+
+        Stated as a relationship so a later bump cannot quietly invert it: once the
+        pause grows to rival the ceiling, shrinking it stops buying reach and the
+        comment above -- which sends anyone wanting a wider range to the ceiling
+        instead -- becomes wrong advice.
+        """
+        assert AUTH_REFRESH_ABANDON_GRACE < AUTH_REFRESH_MAX_WALL_CLOCK / 2
 
 
 # ----------------------------------------------------------------------------

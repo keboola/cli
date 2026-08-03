@@ -573,8 +573,18 @@ The lease resolves both:
      whole token family is revoked — a forced re-login.
   3. Its length is a stack-side setting (`PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS`, default
      30 s, floor 1 s) reported on no response, and a grace replay is served from cache
-     without restarting it. Retrying promptly is the only strategy that holds for every
-     value the stack may configure.
+     without restarting it. Retrying promptly is what gives the recovery its best chance
+     under a window we cannot read.
+
+  **Known limit, stated rather than papered over.** The earliest a retry can land is
+  `AUTH_REFRESH_MAX_WALL_CLOCK` (14 s) plus the pause, so recovery from an *abandoned*
+  refresh is only reliable where the window comfortably exceeds that sum — true of the
+  30 s default, false as the stack approaches the 1 s floor, where an abandoned refresh
+  costs a re-login. No value of `AUTH_REFRESH_ABANDON_GRACE` closes that gap: the ceiling
+  alone already exceeds the floor, and it fires before we know there is anything to retry.
+  The lever for a stack that shrinks its window is a shorter ceiling. This affects only
+  the abandon path — a refresh that *completes*, including one that fails, releases the
+  lease at once and the next command retries with no added delay at all.
 - `refresh_leases` is a sibling of `sessions` in `AuthState`, not a field on
   `StackSession` — a session write replaces the whole per-stack row, so a lease living
   inside it could be dropped by an unrelated `put_session` (the same shape as review F1).

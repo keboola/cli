@@ -734,7 +734,16 @@ AUTH_REFRESH_LEASE_TTL: float = AUTH_REFRESH_MAX_WALL_CLOCK + 2.0
 # from a budget we cannot see: the window is a stack-side setting
 # (`PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS`, default 30 s, floor 1 s) reported on
 # no response, and a replay is served from cache without restarting it. Retrying
-# promptly is the only strategy that holds for every value it may take.
+# promptly is what gives the recovery its best chance under an unknown window.
+#
+# It is not a guarantee, and the limit is worth naming: the earliest a retry can
+# land is AUTH_REFRESH_MAX_WALL_CLOCK plus this pause, so recovery from an
+# abandoned refresh is only reliable on a stack whose window comfortably exceeds
+# that sum. Below it the retry arrives past the window and the user re-logs in.
+# No value here can close that gap -- the ceiling alone already exceeds the
+# documented floor, and it fires before we know there is anything to retry -- so
+# the remedy for a stack that shrinks its window is a shorter ceiling, not a
+# shorter pause.
 AUTH_REFRESH_ABANDON_GRACE: float = 3.0
 # How long a caller that lost the lease waits for the holder's rotated pair
 # before giving up. Not bounded by AUTH_LOCK_TIMEOUT -- a waiter holds no file
