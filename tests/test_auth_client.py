@@ -11,6 +11,7 @@ contract including its never-raises uncertain-result path.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sys
 import time
@@ -864,6 +865,59 @@ class TestRefreshContentionRetry:
         assert len(httpx_mock.get_requests()) == AUTH_REFRESH_CONTENTION_RETRIES + 1
         assert excinfo.value.error_code != ErrorCode.SESSION_EXPIRED
         assert excinfo.value.retryable is True
+
+    @pytest.mark.parametrize("code_key", ["code", "stringCode", "exception.code"])
+    def test_giving_up_says_what_to_do_whatever_shape_the_body_took(
+        self, httpx_mock, monkeypatch, code_key: str
+    ) -> None:
+        """The user-facing message must not depend on the stack's serializer.
+
+        The generic extractor prefers an `exception` key over `message`, so on the
+        nested shape the mapped message is a JSON fragment rather than prose --
+        leaving the user with a 503 and nothing to act on. The server's own detail
+        stays reachable as the cause.
+        """
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        for _ in range(AUTH_REFRESH_CONTENTION_RETRIES + 1):
+            httpx_mock.add_response(**_contention_response(code_key=code_key))
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert "Run the command again." in excinfo.value.message
+        assert "{" not in excinfo.value.message
+        assert AUTH_REFRESH_CONTENTION_STRING_CODE not in excinfo.value.message
+        assert isinstance(excinfo.value.__cause__, KeboolaApiError)
+
+    def test_the_retry_decision_is_traceable_in_the_logs(
+        self, httpx_mock, monkeypatch, caplog
+    ) -> None:
+        """The shared retry loop logs every decision; this one opts out of that loop.
+
+        Without an equivalent trace, a stack seeing repeated rotation deadlocks
+        leaves nothing in kbagent's own logs to distinguish "retried" from "not
+        contention" from "gave up".
+        """
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        for _ in range(AUTH_REFRESH_CONTENTION_RETRIES + 1):
+            httpx_mock.add_response(**_contention_response())
+        client = _make_client()
+        try:
+            with (
+                caplog.at_level(logging.DEBUG, logger=auth_client_module.logger.name),
+                pytest.raises(KeboolaApiError),
+            ):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("replaying refresh" in message for message in messages)
+        assert any("giving up" in message for message in messages)
+        assert not any("kbc_rt_old" in message for message in messages)
 
     def test_retry_after_is_honoured_but_clamped(self, httpx_mock, monkeypatch) -> None:
         """The wait runs inside the caller's wall-clock ceiling.

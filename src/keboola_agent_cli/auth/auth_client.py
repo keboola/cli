@@ -21,6 +21,7 @@ the server reports in a form that proves nothing rotated. See their docstrings.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from typing import Any, NoReturn
@@ -55,6 +56,8 @@ from .models import (
     IntrospectResponse,
     RevokeResult,
 )
+
+logger = logging.getLogger(__name__)
 
 # RFC 8628 error tokens (params.error / top-level error) the device-token
 # endpoint answers with on a non-2xx response.
@@ -465,8 +468,25 @@ class AuthClient(BaseHttpClient):
                 return CliTokenResponse.model_validate(response.json())
 
             delay = _contention_retry_delay(response)
-            if delay is None or attempt == AUTH_REFRESH_CONTENTION_RETRIES:
+            if delay is None:
+                logger.debug(
+                    "Refresh failed with status %d and no rotation-deadlock code; not retrying",
+                    response.status_code,
+                )
                 self._raise_refresh_error(response)
+            if attempt == AUTH_REFRESH_CONTENTION_RETRIES:
+                logger.debug(
+                    "Rotation deadlock persisted across %d attempts; giving up",
+                    AUTH_REFRESH_CONTENTION_RETRIES + 1,
+                )
+                self._raise_contention_exhausted(response)
+            logger.debug(
+                "Rotation deadlock reported by %s; replaying refresh in %.1fs (attempt %d/%d)",
+                self._base_url,
+                delay,
+                attempt + 1,
+                AUTH_REFRESH_CONTENTION_RETRIES + 1,
+            )
             time.sleep(delay)
 
         raise AssertionError("unreachable: the final attempt always returns or raises")
@@ -500,6 +520,32 @@ class AuthClient(BaseHttpClient):
                 error_code=ErrorCode.CONNECTION_ERROR,
                 retryable=True,
             ) from exc
+
+    def _raise_contention_exhausted(self, response: httpx.Response) -> NoReturn:
+        """Report a rotation deadlock that survived every replay.
+
+        Carries its own message rather than the mapped one because the mapped
+        message is not stable across stacks: the generic extractor prefers an
+        `exception` key over `message`, so on the serializer that nests the
+        string code the user would read a JSON fragment instead of prose. The
+        classification is left exactly as the generic mapping produced it -- a
+        database lock is a transient API failure, never a verdict on the
+        credential -- and the mapped error stays attached as the cause so the
+        server's own detail is still there for anyone debugging.
+        """
+        try:
+            self._map_auth_error(response)
+        except KeboolaApiError as exc:
+            raise KeboolaApiError(
+                message=(
+                    f"The Keboola stack at {self._base_url} was too busy to rotate your "
+                    "login (database contention). Run the command again."
+                ),
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=True,
+            ) from exc
+        raise AssertionError("unreachable: _map_auth_error always raises")
 
     def _raise_refresh_error(self, response: httpx.Response) -> NoReturn:
         """Map a failed refresh response, escalating a rejected grant."""

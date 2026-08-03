@@ -350,6 +350,13 @@ class SessionTokenProvider:
         serve` process, repeated stalls against the same unresponsive auth service
         can leave several such workers parked until they time out.
 
+        A worker paused between `refresh`'s contention attempts ends here too, and
+        deliberately so: `_perform_refresh` closes the client as this call unwinds,
+        so the pending replay raises instead of reaching the wire. That is the
+        outcome we want -- this thread has already given up and extended the lease
+        precisely so no second presentation happens -- and the worker's outcome,
+        whatever it turns out to be, is discarded unread below.
+
         Second cost: the server may have rotated a pair that is then discarded,
         leaving the on-disk refresh token one generation stale. That is the same
         state any lost response leaves behind, and the server's idempotent grace
