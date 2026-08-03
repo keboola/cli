@@ -24,7 +24,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.81.0": [
+    "0.80.0": [
         "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
         "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "
         "authorization-code (opens a browser) by default, falling back to the RFC 8628 device "
@@ -118,8 +118,6 @@ CHANGELOG: dict[str, list[str]] = {
         'Fix: the "not supported on session projects" error points at `kbagent project edit '
         "--project <alias> --token <token>`, which works on an already-registered alias, instead "
         "of `project add`, which rejects one that already exists.",
-    ],
-    "0.80.0": [
         "Note (#390): the MCP passthrough now has a named removal date -- `kbagent tool "
         "list` / `tool call` and `agent --type mcp_tool` are REMOVED in **v0.85.0**, "
         "scheduled for the **end of August 2026**. Deprecated since 0.74.0, the notice "

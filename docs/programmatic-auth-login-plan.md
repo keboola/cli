@@ -1,8 +1,8 @@
 # Implementation Plan: PKCE + Device Authorization Login (`kbagent auth`)
 
-Status: **implemented in 0.81.0**
+Status: **implemented in 0.80.0**
 This plan has been implemented in full (see `kbagent auth login|status|logout`,
-`src/keboola_agent_cli/auth/`, and the "0.81.0" entry in
+`src/keboola_agent_cli/auth/`, and the "0.80.0" entry in
 `src/keboola_agent_cli/changelog.py`). The document below is kept as the design
 record; where behavior evolved during implementation, the code and the
 changelog are authoritative over this text.
@@ -429,7 +429,7 @@ Helpers: `auth/pkce.py`, `auth/device.py`, `auth/environment.py`. Commands regis
    expires_at, registered_projects: [...]}` — output models structurally contain
    **no token fields** (by construction, not post-hoc filtering).
 
-**Addendum: the picker shipped (still 0.81.0, unreleased).** PR #535 landed with only
+**Addendum: the picker shipped (still 0.80.0, unreleased).** PR #535 landed with only
 `--register-projects` (a flat batch, no picker) — a real user hit exactly the gap point 5
 called out as optional: nothing gets registered unless that flag is passed, and the
 alias offered is a slug of the project *name*, so the numeric project id printed in the
@@ -457,7 +457,7 @@ gaps are now closed in the same unreleased version:
 - Both paths share one `_apply_selections` code path in `AuthService`, so `login
   --register-projects` and `auth register-projects --all` apply identical collision rules.
 
-**Addendum 2: the picker's typed prompt was replaced with a checkbox (still 0.81.0,
+**Addendum 2: the picker's typed prompt was replaced with a checkbox (still 0.80.0,
 unreleased).** Commit 8a531c0 replaced the numbers/ranges/`all`/`none` typed prompt
 described in the addendum above with an inline arrow-key + spacebar checkbox
 (`commands/_checkbox_select.py`) as the primary selection UI:

@@ -1,6 +1,6 @@
 """CI guard: a `kbc-session://` sentinel must not slip through unguarded.
 
-Four kinds of drift ship silently, and the first three happened during 0.81.0
+Four kinds of drift ship silently, and the first three happened during 0.80.0
 development. Each check below is scoped to a call site or a class definition --
 a broad "does this file mention a token" grep flags every service that correctly
 hands `project.token` to its injected, bearer-aware client factory, which is

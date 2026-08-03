@@ -4942,7 +4942,7 @@ class TestDoctor:
         mock_client = make_mock_client(project_name="Prod", project_id=1234)
 
         # DoctorService now builds its factory via make_client_factory(config_store)
-        # so a kbc-session:// project gets a bearer client (0.81.0). The patched
+        # so a kbc-session:// project gets a bearer client (0.80.0). The patched
         # name therefore returns the *factory*, not the client.
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,

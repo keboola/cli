@@ -11,7 +11,7 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
-## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.81.0)
+## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` requires a human at a browser (or a device to type a
   code into) -- there is no headless/unattended path.** Never invoke it from
@@ -50,7 +50,7 @@ Versioning convention:
   `--project` is the single most common mistake right after a first login;
   the fix is `kbagent project list` to see the real alias, not re-running
   login. `kbagent auth register-projects [--stack] [--all] [--project-id ID
-  ...] [--alias ID=ALIAS ...] [--yes]` (0.81.0+) registers an EXISTING
+  ...] [--alias ID=ALIAS ...] [--yes]` (0.80.0+) registers an EXISTING
   session's projects without re-logging-in -- `--all`/`--project-id` are
   non-interactive and safe for an agent to run once a human has confirmed
   the session is live; omitting both starts an interactive arrow-key +
@@ -64,7 +64,7 @@ Versioning convention:
   instead of hanging on a prompt. Two
   accessible projects sharing the same name each get a distinct suggested
   alias (via the `-{project_id}` suffix) instead of the second one being
-  silently skipped, unlike the original 0.81.0 `--register-projects` batch
+  silently skipped, unlike the original 0.80.0 `--register-projects` batch
   path. Collision handling matches `--register-projects` above: never
   overwrites an existing `config.json` entry.
 - **v1 wires bearer sessions through the Storage + Manage paths.** Everything
@@ -126,7 +126,7 @@ Versioning convention:
   `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
   array, so a consumer must not assume the key is absent.
 - **`auth logout --remove-projects` needs the `admin` permission class, the
-  bare `auth logout` only `write`** (since v0.81.0). The flag deletes
+  bare `auth logout` only `write`** (since v0.80.0). The flag deletes
   `config.json` entries, the same observable effect as `project remove`, so a
   policy denying `cli:admin` blocks the flag while still letting the session be
   ended. `permissions list` shows it as its own row,
@@ -155,7 +155,7 @@ Versioning convention:
   same refresh token, which is exactly the replay the server's grace window
   forgives), so the remedy is simply to re-run the command. Only
   `SESSION_EXPIRED` / `SESSION_NOT_FOUND` mean "log in again".
-- **An older (pre-0.81.0) kbagent build has no sentinel awareness at all.** A
+- **An older (pre-0.80.0) kbagent build has no sentinel awareness at all.** A
   session-registered project opened on an old CLI gets an opaque 401 on a
   plain `X-StorageApi-Token` call; a few consumers that treat the token as
   *data* rather than a header (`semantic-layer token --encrypt`, `kai`,
@@ -1744,7 +1744,7 @@ One project failing does not block others. Check the `errors` array:
 ```
 
 **`error_code` survives the catch-all handler -- branch on it, never on the
-message (since v0.81.0).** In `data-app list`, `tool list`, `tool call` and
+message (since v0.80.0).** In `data-app list`, `tool list`, `tool call` and
 `flow list`, a per-project failure that already carries a code keeps it instead
 of being relabelled `UNEXPECTED_ERROR` / `MCP_ERROR`. So a browser-login
 (session) project hitting an unsupported surface reports
@@ -1761,8 +1761,8 @@ unknown -- do not try to parse a fallback message.
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
-| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.81.0) |
-| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.81.0) |
+| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0) |
+| 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
 | 5 | Configuration error (corrupt config, missing alias) |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled (since 0.22.0). Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
