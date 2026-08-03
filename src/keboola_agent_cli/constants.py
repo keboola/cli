@@ -664,15 +664,18 @@ AUTH_LOCK_TIMEOUT: float = 30.0
 # Timeout for the token-refresh request alone. Tighter than DEFAULT_TIMEOUT on
 # every phase: a refresh that takes longer than this is useless anyway.
 AUTH_REFRESH_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=5.0, write=2.0, pool=2.0)
-# Hard ceiling on the wall clock one refresh attempt may take, ENFORCED by
-# `SessionTokenProvider._refresh_within_budget` around the request rather than
+# Hard ceiling on the wall clock a whole refresh call may take, ENFORCED by
+# `SessionTokenProvider._refresh_within_budget` around the call rather than
 # inferred from AUTH_REFRESH_TIMEOUT: httpx applies `read` and `write` per I/O
 # operation, not per request, and exposes no total-duration option, so a server
 # that trickles a response one chunk at a time stays inside those per-phase
 # deadlines indefinitely. The value is the sum of the phases -- the lowest
-# ceiling that cannot fire before each phase has had its own chance -- and it
-# stays a true ceiling only because `AuthClient.refresh` is a single attempt,
-# outside `BaseHttpClient`'s retry loop.
+# ceiling that cannot fire before a single attempt has had each of its own
+# chances. It bounds the call, not each attempt: `AuthClient.refresh` stays
+# outside `BaseHttpClient`'s retry loop, and its one narrow replay (a rotation
+# deadlock, see AUTH_REFRESH_CONTENTION_RETRIES) shares this budget rather than
+# extending it, so a replay that no longer fits is abandoned like any other
+# overrun and left to the next command.
 AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
     phase
     for phase in (
@@ -683,6 +686,31 @@ AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
     )
     if phase is not None
 )
+
+# The one refresh failure that is safe to retry in place. A rotation that
+# deadlocks on `bi_programmaticSessions` / `bi_manageTokens` is rolled back
+# whole, so nothing rotated and the submitted token is still the session's
+# CURRENT one -- re-presenting it is an ordinary refresh, not the replay a retry
+# normally would be. The server says so itself: it answers `503` with this string
+# code and a `Retry-After`, and its own documentation asks the client to replay
+# the request. Identified by the code rather than by the status alone, because a
+# plain 503 (proxy, load shedding) carries no such proof.
+#
+# The body key varies with the serializer in front of the endpoint (`code`,
+# `stringCode`, or nested `exception.code`), so readers must try all three.
+AUTH_REFRESH_CONTENTION_STRING_CODE: str = "auth.token.refreshContention"
+# One retry only. Deadlock contention that survives a second attempt is not
+# transient any more, and the caller's own retry -- the next command, with the
+# token still current -- is a better place for it than a lease held longer.
+AUTH_REFRESH_CONTENTION_RETRIES: int = 1
+# `Retry-After` is honoured but clamped: the retry runs inside
+# `AUTH_REFRESH_MAX_WALL_CLOCK`, so a server asking for longer than this would
+# only get the attempt abandoned mid-sleep. Anything above the clamp is better
+# served by the next command than by stalling this one.
+AUTH_REFRESH_CONTENTION_MAX_DELAY: float = 2.0
+# Used when the header is absent or unparseable. Mirrors the server's own
+# `DEADLOCK_RETRY_AFTER_SECONDS`, which is what it sends in practice.
+AUTH_REFRESH_CONTENTION_DEFAULT_DELAY: float = 1.0
 
 # Refresh-lease parameters. The lease -- not the file lock -- is what keeps two
 # requests from presenting the same refresh token at once, which is the shape

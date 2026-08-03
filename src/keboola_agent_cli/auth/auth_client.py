@@ -12,13 +12,16 @@ token to revoke in its request body.
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
 :class:`BaseHttpClient`, with two deliberate exceptions that keep the mapping
 but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
-state, not a failure) and `refresh` (it runs inside a cross-process file lock
-whose acquire timeout the retry loop could outlast). See their docstrings.
+state, not a failure) and `refresh` (a blind retry would re-present the refresh
+token, and it runs under a wall-clock ceiling the retry loop would outlast).
+`refresh` makes one narrow exception of its own for a rotation deadlock, which
+the server reports in a form that proves nothing rotated. See their docstrings.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, NoReturn
 from urllib.parse import urlencode
 
@@ -30,6 +33,10 @@ from ..constants import (
     AUTH_DEVICE_TOKEN_PATH,
     AUTH_PKCE_AUTHORIZE_PATH,
     AUTH_PKCE_TOKEN_PATH,
+    AUTH_REFRESH_CONTENTION_DEFAULT_DELAY,
+    AUTH_REFRESH_CONTENTION_MAX_DELAY,
+    AUTH_REFRESH_CONTENTION_RETRIES,
+    AUTH_REFRESH_CONTENTION_STRING_CODE,
     AUTH_REFRESH_TIMEOUT,
     AUTH_SESSIONS_PATH,
     AUTH_TOKEN_INTROSPECT_PATH,
@@ -135,6 +142,62 @@ def _is_rejected_grant(exc: KeboolaApiError) -> bool:
         about_the_request = any(marker in message for marker in _REQUEST_SHAPE_MARKERS)
         return names_the_token and passes_a_verdict and not about_the_request
     return False
+
+
+def _error_string_code(response: httpx.Response) -> str | None:
+    """Read the server's machine-readable string code out of an error body.
+
+    Three shapes are accepted because the key depends on which serializer sits
+    in front of the endpoint: top-level ``code``, top-level ``stringCode``, or
+    nested ``exception.code``. A body that is not JSON, or not an object, has no
+    code -- callers must treat `None` as "unclassifiable", never as a match.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+
+    for key in ("code", "stringCode"):
+        value = body.get(key)
+        if isinstance(value, str):
+            return value
+    nested = body.get("exception")
+    if isinstance(nested, dict) and isinstance(nested.get("code"), str):
+        return str(nested["code"])
+    return None
+
+
+def _contention_retry_delay(response: httpx.Response) -> float | None:
+    """Seconds to wait before replaying this refresh, or `None` if it must not be.
+
+    Only a rotation deadlock qualifies: a 503 whose body carries
+    `AUTH_REFRESH_CONTENTION_STRING_CODE`. That pair is the server's own proof
+    that the rotation transaction rolled back, which is what makes replaying the
+    same refresh token safe here and nowhere else. The status alone is not
+    enough -- a 503 from a proxy or from load shedding proves nothing about
+    whether the rotation committed.
+
+    `Retry-After` is honoured when present and parseable, clamped to
+    `AUTH_REFRESH_CONTENTION_MAX_DELAY` because the wait happens inside the
+    caller's wall-clock ceiling; a longer wait would only get the attempt
+    abandoned mid-sleep.
+    """
+    if response.status_code != 503:
+        return None
+    if _error_string_code(response) != AUTH_REFRESH_CONTENTION_STRING_CODE:
+        return None
+
+    header = response.headers.get("Retry-After")
+    try:
+        requested = float(header) if header else AUTH_REFRESH_CONTENTION_DEFAULT_DELAY
+    except ValueError:
+        # An HTTP-date `Retry-After` is legal but the server sends seconds; treat
+        # anything unparseable as "no guidance" rather than as a reason to skip
+        # a retry the response has already proven safe.
+        requested = AUTH_REFRESH_CONTENTION_DEFAULT_DELAY
+    return min(max(requested, 0.0), AUTH_REFRESH_CONTENTION_MAX_DELAY)
 
 
 class AuthClient(BaseHttpClient):
@@ -327,17 +390,27 @@ class AuthClient(BaseHttpClient):
     # ------------------------------------------------------------------
 
     def refresh(self, refresh_token: str) -> CliTokenResponse:
-        """Rotate a token pair (``POST /v1/auth/token/refresh``), single attempt.
+        """Rotate a token pair (``POST /v1/auth/token/refresh``).
 
         The second deliberate exception to the shared retry infrastructure
         (`poll_device_token` is the other): this bypasses `_do_request` and
-        issues exactly ONE request, under `AUTH_REFRESH_TIMEOUT` rather than
-        the client's default timeout. A refresh lease in ``auth.json`` keeps
-        concurrent kbagent processes off this token while the call runs, and
-        a waiter gives up after `AUTH_REFRESH_WAIT_TIMEOUT`; three retries at
-        the default 30 s read timeout plus backoff would outlast that, so a
-        merely slow auth service would have every other process report
-        contention that is not really there.
+        issues ONE request per failure class, under `AUTH_REFRESH_TIMEOUT`
+        rather than the client's default timeout. A refresh lease in
+        ``auth.json`` keeps concurrent kbagent processes off this token while
+        the call runs, and a waiter gives up after
+        `AUTH_REFRESH_WAIT_TIMEOUT`; three retries at the default 30 s read
+        timeout plus backoff would outlast that, so a merely slow auth service
+        would have every other process report contention that is not really
+        there.
+
+        The single exception is a rotation deadlock, which the server reports
+        as a 503 carrying `AUTH_REFRESH_CONTENTION_STRING_CODE` and a
+        `Retry-After`. That response is proof the rotation rolled back whole,
+        so the submitted token is still the session's current one and
+        re-presenting it is an ordinary refresh rather than a replay -- the
+        reasoning that forbids a blanket retry is exactly what permits this
+        one. `AUTH_REFRESH_CONTENTION_RETRIES` bounds it and the lease is held
+        across it, so no other process can present the token in between.
 
         These per-phase timeouts do not by themselves bound the call: httpx
         applies `read` / `write` per I/O operation, so a trickled response
@@ -370,8 +443,22 @@ class AuthClient(BaseHttpClient):
         `ErrorCode.CONNECTION_ERROR` (both exit 4, network) so a slow or
         unreachable auth service never masquerades as a session problem.
         """
+        for attempt in range(AUTH_REFRESH_CONTENTION_RETRIES + 1):
+            response = self._post_refresh(refresh_token)
+            if response.status_code < 400:
+                return CliTokenResponse.model_validate(response.json())
+
+            delay = _contention_retry_delay(response)
+            if delay is None or attempt == AUTH_REFRESH_CONTENTION_RETRIES:
+                self._raise_refresh_error(response)
+            time.sleep(delay)
+
+        raise AssertionError("unreachable: the final attempt always returns or raises")
+
+    def _post_refresh(self, refresh_token: str) -> httpx.Response:
+        """Issue one refresh request, mapping transport failures to network codes."""
         try:
-            response = self._client.request(
+            return self._client.request(
                 "POST",
                 AUTH_TOKEN_REFRESH_PATH,
                 json={"refreshToken": refresh_token},
@@ -398,22 +485,23 @@ class AuthClient(BaseHttpClient):
                 retryable=True,
             ) from exc
 
-        if response.status_code >= 400:
-            try:
-                self._map_auth_error(response)
-            except KeboolaApiError as exc:
-                if _is_rejected_grant(exc):
-                    raise KeboolaApiError(
-                        message=(
-                            "Your Keboola login expired or was revoked. Run "
-                            "`kbagent auth login` to sign in again."
-                        ),
-                        status_code=exc.status_code,
-                        error_code=ErrorCode.SESSION_EXPIRED,
-                        retryable=False,
-                    ) from exc
-                raise
-        return CliTokenResponse.model_validate(response.json())
+    def _raise_refresh_error(self, response: httpx.Response) -> NoReturn:
+        """Map a failed refresh response, escalating a rejected grant."""
+        try:
+            self._map_auth_error(response)
+        except KeboolaApiError as exc:
+            if _is_rejected_grant(exc):
+                raise KeboolaApiError(
+                    message=(
+                        "Your Keboola login expired or was revoked. Run "
+                        "`kbagent auth login` to sign in again."
+                    ),
+                    status_code=exc.status_code,
+                    error_code=ErrorCode.SESSION_EXPIRED,
+                    retryable=False,
+                ) from exc
+            raise
+        raise AssertionError("unreachable: _map_auth_error always raises")
 
     def introspect(self, access_token: str) -> IntrospectResponse:
         """Fetch session metadata + accessible projects for a live access token.

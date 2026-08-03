@@ -243,8 +243,23 @@ touching the token provider or the flows.
   a hard logout. Losing the retry costs little: the old token is still on disk and, while
   the window is open, still usable, so the next command simply refreshes again. That window
   runs from the server's rotation and its length is stack-side (see "Refresh lease"), so
-  the recovery holds only while nothing delays the next attempt. The single attempt
-  is also what keeps the attempt ceiling (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful.
+  the recovery holds only while nothing delays the next attempt. Staying out of the retry
+  loop is also what keeps the attempt ceiling (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful.
+
+  **One exception, and only one:** a rotation deadlock. The server answers it with `503`,
+  the string code `auth.token.refreshContention` and a `Retry-After`, and its own
+  documentation asks the client to replay the request. That response is proof the rotation
+  transaction rolled back whole, so the submitted token is still the session's *current*
+  one — replaying it is an ordinary refresh, not the replay a blind retry would be. The
+  reasoning that forbids a general retry is exactly what permits this one, which is why it
+  is keyed on the string code and not on the status: a plain `503` from a proxy or from
+  load shedding proves nothing about whether the rotation committed. Bounded by
+  `AUTH_REFRESH_CONTENTION_RETRIES` (1), the `Retry-After` clamped to
+  `AUTH_REFRESH_CONTENTION_MAX_DELAY`, the whole thing inside the existing wall-clock
+  ceiling, and the lease held across it so no other process can present the token in
+  between. Exhausted contention surfaces as a retryable API error, never as
+  `SESSION_EXPIRED` — a database lock is not a verdict on the credential, and purging on it
+  would force an avoidable browser re-login.
   `invalid_grant`/replay is mapped to `SESSION_EXPIRED` before the generic error path.
 
   > **Superseded.** This section described `SessionTokenProvider` holding

@@ -1,21 +1,24 @@
 """Tests for `AuthClient` (Layer 3, programmatic auth / browser login).
 
 Covers the RFC 8628 device-poll matrix, PKCE code exchange body, refresh's
-`invalid_grant` -> `SESSION_EXPIRED` mapping and its bounded single-attempt
-lock-hold budget, the 404 -> feature-flag mapping shared by every auth
-endpoint, the per-request bearer header on introspect, and revoke's public
-(no-Authorization, JSON-body) contract including its never-raises
-uncertain-result path.
+`invalid_grant` -> `SESSION_EXPIRED` mapping, its bounded attempt budget and the
+rotation-deadlock replay that is the one exception to it, the 404 ->
+feature-flag mapping shared by every auth endpoint, the per-request bearer
+header on introspect, and revoke's public (no-Authorization, JSON-body)
+contract including its never-raises uncertain-result path.
 """
 
 from __future__ import annotations
 
+import json
 import time
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
+from keboola_agent_cli.auth import auth_client as auth_client_module
 from keboola_agent_cli.auth.auth_client import AuthClient
 from keboola_agent_cli.auth.models import (
     CliTokenResponse,
@@ -27,6 +30,10 @@ from keboola_agent_cli.auth.models import (
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code
 from keboola_agent_cli.constants import (
     AUTH_LOCK_TIMEOUT,
+    AUTH_REFRESH_CONTENTION_DEFAULT_DELAY,
+    AUTH_REFRESH_CONTENTION_MAX_DELAY,
+    AUTH_REFRESH_CONTENTION_RETRIES,
+    AUTH_REFRESH_CONTENTION_STRING_CODE,
     AUTH_REFRESH_MAX_WALL_CLOCK,
     AUTH_REFRESH_TIMEOUT,
 )
@@ -700,6 +707,226 @@ class TestRefreshLockHoldBudget:
 
         assert excinfo.value.error_code == ErrorCode.CONNECTION_ERROR
         assert map_error_to_exit_code(excinfo.value) == 4
+
+
+# ----------------------------------------------------------------------------
+# refresh: the rotation-deadlock retry
+# ----------------------------------------------------------------------------
+
+
+def _contention_response(
+    *, code_key: str = "code", retry_after: str | None = "1"
+) -> dict[str, Any]:
+    """A 503 shaped like the server's rotation-deadlock answer."""
+    body: dict[str, Any] = {"message": "Refresh contention, retry the request."}
+    if code_key == "exception.code":
+        body["exception"] = {"code": AUTH_REFRESH_CONTENTION_STRING_CODE}
+    else:
+        body[code_key] = AUTH_REFRESH_CONTENTION_STRING_CODE
+    response: dict[str, Any] = {
+        "url": f"{STACK_URL}/v1/auth/token/refresh",
+        "method": "POST",
+        "status_code": 503,
+        "json": body,
+    }
+    if retry_after is not None:
+        response["headers"] = {"Retry-After": retry_after}
+    return response
+
+
+class TestRefreshContentionRetry:
+    """A rotation deadlock is the one refresh failure that may be replayed.
+
+    The server rolls the whole rotation back, so the submitted token is still
+    the session's current one -- the reasoning that forbids a blanket retry is
+    what permits this one. These tests pin both edges: the deadlock is retried,
+    and nothing else is.
+    """
+
+    def test_a_contention_503_is_retried_and_can_succeed(self, httpx_mock, monkeypatch) -> None:
+        """The whole point: a transient deadlock resolves without user action."""
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        httpx_mock.add_response(**_contention_response())
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            result = client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert result.access_token == "kbc_at_new"
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_the_replay_presents_the_same_token(self, httpx_mock, monkeypatch) -> None:
+        """Safe only because nothing rotated -- a fresh token would 401 instead."""
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        httpx_mock.add_response(**_contention_response())
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        bodies = [json.loads(request.content) for request in httpx_mock.get_requests()]
+        assert [body["refreshToken"] for body in bodies] == ["kbc_rt_old", "kbc_rt_old"]
+
+    @pytest.mark.parametrize("code_key", ["code", "stringCode", "exception.code"])
+    def test_every_body_shape_the_serializers_emit_is_recognised(
+        self, httpx_mock, monkeypatch, code_key: str
+    ) -> None:
+        """The key depends on the serializer in front of the endpoint.
+
+        Reading only one of the three would silently turn the retry off on
+        whichever stacks use the other shapes.
+        """
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        httpx_mock.add_response(**_contention_response(code_key=code_key))
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_a_503_without_the_contention_code_is_not_retried(self, httpx_mock) -> None:
+        """A proxy 503 or load shedding proves nothing about whether the rotation committed.
+
+        Replaying then risks presenting a token the server has already rotated
+        out, which past its grace window is a proven replay -- family revocation.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            status_code=503,
+            json={"code": "storage.maintenance", "message": "Service Unavailable"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_the_contention_code_on_another_status_is_not_retried(self, httpx_mock) -> None:
+        """The proof is the pair, not the code alone."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            status_code=500,
+            json={"code": AUTH_REFRESH_CONTENTION_STRING_CODE},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_a_persistent_deadlock_gives_up_and_never_purges_the_session(
+        self, httpx_mock, monkeypatch
+    ) -> None:
+        """Contention is not a credential verdict.
+
+        Classifying it as one would purge a live session from auth.json and force
+        a browser re-login over a transient database lock.
+        """
+        monkeypatch.setattr(auth_client_module.time, "sleep", lambda _seconds: None)
+        for _ in range(AUTH_REFRESH_CONTENTION_RETRIES + 1):
+            httpx_mock.add_response(**_contention_response())
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == AUTH_REFRESH_CONTENTION_RETRIES + 1
+        assert excinfo.value.error_code != ErrorCode.SESSION_EXPIRED
+        assert excinfo.value.retryable is True
+
+    def test_retry_after_is_honoured_but_clamped(self, httpx_mock, monkeypatch) -> None:
+        """The wait runs inside the caller's wall-clock ceiling.
+
+        An unclamped header would have the attempt abandoned mid-sleep, turning
+        a recoverable deadlock into an abandoned refresh.
+        """
+        slept: list[float] = []
+        monkeypatch.setattr(auth_client_module.time, "sleep", slept.append)
+        httpx_mock.add_response(**_contention_response(retry_after="600"))
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert slept == [AUTH_REFRESH_CONTENTION_MAX_DELAY]
+
+    @pytest.mark.parametrize("retry_after", [None, "Wed, 21 Oct 2026 07:28:00 GMT", ""])
+    def test_missing_or_unparseable_retry_after_still_retries(
+        self, httpx_mock, monkeypatch, retry_after: str | None
+    ) -> None:
+        """An HTTP-date header is legal; absent guidance is not a veto.
+
+        Skipping the retry here would discard a recovery the response has already
+        proven safe, over a header we only use to pick a delay.
+        """
+        slept: list[float] = []
+        monkeypatch.setattr(auth_client_module.time, "sleep", slept.append)
+        httpx_mock.add_response(**_contention_response(retry_after=retry_after))
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            json={"accessToken": "kbc_at_new", "refreshToken": "kbc_rt_new", "expiresIn": 3600},
+        )
+        client = _make_client()
+        try:
+            client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert slept == [AUTH_REFRESH_CONTENTION_DEFAULT_DELAY]
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_a_non_json_503_body_is_not_retried(self, httpx_mock) -> None:
+        """An unclassifiable body is not a match -- HTML from a proxy must not retry."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/token/refresh",
+            method="POST",
+            status_code=503,
+            text="<html><body>503 Service Unavailable</body></html>",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.refresh("kbc_rt_old")
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
 
 
 # ----------------------------------------------------------------------------
