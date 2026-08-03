@@ -693,9 +693,21 @@ AUTH_REFRESH_MAX_WALL_CLOCK: float = sum(
 # legitimately working.
 AUTH_REFRESH_LEASE_TTL: float = AUTH_REFRESH_MAX_WALL_CLOCK + 2.0
 # When the ceiling fires, the request may still be in flight and its token still
-# live on the wire, so the lease is EXTENDED rather than released: nobody may
-# re-present that token until the server's idempotent grace window has passed.
-AUTH_REFRESH_ABANDON_GRACE: float = 30.0
+# live on the wire, so the lease is EXTENDED rather than released -- but only
+# briefly, as an anti-stampede pause, NOT to outlast the server's grace window.
+#
+# Waiting out that window is the one thing this value must not do. The server
+# opens its refresh transaction with `SELECT ... FOR UPDATE` on the session row,
+# so a second presentation of the same token blocks until the first commits and
+# is then answered from the rotation cache -- an idempotent replay, whichever
+# request lands first. What it does not forgive is a presentation after the
+# window closes, and the window is measured from the instant the SERVER rotated,
+# not from the instant we gave up. Every second spent here is therefore taken
+# from a budget we cannot see: the window is a stack-side setting
+# (`PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS`, default 30 s, floor 1 s) reported on
+# no response, and a replay is served from cache without restarting it. Retrying
+# promptly is the only strategy that holds for every value it may take.
+AUTH_REFRESH_ABANDON_GRACE: float = 3.0
 # How long a caller that lost the lease waits for the holder's rotated pair
 # before giving up. Not bounded by AUTH_LOCK_TIMEOUT -- a waiter holds no file
 # lock -- but must exceed AUTH_REFRESH_LEASE_TTL so a normal attempt is awaited
@@ -707,9 +719,11 @@ AUTH_REFRESH_POLL_INTERVAL: float = 0.2
 # out than any TTL this code ever grants cannot have come from a correct clock, so
 # a reader treats it as unusable rather than honouring it: otherwise a claim
 # written by a host whose clock ran an hour fast would lock every later process
-# out of the stack for that hour, with no recovery short of logging out. Twice the
-# longest grant, to leave room for ordinary clock jitter.
-AUTH_REFRESH_LEASE_MAX_HORIZON: float = AUTH_REFRESH_ABANDON_GRACE * 2
+# out of the stack for that hour, with no recovery short of logging out. Twice
+# the longest grant, to leave room for ordinary clock jitter -- taken over both
+# TTLs, because a horizon below either of them would reject the very claims this
+# code writes and wedge the stack in the opposite direction.
+AUTH_REFRESH_LEASE_MAX_HORIZON: float = max(AUTH_REFRESH_LEASE_TTL, AUTH_REFRESH_ABANDON_GRACE) * 2
 
 # The backend closes the PKCE callback window at
 # AUTH_PKCE_CALLBACK_TIMEOUT_SECONDS = 120; wait slightly less so we never sit

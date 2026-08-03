@@ -332,12 +332,12 @@ class AuthClient(BaseHttpClient):
         The second deliberate exception to the shared retry infrastructure
         (`poll_device_token` is the other): this bypasses `_do_request` and
         issues exactly ONE request, under `AUTH_REFRESH_TIMEOUT` rather than
-        the client's default timeout. `SessionTokenProvider._refresh_locked`
-        holds the cross-process ``auth.json.lock`` across this call, and every
-        other holder of that lock waits only `AUTH_LOCK_TIMEOUT`; three
-        retries at the default 30 s read timeout plus backoff would let a slow
-        refresh outlast it, so a merely slow auth service would make every
-        concurrent kbagent process report the lock as stuck.
+        the client's default timeout. A refresh lease in ``auth.json`` keeps
+        concurrent kbagent processes off this token while the call runs, and
+        a waiter gives up after `AUTH_REFRESH_WAIT_TIMEOUT`; three retries at
+        the default 30 s read timeout plus backoff would outlast that, so a
+        merely slow auth service would have every other process report
+        contention that is not really there.
 
         These per-phase timeouts do not by themselves bound the call: httpx
         applies `read` / `write` per I/O operation, so a trickled response
@@ -346,10 +346,12 @@ class AuthClient(BaseHttpClient):
         `AUTH_REFRESH_MAX_WALL_CLOCK`, which is where the lock hold is owned.
 
         Dropping the retry costs little: on failure the old refresh token is
-        still on disk and still inside the server's 30 second idempotent grace
-        window, so the next command refreshes again -- while a retry would
-        re-present that same token, which is the very replay the grace window
-        exists to forgive.
+        still on disk and, for as long as the server's idempotent grace window
+        is open, still usable, so the next command refreshes again -- while a
+        retry would re-present that same token, which is the very replay the
+        grace window exists to forgive. The window is measured from the
+        server's own rotation and its length is a stack-side setting, so the
+        recovery holds only while nothing stalls the next attempt.
 
         A rejected grant (the refresh token was replayed after the grace
         window, or its whole family was revoked) is mapped to

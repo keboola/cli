@@ -239,9 +239,11 @@ touching the token provider or the flows.
 - `refresh(refresh_token) -> CliTokenResponse` — a **single attempt**, bypassing
   `_do_request`'s retry loop, under `AUTH_REFRESH_TIMEOUT` rather than the client default.
   A retry would re-present the same refresh token, which is exactly the replay the server's
-  30 s grace window exists to forgive — and past that window it triggers family revocation,
-  a hard logout. Losing the retry costs little: the old token is still on disk and still
-  inside the grace window, so the next command simply refreshes again. The single attempt
+  grace window exists to forgive — and past that window it triggers family revocation,
+  a hard logout. Losing the retry costs little: the old token is still on disk and, while
+  the window is open, still usable, so the next command simply refreshes again. That window
+  runs from the server's rotation and its length is stack-side (see "Refresh lease"), so
+  the recovery holds only while nothing delays the next attempt. The single attempt
   is also what keeps the attempt ceiling (`AUTH_REFRESH_MAX_WALL_CLOCK`) meaningful.
   `invalid_grant`/replay is mapped to `SESSION_EXPIRED` before the generic error path.
 
@@ -538,9 +540,26 @@ The lease resolves both:
   is raised.
 - `expires_at` (`AUTH_REFRESH_LEASE_TTL`) makes a crashed holder self-healing.
 - An **abandoned** request (the ceiling fired, `_AbandonedRefresh`) keeps its claim,
-  extended by `AUTH_REFRESH_ABANDON_GRACE`: the token may still be in flight, and nobody
-  may re-present it until the server's idempotent grace window has passed. A request that
-  *completed*, successfully or not, releases the lease immediately.
+  extended by `AUTH_REFRESH_ABANDON_GRACE` — a short anti-stampede pause, not a wait for
+  the in-flight token to cool. A request that *completed*, successfully or not, releases
+  the lease immediately.
+
+  The pause is deliberately far shorter than the server's grace window, for three reasons
+  read out of `TokenRefreshProcessor` (connection):
+
+  1. A genuinely concurrent pair is already safe. The refresh transaction opens with
+     `SELECT ... FOR UPDATE` on the session row, so the second presentation blocks until
+     the first commits and is then answered from the rotation cache — an idempotent
+     replay, whichever request lands first. Serialising a second time on our side buys
+     nothing.
+  2. The window is measured from the server's own rotation (`refreshTokenRotatedAt`), not
+     from our abandon, so its clock is already running when the ceiling fires. Waiting the
+     full window pushes the retry *past* it, where reuse stops being forgiven and the
+     whole token family is revoked — a forced re-login.
+  3. Its length is a stack-side setting (`PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS`, default
+     30 s, floor 1 s) reported on no response, and a grace replay is served from cache
+     without restarting it. Retrying promptly is the only strategy that holds for every
+     value the stack may configure.
 - `refresh_leases` is a sibling of `sessions` in `AuthState`, not a field on
   `StackSession` — a session write replaces the whole per-stack row, so a lease living
   inside it could be dropped by an unrelated `put_session` (the same shape as review F1).

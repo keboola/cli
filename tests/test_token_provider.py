@@ -48,7 +48,13 @@ from keboola_agent_cli.auth.token_provider import (
     get_session_token_provider,
     reset_provider_registry,
 )
-from keboola_agent_cli.constants import AUTH_REFRESH_LEASE_TTL
+from keboola_agent_cli.constants import (
+    AUTH_REFRESH_ABANDON_GRACE,
+    AUTH_REFRESH_LEASE_MAX_HORIZON,
+    AUTH_REFRESH_LEASE_TTL,
+    AUTH_REFRESH_MAX_WALL_CLOCK,
+    AUTH_REFRESH_WAIT_TIMEOUT,
+)
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 STACK_URL = "https://connection.keboola.com"
@@ -791,6 +797,54 @@ class TestRefreshLease:
         store.delete_session(STACK_URL)
 
         assert store.get_refresh_lease(STACK_URL) is None
+
+
+class TestLeaseConstantArithmetic:
+    """Relationships between the lease constants, so a later tune cannot break them.
+
+    Each is a property the behavioural tests above rely on but cannot state:
+    they exercise one set of values, while these hold for any set.
+    """
+
+    def test_the_horizon_admits_every_ttl_this_code_grants(self) -> None:
+        """A horizon below a granted TTL rejects the claims we write ourselves.
+
+        `RefreshLease.is_live` treats an expiry beyond the horizon as the work of
+        a skewed clock. Set the horizon under either TTL and every ordinary claim
+        reads as unusable -- the takeover path fires on live leases and two
+        processes refresh the same token at once, which is the exact collision
+        the lease exists to prevent.
+        """
+        assert AUTH_REFRESH_LEASE_MAX_HORIZON > AUTH_REFRESH_LEASE_TTL
+        assert AUTH_REFRESH_LEASE_MAX_HORIZON > AUTH_REFRESH_ABANDON_GRACE
+
+    def test_an_abandoned_lease_expires_before_a_waiter_gives_up(self) -> None:
+        """Otherwise every command reports contention instead of just refreshing.
+
+        A waiter polls for `AUTH_REFRESH_WAIT_TIMEOUT` and then raises "another
+        kbagent process is still refreshing". While an abandon-extended claim
+        outlives that budget, each command against the stack pays the full wait
+        and then fails, though nothing is actually refreshing any more.
+        """
+        assert AUTH_REFRESH_MAX_WALL_CLOCK + AUTH_REFRESH_ABANDON_GRACE < AUTH_REFRESH_WAIT_TIMEOUT
+
+    def test_the_abandon_pause_leaves_room_inside_the_server_grace_window(self) -> None:
+        """The recovery model is a prompt retry, not a wait for the token to cool.
+
+        The server measures its grace window from its own rotation, so the clock
+        is already running when the ceiling fires. Abandon plus pause has to fit
+        inside the window with room for the next command to start, or the retry
+        lands past it and is punished as a proven replay -- family revocation,
+        a forced re-login. `PROGRAMMATIC_AUTH_GRACE_PERIOD_SECONDS` is stack-side
+        and never reported, so this pins the documented default and no more.
+        """
+        server_grace_default = 30.0
+        # What the retry itself needs once the pause is over: a new process to
+        # start, read auth.json and reach the refresh call.
+        next_command_headroom = 10.0
+        earliest_retry = AUTH_REFRESH_MAX_WALL_CLOCK + AUTH_REFRESH_ABANDON_GRACE
+
+        assert earliest_retry + next_command_headroom <= server_grace_default
 
 
 # ----------------------------------------------------------------------------

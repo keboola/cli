@@ -298,10 +298,13 @@ class SessionTokenProvider:
         """Run the network refresh while holding the lease, then release it.
 
         The lease is released on every outcome EXCEPT an abandoned request: there
-        the token may still be travelling, so the claim is extended by
-        `AUTH_REFRESH_ABANDON_GRACE` instead, which keeps any other process from
-        presenting the same refresh token while that is true. A completed request
-        -- success or a server error -- carries no such risk.
+        the token may still be travelling, so the claim is extended by the short
+        `AUTH_REFRESH_ABANDON_GRACE` instead. That pause keeps the next command
+        from stampeding straight back into a request we have only just walked
+        away from; it deliberately does not try to outlast the server's grace
+        window, because a presentation past that window is what turns a forgiven
+        replay into family revocation. A completed request -- success or a server
+        error -- carries no such risk and releases immediately.
         """
         try:
             token = self._perform_refresh(session)
@@ -342,8 +345,10 @@ class SessionTokenProvider:
 
         Second cost: the server may have rotated a pair that is then discarded,
         leaving the on-disk refresh token one generation stale. That is the same
-        state any lost response leaves behind, and the server's 30 s idempotent
-        grace window is what forgives it (see `AuthClient.refresh`).
+        state any lost response leaves behind, and the server's idempotent grace
+        window is what forgives it (see `AuthClient.refresh`) -- provided the
+        retry lands inside a window that started when the server rotated, which
+        is why `AUTH_REFRESH_ABANDON_GRACE` holds the lease only briefly.
         """
         rotated: list[CliTokenResponse] = []
         failure: list[BaseException] = []
