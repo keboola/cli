@@ -1,4 +1,4 @@
-"""Tests for the programmatic-auth wire/state models (0.78.0).
+"""Tests for the programmatic-auth wire/state models (0.81.0).
 
 Focused on `CliTokenResponse.refresh_expiry`, the single place that decides
 whether a token response carries a refresh-token expiry. It is load-bearing

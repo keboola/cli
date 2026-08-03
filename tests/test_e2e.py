@@ -12549,7 +12549,7 @@ class TestE2EDeviceEnrollmentPrimitives:
 @skip_without_session_credentials
 @pytest.mark.e2e
 class TestE2EAuthRegisterProjects:
-    """End-to-end coverage for `kbagent auth register-projects` (0.78.0).
+    """End-to-end coverage for `kbagent auth register-projects` (0.81.0).
 
     Fixes a real usability bug: `auth login` prints an accessible-projects
     table but registers nothing unless `--register-projects` is passed, and

@@ -1260,7 +1260,7 @@ class TestProjectNotFoundError:
 
 
 class TestValidateAliasFormat:
-    """`validate_alias_format` -- shared alias-format guard (0.78.0, added for the
+    """`validate_alias_format` -- shared alias-format guard (0.81.0, added for the
     `auth register-projects` picker so it and `project edit --new-alias` cannot
     drift into accepting different character sets for the same config.json key).
     """
@@ -1327,7 +1327,7 @@ class TestValidateAliasFormat:
 
 
 class TestProjectNotFoundErrorSessionHint:
-    """`project_not_found_error`'s session-aware hint (0.78.0): a programmatic-auth
+    """`project_not_found_error`'s session-aware hint (0.81.0): a programmatic-auth
     user has no static token to paste, so the remedy it points at is
     `auth register-projects`, not `project add` -- but only when a session
     actually exists (issue: real user hit "project not found" right after

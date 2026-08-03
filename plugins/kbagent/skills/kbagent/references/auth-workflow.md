@@ -4,7 +4,7 @@
 > one) who wants to authenticate via a browser instead of pasting a static
 > Storage API token. Goal: sign in once, understand what got stored where,
 > and know how to check on / tear down the session later.
-> Since v0.78.0. Full command reference: `commands-reference.md` >
+> Since v0.81.0. Full command reference: `commands-reference.md` >
 > "Programmatic Auth (Browser Login)". Gotchas: `gotchas.md` > "Programmatic
 > auth (browser login) is human-only; sentinel tokens; v1 scope".
 
@@ -253,7 +253,7 @@ browser login only completes on the host, so someone has to run
   token expired, was revoked (e.g. you logged in again elsewhere and the old
   session became an "orphan"), or no session was ever created for this
   stack. Run `kbagent auth login` again.
-- **A session-registered project 401s on an older kbagent**: pre-0.78.0
+- **A session-registered project 401s on an older kbagent**: pre-0.81.0
   builds have no concept of the sentinel token and will try to send
   `kbc-session://...` as a literal `X-StorageApi-Token`. Upgrade kbagent, or
   use a static-token project instead.

@@ -3,7 +3,7 @@
 `kbagent auth login` signs you in to a Keboola stack through a real browser
 instead of a pasted Storage API token. The result is a **programmatic
 session**: a short-lived access token (`kbc_at_*`) plus a rotating refresh
-token (`kbc_rt_*`) that kbagent renews for you (since v0.78.0).
+token (`kbc_rt_*`) that kbagent renews for you (since v0.81.0).
 
 > **Read this first: `auth login` needs a human at a browser.**
 >

@@ -293,7 +293,7 @@ kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
 kbagent auth status [--stack URL|alias]
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
 kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
-# auth (since 0.78.0): browser-based login -- PKCE authorization-code by default (falls back to the
+# auth (since 0.81.0): browser-based login -- PKCE authorization-code by default (falls back to the
 #   RFC 8628 device flow ONLY on a pre-exchange failure: no loopback browser, callback timeout, or an
 #   SSH/container/WSL heuristic; --device-code forces it). REQUIRES A HUMAN AT A BROWSER -- never attempt
 #   from an unattended AI agent task; use a static Storage token for CI/headless instead. Issues a
@@ -312,7 +312,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   means whoever holds KBAGENT_SERVE_TOKEN acts as the signed-in USER; see docs/web-server.md.
 #   New error codes: AUTH_NOT_SUPPORTED_ON_STACK, AUTH_FLOW_TIMEOUT, AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED,
 #   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
-# `auth register-projects` (0.78.0+): fixes the usability gap where nothing was registered unless
+# `auth register-projects` (0.81.0+): fixes the usability gap where nothing was registered unless
 #   --register-projects was passed at login, and where the alias offered was a slug of the project
 #   NAME (never the numeric id, so `--project 9840` never resolves). Lists every project the session
 #   can access with a collision-free suggested alias, then lets the caller pick which to register.

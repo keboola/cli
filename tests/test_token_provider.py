@@ -1,4 +1,4 @@
-"""Tests for `SessionTokenProvider` and `BearerAuth` (0.78.0).
+"""Tests for `SessionTokenProvider` and `BearerAuth` (0.81.0).
 
 A programmatic session's refresh token is **rotated on every refresh**, with a
 30-second idempotent grace window and server-side *family revocation* on
