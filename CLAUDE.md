@@ -710,6 +710,9 @@ kbagent context
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
 kbagent doctor [--fix]
+# `doctor` includes an `mcp_tool_tasks` check (0.81.0+): warns about scheduled agent tasks
+# still using `--type mcp_tool` (removed in v0.85.0); they run unattended and get no warning
+# at removal. `agent list` marks those rows and adds a per-task `deprecation` key in --json.
 kbagent version [--beta]
 kbagent update [--beta]
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions

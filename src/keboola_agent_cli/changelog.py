@@ -24,6 +24,27 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.81.0": [
+        "New (#390): `kbagent doctor` gains an `mcp_tool_tasks` check that finds scheduled "
+        "agent tasks still using the deprecated `--type mcp_tool` action, which is removed "
+        "in v0.85.0. These are the tasks that break silently: an interactive `tool call` "
+        "warns on every invocation right up to removal, but a scheduled task was warned "
+        "once -- when it was created -- and then runs unattended, so at removal it simply "
+        "starts failing on its next cron tick with nobody watching. The check warns with "
+        "each task's id, the tool it calls and the native command that replaces it "
+        "(`details.tasks[]` in `--json`, each carrying `native_command`); a tool the parity "
+        "map does not know reports `null` rather than inventing a replacement. It skips "
+        "cleanly when there is no `agents.json` and never spawns MCP or calls the API.",
+        "New (#390): `kbagent agent list` marks tasks using the MCP passthrough. A note under "
+        "the table names them and points at `kbagent doctor` (an inline tag in the Type "
+        "column was truncated to 'DEPRECA…' -- that column is one of seven), and `--json` "
+        "adds an additive per-task "
+        "`deprecation` key carrying the removal version. The key appears ONLY on affected "
+        "tasks, so every existing consumer sees a byte-identical payload -- the same "
+        "contract `tool list` / `tool call` already use. `kbagent serve`'s `/agents` route "
+        "carries the same key, so the Web UI flags them too -- that population is the least "
+        "likely to ever run `kbagent doctor`.",
+    ],
     "0.80.4": [
         "Fix: a sync manifest written on Windows was unusable by everyone else "
         "on the team. `.keboola/manifest.json` is a **tracked** file -- sharing "

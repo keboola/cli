@@ -1458,6 +1458,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   The `tool` group and `agent --type mcp_tool` are REMOVED in kbagent
   v0.85.0, scheduled for the end of August 2026. Migrate before then.
+  Run `kbagent doctor` to list scheduled tasks still on `mcp_tool` --
+  the mcp_tool_tasks check names each task's tool and native replacement.
   The MCP passthrough is on a removal track (epic #390): every catalog tool
   has a native command. Prefer the native command in ALL new work -- `tool
   list` prints the replacement in the cli_equivalent column and `tool call`
