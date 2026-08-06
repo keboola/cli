@@ -75,8 +75,15 @@ class Project:
 
 
 def _alias_from_dir(directory: str) -> str:
-    name = Path(directory).name or "PROJECT"
-    return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").upper() or "PROJECT"
+    """Derive a secret-safe alias from the project's full relative path.
+
+    Uses the whole path (not just the last segment) so nested multi-project
+    layouts (``env/prod``, ``other/prod``) don't collide on a shared
+    ``KBC_TOKEN_<ALIAS>`` secret name.
+    """
+    if directory in ("", "."):
+        return "PROJECT"
+    return re.sub(r"[^A-Za-z0-9]+", "_", directory).strip("_").upper() or "PROJECT"
 
 
 def discover_projects(repo: Path) -> list[Project]:
