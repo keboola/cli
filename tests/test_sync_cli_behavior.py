@@ -58,7 +58,7 @@ def _invoke(args: list[str], tmp_path: Path) -> tuple[int, MagicMock]:
         MockStore.return_value = store
         MockProj.return_value = ProjectService(config_store=store)
         MockSync.return_value = mock_sync
-        result = runner.invoke(app, args)
+        result = runner.invoke(app, ["--config-dir", str(tmp_path / "config"), *args])
     return result.exit_code, mock_sync
 
 
@@ -131,6 +131,8 @@ class TestPushDryRunIsSafe:
                 app,
                 [
                     "--json",
+                    "--config-dir",
+                    str(tmp_path / "config"),
                     "sync",
                     "push",
                     "--project",

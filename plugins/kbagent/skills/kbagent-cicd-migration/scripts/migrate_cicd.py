@@ -189,7 +189,7 @@ def _project_step(p: Project, command: str, step_name: str, json_output: bool = 
     )
 
 
-def gen_validate(projects: list[Project], main_branch: str) -> str:
+def gen_validate(projects: list[Project]) -> str:
     diff_steps = "".join(
         _project_step(p, "diff", f"Diff {p.directory}", json_output=True) for p in projects
     )
@@ -218,7 +218,7 @@ def gen_validate(projects: list[Project], main_branch: str) -> str:
     )
 
 
-def gen_pull(projects: list[Project], main_branch: str, schedule: str | None) -> str:
+def gen_pull(projects: list[Project], schedule: str | None) -> str:
     on_block = "  workflow_dispatch:\n"
     if schedule:
         on_block += f"  schedule:\n    - cron: '{schedule}'\n"
@@ -377,8 +377,8 @@ def run(args: argparse.Namespace) -> int:
 
     install = _install_steps(args.version, args.git_ref)
     files = {
-        ".github/workflows/kbagent-validate.yml": gen_validate(projects, args.main_branch),
-        ".github/workflows/kbagent-pull.yml": gen_pull(projects, args.main_branch, args.schedule),
+        ".github/workflows/kbagent-validate.yml": gen_validate(projects),
+        ".github/workflows/kbagent-pull.yml": gen_pull(projects, args.schedule),
         ".github/workflows/kbagent-push.yml": gen_push(projects, args.main_branch),
     }
     files = {k: v.replace(_INSTALL_TOKEN, install) for k, v in files.items()}

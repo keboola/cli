@@ -35,7 +35,8 @@ hard incompatibilities make this a deliberate cutover (verified against the code
      and become orphans that must be deleted. Expect a **massive reformatting diff**.
 2. **kbagent sync is an ORCHESTRATOR, not cwd-per-folder.** `kbc pull` runs against
    whatever directory you `cd` into. `kbagent sync pull` *requires* `--project ALIAS`
-   (resolved from a central config store) or `--all-projects` (`sync.py:67,495`). In
+   (resolved from a central config store) or `--all-projects` (`commands/sync.py`'s
+   project-selection guard). In
    CI we bridge this with env-injection: `KBAGENT_PROJECT_FROM_ENV=1` synthesizes a
    project under the reserved alias `__env__`, and every command passes
    `--project __env__ --directory <folder>`.
