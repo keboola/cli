@@ -46,7 +46,7 @@ secret model.
 
 ## Security guardrails
 - Do **not** commit `.kbagent/config.json` with tokens (the new CLI auto-writes a
-  `.gitignore` for its config dir — `config_store.py:359`).
+  `.gitignore` for its config dir — `ConfigStore._ensure_gitignore`).
 - Do **not** pass `--allow-plaintext-on-encrypt-failure` in CI.
 - Prefer environment-scoped secrets + required reviewers for any lane that pushes
   to a production project.

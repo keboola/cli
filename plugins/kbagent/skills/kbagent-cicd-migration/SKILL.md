@@ -29,7 +29,7 @@ hard incompatibilities make this a deliberate cutover (verified against the code
    - `kbc` writes per config: `config.json` + `meta.json` + `description.md` (JSON).
    - `kbagent` writes per config: **`_config.yml`** (YAML, with `name`/`description`/
      `parameters` hoisted + a `_configuration_extra` block) + extracted code files
-     (`constants.py:425`, `sync/config_format.py`).
+     (`constants.py`'s `CONFIG_FILENAME`, `sync/config_format.py`).
    - The first `kbagent sync pull` therefore **rewrites every configuration** into a
      new format. The old `config.json`/`meta.json` files are **not read** by kbagent
      and become orphans that must be deleted. Expect a **massive reformatting diff**.

@@ -31,7 +31,7 @@ installed `kbagent` version (`kbagent sync pull --help`); the new CLI evolves fa
 |---|---|---|
 | `KBC_STORAGE_API_TOKEN` | `KBC_TOKEN` | Storage API token |
 | `KBC_STORAGE_API_HOST` (bare host) | `KBC_STORAGE_API_URL` (full URL) | `connection.keboola.com` → `https://connection.keboola.com` |
-| *(implicit)* | `KBAGENT_PROJECT_FROM_ENV=1` | **Required** opt-in so kbagent synthesizes an ephemeral project from the env in CI (no `config.json` on disk). See `constants.py:163`, `config_store.py:193` |
+| *(implicit)* | `KBAGENT_PROJECT_FROM_ENV=1` | **Required** opt-in so kbagent synthesizes an ephemeral project from the env in CI (no `config.json` on disk). See `constants.py`'s `ENV_PROJECT_FROM_ENV` and `ConfigStore._inject_env_project` |
 | `KBC_PROJECT_ID`, `KBC_BRANCH_ID`, `KBC_BRANCHES` | *(from manifest + branch-mapping)* | Project id comes from `.keboola/manifest.json`; branch from `.keboola/branch-mapping.json` |
 
 ## Branching

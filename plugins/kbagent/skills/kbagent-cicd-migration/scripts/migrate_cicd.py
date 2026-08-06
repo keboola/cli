@@ -92,12 +92,20 @@ def discover_projects(repo: Path) -> list[Project]:
             print(f"  ! skipping {manifest_path}: {exc}", file=sys.stderr)
             continue
         proj = data.get("project", {})
+        project_id = proj.get("id")
+        api_host = proj.get("apiHost")
+        if not project_id or not api_host:
+            print(
+                f"  ! skipping {manifest_path}: missing project.id or project.apiHost",
+                file=sys.stderr,
+            )
+            continue
         projects.append(
             Project(
                 alias=_alias_from_dir(rel),
                 directory=rel,
-                project_id=str(proj.get("id", "")),
-                api_host=str(proj.get("apiHost", "")),
+                project_id=str(project_id),
+                api_host=str(api_host),
                 allowed_branches=[str(b) for b in data.get("allowedBranches", [])],
                 ignored_components=[str(c) for c in data.get("ignoredComponents", [])],
             )
@@ -315,7 +323,11 @@ def secrets_report(projects: list[Project], repo_slug: str) -> str:
 def _guess_repo_slug(repo: Path) -> str:
     config = repo / ".git" / "config"
     if config.exists():
-        m = re.search(r"github\.com[:/]([^/]+/[^/\s.]+)", config.read_text(errors="ignore"))
+        m = re.search(
+            r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$",
+            config.read_text(errors="ignore"),
+            re.MULTILINE,
+        )
         if m:
             return m.group(1)
     return "<owner>/<repo>"
