@@ -7,7 +7,7 @@ installed `kbagent` version (`kbagent sync pull --help`); the new CLI evolves fa
 
 | kbc (old) | kbagent (new) |
 |---|---|
-| Download Go binary zip from `keboola/keboola-as-code` GitHub release, unzip to `/usr/local/bin/kbc` | `uv tool install keboola-agent-cli==<ver>` (PyPI) or `uv tool install 'git+https://github.com/keboola/cli@<tag>'` |
+| Download Go binary zip from `keboola/keboola-as-code` GitHub release, unzip to `/usr/local/bin/kbc` | `uv tool install keboola-cli==<ver>` (PyPI) or `uv tool install 'git+https://github.com/keboola/cli@<tag>'` |
 | `kbc --version` | `kbagent version` |
 | Custom `install` composite action | `astral-sh/setup-uv@v5` + one `uv tool install` line |
 

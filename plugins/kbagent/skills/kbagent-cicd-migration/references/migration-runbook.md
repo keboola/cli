@@ -17,7 +17,7 @@ No co-existence, but yes a controlled cutover:
 - [ ] **Announce a change freeze** on the repo + the Keboola projects for the
       conversion window. Any config edit made in the UI between "pull" and "cutover"
       becomes drift you'll chase. Keep it short.
-- [ ] **Pick a kbagent version** and pin it (`keboola-agent-cli==X.Y.Z` or
+- [ ] **Pick a kbagent version** and pin it (`keboola-cli==X.Y.Z` or
       `git+...@vX.Y.Z`). Never unpinned on a prod lane.
 - [ ] **Set GitHub secrets**: one `KBC_TOKEN_<ALIAS>` per project (see
       `references/secrets-setup.md`).

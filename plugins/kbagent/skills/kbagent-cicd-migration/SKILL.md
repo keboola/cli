@@ -2,7 +2,7 @@
 name: kbagent-cicd-migration
 description: >
   Use when migrating an existing kbc (keboola-as-code) GitHub CI/CD pipeline to
-  the new kbagent (keboola-agent-cli) sync engine. Covers: converting per-project
+  the new kbagent (keboola-cli) sync engine. Covers: converting per-project
   pull/push PR workflows, multi-project repos (e.g. L0/L1 dev->prod promotion),
   branch->environment mapping, GitHub secrets/variables/environments setup, the
   install step (uv tool install instead of downloading a Go binary), and the
@@ -105,7 +105,7 @@ Four things this skill cannot infer; get them from the customer/operator first:
   and `.github/workflows/`) actually lives locally — Step 1's `migrate_cicd.py`
   argument.
 - **A `kbagent` binary or install.** Either already on `PATH`, or install it now:
-  `uv tool install keboola-agent-cli==<ver>` (see Step 2 for version pin) or a
+  `uv tool install keboola-cli==<ver>` (see Step 2 for version pin) or a
   downloaded standalone binary. No local `kbc` binary is required to *run* the
   migration (kbagent is the only tool that touches the repo from Step 3b on) —
   only to *verify* the "same data, new layout" claim by diffing a `kbc pull`
@@ -181,7 +181,7 @@ a project" — see Step 5), and the legacy `kbc` workflow/action files it supers
 ### Step 2 — Pick a version pin (decide before generating)
 - **Pinned (recommended for prod lanes):** `--version 0.58.0` (PyPI, once published)
   or `--git-ref v0.58.0` (git tag, until PyPI exists). Reproducible CI.
-- **Unpinned (`keboola-agent-cli`, resolves to latest):** only acceptable for a
+- **Unpinned (`keboola-cli`, resolves to latest):** only acceptable for a
   non-prod/scratch lane. Warn the user: unpinned + the current auto-update behavior
   means non-deterministic CI runs.
 

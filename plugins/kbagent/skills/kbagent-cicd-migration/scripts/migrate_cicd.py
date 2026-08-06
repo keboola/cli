@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate a kbc (keboola-as-code) GitHub CI/CD repo to kbagent (keboola-agent-cli).
+"""Migrate a kbc (keboola-as-code) GitHub CI/CD repo to kbagent (keboola-cli).
 
 This is the engine the ``kbagent-cicd-migration`` skill drives. It:
 
@@ -143,10 +143,10 @@ def _install_steps(version: str | None, git_ref: str | None) -> str:
     if git_ref:
         spec = f"git+https://github.com/keboola/cli@{git_ref}"
     elif version:
-        spec = f"keboola-agent-cli=={version}"
+        spec = f"keboola-cli=={version}"
     else:
         # Unpinned: only acceptable for non-production lanes. The skill warns.
-        spec = "keboola-agent-cli"
+        spec = "keboola-cli"
     return (
         "      - name: Install uv\n"
         "        uses: astral-sh/setup-uv@v5\n"
