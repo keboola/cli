@@ -146,13 +146,9 @@ that is the actual answer to "the diff is too big to review," not a rewritten
 history.
 
 ## Branching model — pick one
-| Model | When | How |
-|---|---|---|
-| **Single-branch (production)** | Each git branch/project maps straight to a production Keboola project (the demo's L0/L1 promotion) | Leave `.keboola/branch-mapping.json` at default (null = production); gate prod pushes via the GitHub Environment |
-| **Git-branching (dev isolation)** | You want each PR to deploy to an isolated Keboola dev branch, then merge to prod on merge-to-main | `kbagent sync init --git-branching`; `kbagent sync branch-link --project __env__ --branch-name <pr-branch>` in the PR workflow; `main` maps to production |
-
-For most teams already doing PR-per-change promotion, **git-branching** is the closer
-fit and is safer (no direct prod writes from PRs). Migrate to it in PR 2, not PR 1.
+See [references/branching-model.md](branching-model.md) for the full decision table
+(single-branch vs. git-branching). Migrate to git-branching in PR 2, not PR 1, if
+you choose it — it's additive and doesn't require re-converting the config tree.
 
 ## Hard guardrails (repeat to the user)
 - **Never** `kbagent sync push` (without `--dry-run`) against an adopted-but-not-yet-

@@ -22,8 +22,7 @@ Stdlib only. Dry-run by default; pass ``--write`` to write files.
 Usage:
     python migrate_cicd.py <repo_dir> [--write] \\
         [--version 0.58.0 | --git-ref vX.Y.Z] \\
-        [--main-branch main] [--schedule "0 * * * *"] \\
-        [--git-branching]
+        [--main-branch main] [--schedule "0 * * * *"]
 
 Examples:
     # Inspect what would change (no writes):
@@ -150,15 +149,20 @@ def _install_steps(version: str | None, git_ref: str | None) -> str:
     )
 
 
-def _project_step(p: Project, command: str, step_name: str) -> str:
+def _project_step(p: Project, command: str, step_name: str, json_output: bool = False) -> str:
     """Render one per-project step using the env-injection auth model.
 
     kbagent sync is an orchestrator over registered project aliases, NOT a
     cwd-per-folder tool like kbc. In CI we synthesize an ephemeral project from
     the env (KBAGENT_PROJECT_FROM_ENV=1 -> reserved alias ``__env__``) and pass
-    ``--project __env__`` explicitly. A first idempotent ``init --adopt-existing``
-    registers the committed manifest before the real command.
+    ``--project __env__`` explicitly. The committed ``.keboola/manifest.json``
+    (written by the one-time conversion, Step 3b) is already checked out by
+    ``actions/checkout`` -- no ``sync init`` step is needed or run here; a
+    fresh, un-converted project has no CI step to init in the first place.
+    ``--json`` is a global option, so it goes before ``sync``, not after the
+    subcommand.
     """
+    prefix = "kbagent --json " if json_output else "kbagent "
     return (
         f"      - name: {step_name} ({p.alias})\n"
         "        env:\n"
@@ -166,13 +170,14 @@ def _project_step(p: Project, command: str, step_name: str) -> str:
         f"          KBC_TOKEN: ${{{{ secrets.{p.token_secret} }}}}\n"
         f"          KBC_STORAGE_API_URL: {p.stack_url}\n"
         "        run: |\n"
-        f"          kbagent sync init --adopt-existing --project __env__ --directory '{p.directory}' || true\n"
-        f"          kbagent sync {command} --project __env__ --directory '{p.directory}'\n"
+        f"          {prefix}sync {command} --project __env__ --directory '{p.directory}'\n"
     )
 
 
 def gen_validate(projects: list[Project], main_branch: str) -> str:
-    diff_steps = "".join(_project_step(p, "diff --json", f"Diff {p.directory}") for p in projects)
+    diff_steps = "".join(
+        _project_step(p, "diff", f"Diff {p.directory}", json_output=True) for p in projects
+    )
     dry_run_steps = "".join(
         _project_step(p, "push --dry-run", f"Push dry-run {p.directory}") for p in projects
     )
@@ -227,7 +232,7 @@ def gen_pull(projects: list[Project], main_branch: str, schedule: str | None) ->
     )
 
 
-def gen_push(projects: list[Project], main_branch: str, git_branching: bool) -> str:
+def gen_push(projects: list[Project], main_branch: str) -> str:
     # GitHub Environments gate production approvals; the prod environment maps to
     # the main branch, mirroring the legacy `github.ref_name == 'main'` logic.
     env_expr = f"${{{{ github.ref_name == '{main_branch}' && 'prod' || 'dev' }}}}"
@@ -355,9 +360,7 @@ def run(args: argparse.Namespace) -> int:
     files = {
         ".github/workflows/kbagent-validate.yml": gen_validate(projects, args.main_branch),
         ".github/workflows/kbagent-pull.yml": gen_pull(projects, args.main_branch, args.schedule),
-        ".github/workflows/kbagent-push.yml": gen_push(
-            projects, args.main_branch, args.git_branching
-        ),
+        ".github/workflows/kbagent-push.yml": gen_push(projects, args.main_branch),
     }
     files = {k: v.replace(_INSTALL_TOKEN, install) for k, v in files.items()}
 
@@ -396,9 +399,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--schedule", default=None, help="Cron for scheduled pull, e.g. '0 * * * *' (default: none)"
-    )
-    ap.add_argument(
-        "--git-branching", action="store_true", help="Annotate for git-branch->Keboola-branch mode"
     )
     return run(ap.parse_args(argv))
 

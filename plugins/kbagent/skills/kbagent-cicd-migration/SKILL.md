@@ -83,6 +83,20 @@ Only three mechanics change: **install** (`uv tool install` not a binary downloa
 [references/command-mapping.md](references/command-mapping.md)), and **auth env vars**
 (`KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` + `KBC_STORAGE_API_URL`).
 
+**The per-project directory layout is also untouched.** Whatever top-level folder
+name each project already uses in the repo — a numeric project id (`9086/`), a
+promotion label (`L0/`, `L1/`), or a flat single-project repo (no per-project
+folder at all) — kbagent keeps it exactly as-is: `migrate_cicd.py` discovers every
+project by walking for `.keboola/manifest.json` and reuses that folder's existing
+path verbatim in every generated step (`--directory '{p.directory}'`); it never
+renames, moves, or re-derives the folder from the alias. Inside that folder the
+branch subdirectory (`main/`, etc.) and the `storage/`-adjacent component-type
+folders are unchanged too — only the file format one level below (`config.json`
+→ `_config.yml`) changes. **Do not** use `kbagent sync --all-projects` to "adopt"
+this layout — it enforces its own `<directory>/<alias>/` convention (see the
+guardrail below) and would rename/duplicate the tree; the generated CI never
+uses it for exactly this reason.
+
 ## Prerequisites — ask for these before Step 1
 
 Four things this skill cannot infer; get them from the customer/operator first:
@@ -211,17 +225,22 @@ for the full mapping from the old `secrets.KBC_SAPI_TOKEN_*` / `vars.KBC_*` sche
 - **Branching:** the old model used a fixed branch id per env. The new model maps
   git branch → Keboola dev branch via `.keboola/branch-mapping.json` +
   `kbagent sync branch-link`. For PR-based promotion this is usually *better*:
-  a PR branch links to a Keboola dev branch, `main` pushes to production. Add
-  `--git-branching` to annotate, and walk the user through `branch-link` if they
-  want per-PR isolated dev branches. If they want to keep the simple single-branch
-  (production) model, leave branch-mapping at the default (null = production).
+  a PR branch links to a Keboola dev branch, `main` pushes to production. This
+  is a per-project runtime choice, not something the generator needs to know
+  about — run `kbagent sync init --git-branching` and walk the user through
+  `branch-link` if they want per-PR isolated dev branches (see
+  [references/branching-model.md](references/branching-model.md)). If they
+  want to keep the simple single-branch (production) model, leave
+  branch-mapping at the default (null = production) and skip this entirely.
 
 ### Step 6 — Validate before merging
 - Open the migration PR; the `kbagent-validate` workflow runs `sync diff` — confirm
   the diff is empty (no unintended drift) against each project.
-- Manually run `kbagent-pull` once and confirm the committed state matches what
-  `kbc pull` produced (the layout is identical; `git diff` should be tiny — mostly
-  YAML vs JSON config-body formatting differences if any).
+- Manually run `kbagent-pull` once **against the already-converted tree** and
+  confirm it's a no-op: `git diff` should be empty (or near-empty). This checks
+  that nothing drifted between the conversion commit and now — it is not the
+  same comparison as the one-time JSON→YAML conversion diff in Step 3b, which
+  is expected to touch every config file.
 - Do a `kbagent-push` dry-run (the validate workflow already does this) and read
   the planned changes before the first real gated push.
 
