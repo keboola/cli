@@ -232,9 +232,10 @@ def gen_push(projects: list[Project], main_branch: str, git_branching: bool) -> 
     # the main branch, mirroring the legacy `github.ref_name == 'main'` logic.
     env_expr = f"${{{{ github.ref_name == '{main_branch}' && 'prod' || 'dev' }}}}"
     # The workflow_dispatch boolean arrives as the string 'true'/'false'; the GH
-    # expression maps it to the --allow-delete flag (opt-in deletion of remote
-    # configs that were removed locally).
-    delete_expr = "${{ github.event.inputs.allow_delete == 'true' && '--allow-delete' || '' }}"
+    # expression maps it to the --force flag (opt-in deletion of remote configs
+    # that were removed locally). kbagent's actual flag is --force, NOT
+    # --allow-delete -- there is no --allow-delete option in the CLI.
+    delete_expr = "${{ github.event.inputs.allow_delete == 'true' && '--force' || '' }}"
     steps = "".join(
         _project_step(p, f"push {delete_expr}", f"Push {p.directory}") for p in projects
     )
