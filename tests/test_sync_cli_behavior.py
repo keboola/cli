@@ -75,11 +75,13 @@ class TestProjectSelectionRequired:
         code, mock = _invoke(["sync", "diff", "--directory", str(tmp_path)], tmp_path)
         assert code == 2
         mock.diff.assert_not_called()
+        mock.diff_all.assert_not_called()
 
     def test_push_without_project_is_usage_error(self, tmp_path: Path) -> None:
         code, mock = _invoke(["sync", "push", "--directory", str(tmp_path)], tmp_path)
         assert code == 2
         mock.push.assert_not_called()
+        mock.push_all.assert_not_called()
 
 
 class TestMutuallyExclusiveSelection:

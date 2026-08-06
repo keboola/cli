@@ -21,18 +21,18 @@ Stdlib only. Dry-run by default; pass ``--write`` to write files.
 
 Usage:
     python migrate_cicd.py <repo_dir> [--write] \\
-        [--version 0.58.0 | --git-ref vX.Y.Z] \\
+        [--version X.Y.Z | --git-ref vX.Y.Z] \\
         [--main-branch main] [--schedule "0 * * * *"]
 
 Examples:
     # Inspect what would change (no writes):
     python migrate_cicd.py ../CLI-based-sync-demo
 
-    # Generate workflows pinned to a published PyPI version:
-    python migrate_cicd.py ../CLI-based-sync-demo --write --version 0.58.0
+    # Generate workflows pinned to a PyPI version:
+    python migrate_cicd.py ../CLI-based-sync-demo --write --version X.Y.Z
 
-    # Pin to a git tag instead (no PyPI release yet):
-    python migrate_cicd.py ../CLI-based-sync-demo --write --git-ref v0.58.0
+    # Pin to a git tag instead:
+    python migrate_cicd.py ../CLI-based-sync-demo --write --git-ref vX.Y.Z
 """
 
 from __future__ import annotations
@@ -409,8 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         "--write", action="store_true", help="Write the generated workflows (default: dry-run)"
     )
     grp = ap.add_mutually_exclusive_group()
-    grp.add_argument("--version", help="Pin kbagent to this PyPI version, e.g. 0.58.0")
-    grp.add_argument("--git-ref", help="Pin kbagent to a git tag/ref, e.g. v0.58.0 (no PyPI yet)")
+    grp.add_argument("--version", help="Pin kbagent to this PyPI version, e.g. X.Y.Z")
+    grp.add_argument("--git-ref", help="Pin kbagent to a git tag/ref, e.g. vX.Y.Z")
     ap.add_argument(
         "--main-branch",
         default="main",

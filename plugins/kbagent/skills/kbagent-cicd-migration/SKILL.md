@@ -179,8 +179,9 @@ id / stack host / required token secret name, any `ignoredComponents` ("subset o
 a project" — see Step 5), and the legacy `kbc` workflow/action files it supersedes.
 
 ### Step 2 — Pick a version pin (decide before generating)
-- **Pinned (recommended for prod lanes):** `--version 0.58.0` (PyPI, once published)
-  or `--git-ref v0.58.0` (git tag, until PyPI exists). Reproducible CI.
+- **Pinned (recommended for prod lanes):** `--version X.Y.Z` (PyPI) or
+  `--git-ref vX.Y.Z` (git tag). Reproducible CI. Check the
+  [latest release](https://pypi.org/project/keboola-cli/) for the current `X.Y.Z`.
 - **Unpinned (`keboola-cli`, resolves to latest):** only acceptable for a
   non-prod/scratch lane. Warn the user: unpinned + the current auto-update behavior
   means non-deterministic CI runs.
@@ -188,7 +189,7 @@ a project" — see Step 5), and the legacy `kbc` workflow/action files it supers
 ### Step 3 — Generate the clean workflows
 ```bash
 python <skill_dir>/scripts/migrate_cicd.py /path/to/repo --write \
-    --version 0.58.0 --main-branch main --schedule "0 * * * *"
+    --version X.Y.Z --main-branch main --schedule "0 * * * *"
 ```
 Produces:
 - `.github/workflows/kbagent-validate.yml` — on PR: `sync diff` + `sync push --dry-run` per project (read-only drift + secret-encryption preflight).
