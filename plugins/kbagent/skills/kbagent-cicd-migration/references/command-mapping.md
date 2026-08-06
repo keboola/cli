@@ -17,12 +17,12 @@ installed `kbagent` version (`kbagent sync pull --help`); the new CLI evolves fa
 |---|---|---|
 | `kbc init -d DIR --allow-target-env` | `rm DIR/.keboola/manifest.json && kbagent sync init --project <alias> --directory DIR` | `--project` is required. For the one-time kbc→kbagent conversion use **plain `init`, not `--adopt-existing`** — adopting a kbc-written manifest inherits kbc's row/companion-config paths verbatim and leaves a permanently dirty `sync status` (root-caused; see SKILL.md and `migration-runbook.md`). kbc and kbagent both write to the same path (`.keboola/manifest.json`), so plain `init` errors "Manifest already exists" until you delete that one file (not the `config.json`/`meta.json` tree next to it) — confirmed live, 2026-08-06. `--adopt-existing` is still correct for re-registering an *already-converted* kbagent-native manifest in ephemeral CI (no kbc data involved at that point). |
 | `kbc persist -d DIR` | *(folded into `sync pull`)* | No separate persist step; pull writes manifest + new objects |
-| `kbc pull -d DIR --force` | `kbagent sync pull --directory DIR --force` | `--force` overrides local-vs-remote conflicts (3-way diff) |
-| `kbc push -d DIR` | `kbagent sync push --directory DIR` | Encrypts `#`-secrets fail-closed before write |
-| `kbc push -d DIR --force` | `kbagent sync push --directory DIR --force` | Push's `--force` removes remote configs deleted locally (there is no `--allow-delete` flag — same flag name as pull's `--force`, but a different meaning per command) |
-| `kbc push --dry-run` / push-dry action | `kbagent sync push --dry-run --directory DIR` | Shows planned changes without writing |
-| `kbc diff -d DIR` | `kbagent [--json] sync diff --directory DIR` | `--json` is a **global** option (before `sync`, not after `diff`); gives structured drift for CI gating |
-| `kbc status` | `kbagent sync status --directory DIR` | |
+| `kbc pull -d DIR --force` | `kbagent sync pull --project <alias> --directory DIR --force` | `--project` (or `--all-projects`) is required; `--force` overrides local-vs-remote conflicts (3-way diff) |
+| `kbc push -d DIR` | `kbagent sync push --project <alias> --directory DIR` | Encrypts `#`-secrets fail-closed before write |
+| `kbc push -d DIR --force` | `kbagent sync push --project <alias> --directory DIR --force` | Push's `--force` removes remote configs deleted locally (there is no `--allow-delete` flag — same flag name as pull's `--force`, but a different meaning per command) |
+| `kbc push --dry-run` / push-dry action | `kbagent sync push --project <alias> --dry-run --directory DIR` | Shows planned changes without writing |
+| `kbc diff -d DIR` | `kbagent [--json] sync diff --project <alias> --directory DIR` | `--json` is a **global** option (before `sync`, not after `diff`); gives structured drift for CI gating |
+| `kbc status` | `kbagent sync status --directory DIR` | `sync status` reads the local manifest only, no `--project` needed |
 | `kbc validate` (JSON-schema) | *(no direct equivalent — gap)* | Use `sync diff` for drift; schema validation is not ported |
 
 ## Auth / environment variables
