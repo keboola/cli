@@ -665,7 +665,15 @@ AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
 # window must be active on the current session before `AUTH_PAT_PATH` (POST)
 # will mint a token -- see `AuthService.create_pat`.
 AUTH_SUDO_PATH: str = "/v1/auth/sudo"
+AUTH_SUDO_CHALLENGE_PATH: str = "/v1/auth/sudo/challenge"
 AUTH_PAT_PATH: str = "/v1/auth/pat"
+
+# PLACEHOLDER -- the browser-facing page that runs the WebAuthn ceremony and
+# redirects back to the CLI's loopback listener, mirroring
+# AUTH_PKCE_AUTHORIZE_PATH for login. Not yet confirmed against a live stack
+# (auth/webauthn_browser.py's module docstring has the full contract this
+# assumes); adjust this one constant once the real page exists.
+AUTH_SUDO_WEBAUTHN_CEREMONY_PATH: str = "/admin/auth/sudo/webauthn"
 
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down

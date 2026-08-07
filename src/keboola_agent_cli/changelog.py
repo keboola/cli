@@ -25,13 +25,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.81.0": [
-        "New: `kbagent auth pat-create --name NAME [--totp-code CODE] [--read-only] "
-        "[--ttl-days N]` -- mint a Personal Access Token (`kbc_pat_...`) from an EXISTING "
-        "`auth login` session, for one-time CI/CD setup. Does a TOTP step-up "
-        "(`POST /v1/auth/sudo`) then mints the token (`POST /v1/auth/pat`); `--totp-code` is "
-        "prompted interactively when omitted and is REQUIRED under `--json` or a non-TTY "
-        "stdin -- there is no unattended path to mint a PAT, the same human-required boundary "
-        "as `auth login` itself. The token is printed exactly once and never stored by kbagent.",
+        "New: `kbagent auth pat-create --name NAME [--totp-code CODE | --webauthn] "
+        "[--read-only] [--ttl-days N] [--project-id ID ...]` -- mint a Personal Access "
+        "Token (`kbc_pat_...`) from an EXISTING `auth login` session, for one-time CI/CD "
+        "setup. Two mutually exclusive step-up factors: `--totp-code` (prompted "
+        "interactively when omitted, and REQUIRED under `--json` or a non-TTY stdin -- "
+        "there is no unattended path to mint a PAT, the same human-required boundary as "
+        "`auth login` itself) or `--webauthn` (opens a browser for a passkey ceremony via "
+        "a new loopback listener, mirroring the PKCE login flow -- the exact ceremony-page "
+        "contract is a documented placeholder pending platform confirmation). `--project-id` "
+        "(repeatable) narrows the scope to an explicit allow-list instead of every accessible "
+        "project, for a one-project-per-CI-secret setup. The token is printed exactly once "
+        "and never stored by kbagent.",
         "New: `kbagent auth pat-revoke PAT_ID [--yes]` -- revoke a Personal Access Token. No "
         "sudo step-up needed; idempotent (revoking an already-revoked id is not an error).",
         "New: a `kbc_pat_...` token now works as a drop-in for `KBC_TOKEN` "

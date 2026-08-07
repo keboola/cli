@@ -572,9 +572,15 @@ def auth_pat_create(
     totp_code: str | None = typer.Option(
         None,
         "--totp-code",
-        help="Current 6-digit TOTP code. Omitted: prompted interactively "
-        "(never accept this as a hardcoded value in a script -- it is a live, "
-        "30-second code you type from your authenticator app each time).",
+        help="Current 6-digit TOTP code. Omitted (and --webauthn not passed): prompted "
+        "interactively (never accept this as a hardcoded value in a script -- it is a "
+        "live, 30-second code you type from your authenticator app each time).",
+    ),
+    webauthn: bool = typer.Option(
+        False,
+        "--webauthn",
+        help="Step up via a WebAuthn/passkey browser ceremony instead of a typed TOTP "
+        "code. Opens a browser; mutually exclusive with --totp-code.",
     ),
     read_only: bool = typer.Option(
         False, "--read-only", help="Issue a read-only PAT (denies writes on Storage routes)"
@@ -582,13 +588,22 @@ def auth_pat_create(
     ttl_days: int | None = typer.Option(
         None, "--ttl-days", help="PAT lifetime in days (default: org policy maximum)"
     ),
+    project_id: list[str] | None = typer.Option(
+        None,
+        "--project-id",
+        help="Restrict the PAT to this project id (repeatable). Omitted: every project "
+        "the signed-in user can access -- pass this for a one-project-per-CI-secret setup.",
+    ),
 ) -> None:
     """Mint a Personal Access Token from the current session, for one-time CI/CD setup.
 
     Requires `kbagent auth login` to already be signed in on this stack --
     this command spends that session's access token, it does not start a new
-    login. Also requires a live TOTP code (step-up authentication), because
-    the auth service will not mint a PAT without an active sudo window.
+    login. Also requires a live step-up (sudo), because the auth service will
+    not mint a PAT without an active sudo window: either a typed TOTP code
+    (the default -- no browser needed) or `--webauthn` (opens a browser for a
+    passkey ceremony; see `auth/webauthn_browser.py` for the current
+    placeholder ceremony-page contract this assumes).
 
     The token is printed exactly once, in `access_token`, and never stored by
     kbagent -- copy it into a CI secret immediately. Store it as `KBC_TOKEN`
@@ -599,13 +614,24 @@ def auth_pat_create(
     (`sync`, `storage`, `config`, ...) works the same way with a PAT -- with
     the difference that a PAT does not rotate, so replace it (this command
     again) instead of expecting an automatic refresh.
+
+    `--project-id` (repeatable) scopes the token to an explicit allow-list
+    instead of every accessible project -- use it once per project when
+    minting a separate CI secret per project (e.g. `KBC_TOKEN_<ALIAS>`).
     """
     formatter = get_formatter(ctx)
     check_cli_operation(ctx, "auth.pat-create")
-    if totp_code is None:
+    if webauthn and totp_code is not None:
+        formatter.error(
+            message="--webauthn and --totp-code are mutually exclusive.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+    if not webauthn and totp_code is None:
         if formatter.json_mode or not _is_stdout_tty():
             formatter.error(
-                message="--totp-code is required in --json mode or when stdin is not a TTY.",
+                message="--totp-code (or --webauthn) is required in --json mode or when "
+                "stdin is not a TTY.",
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
             raise typer.Exit(code=2)
@@ -615,9 +641,11 @@ def auth_pat_create(
         result = service.create_pat(
             stack=stack,
             totp_code=totp_code,
+            webauthn=webauthn,
             name=name,
             read_only=read_only,
             expires_in=ttl_days * 86400 if ttl_days else None,
+            project_ids=project_id,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)

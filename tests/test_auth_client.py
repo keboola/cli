@@ -30,6 +30,7 @@ from keboola_agent_cli.auth.models import (
     IntrospectResponse,
     PatCreateResult,
     RevokeResult,
+    SudoChallengeResult,
     SudoResult,
 )
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code
@@ -1337,6 +1338,74 @@ class TestSudoTotp:
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
 
 
+class TestSudoChallenge:
+    def test_returns_challenge_token_and_options(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo/challenge",
+            method="POST",
+            status_code=200,
+            json={
+                "challengeToken": "kbc_mfa_xyz",
+                "options": {"challenge": "abc", "rpId": "keboola.com"},
+                "expiresIn": 120,
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.sudo_challenge("kbc_at_live")
+        finally:
+            client.close()
+
+        assert isinstance(result, SudoChallengeResult)
+        assert result.challenge_token == "kbc_mfa_xyz"
+        assert result.options == {"challenge": "abc", "rpId": "keboola.com"}
+        assert result.expires_in == 120
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == "Bearer kbc_at_live"
+
+    def test_404_maps_to_auth_not_supported(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo/challenge", method="POST", status_code=404, json={}
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.sudo_challenge("kbc_at_live")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+
+class TestSudoWebauthn:
+    def test_verified_sends_type_and_assertion(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo",
+            method="POST",
+            status_code=200,
+            json={
+                "sudoVerified": True,
+                "sudoExpiresAt": "2026-01-01T00:05:00Z",
+                "sudoTimeoutSeconds": 300,
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.sudo_webauthn("kbc_at_live", "kbc_mfa_xyz", "fake-assertion-json")
+        finally:
+            client.close()
+
+        assert result.verified is True
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == "Bearer kbc_at_live"
+        assert json.loads(request.read().decode()) == {
+            "type": "webauthn",
+            "challengeToken": "kbc_mfa_xyz",
+            "webauthnAssertion": "fake-assertion-json",
+        }
+
+
 class TestCreatePat:
     def test_minimal_request(self, httpx_mock) -> None:
         httpx_mock.add_response(
@@ -1403,6 +1472,37 @@ class TestCreatePat:
             "name": "n",
             "expiresIn": 86400,
             "scope": {"all": True, "readOnly": True},
+        }
+
+    def test_project_ids_scope_narrows_to_allow_list(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat",
+            method="POST",
+            status_code=201,
+            json={
+                "accessToken": "kbc_pat_scoped",
+                "expiresIn": 86400,
+                "pat": {
+                    "id": "pat-3",
+                    "name": "n",
+                    "scope": {"projects": ["9840"]},
+                    "projects": [],
+                    "readOnly": False,
+                    "expiresAt": "2026-01-02T00:00:00Z",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                },
+            },
+        )
+        client = _make_client()
+        try:
+            client.create_pat("kbc_at_live", name="n", project_ids=["9840"])
+        finally:
+            client.close()
+
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.read().decode()) == {
+            "name": "n",
+            "scope": {"projects": ["9840"]},
         }
 
     def test_sudo_not_active_raises(self, httpx_mock) -> None:

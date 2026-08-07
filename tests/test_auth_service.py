@@ -25,6 +25,7 @@ from keboola_agent_cli.auth.models import (
     PatCreateResult,
     PatItem,
     RevokeResult,
+    SudoChallengeResult,
     SudoResult,
 )
 from keboola_agent_cli.auth.pkce import (
@@ -35,6 +36,7 @@ from keboola_agent_cli.auth.pkce import (
     PkceStateMismatch,
 )
 from keboola_agent_cli.auth.state_store import AuthStateStore
+from keboola_agent_cli.auth.webauthn_browser import WebAuthnCallback, WebAuthnStateMismatch
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
@@ -81,6 +83,9 @@ class _FakeAuthClient:
             pat=PatItem(id="pat-1", name="ci-token", readOnly=False),
         )
         self.revoke_pat_result = RevokeResult(confirmed=True)
+        self.sudo_challenge_result = SudoChallengeResult(
+            challenge_token="kbc_mfa_xyz", options={"challenge": "abc"}, expires_in=120
+        )
 
     def __enter__(self) -> _FakeAuthClient:
         return self
@@ -128,6 +133,14 @@ class _FakeAuthClient:
         self.calls.append(("sudo_totp", (access_token, totp_code)))
         return self.sudo_result
 
+    def sudo_challenge(self, access_token: str):
+        self.calls.append(("sudo_challenge", (access_token,)))
+        return self.sudo_challenge_result
+
+    def sudo_webauthn(self, access_token: str, challenge_token: str, assertion: str):
+        self.calls.append(("sudo_webauthn", (access_token, challenge_token, assertion)))
+        return self.sudo_result
+
     def create_pat(self, access_token: str, **kwargs: Any):
         self.calls.append(("create_pat", (access_token, kwargs)))
         return self.pat_create_response
@@ -169,6 +182,44 @@ def _reset_fake_callback_server() -> None:
     _FakeCallbackServer.build_error = None
     _FakeCallbackServer.wait_error = None
     _FakeCallbackServer.wait_state_override = None
+
+
+class _FakeWebAuthnCallbackServer:
+    """Stand-in for `WebAuthnCallbackServer`: succeeds with a fixed callback."""
+
+    wait_error: Exception | None = None
+    wait_state_override: str | None = None
+
+    def __init__(self, *, expected_state: str) -> None:
+        self._expected_state = expected_state
+        self.redirect_uri = "http://127.0.0.1:1/callback"
+
+    def __enter__(self) -> _FakeWebAuthnCallbackServer:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def wait(self, timeout: float | None = None) -> WebAuthnCallback:
+        wait_error = type(self).wait_error
+        if wait_error is not None:
+            raise wait_error
+        state = type(self).wait_state_override or self._expected_state
+        return WebAuthnCallback(assertion="fake-assertion-json", state=state)
+
+
+def _reset_fake_webauthn_server() -> None:
+    _FakeWebAuthnCallbackServer.wait_error = None
+    _FakeWebAuthnCallbackServer.wait_state_override = None
+
+
+@pytest.fixture(autouse=True)
+def _patch_webauthn_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Replace the real WebAuthn loopback listener with the in-memory fake for every test."""
+    _reset_fake_webauthn_server()
+    monkeypatch.setattr(svc_mod, "WebAuthnCallbackServer", _FakeWebAuthnCallbackServer)
+    yield
+    _reset_fake_webauthn_server()
 
 
 @pytest.fixture(autouse=True)
@@ -1300,6 +1351,7 @@ class TestCreatePat:
             "name": "ci-salesforce",
             "read_only": False,
             "expires_in": None,
+            "project_ids": None,
         }
 
     def test_sudo_not_verified_raises_sudo_required(self, store, state_store) -> None:
@@ -1323,6 +1375,72 @@ class TestCreatePat:
 
         create_call = next(c for c in client.calls if c[0] == "create_pat")
         assert create_call[1][1]["expires_in"] == 90 * 86400
+
+    def test_project_ids_forwarded(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        service.create_pat(
+            stack=STACK_URL, totp_code="123456", name="ci", project_ids=["9840", "9841"]
+        )
+
+        create_call = next(c for c in client.calls if c[0] == "create_pat")
+        assert create_call[1][1]["project_ids"] == ["9840", "9841"]
+
+    def test_neither_totp_nor_webauthn_raises_config_error(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError):
+            service.create_pat(stack=STACK_URL, name="ci")
+
+    def test_webauthn_does_challenge_then_browser_ceremony_then_verify(
+        self, store, state_store
+    ) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        opened: list[str] = []
+
+        def _record_open(url: str) -> bool:
+            opened.append(url)
+            return True
+
+        service = _make_service(store, state_store, client, browser_opener=_record_open)
+
+        result = service.create_pat(stack=STACK_URL, webauthn=True, name="ci-salesforce")
+
+        assert result.access_token == "kbc_pat_abc123"
+        assert client.calls[0] == ("sudo_challenge", ("old-at",))
+        assert client.calls[1][0] == "sudo_webauthn"
+        assert client.calls[1][1] == ("old-at", "kbc_mfa_xyz", "fake-assertion-json")
+        assert client.calls[2][0] == "create_pat"
+        # The browser was opened at a URL carrying the challenge token.
+        assert len(opened) == 1
+        assert "kbc_mfa_xyz" in opened[0]
+        assert "connection.keboola.com" in opened[0]
+
+    def test_webauthn_state_mismatch_propagates(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+        _FakeWebAuthnCallbackServer.wait_error = WebAuthnStateMismatch("state did not match")
+
+        with pytest.raises(WebAuthnStateMismatch):
+            service.create_pat(stack=STACK_URL, webauthn=True, name="ci")
+        assert not any(c[0] == "create_pat" for c in client.calls)
+
+    def test_webauthn_sudo_not_verified_raises_sudo_required(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.sudo_result = SudoResult(verified=False)
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.create_pat(stack=STACK_URL, webauthn=True, name="ci")
+        assert exc_info.value.error_code == ErrorCode.AUTH_SUDO_REQUIRED
+        assert not any(c[0] == "create_pat" for c in client.calls)
 
 
 class TestRevokePat:

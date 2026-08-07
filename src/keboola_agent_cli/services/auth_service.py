@@ -21,7 +21,7 @@ from typing import Any
 from ..auth.auth_client import AuthClient
 from ..auth.device import run_device_flow
 from ..auth.environment import BrowserEnvironment, detect_browser_environment, open_browser
-from ..auth.models import CliTokenResponse, DeviceAuthorization, StackSession
+from ..auth.models import CliTokenResponse, DeviceAuthorization, StackSession, SudoResult
 from ..auth.pkce import (
     PkceAuthorizationError,
     PkceCallbackServer,
@@ -32,7 +32,13 @@ from ..auth.pkce import (
 from ..auth.sentinel import is_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
+from ..auth.webauthn_browser import (
+    WebAuthnCallbackServer,
+    build_ceremony_url,
+    generate_webauthn_state,
+)
 from ..config_store import ConfigStore
+from ..constants import AUTH_SUDO_WEBAUTHN_CEREMONY_PATH
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from ._auth_registration import (
@@ -440,6 +446,32 @@ class AuthService:
             code_verifier=challenge.code_verifier,
         )
 
+    def _perform_webauthn_sudo(
+        self, client: AuthClient, stack_url: str, access_token: str
+    ) -> SudoResult:
+        """Run one WebAuthn sudo ceremony: challenge -> browser -> loopback -> verify.
+
+        Mirrors `_perform_pkce`'s shape. See `auth/webauthn_browser.py`'s
+        module docstring for the placeholder ceremony-page contract this
+        assumes -- everything below it (the loopback listener, opening the
+        browser, wiring the result into `sudo_webauthn`) is real regardless
+        of what the confirmed page path/params turn out to be.
+        """
+        challenge = client.sudo_challenge(access_token)
+        state = generate_webauthn_state()
+        with WebAuthnCallbackServer(expected_state=state) as server:
+            ceremony_url = build_ceremony_url(
+                stack_url=stack_url,
+                ceremony_path=AUTH_SUDO_WEBAUTHN_CEREMONY_PATH,
+                options=challenge.options,
+                challenge_token=challenge.challenge_token,
+                redirect_uri=server.redirect_uri,
+                state=state,
+            )
+            self._browser_opener(ceremony_url)
+            callback = server.wait()
+        return client.sudo_webauthn(access_token, challenge.challenge_token, callback.assertion)
+
     # ------------------------------------------------------------------
     # project candidates / registration
     # ------------------------------------------------------------------
@@ -787,18 +819,24 @@ class AuthService:
         self,
         *,
         stack: str | None,
-        totp_code: str,
+        totp_code: str | None = None,
+        webauthn: bool = False,
         name: str,
         read_only: bool = False,
         expires_in: int | None = None,
+        project_ids: list[str] | None = None,
     ) -> PatCreateCliResult:
         """Mint a PAT from the already-logged-in session on this stack.
 
-        This does NOT log in or open a browser -- it spends an *existing*
-        session's access token to complete the sudo-then-create-PAT sequence,
-        which are ordinary bearer-authenticated API calls once a live session
-        exists (unlike `auth login` itself, neither needs a browser). Run
+        This does NOT log in itself -- it spends an *existing* session's
+        access token to complete the sudo-then-create-PAT sequence. Run
         `kbagent auth login` first if there is no stored session yet.
+
+        Exactly one step-up factor: `totp_code` (a typed 6-digit code -- no
+        browser needed, the ordinary case) or `webauthn=True` (opens a
+        browser for a WebAuthn/passkey ceremony -- see
+        `auth/webauthn_browser.py`'s module docstring for the ceremony-page
+        contract this assumes and its current placeholder status).
 
         The intended use is one-time CI/CD setup: mint a long-lived, scoped
         PAT here interactively, then store `access_token` as a CI secret and
@@ -807,7 +845,14 @@ class AuthService:
         recognizes the `kbc_pat_...` prefix and sends it as
         `Authorization: Bearer` instead of `X-StorageApi-Token`
         (`services/base.py`'s `make_client_factory`).
+
+        `project_ids`, when given, narrows the PAT to exactly those projects
+        (least privilege for a one-project-per-secret CI setup) instead of
+        every project the signed-in user can access.
         """
+        if not webauthn and not totp_code:
+            raise ConfigError("Either totp_code or webauthn=True is required to step up.")
+
         stack_url = self._resolve_stack_url(stack)
         session = self._state_store.get_session(stack_url)
         if session is None:
@@ -822,7 +867,11 @@ class AuthService:
         )
         access_token = provider.get_access_token()
         with self._auth_client_factory(stack_url) as client:
-            sudo = client.sudo_totp(access_token, totp_code)
+            if webauthn:
+                sudo = self._perform_webauthn_sudo(client, stack_url, access_token)
+            else:
+                assert totp_code is not None  # guarded above
+                sudo = client.sudo_totp(access_token, totp_code)
             if not sudo.verified:
                 raise KeboolaApiError(
                     message="Sudo step-up was not verified. Check the TOTP code and try again.",
@@ -831,7 +880,11 @@ class AuthService:
                     retryable=False,
                 )
             result = client.create_pat(
-                access_token, name=name, read_only=read_only, expires_in=expires_in
+                access_token,
+                name=name,
+                read_only=read_only,
+                expires_in=expires_in,
+                project_ids=project_ids,
             )
 
         return PatCreateCliResult(

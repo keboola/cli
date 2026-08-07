@@ -140,18 +140,27 @@ Use `kbagent <command> --help` for full flag details and examples.
     hint to run this command later. A failure in this optional follow-up
     never changes login's own (already-successful) exit code.
 
-  kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE] [--read-only] [--ttl-days N]
+  kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE | --webauthn] [--read-only] [--ttl-days N] [--project-id ID ...]
   kbagent auth pat-revoke PAT_ID [--stack URL|alias] [--yes]
     Mint or revoke a Personal Access Token (kbc_pat_...) -- the sanctioned
     way to give CI/CD a long-lived credential instead of a raw Storage
     token. pat-create spends an EXISTING `auth login` session's access
-    token (it does NOT log in itself) to do a TOTP step-up
-    (POST /v1/auth/sudo) then mint the token (POST /v1/auth/pat).
-    --totp-code is prompted interactively when omitted, and is REQUIRED
-    under --json or a non-TTY stdin -- there is no unattended path to mint
-    a PAT, same "needs a human" boundary as `auth login` itself. AN AI
+    token (it does NOT log in itself) to do a step-up then mint the token
+    (POST /v1/auth/pat). Two mutually exclusive step-up factors:
+    --totp-code (prompted interactively when omitted, and REQUIRED under
+    --json or a non-TTY stdin -- there is no unattended path to mint a
+    PAT, same "needs a human" boundary as `auth login` itself), or
+    --webauthn (opens a browser for a passkey ceremony -- see
+    auth/webauthn_browser.py for the current placeholder ceremony-page
+    contract this assumes; works fine under --json/non-TTY since it never
+    prompts for a typed code).
+    --project-id (repeatable) narrows the PAT's scope to an explicit
+    allow-list instead of every project the signed-in user can access --
+    use it once per project when minting a separate CI secret per project
+    (e.g. KBC_TOKEN_<ALIAS>). AN AI
     AGENT MUST NOT invent or guess a TOTP code; either the human supplies
-    --totp-code, or the agent must not run this command at all.
+    --totp-code (or completes --webauthn themselves), or the agent must
+    not run this command at all.
     The token is printed exactly once (in `access_token`) and never stored
     by kbagent -- copy it into a CI secret immediately. Store it as
     KBC_TOKEN under KBAGENT_PROJECT_FROM_ENV=1, or via `project add

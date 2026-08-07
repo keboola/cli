@@ -42,6 +42,7 @@ from ..constants import (
     AUTH_REFRESH_CONTENTION_STRING_CODE,
     AUTH_REFRESH_TIMEOUT,
     AUTH_SESSIONS_PATH,
+    AUTH_SUDO_CHALLENGE_PATH,
     AUTH_SUDO_PATH,
     AUTH_TOKEN_INTROSPECT_PATH,
     AUTH_TOKEN_REFRESH_PATH,
@@ -58,6 +59,7 @@ from .models import (
     IntrospectResponse,
     PatCreateResult,
     RevokeResult,
+    SudoChallengeResult,
     SudoResult,
 )
 
@@ -659,15 +661,58 @@ class AuthClient(BaseHttpClient):
         """Activate the sudo window on the current session via TOTP (``POST /v1/auth/sudo``).
 
         Required before `create_pat` -- a PAT cannot be minted outside an
-        active sudo window. Only the TOTP factor is wired here: WebAuthn
-        step-up needs a live browser ceremony this CLI has nowhere to host,
-        and password step-up is rejected outright once MFA is configured
-        (the API's own rule, not a restriction added here).
+        active sudo window. Password step-up is rejected outright once MFA
+        is configured (the API's own rule, not a restriction added here).
+        See `sudo_challenge`/`sudo_webauthn` for the WebAuthn/passkey factor,
+        which needs a live browser ceremony instead of a typed code.
         """
         response = self._do_request(
             "POST",
             AUTH_SUDO_PATH,
             json={"type": "totp", "totpCode": totp_code},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        data = response.json()
+        return SudoResult(
+            verified=bool(data.get("sudoVerified")),
+            expires_at=str(data.get("sudoExpiresAt", "")),
+            timeout_seconds=int(data.get("sudoTimeoutSeconds", 0)),
+        )
+
+    def sudo_challenge(self, access_token: str) -> SudoChallengeResult:
+        """Start a WebAuthn sudo challenge (``POST /v1/auth/sudo/challenge``).
+
+        Returns the `challengeToken` + `PublicKeyCredentialRequestOptions`
+        the caller hands to a browser ceremony page; complete it with
+        `sudo_webauthn` once the page redirects back with an assertion.
+        """
+        response = self._do_request(
+            "POST",
+            AUTH_SUDO_CHALLENGE_PATH,
+            json={},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        data = response.json()
+        return SudoChallengeResult(
+            challenge_token=str(data.get("challengeToken", "")),
+            options=data.get("options") or {},
+            expires_in=int(data.get("expiresIn", 0)),
+        )
+
+    def sudo_webauthn(self, access_token: str, challenge_token: str, assertion: str) -> SudoResult:
+        """Complete a WebAuthn sudo step-up (``POST /v1/auth/sudo``).
+
+        `challenge_token` and `assertion` are the values `sudo_challenge`
+        issued and the browser ceremony redirected back with, respectively.
+        """
+        response = self._do_request(
+            "POST",
+            AUTH_SUDO_PATH,
+            json={
+                "type": "webauthn",
+                "challengeToken": challenge_token,
+                "webauthnAssertion": assertion,
+            },
             headers={"Authorization": f"Bearer {access_token}"},
         )
         data = response.json()
@@ -684,6 +729,7 @@ class AuthClient(BaseHttpClient):
         name: str,
         read_only: bool = False,
         expires_in: int | None = None,
+        project_ids: list[str] | None = None,
     ) -> PatCreateResult:
         """Mint a Personal Access Token (``POST /v1/auth/pat``).
 
@@ -691,12 +737,24 @@ class AuthClient(BaseHttpClient):
         the server answers 403 otherwise. The returned `PatCreateResult`
         carries the bearer value exactly once -- the caller must print it
         and never persist it.
+
+        `project_ids` narrows the scope to an explicit allow-list (least
+        privilege for a CI secret meant to touch exactly one project)
+        instead of the server's default of every project the signed-in user
+        can access.
         """
         body: dict[str, Any] = {"name": name}
         if expires_in is not None:
             body["expiresIn"] = expires_in
+        scope: dict[str, Any] = {}
+        if project_ids:
+            scope["projects"] = project_ids
+        else:
+            scope["all"] = True
         if read_only:
-            body["scope"] = {"all": True, "readOnly": True}
+            scope["readOnly"] = True
+        if scope != {"all": True}:
+            body["scope"] = scope
         response = self._do_request(
             "POST",
             AUTH_PAT_PATH,

@@ -1019,7 +1019,13 @@ class TestPatCreate:
         assert "kbc_pat_shownonceonly00000000" in result.output
         assert "ONLY ONCE" in result.output
         svc.create_pat.assert_called_once_with(
-            stack=None, totp_code="123456", name="ci-salesforce", read_only=False, expires_in=None
+            stack=None,
+            totp_code="123456",
+            webauthn=False,
+            name="ci-salesforce",
+            read_only=False,
+            expires_in=None,
+            project_ids=None,
         )
 
     def test_read_only_and_ttl_forwarded(self, tmp_path: Path) -> None:
@@ -1044,7 +1050,45 @@ class TestPatCreate:
         )
         assert result.exit_code == 0, result.output
         svc.create_pat.assert_called_once_with(
-            stack=None, totp_code="123456", name="ci", read_only=True, expires_in=30 * 86400
+            stack=None,
+            totp_code="123456",
+            webauthn=False,
+            name="ci",
+            read_only=True,
+            expires_in=30 * 86400,
+            project_ids=None,
+        )
+
+    def test_project_id_repeatable_forwarded(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.return_value = _pat_create_result()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "auth",
+                "pat-create",
+                "--name",
+                "ci-salesforce",
+                "--totp-code",
+                "123456",
+                "--project-id",
+                "9840",
+                "--project-id",
+                "9841",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        svc.create_pat.assert_called_once_with(
+            stack=None,
+            totp_code="123456",
+            webauthn=False,
+            name="ci-salesforce",
+            read_only=False,
+            expires_in=None,
+            project_ids=["9840", "9841"],
         )
 
     def test_json_mode_without_totp_code_fails_fast(self, tmp_path: Path) -> None:
@@ -1070,6 +1114,47 @@ class TestPatCreate:
         assert result.exit_code != 0
         data = json.loads(result.stdout)
         assert data["error"]["code"] == "AUTH_SUDO_REQUIRED"
+
+    def test_webauthn_flag_forwarded_without_totp_code(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.return_value = _pat_create_result()
+        result = _invoke(config_dir, svc, ["auth", "pat-create", "--name", "ci", "--webauthn"])
+        assert result.exit_code == 0, result.output
+        svc.create_pat.assert_called_once_with(
+            stack=None,
+            totp_code=None,
+            webauthn=True,
+            name="ci",
+            read_only=False,
+            expires_in=None,
+            project_ids=None,
+        )
+
+    def test_webauthn_and_totp_code_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "pat-create", "--name", "ci", "--webauthn", "--totp-code", "123456"],
+        )
+        assert result.exit_code == 2, result.output
+        svc.create_pat.assert_not_called()
+
+    def test_webauthn_works_under_json_mode_without_totp_code(self, tmp_path: Path) -> None:
+        """--webauthn needs no typed code, so it must not hit the --json/no-TTY fail-fast."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.return_value = _pat_create_result()
+        result = _invoke(
+            config_dir, svc, ["--json", "auth", "pat-create", "--name", "ci", "--webauthn"]
+        )
+        assert result.exit_code == 0, result.output
+        svc.create_pat.assert_called_once()
 
 
 class TestPatRevoke:

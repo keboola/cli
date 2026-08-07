@@ -204,6 +204,20 @@ class SudoResult:
     timeout_seconds: int = 0
 
 
+@dataclass(frozen=True)
+class SudoChallengeResult:
+    """Outcome of POST /v1/auth/sudo/challenge -- a WebAuthn ceremony to complete in a browser.
+
+    ``options`` is the serialized `PublicKeyCredentialRequestOptions` the
+    ceremony page feeds to `navigator.credentials.get({publicKey: options})`
+    -- passed through opaquely, this CLI never inspects its contents.
+    """
+
+    challenge_token: str
+    options: dict
+    expires_in: int = 0
+
+
 class PatItem(BaseModel):
     """A Personal Access Token's metadata. Never carries the secret value."""
 

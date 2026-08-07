@@ -333,7 +333,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
 #   section 4.5 for the full design.
 
-kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE] [--read-only] [--ttl-days N]
+kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE | --webauthn] [--read-only] [--ttl-days N] [--project-id ID ...]
 kbagent auth pat-revoke PAT_ID [--stack URL|alias] [--yes]
 # `auth pat-*` (0.81.0+): mints/revokes a Personal Access Token (`kbc_pat_...`) for one-time CI/CD
 #   setup -- the sanctioned alternative to a raw Storage token for pipelines, and the only session-auth
