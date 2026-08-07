@@ -22,7 +22,10 @@ from keboola_agent_cli.auth.models import (
     CliTokenResponse,
     DeviceAuthorization,
     IntrospectResponse,
+    PatCreateResult,
+    PatItem,
     RevokeResult,
+    SudoResult,
 )
 from keboola_agent_cli.auth.pkce import (
     LoopbackCallback,
@@ -39,6 +42,8 @@ from keboola_agent_cli.services import auth_service as svc_mod
 from keboola_agent_cli.services.auth_service import (
     SESSION_UNSUPPORTED_FEATURES,
     AuthService,
+    PatCreateCliResult,
+    PatRevokeResult,
     ProjectSelection,
 )
 
@@ -67,6 +72,15 @@ class _FakeAuthClient:
         self.refresh_side_effect: Exception | None = None
         self.revoke_result = RevokeResult(confirmed=True)
         self.delete_session_result = RevokeResult(confirmed=True)
+        self.sudo_result = SudoResult(
+            verified=True, expires_at="2026-01-01T00:05:00Z", timeout_seconds=300
+        )
+        self.pat_create_response = PatCreateResult(
+            accessToken="kbc_pat_abc123",
+            expiresIn=7776000,
+            pat=PatItem(id="pat-1", name="ci-token", readOnly=False),
+        )
+        self.revoke_pat_result = RevokeResult(confirmed=True)
 
     def __enter__(self) -> _FakeAuthClient:
         return self
@@ -109,6 +123,18 @@ class _FakeAuthClient:
     def delete_session(self, session_id: str, access_token: str) -> RevokeResult:
         self.calls.append(("delete_session", (session_id, access_token)))
         return self.delete_session_result
+
+    def sudo_totp(self, access_token: str, totp_code: str):
+        self.calls.append(("sudo_totp", (access_token, totp_code)))
+        return self.sudo_result
+
+    def create_pat(self, access_token: str, **kwargs: Any):
+        self.calls.append(("create_pat", (access_token, kwargs)))
+        return self.pat_create_response
+
+    def revoke_pat(self, access_token: str, pat_id: str) -> RevokeResult:
+        self.calls.append(("revoke_pat", (access_token, pat_id)))
+        return self.revoke_pat_result
 
 
 class _FakeCallbackServer:
@@ -1243,3 +1269,87 @@ class TestLogoutHelperResults:
 
         assert outcome.revoked == ["gone"]
         assert outcome.remaining == ["stuck"]
+
+
+class TestCreatePat:
+    def test_no_session_raises_config_error(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+        with pytest.raises(ConfigError):
+            service.create_pat(stack=STACK_URL, totp_code="123456", name="ci")
+
+    def test_success_does_sudo_then_create_with_live_access_token(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        result = service.create_pat(stack=STACK_URL, totp_code="123456", name="ci-salesforce")
+
+        assert isinstance(result, PatCreateCliResult)
+        assert result.access_token == "kbc_pat_abc123"
+        assert result.pat_id == "pat-1"
+        assert result.name == "ci-token"
+        assert result.read_only is False
+
+        # sudo MUST happen before create_pat, both with the session's live access token.
+        assert client.calls[0] == ("sudo_totp", ("old-at", "123456"))
+        create_call = client.calls[1]
+        assert create_call[0] == "create_pat"
+        assert create_call[1][0] == "old-at"
+        assert create_call[1][1] == {
+            "name": "ci-salesforce",
+            "read_only": False,
+            "expires_in": None,
+        }
+
+    def test_sudo_not_verified_raises_sudo_required(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.sudo_result = SudoResult(verified=False)
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.create_pat(stack=STACK_URL, totp_code="000000", name="ci")
+        assert exc_info.value.error_code == ErrorCode.AUTH_SUDO_REQUIRED
+        # create_pat must never be attempted once sudo failed.
+        assert not any(c[0] == "create_pat" for c in client.calls)
+
+    def test_ttl_days_converted_to_seconds(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        service.create_pat(stack=STACK_URL, totp_code="123456", name="ci", expires_in=90 * 86400)
+
+        create_call = next(c for c in client.calls if c[0] == "create_pat")
+        assert create_call[1][1]["expires_in"] == 90 * 86400
+
+
+class TestRevokePat:
+    def test_no_session_raises_config_error(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+        with pytest.raises(ConfigError):
+            service.revoke_pat(stack=STACK_URL, pat_id="pat-1")
+
+    def test_confirmed_revoke(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        result = service.revoke_pat(stack=STACK_URL, pat_id="pat-1")
+
+        assert isinstance(result, PatRevokeResult)
+        assert result.status == "ok"
+        assert ("revoke_pat", ("old-at", "pat-1")) in client.calls
+
+    def test_unconfirmed_revoke_reported_distinctly(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.revoke_pat_result = RevokeResult(confirmed=False, message="timed out")
+        service = _make_service(store, state_store, client)
+
+        result = service.revoke_pat(stack=STACK_URL, pat_id="pat-1")
+
+        assert result.status == "unconfirmed"
+        assert result.detail == "timed out"

@@ -182,3 +182,5 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `AUTH_STATE_MISMATCH` | The PKCE callback's `state` parameter did not match the one generated at login start |
 | `SESSION_EXPIRED` | The programmatic-auth session's refresh token expired or was revoked; run `kbagent auth login` again |
 | `SESSION_NOT_FOUND` | No programmatic-auth session is persisted for this stack; run `kbagent auth login` |
+| `AUTH_SUDO_REQUIRED` | `auth pat-create` could not activate the sudo (step-up) window -- check the TOTP code and try again |
+| `AUTH_MFA_INVALID` | An MFA verification code (TOTP or recovery code) was rejected as invalid or expired |

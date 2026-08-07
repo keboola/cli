@@ -72,6 +72,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the programmatic-auth session health for a stack | `kbagent auth status` |
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
+| Mint a Personal Access Token from the current session, for one-time CI/CD setup | `kbagent auth pat-create --name NAME` |
+| Revoke a Personal Access Token. | `kbagent auth pat-revoke <PAT-ID>` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |

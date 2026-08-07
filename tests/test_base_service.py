@@ -26,6 +26,7 @@ from keboola_agent_cli.services.base import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_CODE,
     BaseService,
+    make_client_factory,
     project_error_entry,
 )
 from keboola_agent_cli.services.mcp_service import MCP_ERROR_CODE
@@ -545,3 +546,42 @@ class TestDefaultClientFactory:
         service = _TestService(config_store=store, client_factory=mock_factory)
 
         assert service._client_factory is mock_factory
+
+
+class TestMakeClientFactoryPatDispatch:
+    """A `kbc_pat_...` static token must go out as Authorization: Bearer,
+    not X-StorageApi-Token -- those are different auth schemes on the
+    Storage API, confirmed against its own OpenAPI security schemes."""
+
+    def test_plain_static_token_unaffected(self, tmp_config_dir: Path) -> None:
+        store = setup_single_project(tmp_config_dir)
+        factory = make_client_factory(store)
+        client = factory("https://connection.keboola.com", "901-55555-someToken")
+        try:
+            assert client._client.headers.get("X-StorageApi-Token") == "901-55555-someToken"
+            assert client._client.auth is None
+        finally:
+            client.close()
+
+    def test_pat_token_routes_to_bearer_auth(self, tmp_config_dir: Path) -> None:
+        from keboola_agent_cli.auth.token_provider import StaticBearerAuth
+
+        store = setup_single_project(tmp_config_dir)
+        factory = make_client_factory(store)
+        client = factory("https://connection.keboola.com", "kbc_pat_abc123")
+        try:
+            assert "X-StorageApi-Token" not in client._client.headers
+            assert isinstance(client._client.auth, StaticBearerAuth)
+        finally:
+            client.close()
+
+    def test_pat_bearer_auth_stamps_the_token_value(self, tmp_config_dir: Path) -> None:
+        import httpx
+
+        from keboola_agent_cli.auth.token_provider import StaticBearerAuth
+
+        auth = StaticBearerAuth("kbc_pat_abc123")
+        request = httpx.Request("GET", "https://connection.keboola.com/v2/storage/buckets")
+        flow = auth.auth_flow(request)
+        stamped = next(flow)
+        assert stamped.headers["Authorization"] == "Bearer kbc_pat_abc123"

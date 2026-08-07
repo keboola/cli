@@ -462,6 +462,25 @@ class BearerAuth(httpx.Auth):
             request.headers["X-KBC-ProjectId"] = str(self._project_id)
 
 
+class StaticBearerAuth(httpx.Auth):
+    """httpx auth hook that stamps a fixed `Authorization: Bearer` value.
+
+    The PAT counterpart of `BearerAuth`: a Personal Access Token has no
+    refresh token and does not rotate, so it needs none of `BearerAuth`'s
+    `TokenProvider`/401-retry machinery -- it behaves like a static Storage
+    token that happens to go on a different header. When it expires or is
+    revoked, the fix is the same as for a stale static token: mint a new one
+    and update the secret, not an automatic refresh.
+    """
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        yield request
+
+
 def get_session_token_provider(stack_url: str, state_store: AuthStateStore) -> SessionTokenProvider:
     """Return the process-wide provider for (state_store.state_path, normalized stack_url).
 

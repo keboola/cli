@@ -24,6 +24,26 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.81.0": [
+        "New: `kbagent auth pat-create --name NAME [--totp-code CODE] [--read-only] "
+        "[--ttl-days N]` -- mint a Personal Access Token (`kbc_pat_...`) from an EXISTING "
+        "`auth login` session, for one-time CI/CD setup. Does a TOTP step-up "
+        "(`POST /v1/auth/sudo`) then mints the token (`POST /v1/auth/pat`); `--totp-code` is "
+        "prompted interactively when omitted and is REQUIRED under `--json` or a non-TTY "
+        "stdin -- there is no unattended path to mint a PAT, the same human-required boundary "
+        "as `auth login` itself. The token is printed exactly once and never stored by kbagent.",
+        "New: `kbagent auth pat-revoke PAT_ID [--yes]` -- revoke a Personal Access Token. No "
+        "sudo step-up needed; idempotent (revoking an already-revoked id is not an error).",
+        "New: a `kbc_pat_...` token now works as a drop-in for `KBC_TOKEN` "
+        "(`KBAGENT_PROJECT_FROM_ENV=1`) or `project add --token` -- `make_client_factory` "
+        "recognizes the prefix on a plain static token and sends it as `Authorization: Bearer` "
+        "instead of `X-StorageApi-Token` (the Storage API treats these as distinct auth "
+        "schemes, not interchangeable encodings of one), so a PAT reaches every command that "
+        "already works on a session project (`sync`, `storage`, `config`, ...). Unlike a "
+        "session, a PAT does not rotate -- replace it (`pat-create` again) rather than "
+        "expecting an automatic refresh.",
+        "New error codes: `AUTH_SUDO_REQUIRED`, `AUTH_MFA_INVALID`.",
+    ],
     "0.80.0": [
         "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
         "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "

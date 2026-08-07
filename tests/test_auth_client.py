@@ -28,7 +28,9 @@ from keboola_agent_cli.auth.models import (
     DeviceAuthorization,
     DevicePollStatus,
     IntrospectResponse,
+    PatCreateResult,
     RevokeResult,
+    SudoResult,
 )
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code
 from keboola_agent_cli.constants import (
@@ -1280,3 +1282,182 @@ class Test404OnEveryEndpoint:
 
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
         assert STACK_URL in excinfo.value.message
+
+
+class TestSudoTotp:
+    def test_verified_stamps_bearer_and_body(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo",
+            method="POST",
+            status_code=200,
+            json={
+                "sudoVerified": True,
+                "sudoExpiresAt": "2026-01-01T00:05:00Z",
+                "sudoTimeoutSeconds": 300,
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.sudo_totp("kbc_at_live", "123456")
+        finally:
+            client.close()
+
+        assert isinstance(result, SudoResult)
+        assert result.verified is True
+        assert result.timeout_seconds == 300
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == "Bearer kbc_at_live"
+        assert json.loads(request.read().decode()) == {"type": "totp", "totpCode": "123456"}
+
+    def test_not_verified(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo",
+            method="POST",
+            status_code=200,
+            json={"sudoVerified": False, "sudoExpiresAt": "", "sudoTimeoutSeconds": 0},
+        )
+        client = _make_client()
+        try:
+            result = client.sudo_totp("kbc_at_live", "000000")
+        finally:
+            client.close()
+        assert result.verified is False
+
+    def test_404_maps_to_auth_not_supported(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/sudo", method="POST", status_code=404, json={}
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.sudo_totp("kbc_at_live", "123456")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+
+class TestCreatePat:
+    def test_minimal_request(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat",
+            method="POST",
+            status_code=201,
+            json={
+                "accessToken": "kbc_pat_abc123",
+                "tokenType": "Bearer",
+                "expiresIn": 7776000,
+                "pat": {
+                    "id": "pat-1",
+                    "name": "ci-salesforce",
+                    "scope": {"all": True},
+                    "projects": [],
+                    "readOnly": False,
+                    "expiresAt": "2026-04-01T00:00:00Z",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                },
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.create_pat("kbc_at_live", name="ci-salesforce")
+        finally:
+            client.close()
+
+        assert isinstance(result, PatCreateResult)
+        assert result.access_token == "kbc_pat_abc123"
+        assert result.pat.id == "pat-1"
+        assert result.pat.read_only is False
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == "Bearer kbc_at_live"
+        assert json.loads(request.read().decode()) == {"name": "ci-salesforce"}
+
+    def test_read_only_and_ttl_in_body(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat",
+            method="POST",
+            status_code=201,
+            json={
+                "accessToken": "kbc_pat_ro",
+                "expiresIn": 86400,
+                "pat": {
+                    "id": "pat-2",
+                    "name": "n",
+                    "scope": {"all": True, "readOnly": True},
+                    "projects": [],
+                    "readOnly": True,
+                    "expiresAt": "2026-01-02T00:00:00Z",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                },
+            },
+        )
+        client = _make_client()
+        try:
+            client.create_pat("kbc_at_live", name="n", read_only=True, expires_in=86400)
+        finally:
+            client.close()
+
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.read().decode()) == {
+            "name": "n",
+            "expiresIn": 86400,
+            "scope": {"all": True, "readOnly": True},
+        }
+
+    def test_sudo_not_active_raises(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat",
+            method="POST",
+            status_code=403,
+            json={"error": "Sudo window not active."},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.create_pat("kbc_at_live", name="n")
+        finally:
+            client.close()
+
+
+class TestRevokePat:
+    def test_confirmed(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat/pat-1", method="DELETE", status_code=204
+        )
+        client = _make_client()
+        try:
+            result = client.revoke_pat("kbc_at_live", "pat-1")
+        finally:
+            client.close()
+        assert isinstance(result, RevokeResult)
+        assert result.confirmed is True
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == "Bearer kbc_at_live"
+
+    def test_already_revoked_404_is_confirmed(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat/pat-1", method="DELETE", status_code=404, json={}
+        )
+        client = _make_client()
+        try:
+            result = client.revoke_pat("kbc_at_live", "pat-1")
+        finally:
+            client.close()
+        assert result.confirmed is True
+
+    def test_server_error_never_raises(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/pat/pat-1",
+            method="DELETE",
+            status_code=500,
+            json={"error": "internal error"},
+        )
+        client = _make_client()
+        try:
+            result = client.revoke_pat("kbc_at_live", "pat-1")
+        finally:
+            client.close()
+        assert result.confirmed is False
+        assert result.message

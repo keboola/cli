@@ -159,6 +159,34 @@ class LogoutResult:
     orphans_remaining: list[str]
 
 
+@dataclass(frozen=True)
+class PatCreateCliResult:
+    """Result of `kbagent auth pat-create`.
+
+    Unlike every other result in this module, this ONE legitimately carries
+    a token value -- a PAT is shown exactly once, by design, and this is
+    that one display. It must never be written to a log or persisted
+    anywhere by kbagent itself.
+    """
+
+    status: str  # "ok"
+    stack_url: str
+    pat_id: str
+    name: str
+    read_only: bool
+    expires_in: int
+    access_token: str
+
+
+@dataclass(frozen=True)
+class PatRevokeResult:
+    """Result of `kbagent auth pat-revoke`."""
+
+    status: str  # "ok" | "unconfirmed"
+    pat_id: str
+    detail: str = ""
+
+
 AuthClientFactory = Callable[[str], AuthClient]
 
 
@@ -752,6 +780,98 @@ class AuthService:
         return _OrphanRetryOutcome(revoked=revoked, remaining=remaining)
 
     # ------------------------------------------------------------------
+    # PAT (Personal Access Token) provisioning
+    # ------------------------------------------------------------------
+
+    def create_pat(
+        self,
+        *,
+        stack: str | None,
+        totp_code: str,
+        name: str,
+        read_only: bool = False,
+        expires_in: int | None = None,
+    ) -> PatCreateCliResult:
+        """Mint a PAT from the already-logged-in session on this stack.
+
+        This does NOT log in or open a browser -- it spends an *existing*
+        session's access token to complete the sudo-then-create-PAT sequence,
+        which are ordinary bearer-authenticated API calls once a live session
+        exists (unlike `auth login` itself, neither needs a browser). Run
+        `kbagent auth login` first if there is no stored session yet.
+
+        The intended use is one-time CI/CD setup: mint a long-lived, scoped
+        PAT here interactively, then store `access_token` as a CI secret and
+        use it in place of a Storage token (`KBC_TOKEN` under
+        `KBAGENT_PROJECT_FROM_ENV=1`, or `project add --token`) -- kbagent
+        recognizes the `kbc_pat_...` prefix and sends it as
+        `Authorization: Bearer` instead of `X-StorageApi-Token`
+        (`services/base.py`'s `make_client_factory`).
+        """
+        stack_url = self._resolve_stack_url(stack)
+        session = self._state_store.get_session(stack_url)
+        if session is None:
+            raise ConfigError(
+                f"No stored session for {stack_url}. Run `kbagent auth login "
+                f"--stack {stack_url}` first -- a PAT is minted FROM an existing "
+                "session, it does not create one."
+            )
+
+        provider = SessionTokenProvider(
+            stack_url, self._state_store, client_factory=self._auth_client_factory
+        )
+        access_token = provider.get_access_token()
+        with self._auth_client_factory(stack_url) as client:
+            sudo = client.sudo_totp(access_token, totp_code)
+            if not sudo.verified:
+                raise KeboolaApiError(
+                    message="Sudo step-up was not verified. Check the TOTP code and try again.",
+                    status_code=401,
+                    error_code=ErrorCode.AUTH_SUDO_REQUIRED,
+                    retryable=False,
+                )
+            result = client.create_pat(
+                access_token, name=name, read_only=read_only, expires_in=expires_in
+            )
+
+        return PatCreateCliResult(
+            status="ok",
+            stack_url=stack_url,
+            pat_id=result.pat.id,
+            name=result.pat.name,
+            read_only=result.pat.read_only,
+            expires_in=result.expires_in,
+            access_token=result.access_token,
+        )
+
+    def revoke_pat(self, *, stack: str | None, pat_id: str) -> PatRevokeResult:
+        """Revoke a PAT using the already-logged-in session on this stack.
+
+        No sudo step-up needed -- unlike minting, revocation is not gated
+        behind a sudo window on this endpoint.
+        """
+        stack_url = self._resolve_stack_url(stack)
+        session = self._state_store.get_session(stack_url)
+        if session is None:
+            raise ConfigError(
+                f"No stored session for {stack_url}. Run `kbagent auth login "
+                f"--stack {stack_url}` first."
+            )
+
+        provider = SessionTokenProvider(
+            stack_url, self._state_store, client_factory=self._auth_client_factory
+        )
+        access_token = provider.get_access_token()
+        with self._auth_client_factory(stack_url) as client:
+            result = client.revoke_pat(access_token, pat_id)
+
+        return PatRevokeResult(
+            status="ok" if result.confirmed else "unconfirmed",
+            pat_id=pat_id,
+            detail=result.message,
+        )
+
+    # ------------------------------------------------------------------
     # shared
     # ------------------------------------------------------------------
 
@@ -795,6 +915,8 @@ __all__ = [
     "AuthStatusResult",
     "LoginResult",
     "LogoutResult",
+    "PatCreateCliResult",
+    "PatRevokeResult",
     "ProjectCandidate",
     "ProjectCandidatesResult",
     "ProjectSelection",

@@ -637,6 +637,17 @@ AUTH_STATE_VERSION: int = 1
 # kbagent builds still load the file.
 SESSION_TOKEN_PREFIX: str = "kbc-session://"
 
+# Prefix on the *real* bearer token value (not a config.json sentinel) that a
+# Personal Access Token comes back as from `POST /v1/auth/pat`. Recognised by
+# `services/base.py`'s `make_client_factory` so a PAT dropped into a plain
+# static-token slot (`project add --token`, or `KBC_TOKEN` under
+# `KBAGENT_PROJECT_FROM_ENV=1`) is sent as `Authorization: Bearer`, matching
+# what the Storage API's own `BearerAuth` security scheme expects -- a literal
+# `kbc_pat_...` string sent as `X-StorageApi-Token` is rejected outright, since
+# that header is a distinct auth scheme from Bearer, not an alternate encoding
+# of it.
+PAT_ACCESS_TOKEN_PREFIX: str = "kbc_pat_"
+
 # Server endpoints, relative to the stack base URL.
 AUTH_PKCE_AUTHORIZE_PATH: str = "/admin/auth/pkce/authorize"
 AUTH_PKCE_TOKEN_PATH: str = "/v1/auth/pkce/token"
@@ -650,6 +661,11 @@ AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
 # which only ever has a session id on hand, never that session's refresh
 # token -- see plan review B-1/B-2).
 AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
+# Step-up (sudo) and Personal Access Token endpoints (since 0.81.0). A sudo
+# window must be active on the current session before `AUTH_PAT_PATH` (POST)
+# will mint a token -- see `AuthService.create_pat`.
+AUTH_SUDO_PATH: str = "/v1/auth/sudo"
+AUTH_PAT_PATH: str = "/v1/auth/pat"
 
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down

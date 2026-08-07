@@ -140,6 +140,31 @@ Use `kbagent <command> --help` for full flag details and examples.
     hint to run this command later. A failure in this optional follow-up
     never changes login's own (already-successful) exit code.
 
+  kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE] [--read-only] [--ttl-days N]
+  kbagent auth pat-revoke PAT_ID [--stack URL|alias] [--yes]
+    Mint or revoke a Personal Access Token (kbc_pat_...) -- the sanctioned
+    way to give CI/CD a long-lived credential instead of a raw Storage
+    token. pat-create spends an EXISTING `auth login` session's access
+    token (it does NOT log in itself) to do a TOTP step-up
+    (POST /v1/auth/sudo) then mint the token (POST /v1/auth/pat).
+    --totp-code is prompted interactively when omitted, and is REQUIRED
+    under --json or a non-TTY stdin -- there is no unattended path to mint
+    a PAT, same "needs a human" boundary as `auth login` itself. AN AI
+    AGENT MUST NOT invent or guess a TOTP code; either the human supplies
+    --totp-code, or the agent must not run this command at all.
+    The token is printed exactly once (in `access_token`) and never stored
+    by kbagent -- copy it into a CI secret immediately. Store it as
+    KBC_TOKEN under KBAGENT_PROJECT_FROM_ENV=1, or via `project add
+    --token`: services/base.py's make_client_factory recognizes the
+    kbc_pat_ prefix on a plain static token and sends it as
+    `Authorization: Bearer` instead of `X-StorageApi-Token` (different
+    auth schemes on the Storage API, not different encodings of one), so
+    every command that already works on a session project (sync, storage,
+    config, ...) works the same way with a PAT. A PAT does not rotate
+    (unlike a session) -- replace it (pat-create again) rather than
+    expecting an automatic refresh. pat-revoke needs no step-up and is
+    idempotent (revoking an already-revoked id is not an error).
+
   Storage posture: session tokens live in PLAINTEXT in auth.json (0600), a
   sibling of config.json -- the same posture as the static Storage tokens
   already kept there (deliberate RFC 8628 deviation; see

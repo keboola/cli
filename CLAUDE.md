@@ -287,7 +287,7 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --deny-writes, --deny-destructive, --allow-env-manage-token
-# Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
+# Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`. KBC_TOKEN accepts either a real Storage token or a `kbagent auth pat-create`-minted PAT (0.81.0+, see `auth pat-*` below) -- both work identically in this path.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
 kbagent auth status [--stack URL|alias]
@@ -332,6 +332,23 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   applies retroactively to `auth login --register-projects` (now suffixes on an alias collision
 #   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
 #   section 4.5 for the full design.
+
+kbagent auth pat-create --name NAME [--stack URL|alias] [--totp-code CODE] [--read-only] [--ttl-days N]
+kbagent auth pat-revoke PAT_ID [--stack URL|alias] [--yes]
+# `auth pat-*` (0.81.0+): mints/revokes a Personal Access Token (`kbc_pat_...`) for one-time CI/CD
+#   setup -- the sanctioned alternative to a raw Storage token for pipelines, and the only session-auth
+#   surface meant to run non-interactively downstream of a one-time human step. `pat-create` spends an
+#   EXISTING `auth login` session's access token (it does not log in itself) to do a TOTP step-up
+#   (`POST /v1/auth/sudo`) followed by `POST /v1/auth/pat`; --totp-code is prompted interactively when
+#   omitted, and is REQUIRED (fails fast) under --json or a non-TTY stdin -- there is no unattended path
+#   to mint a PAT, matching `auth login`'s own "needs a human" boundary. The token is printed exactly
+#   once and never stored by kbagent. Store it as `KBC_TOKEN` (the `KBAGENT_PROJECT_FROM_ENV=1` headless
+#   path) or via `project add --token`: `make_client_factory` (services/base.py) recognizes the
+#   `kbc_pat_` prefix on a plain static token and sends it as `Authorization: Bearer` instead of
+#   `X-StorageApi-Token` -- those are different auth schemes on the Storage API, not different encodings
+#   of one, so a PAT dropped into the old header would just fail. A PAT does not rotate (unlike a
+#   session); replace it (`pat-create` again) instead of expecting a refresh. `pat-revoke` needs no
+#   step-up. New error codes: AUTH_SUDO_REQUIRED, AUTH_MFA_INVALID.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

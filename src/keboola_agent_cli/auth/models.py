@@ -3,8 +3,9 @@
 Two families of model live here:
 
 - Wire models (`AuthUser`, `CliTokenResponse`, `DeviceAuthorization`,
-  `AuthProject`, `IntrospectResponse`, `DevicePollResult`, `RevokeResult`):
-  shaped after the Keboola auth-service JSON responses, never persisted.
+  `AuthProject`, `IntrospectResponse`, `DevicePollResult`, `RevokeResult`,
+  `SudoResult`, `PatItem`, `PatCreateResult`): shaped after the Keboola
+  auth-service JSON responses, never persisted.
 - Persisted state (`StackSession`, `AuthState`): the exact shape written to
   and read from ``auth.json`` by `AuthStateStore`.
 
@@ -186,6 +187,50 @@ class RevokeResult:
 
     confirmed: bool
     message: str = ""
+
+
+@dataclass(frozen=True)
+class SudoResult:
+    """Outcome of POST /v1/auth/sudo (step-up authentication).
+
+    Carries no token -- the sudo window is server-side state on the existing
+    session, not a new credential. ``expires_at`` is the raw RFC 3339 string
+    from the response, kept as-is since it is only ever displayed, never
+    computed on.
+    """
+
+    verified: bool
+    expires_at: str = ""
+    timeout_seconds: int = 0
+
+
+class PatItem(BaseModel):
+    """A Personal Access Token's metadata. Never carries the secret value."""
+
+    id: str
+    name: str
+    read_only: bool = Field(default=False, alias="readOnly")
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
+class PatCreateResult(BaseModel):
+    """Response to POST /v1/auth/pat.
+
+    ``access_token`` is the PAT's bearer value, shown exactly once by this
+    response and never retrievable again -- callers must print it and not
+    persist it (mirrors the "no token value is ever logged" rule the session
+    login flow already follows).
+    """
+
+    access_token: str = Field(alias="accessToken")
+    token_type: str = Field(default="Bearer", alias="tokenType")
+    expires_in: int = Field(default=0, alias="expiresIn")
+    pat: PatItem
+
+    model_config = _WIRE_MODEL_CONFIG
 
 
 class StackSession(BaseModel):

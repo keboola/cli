@@ -25,6 +25,8 @@ from keboola_agent_cli.services.auth_service import (
     AuthStatusResult,
     LoginResult,
     LogoutResult,
+    PatCreateCliResult,
+    PatRevokeResult,
     ProjectCandidate,
     ProjectCandidatesResult,
     RegisteredProject,
@@ -107,6 +109,26 @@ def _candidate(**overrides: Any) -> ProjectCandidate:
     }
     defaults.update(overrides)
     return ProjectCandidate(**defaults)  # type: ignore[arg-type]
+
+
+def _pat_create_result(**overrides: Any) -> PatCreateCliResult:
+    defaults: dict[str, Any] = {
+        "status": "ok",
+        "stack_url": STACK_URL,
+        "pat_id": "pat-1",
+        "name": "ci-salesforce",
+        "read_only": False,
+        "expires_in": 7776000,
+        "access_token": "kbc_pat_shownonceonly00000000",
+    }
+    defaults.update(overrides)
+    return PatCreateCliResult(**defaults)  # type: ignore[arg-type]
+
+
+def _pat_revoke_result(**overrides: Any) -> PatRevokeResult:
+    defaults: dict[str, Any] = {"status": "ok", "pat_id": "pat-1", "detail": ""}
+    defaults.update(overrides)
+    return PatRevokeResult(**defaults)  # type: ignore[arg-type]
 
 
 def _register_result(**overrides: Any) -> RegisterProjectsResult:
@@ -980,3 +1002,128 @@ class TestSessionRestrictionDisclosure:
         result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
         assert result.exit_code == 0, result.output
         assert "Not available on session-backed projects" not in result.output
+
+
+class TestPatCreate:
+    def test_success_with_explicit_totp_code(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.return_value = _pat_create_result()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "pat-create", "--name", "ci-salesforce", "--totp-code", "123456"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "kbc_pat_shownonceonly00000000" in result.output
+        assert "ONLY ONCE" in result.output
+        svc.create_pat.assert_called_once_with(
+            stack=None, totp_code="123456", name="ci-salesforce", read_only=False, expires_in=None
+        )
+
+    def test_read_only_and_ttl_forwarded(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.return_value = _pat_create_result(read_only=True)
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "auth",
+                "pat-create",
+                "--name",
+                "ci",
+                "--totp-code",
+                "123456",
+                "--read-only",
+                "--ttl-days",
+                "30",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        svc.create_pat.assert_called_once_with(
+            stack=None, totp_code="123456", name="ci", read_only=True, expires_in=30 * 86400
+        )
+
+    def test_json_mode_without_totp_code_fails_fast(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(config_dir, svc, ["--json", "auth", "pat-create", "--name", "ci"])
+        assert result.exit_code == 2, result.output
+        svc.create_pat.assert_not_called()
+
+    def test_sudo_required_error_surfaces(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.create_pat.side_effect = KeboolaApiError(
+            "Sudo step-up was not verified.", error_code=ErrorCode.AUTH_SUDO_REQUIRED
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "pat-create", "--name", "ci", "--totp-code", "000000"],
+        )
+        assert result.exit_code != 0
+        data = json.loads(result.stdout)
+        assert data["error"]["code"] == "AUTH_SUDO_REQUIRED"
+
+
+class TestPatRevoke:
+    def test_confirmed_revoke(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.revoke_pat.return_value = _pat_revoke_result()
+        result = _invoke(config_dir, svc, ["auth", "pat-revoke", "pat-1", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "revoked" in result.output.lower()
+        svc.revoke_pat.assert_called_once_with(stack=None, pat_id="pat-1")
+
+    def test_confirm_abort(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(config_dir, svc, ["auth", "pat-revoke", "pat-1"], input_text="n\n")
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+        svc.revoke_pat.assert_not_called()
+
+    def test_unconfirmed_revoke_reported_distinctly(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.revoke_pat.return_value = _pat_revoke_result(status="unconfirmed", detail="timed out")
+        result = _invoke(config_dir, svc, ["auth", "pat-revoke", "pat-1", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Could not confirm" in result.output
+
+
+class TestPatPermissionClassification:
+    def test_registry_entries(self) -> None:
+        assert OPERATION_REGISTRY["auth.pat-create"] == "admin"
+        assert OPERATION_REGISTRY["auth.pat-revoke"] == "admin"
+
+    def test_admin_deny_blocks_pat_create(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "version": CURRENT_CONFIG_VERSION,
+                    "projects": {},
+                    "permissions": {"mode": "allow", "allow": [], "deny": ["cli:admin"]},
+                }
+            )
+        )
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "pat-create", "--name", "ci", "--totp-code", "123456"],
+        )
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        svc.create_pat.assert_not_called()

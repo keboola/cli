@@ -33,6 +33,7 @@ from ..constants import (
     AUTH_CLIENT_ID,
     AUTH_DEVICE_PATH,
     AUTH_DEVICE_TOKEN_PATH,
+    AUTH_PAT_PATH,
     AUTH_PKCE_AUTHORIZE_PATH,
     AUTH_PKCE_TOKEN_PATH,
     AUTH_REFRESH_CONTENTION_DEFAULT_DELAY,
@@ -41,6 +42,7 @@ from ..constants import (
     AUTH_REFRESH_CONTENTION_STRING_CODE,
     AUTH_REFRESH_TIMEOUT,
     AUTH_SESSIONS_PATH,
+    AUTH_SUDO_PATH,
     AUTH_TOKEN_INTROSPECT_PATH,
     AUTH_TOKEN_REFRESH_PATH,
     AUTH_TOKEN_REVOKE_PATH,
@@ -54,7 +56,9 @@ from .models import (
     DevicePollResult,
     DevicePollStatus,
     IntrospectResponse,
+    PatCreateResult,
     RevokeResult,
+    SudoResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -632,6 +636,87 @@ class AuthClient(BaseHttpClient):
             response = self._client.request(
                 "DELETE",
                 f"{AUTH_SESSIONS_PATH}/{session_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        except httpx.HTTPError as exc:
+            return RevokeResult(
+                confirmed=False,
+                message=self._truncate(f"{type(exc).__name__}: {exc}"),
+            )
+
+        if response.status_code < 300 or response.status_code == 404:
+            return RevokeResult(confirmed=True)
+        return RevokeResult(
+            confirmed=False,
+            message=self._truncate(self._extract_error_message(response)),
+        )
+
+    # ------------------------------------------------------------------
+    # Sudo step-up + Personal Access Tokens (since 0.81.0)
+    # ------------------------------------------------------------------
+
+    def sudo_totp(self, access_token: str, totp_code: str) -> SudoResult:
+        """Activate the sudo window on the current session via TOTP (``POST /v1/auth/sudo``).
+
+        Required before `create_pat` -- a PAT cannot be minted outside an
+        active sudo window. Only the TOTP factor is wired here: WebAuthn
+        step-up needs a live browser ceremony this CLI has nowhere to host,
+        and password step-up is rejected outright once MFA is configured
+        (the API's own rule, not a restriction added here).
+        """
+        response = self._do_request(
+            "POST",
+            AUTH_SUDO_PATH,
+            json={"type": "totp", "totpCode": totp_code},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        data = response.json()
+        return SudoResult(
+            verified=bool(data.get("sudoVerified")),
+            expires_at=str(data.get("sudoExpiresAt", "")),
+            timeout_seconds=int(data.get("sudoTimeoutSeconds", 0)),
+        )
+
+    def create_pat(
+        self,
+        access_token: str,
+        *,
+        name: str,
+        read_only: bool = False,
+        expires_in: int | None = None,
+    ) -> PatCreateResult:
+        """Mint a Personal Access Token (``POST /v1/auth/pat``).
+
+        Requires an active sudo window (`sudo_totp`) on the same session;
+        the server answers 403 otherwise. The returned `PatCreateResult`
+        carries the bearer value exactly once -- the caller must print it
+        and never persist it.
+        """
+        body: dict[str, Any] = {"name": name}
+        if expires_in is not None:
+            body["expiresIn"] = expires_in
+        if read_only:
+            body["scope"] = {"all": True, "readOnly": True}
+        response = self._do_request(
+            "POST",
+            AUTH_PAT_PATH,
+            json=body,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        return PatCreateResult.model_validate(response.json())
+
+    def revoke_pat(self, access_token: str, pat_id: str) -> RevokeResult:
+        """Revoke a Personal Access Token (``DELETE /v1/auth/pat/{id}``).
+
+        Idempotent server-side (a second call against an already-revoked id
+        still returns 204) and, like `revoke`/`delete_session`, never raises
+        -- a failed revoke must be reported distinctly, not thrown, so a
+        caller can still tell the operator exactly what to check.
+        """
+        try:
+            response = self._client.request(
+                "DELETE",
+                f"{AUTH_PAT_PATH}/{pat_id}",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
         except httpx.HTTPError as exc:

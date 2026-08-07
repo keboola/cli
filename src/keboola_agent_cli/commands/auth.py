@@ -12,7 +12,13 @@ Requires a human at a browser (or able to visit a URL and type a code) --
 this is not something an AI agent can complete unattended. The resulting
 session tokens are never printed or retrievable via the CLI; every result
 below is built from a dataclass with no token field, so `--json` output is
-safe by construction.
+safe by construction -- with one deliberate exception: `pat-create`
+(`PatCreateCliResult`), whose entire purpose is to show a newly-minted
+Personal Access Token exactly once so the operator can copy it into a CI
+secret. `pat-create`/`pat-revoke` also need an already-live session (from
+`auth login`) plus a fresh TOTP code, but neither opens a browser itself --
+minting or revoking a PAT is an ordinary bearer-authenticated API call once
+a session exists.
 """
 
 from __future__ import annotations
@@ -35,6 +41,8 @@ from ..services.auth_service import (
     AuthStatusResult,
     LoginResult,
     LogoutResult,
+    PatCreateCliResult,
+    PatRevokeResult,
     ProjectSelection,
     RegisteredProject,
     RegisterProjectsResult,
@@ -263,6 +271,30 @@ def _format_register_projects_result(console: Console, result: RegisterProjectsR
         console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
     if result.registered_projects:
         _render_session_restrictions(console, result.session_unsupported_features)
+
+
+def _format_pat_create_result(console: Console, result: PatCreateCliResult) -> None:
+    """Render a freshly-minted PAT. This is the one place a token is ever printed."""
+    console.print(f"[bold green]PAT created[/bold green] on {escape(result.stack_url)}.")
+    console.print(
+        "[bold yellow]This value is shown ONLY ONCE -- copy it into a CI secret now:[/bold yellow]"
+    )
+    console.print(result.access_token)
+    scope = "read-only" if result.read_only else "read-write"
+    console.print(
+        f"[dim]name={escape(result.name)} scope={scope} expires_in={result.expires_in}s[/dim]"
+    )
+
+
+def _format_pat_revoke_result(console: Console, result: PatRevokeResult) -> None:
+    """Render a PAT revocation, surfacing an uncertain remote revoke distinctly."""
+    if result.status == "ok":
+        console.print(f"[bold green]PAT revoked[/bold green] ({escape(result.pat_id)}).")
+    else:
+        console.print(
+            f"[bold yellow]Could not confirm revocation[/bold yellow] of PAT "
+            f"{escape(result.pat_id)}. {escape(result.detail)}"
+        )
 
 
 # ── Commands ──────────────────────────────────────────────────────────
@@ -528,6 +560,95 @@ def auth_register_projects(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_register_projects_result)
+
+
+@auth_app.command("pat-create")
+def auth_pat_create(
+    ctx: typer.Context,
+    name: str = typer.Option(..., "--name", help="Label for the PAT (shown in future listings)"),
+    stack: str | None = typer.Option(
+        None, "--stack", help="Stack URL or a registered project alias with a live session"
+    ),
+    totp_code: str | None = typer.Option(
+        None,
+        "--totp-code",
+        help="Current 6-digit TOTP code. Omitted: prompted interactively "
+        "(never accept this as a hardcoded value in a script -- it is a live, "
+        "30-second code you type from your authenticator app each time).",
+    ),
+    read_only: bool = typer.Option(
+        False, "--read-only", help="Issue a read-only PAT (denies writes on Storage routes)"
+    ),
+    ttl_days: int | None = typer.Option(
+        None, "--ttl-days", help="PAT lifetime in days (default: org policy maximum)"
+    ),
+) -> None:
+    """Mint a Personal Access Token from the current session, for one-time CI/CD setup.
+
+    Requires `kbagent auth login` to already be signed in on this stack --
+    this command spends that session's access token, it does not start a new
+    login. Also requires a live TOTP code (step-up authentication), because
+    the auth service will not mint a PAT without an active sudo window.
+
+    The token is printed exactly once, in `access_token`, and never stored by
+    kbagent -- copy it into a CI secret immediately. Store it as `KBC_TOKEN`
+    (the `KBAGENT_PROJECT_FROM_ENV=1` headless path) or via
+    `project add --token`: kbagent recognizes the `kbc_pat_...` prefix and
+    sends it as `Authorization: Bearer`, the same auth scheme a browser-login
+    session uses, so every command that already works on a session project
+    (`sync`, `storage`, `config`, ...) works the same way with a PAT -- with
+    the difference that a PAT does not rotate, so replace it (this command
+    again) instead of expecting an automatic refresh.
+    """
+    formatter = get_formatter(ctx)
+    check_cli_operation(ctx, "auth.pat-create")
+    if totp_code is None:
+        if formatter.json_mode or not _is_stdout_tty():
+            formatter.error(
+                message="--totp-code is required in --json mode or when stdin is not a TTY.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+            raise typer.Exit(code=2)
+        totp_code = typer.prompt("Current TOTP code")
+    service: AuthService = get_service(ctx, "auth_service")
+    try:
+        result = service.create_pat(
+            stack=stack,
+            totp_code=totp_code,
+            name=name,
+            read_only=read_only,
+            expires_in=ttl_days * 86400 if ttl_days else None,
+        )
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_errors(formatter, exc)
+    formatter.output(result, _format_pat_create_result)
+
+
+@auth_app.command("pat-revoke")
+def auth_pat_revoke(
+    ctx: typer.Context,
+    pat_id: str = typer.Argument(..., help="PAT id (UUID) to revoke"),
+    stack: str | None = typer.Option(
+        None, "--stack", help="Stack URL or a registered project alias with a live session"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Revoke a Personal Access Token. Idempotent -- an already-revoked id is not an error."""
+    formatter = get_formatter(ctx)
+    check_cli_operation(ctx, "auth.pat-revoke")
+    if (
+        not formatter.json_mode
+        and not yes
+        and not typer.confirm(f"Revoke PAT {pat_id}? Anything using it will stop working.")
+    ):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+    service: AuthService = get_service(ctx, "auth_service")
+    try:
+        result = service.revoke_pat(stack=stack, pat_id=pat_id)
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_errors(formatter, exc)
+    formatter.output(result, _format_pat_revoke_result)
 
 
 def _pick_projects_interactively(

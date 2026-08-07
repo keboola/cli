@@ -25,6 +25,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
+    # pat-create mints a durable, usable-anywhere credential (unlike a
+    # sentinel, it IS the bearer value) -- same "admin" class as `project
+    # add`'s pasted static token. pat-revoke is the same class as
+    # `project remove`: it can cut off whatever CI/CD is using that PAT.
+    "auth.pat-create": "admin",
+    "auth.pat-revoke": "admin",
     # Project management
     "project.add": "admin",
     "project.list": "read",
