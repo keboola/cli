@@ -113,12 +113,21 @@ Four things this skill cannot infer; get them from the customer/operator first:
   against a `kbagent sync pull` of the same project, which is optional.
 - **Auth for each project being converted — two different answers for CI vs. the
   local conversion step.** The generated CI workflows (Step 3/4) always need a
-  static per-project Storage API token secret (`KBC_TOKEN_<ALIAS>`,
-  `KBAGENT_PROJECT_FROM_ENV=1`) — `kbagent auth login` is browser-based and
-  cannot run unattended on a GitHub Actions runner, so there is no login-based
-  alternative for CI. For the **local, interactive** one-time conversion in Step
-  3b, though, a raw token is not the only option: if the operator already has
-  (or runs) `kbagent auth login` + `auth register-projects`, they get a
+  per-project credential secret (`KBC_TOKEN_<ALIAS>`, `KBAGENT_PROJECT_FROM_ENV=1`)
+  — `kbagent auth login` is browser-based and cannot run unattended on a GitHub
+  Actions runner, so there is no login-based alternative for CI. **Recommended
+  (kbagent v0.81.0+): a Personal Access Token**, minted once by the operator via
+  `kbagent auth login` (browser, once per stack) then `kbagent auth pat-create
+  --name "ci-<alias>" --project-id <id>` (prompts for a live TOTP code, prints
+  the PAT exactly once) — that PAT is a drop-in for `KBC_TOKEN`, scoped to one
+  project, with its own expiry and independent revocation
+  (`kbagent auth pat-revoke`). See
+  [references/secrets-setup.md](references/secrets-setup.md) for the full
+  walkthrough. Fall back to a raw Storage API token (pasted from the Keboola UI)
+  only if `auth pat-create` isn't available or the account can't complete
+  browser-login + TOTP. For the **local, interactive** one-time conversion in
+  Step 3b, a raw token is not the only option either: if the operator already
+  has (or runs) `kbagent auth login` + `auth register-projects`, they get a
   registered alias with a session token and can run `kbagent sync init/pull
   --project <alias> --directory <DIR>` directly — no `KBAGENT_PROJECT_FROM_ENV`/
   `KBC_TOKEN` env-injection needed, since that dance exists specifically to

@@ -300,11 +300,14 @@ def _install_steps_placeholder() -> str:
 
 def secrets_report(projects: list[Project], repo_slug: str) -> str:
     lines: list[str] = []
-    lines.append("Required GitHub secrets (per project Storage API token):")
+    lines.append("Required GitHub secrets (one per project):")
+    lines.append("  Recommended (kbagent v0.81.0+): mint a scoped PAT, then store it --")
+    lines.append("  never a raw Storage token pasted from the UI:")
     for p in projects:
+        lines.append(f"  kbagent auth pat-create --name 'ci-{p.alias}' --project-id {p.project_id}")
         lines.append(
             f"  gh secret set {p.token_secret} "
-            f"--repo {repo_slug}   # project {p.project_id} ({p.directory})"
+            f"--repo {repo_slug}   # paste the PAT just printed above, for project {p.project_id} ({p.directory})"
         )
     lines.append("")
     lines.append("Required GitHub Environments (for `kbagent push` approval gating):")
