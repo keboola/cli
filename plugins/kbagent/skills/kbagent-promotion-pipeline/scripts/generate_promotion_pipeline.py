@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,19 +84,26 @@ class Pipeline:
 
 _SAFE_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 _SAFE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+/?$")
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
 
 
 def _validate_pipelines(pipelines: list[Pipeline]) -> None:
     """Reject pipeline fields that would break out of generated YAML/shell quoting.
 
-    ``directory``/``*_stack_url`` are admin-authored (a JSON config file or CLI
-    flags), not attacker-controlled at runtime, but the generator still embeds
-    them raw into single-quoted shell strings and YAML `paths:` lists -- a
-    value containing a quote, newline, or `..` would corrupt the generated
-    workflow. Fail fast at generation time instead (CWE-78-adjacent).
+    ``name``/``directory``/``*_stack_url`` are admin-authored (a JSON config
+    file or CLI flags), not attacker-controlled at runtime, but the generator
+    still embeds them into YAML string fields and (for ``directory``) a
+    shell command -- a value containing a quote, colon, newline, or `..`
+    would corrupt the generated workflow. Fail fast at generation time
+    instead (CWE-78-adjacent). Also rejects two pipelines that would collide
+    on the same tracked directory (guaranteed-wrong: two different tokens
+    pulling/pushing into one folder) or the same secret-name label.
     """
     labels_seen: dict[str, str] = {}
+    directories_seen: dict[str, str] = {}
     for p in pipelines:
+        if not _SAFE_NAME_RE.match(p.name):
+            raise ValueError(f"pipeline name {p.name!r} contains unsafe characters")
         if ".." in p.directory.split("/") or not _SAFE_DIRECTORY_RE.match(p.directory):
             raise ValueError(f"pipeline {p.name!r}: unsafe directory {p.directory!r}")
         for field, url in (
@@ -104,6 +112,12 @@ def _validate_pipelines(pipelines: list[Pipeline]) -> None:
         ):
             if not _SAFE_URL_RE.match(url):
                 raise ValueError(f"pipeline {p.name!r}: unsafe {field} {url!r}")
+        if p.directory in directories_seen:
+            raise ValueError(
+                f"pipelines {directories_seen[p.directory]!r} and {p.name!r} both use "
+                f"directory {p.directory!r} -- each pipeline needs its own directory"
+            )
+        directories_seen[p.directory] = p.name
         if p.label in labels_seen:
             raise ValueError(
                 f"pipelines {labels_seen[p.label]!r} and {p.name!r} both sanitize to the "
@@ -112,18 +126,29 @@ def _validate_pipelines(pipelines: list[Pipeline]) -> None:
         labels_seen[p.label] = p.name
 
 
+def _pipeline_from_dict(p: dict) -> Pipeline:
+    try:
+        return Pipeline(
+            name=str(p["name"]),
+            directory=str(p["directory"]),
+            source_stack_url=_normalize_url(str(p["source_stack_url"])),
+            dest_stack_url=_normalize_url(str(p["dest_stack_url"])),
+        )
+    except KeyError as exc:
+        raise ValueError(f"pipeline entry missing required key {exc}") from exc
+
+
 def _load_pipelines(args: argparse.Namespace) -> list[Pipeline]:
     if args.config:
-        data = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        pipelines = [
-            Pipeline(
-                name=str(p["name"]),
-                directory=str(p["directory"]),
-                source_stack_url=_normalize_url(str(p["source_stack_url"])),
-                dest_stack_url=_normalize_url(str(p["dest_stack_url"])),
-            )
-            for p in data
-        ]
+        try:
+            raw = Path(args.config).read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, list):
+                raise ValueError("--config must contain a JSON list of pipeline objects")
+            pipelines = [_pipeline_from_dict(p) for p in data]
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"error: --config {args.config!r} is invalid: {exc}", file=sys.stderr)
+            sys.exit(2)
     else:
         missing = [
             flag
@@ -184,7 +209,7 @@ def _install_steps(version: str | None, git_ref: str | None) -> str:
         "      - name: Install uv\n"
         "        uses: astral-sh/setup-uv@v5\n"
         "      - name: Install kbagent\n"
-        f"        run: uv tool install '{spec}'\n"
+        f"        run: uv tool install {shlex.quote(spec)}\n"
         "      - name: Show version\n"
         "        run: kbagent version\n"
     )
@@ -206,7 +231,8 @@ def _pipeline_step(
         f"          KBC_TOKEN: ${{{{ secrets.{token_secret} }}}}\n"
         f"          KBC_STORAGE_API_URL: {stack_url}\n"
         "        run: |\n"
-        f"          {prefix}sync {command} --project __env__ --directory '{p.directory}'\n"
+        f"          {prefix}sync {command} --project __env__ "
+        f"--directory {shlex.quote(p.directory)}\n"
     )
 
 
@@ -232,7 +258,8 @@ def _pull_and_merge_step(p: Pipeline) -> str:
         f"          KBC_TOKEN: ${{{{ secrets.{p.source_token_secret} }}}}\n"
         f"          KBC_STORAGE_API_URL: {p.source_stack_url}\n"
         "        run: |\n"
-        f"          kbagent sync pull --project __env__ --directory '{scratch}' --force\n"
+        f"          kbagent sync pull --project __env__ --directory {shlex.quote(scratch)} "
+        "--force\n"
         f"      - name: Merge {p.name} content into '{p.directory}' (manifest untouched)\n"
         "        run: |\n"
         "          python3 - <<'PYEOF'\n"
@@ -241,11 +268,21 @@ def _pull_and_merge_step(p: Pipeline) -> str:
         f"          dst = pathlib.Path({p.directory!r})\n"
         "          dst.mkdir(parents=True, exist_ok=True)\n"
         "          for item in list(dst.iterdir()):\n"
-        "              if item.name != '.keboola':\n"
-        "                  shutil.rmtree(item) if item.is_dir() else item.unlink()\n"
+        "              if item.name == '.keboola':\n"
+        "                  continue\n"
+        "              # is_dir() follows symlinks -- unlink the link itself rather\n"
+        "              # than rmtree-ing through it (which could delete outside <dir>).\n"
+        "              if item.is_symlink() or item.is_file():\n"
+        "                  item.unlink()\n"
+        "              else:\n"
+        "                  shutil.rmtree(item)\n"
         "          for item in src.iterdir():\n"
         "              if item.name == '.keboola':\n"
         "                  continue\n"
+        "              if item.is_symlink():\n"
+        "                  # kbagent's own `sync pull` output is always plain files/\n"
+        "                  # dirs, never symlinks -- refuse rather than guess at intent.\n"
+        "                  raise SystemExit(f'refusing to copy symlink from pull: {item}')\n"
         "              target = dst / item.name\n"
         "              if item.is_dir():\n"
         "                  shutil.copytree(item, target)\n"

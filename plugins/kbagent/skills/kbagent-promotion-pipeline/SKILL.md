@@ -41,8 +41,10 @@ two Storage API tokens (source, destination):
    [references/secrets-setup.md](references/secrets-setup.md)).
 2. **Validate** (`kbagent-promote-validate.yml`, on the PR) runs
    `sync push --dry-run --project __env__ --directory <dir>` against the
-   **destination** project's token, for every pipeline touched by the PR --
-   this is the cross-project diff: *if this PR merges, here is exactly what
+   **destination** project's token, once per configured pipeline (the
+   `paths:` trigger only gates whether the workflow runs at all, not which
+   pipeline steps execute inside it -- every pipeline's dry-run always runs)
+   -- this is the cross-project diff: *if this PR merges, here is exactly what
    changes in the destination project.* Read this before approving.
 3. **Push** (`kbagent-promote-push.yml`, on push to `main`) runs, in a
    **separate job per pipeline**, `sync push --project __env__ --directory

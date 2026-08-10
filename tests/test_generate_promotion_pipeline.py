@@ -48,12 +48,16 @@ class TestPullMechanic:
     def test_pulls_into_scratch_not_tracked_directory(self) -> None:
         yml = gen_pull([_pipeline()], schedule=None, main_branch="main")
         assert "/tmp/promote-scratch/salesforce" in yml
-        assert "--directory '/tmp/promote-scratch/salesforce' --force" in yml
+        assert "--directory /tmp/promote-scratch/salesforce --force" in yml
 
     def test_merge_step_preserves_keboola_manifest(self) -> None:
         yml = gen_pull([_pipeline()], schedule=None, main_branch="main")
-        assert "if item.name != '.keboola'" in yml
-        assert "if item.name == '.keboola'" in yml
+        assert yml.count("if item.name == '.keboola'") == 2
+
+    def test_merge_step_does_not_follow_symlinks(self) -> None:
+        yml = gen_pull([_pipeline()], schedule=None, main_branch="main")
+        assert "item.is_symlink()" in yml
+        assert "refusing to copy symlink" in yml
 
     def test_pr_uses_pat_not_default_token(self) -> None:
         yml = gen_pull([_pipeline()], schedule=None, main_branch="main")
@@ -99,9 +103,41 @@ class TestValidatePipelines:
         with pytest.raises(ValueError, match="unsafe source_stack_url"):
             _validate_pipelines([p])
 
+    def test_rejects_unsafe_name(self) -> None:
+        with pytest.raises(ValueError, match="unsafe characters"):
+            _validate_pipelines([_pipeline(name="sales'; rm -rf /")])
+
+    def test_rejects_directory_collision(self) -> None:
+        with pytest.raises(ValueError, match="both use directory"):
+            _validate_pipelines([_pipeline("SALESFORCE", "shared"), _pipeline("GA4", "shared")])
+
     def test_rejects_label_collision(self) -> None:
         with pytest.raises(ValueError, match="secret-name label"):
             _validate_pipelines([_pipeline("sales-force", "a"), _pipeline("sales force", "b")])
 
     def test_accepts_distinct_safe_pipelines(self) -> None:
         _validate_pipelines([_pipeline("SALESFORCE", "salesforce"), _pipeline("GA4", "ga4")])
+
+
+class TestConfigParsing:
+    def test_missing_config_file_exits_2_not_traceback(self, tmp_path, capsys) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _mod.main(["--config", str(tmp_path / "missing.json"), str(tmp_path)])
+        assert exc.value.code == 2
+        assert "invalid" in capsys.readouterr().err
+
+    def test_invalid_json_exits_2_not_traceback(self, tmp_path, capsys) -> None:
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            _mod.main(["--config", str(bad), str(tmp_path)])
+        assert exc.value.code == 2
+        assert "invalid" in capsys.readouterr().err
+
+    def test_missing_required_key_exits_2_not_traceback(self, tmp_path, capsys) -> None:
+        cfg = tmp_path / "missing_key.json"
+        cfg.write_text('[{"name": "X", "directory": "x"}]', encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            _mod.main(["--config", str(cfg), str(tmp_path)])
+        assert exc.value.code == 2
+        assert "missing required key" in capsys.readouterr().err
