@@ -13,8 +13,9 @@ class TestComputeTotpCode:
     def test_rfc6238_test_vector(self) -> None:
         """RFC 6238 appendix B: seed 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' (the base32
         encoding of the ASCII string '12345678901234567890') at T=59s -> '94287082'
-        for SHA1/8-digit. This module hardcodes 6 digits, so check the low-order
-        6 digits of the same well-known reference value instead."""
+        for SHA1/8-digit. ``digits`` defaults to 6 (the login-password CLI never
+        overrides it), but the RFC's published vector is 8-digit, so pass digits=8
+        here to check against the exact reference value rather than a truncation."""
         with patch("keboola_agent_cli.auth.totp.time.time", return_value=59):
             code = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", digits=8)
         assert code == "94287082"

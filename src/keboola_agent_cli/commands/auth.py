@@ -18,6 +18,7 @@ a dataclass with no token field, so `--json` output is safe by construction.
 
 from __future__ import annotations
 
+import getpass
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, NoReturn
@@ -385,6 +386,19 @@ def _run_post_login_hook(
         )
 
 
+def _read_password_stdin() -> str:
+    """Read a password from stdin.
+
+    TTY -> getpass (hidden, line-based, Enter to confirm).
+    Pipe/redirected -> read to EOF, strip whitespace.
+    Using `sys.stdin.read()` unconditionally would hang interactively
+    until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
+    """
+    if sys.stdin.isatty():
+        return getpass.getpass("Password: ").strip()
+    return sys.stdin.read().strip()
+
+
 @auth_app.command("login-password")
 def auth_login_password(
     ctx: typer.Context,
@@ -394,13 +408,20 @@ def auth_login_password(
         envvar=ENV_KBC_LOGIN_EMAIL,
         help="Account email. Also settable via KBC_LOGIN_EMAIL.",
     ),
-    password: str = typer.Option(
-        ...,
+    password: str | None = typer.Option(
+        None,
         "--password",
         envvar=ENV_KBC_LOGIN_PASSWORD,
         help="Account password. Prefer KBC_LOGIN_PASSWORD (a CI secret in the step's "
-        "env: block) over typing this flag directly -- it avoids the value landing in "
-        "shell history or a process listing.",
+        "env: block) or --password-stdin over typing this flag directly -- it avoids "
+        "the value landing in shell history or a process listing.",
+    ),
+    password_stdin: bool = typer.Option(
+        False,
+        "--password-stdin",
+        help="Read the password from stdin instead of --password/KBC_LOGIN_PASSWORD. "
+        "On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until "
+        'EOF (e.g. `echo "$PASS" | kbagent auth login-password --password-stdin ...`).',
     ),
     totp_secret: str | None = typer.Option(
         None,
@@ -442,6 +463,12 @@ def auth_login_password(
     """
     formatter = get_formatter(ctx)
     service: AuthService = get_service(ctx, "auth_service")
+    if password_stdin:
+        password = _read_password_stdin()
+    if not password:
+        _handle_errors(
+            formatter, ConfigError("Pass --password, --password-stdin, or set KBC_LOGIN_PASSWORD.")
+        )
     try:
         totp_code = compute_totp_code(totp_secret) if totp_secret else None
         result = service.login_password(

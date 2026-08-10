@@ -317,7 +317,8 @@ class AuthService:
                     )
                 if not totp_code:
                     raise ConfigError(
-                        "This account requires a TOTP code to sign in -- pass totp_code."
+                        "This account requires a TOTP code to sign in -- pass "
+                        "--totp-secret (kbagent computes the code from it)."
                     )
                 tokens = client.verify_mfa_totp(result.mfa_token, totp_code)
             else:

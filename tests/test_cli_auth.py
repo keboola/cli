@@ -255,6 +255,33 @@ class TestLoginPassword:
         assert result.exit_code == 0, result.output
         assert svc.login_password.call_args.kwargs["totp_code"] is None
 
+    def test_password_stdin_reads_piped_password(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "login-password", "--email", "svc@example.com", "--password-stdin"],
+            input_text="s3cr3t\n",
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.login_password.call_args.kwargs["password"] == "s3cr3t"
+
+    def test_missing_password_is_config_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "login-password", "--email", "svc@example.com"],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+        svc.login_password.assert_not_called()
+
     def test_env_vars_populate_email_and_password(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

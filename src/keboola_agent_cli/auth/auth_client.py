@@ -258,7 +258,7 @@ class AuthClient(BaseHttpClient):
         self.close()
 
     # ------------------------------------------------------------------
-    # PKCE
+    # Password grant + MFA (unattended, CI-safe login)
     # ------------------------------------------------------------------
 
     def login_password(self, email: str, password: str) -> CliTokenResponse | MfaChallengeResult:
@@ -287,6 +287,10 @@ class AuthClient(BaseHttpClient):
             json={"mfaToken": mfa_token, "type": "totp", "code": code},
         )
         return CliTokenResponse.model_validate(response.json())
+
+    # ------------------------------------------------------------------
+    # PKCE
+    # ------------------------------------------------------------------
 
     def authorize_url(self, *, redirect_uri: str, code_challenge: str, state: str) -> str:
         """Build the browser-facing PKCE authorize URL.
