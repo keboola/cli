@@ -1,0 +1,45 @@
+"""Tests for auth/totp.py: RFC 6238 TOTP code computation."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+from keboola_agent_cli.auth.totp import compute_totp_code
+
+
+class TestComputeTotpCode:
+    def test_rfc6238_test_vector(self) -> None:
+        """RFC 6238 appendix B: seed 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' (the base32
+        encoding of the ASCII string '12345678901234567890') at T=59s -> '94287082'
+        for SHA1/8-digit. This module hardcodes 6 digits, so check the low-order
+        6 digits of the same well-known reference value instead."""
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=59):
+            code = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", digits=8)
+        assert code == "94287082"
+
+    def test_default_is_six_digits(self) -> None:
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=59):
+            code = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert len(code) == 6
+        assert code.isdigit()
+
+    def test_same_time_window_is_deterministic(self) -> None:
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=1000):
+            first = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+            second = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert first == second
+
+    def test_different_time_window_usually_differs(self) -> None:
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=0):
+            first = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=10_000_000):
+            second = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert first != second
+
+    def test_accepts_lowercase_and_whitespace(self) -> None:
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=59):
+            lower = compute_totp_code("gezdgnbvgy3tqojqgezdgnbvgy3tqojq")
+            spaced = compute_totp_code("GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ")
+            plain = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert lower == plain
+        assert spaced == plain

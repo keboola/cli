@@ -69,6 +69,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove all permission restrictions | `kbagent permissions reset` |
 | Check if a specific operation is allowed | `kbagent permissions check <OPERATION>` |
 | Sign in to a Keboola stack via browser login (PKCE) or device code | `kbagent auth login` |
+| Sign in via email + password (+ TOTP if the account has MFA) -- no browser | `kbagent auth login-password --email EMAIL --password PASSWORD` |
 | Show the programmatic-auth session health for a stack | `kbagent auth status` |
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |

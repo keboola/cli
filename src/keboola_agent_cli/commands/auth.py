@@ -1,4 +1,4 @@
-"""Programmatic browser login -- `kbagent auth login|status|logout|register-projects`.
+"""Programmatic browser login -- `kbagent auth login|login-password|status|logout|register-projects`.
 
 Thin CLI layer for the `kbagent auth` command group: parses arguments, calls
 :class:`AuthService`, formats output. No business logic belongs here -- alias
@@ -6,13 +6,14 @@ computation, collision resolution, and the actual `config.json` write all
 live in `AuthService` / `config_store.py`. The interactive picker itself
 lives in `_auth_picker.py` (terminal I/O only, same reasoning).
 
-Signs in a user-scoped Keboola session (PKCE authorization-code flow, or a
-device-code flow for headless/remote machines) and stores it in `auth.json`.
-Requires a human at a browser (or able to visit a URL and type a code) --
-this is not something an AI agent can complete unattended. The resulting
-session tokens are never printed or retrievable via the CLI; every result
-below is built from a dataclass with no token field, so `--json` output is
-safe by construction.
+Two ways to sign in, stored the same way in `auth.json`: `login` (PKCE
+authorization-code, or a device-code flow for headless/remote machines)
+requires a human at a browser -- an AI agent must not attempt it on its own
+initiative. `login-password` (email + password + TOTP) is the deliberate
+unattended exception, built for CI: it never opens a browser and is safe to
+run from a secret-backed workflow step. The resulting session tokens are
+never printed or retrievable via the CLI; every result below is built from
+a dataclass with no token field, so `--json` output is safe by construction.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..auth.models import DeviceAuthorization
+from ..auth.totp import compute_totp_code
+from ..constants import ENV_KBC_LOGIN_EMAIL, ENV_KBC_LOGIN_PASSWORD, ENV_KBC_LOGIN_TOTP_SECRET
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter
 from ..services.auth_service import (
@@ -380,6 +383,76 @@ def _run_post_login_hook(
         target_console.print(
             f"[bold yellow]Warning:[/bold yellow] Could not register projects{suffix}"
         )
+
+
+@auth_app.command("login-password")
+def auth_login_password(
+    ctx: typer.Context,
+    email: str = typer.Option(
+        ...,
+        "--email",
+        envvar=ENV_KBC_LOGIN_EMAIL,
+        help="Account email. Also settable via KBC_LOGIN_EMAIL.",
+    ),
+    password: str = typer.Option(
+        ...,
+        "--password",
+        envvar=ENV_KBC_LOGIN_PASSWORD,
+        help="Account password. Prefer KBC_LOGIN_PASSWORD (a CI secret in the step's "
+        "env: block) over typing this flag directly -- it avoids the value landing in "
+        "shell history or a process listing.",
+    ),
+    totp_secret: str | None = typer.Option(
+        None,
+        "--totp-secret",
+        envvar=ENV_KBC_LOGIN_TOTP_SECRET,
+        help="Base32 TOTP seed (from the account's authenticator enrollment, NOT a "
+        "6-digit code) -- required if the account has TOTP-based MFA configured. "
+        "kbagent computes the current code from this itself, so no human ever "
+        "types a live code. Also settable via KBC_LOGIN_TOTP_SECRET.",
+    ),
+    stack: str | None = typer.Option(
+        None, "--stack", help="Stack URL or a registered project alias to log into"
+    ),
+    register_projects: bool = typer.Option(
+        False,
+        "--register-projects",
+        help="Register every project this session can access under a local alias",
+    ),
+) -> None:
+    """Sign in via email + password (+ TOTP if the account has MFA) -- no browser.
+
+    This is `auth login`'s unattended counterpart, built for CI: it never
+    opens a browser and completes entirely over HTTP, so it is safe to run
+    from a secret-backed workflow step. It does NOT relax `auth login`'s own
+    "requires a human at a browser" contract for the PKCE/device flows --
+    this is a separate, explicitly opt-in command using a different grant
+    entirely.
+
+    Only TOTP-based MFA can be resolved here (kbagent computes the current
+    code itself from --totp-secret). An account with WebAuthn/passkey-only
+    MFA cannot use this command -- that ceremony needs a real browser; use
+    `kbagent auth login` for such an account instead.
+
+    Storing an account's password (and TOTP seed) as CI secrets is a bigger
+    blast radius than a single scoped credential: whoever holds them can do
+    anything that account can do, not just what one project's token allows.
+    Use a dedicated, least-privileged service account for this, never a
+    real human's own credentials.
+    """
+    formatter = get_formatter(ctx)
+    service: AuthService = get_service(ctx, "auth_service")
+    try:
+        result = service.login_password(
+            stack=stack,
+            email=email,
+            password=password,
+            totp_code=compute_totp_code(totp_secret) if totp_secret else None,
+            register_projects=register_projects,
+        )
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_errors(formatter, exc)
+    formatter.output(result, _format_login_result)
 
 
 @auth_app.command("status")

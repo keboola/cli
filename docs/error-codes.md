@@ -182,3 +182,4 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `AUTH_STATE_MISMATCH` | The PKCE callback's `state` parameter did not match the one generated at login start |
 | `SESSION_EXPIRED` | The programmatic-auth session's refresh token expired or was revoked; run `kbagent auth login` again |
 | `SESSION_NOT_FOUND` | No programmatic-auth session is persisted for this stack; run `kbagent auth login` |
+| `AUTH_MFA_INVALID` | `auth login-password` hit an MFA factor it cannot resolve without a browser (e.g. WebAuthn-only) -- use `kbagent auth login` for that account instead |

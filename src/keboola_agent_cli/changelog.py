@@ -24,6 +24,23 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.84.0": [
+        "New: `kbagent auth login-password --email EMAIL (--password PASSWORD | "
+        "--password-stdin) [--totp-secret SECRET]` -- the deliberate unattended exception "
+        'to `auth login`\'s "needs a human at a browser" rule. A password grant (no '
+        "browser), safe to run from a CI secret-backed workflow step. `--password-stdin` "
+        "(hidden prompt on a TTY, reads to EOF on a pipe) is the recommended way to supply "
+        "the password -- `--password` and `--password-stdin` are mutually exclusive. "
+        "`--email`/`--password`/`--totp-secret` also read from "
+        "`KBC_LOGIN_EMAIL`/`KBC_LOGIN_PASSWORD`/`KBC_LOGIN_TOTP_SECRET` env vars (same "
+        "convention as `KBC_TOKEN`). `--totp-secret` is the account's base32 TOTP seed, "
+        "not a 6-digit code -- kbagent computes the current code itself (stdlib RFC 6238), "
+        "so no human ever types a live code. Only resolves TOTP-based MFA; a "
+        "WebAuthn/passkey-only account gets the new `AUTH_MFA_INVALID` error and must use "
+        "`auth login` instead. Stores the resulting session in `auth.json` exactly like "
+        "`auth login` does -- same downstream command support, same "
+        "`--register-projects` contract.",
+    ],
     "0.83.0": [
         "Note (#390): there will be NO `kbagent agent migrate-mcp-tasks` command. Migrating "
         "a scheduled `--type mcp_tool` task to `--type cli_command` before v0.85.0 is a "

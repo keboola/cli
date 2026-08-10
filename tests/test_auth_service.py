@@ -22,6 +22,7 @@ from keboola_agent_cli.auth.models import (
     CliTokenResponse,
     DeviceAuthorization,
     IntrospectResponse,
+    MfaChallengeResult,
     RevokeResult,
 )
 from keboola_agent_cli.auth.pkce import (
@@ -67,6 +68,10 @@ class _FakeAuthClient:
         self.refresh_side_effect: Exception | None = None
         self.revoke_result = RevokeResult(confirmed=True)
         self.delete_session_result = RevokeResult(confirmed=True)
+        self.login_password_response: CliTokenResponse | MfaChallengeResult | None = None
+        self.login_password_side_effect: Exception | None = None
+        self.verify_mfa_response: CliTokenResponse | None = None
+        self.verify_mfa_side_effect: Exception | None = None
 
     def __enter__(self) -> _FakeAuthClient:
         return self
@@ -101,6 +106,20 @@ class _FakeAuthClient:
             raise self.refresh_side_effect
         assert self.refresh_response is not None
         return self.refresh_response
+
+    def login_password(self, email: str, password: str):
+        self.calls.append(("login_password", (email, password)))
+        if self.login_password_side_effect is not None:
+            raise self.login_password_side_effect
+        assert self.login_password_response is not None
+        return self.login_password_response
+
+    def verify_mfa_totp(self, mfa_token: str, code: str) -> CliTokenResponse:
+        self.calls.append(("verify_mfa_totp", (mfa_token, code)))
+        if self.verify_mfa_side_effect is not None:
+            raise self.verify_mfa_side_effect
+        assert self.verify_mfa_response is not None
+        return self.verify_mfa_response
 
     def revoke(self, token: str, *, token_type_hint: str = "refreshToken") -> RevokeResult:
         self.calls.append(("revoke", (token, token_type_hint)))
@@ -1243,3 +1262,61 @@ class TestLogoutHelperResults:
 
         assert outcome.revoked == ["gone"]
         assert outcome.remaining == ["stuck"]
+
+
+class TestLoginPassword:
+    def test_no_mfa_finalizes_like_any_other_login(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.login_password_response = _tokens(session_id="sess-pw")
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login_password(stack=STACK_URL, email="svc@example.com", password="s3cr3t")
+
+        assert result.method == "password"
+        assert result.session_id == "sess-pw"
+        assert client.calls[0] == ("login_password", ("svc@example.com", "s3cr3t"))
+        assert not any(c[0] == "verify_mfa_totp" for c in client.calls)
+        assert state_store.get_session(STACK_URL) is not None
+
+    def test_totp_challenge_resolved_before_finalizing(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.login_password_response = MfaChallengeResult(
+            mfaRequired=True, mfaType="totp", mfaToken="kbc_mfa_xyz", allowedMethods=["totp"]
+        )
+        client.verify_mfa_response = _tokens(session_id="sess-pw")
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login_password(
+            stack=STACK_URL, email="svc@example.com", password="s3cr3t", totp_code="123456"
+        )
+
+        assert result.method == "password"
+        assert client.calls[0] == ("login_password", ("svc@example.com", "s3cr3t"))
+        assert client.calls[1] == ("verify_mfa_totp", ("kbc_mfa_xyz", "123456"))
+
+    def test_totp_challenge_without_code_raises_config_error(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.login_password_response = MfaChallengeResult(
+            mfaRequired=True, mfaType="totp", mfaToken="kbc_mfa_xyz", allowedMethods=["totp"]
+        )
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError):
+            service.login_password(stack=STACK_URL, email="svc@example.com", password="s3cr3t")
+        assert not any(c[0] == "verify_mfa_totp" for c in client.calls)
+
+    def test_webauthn_challenge_raises_mfa_invalid(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.login_password_response = MfaChallengeResult(
+            mfaRequired=True,
+            mfaType="webauthn",
+            mfaToken="kbc_mfa_xyz",
+            allowedMethods=["webauthn"],
+        )
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.login_password(stack=STACK_URL, email="svc@example.com", password="s3cr3t")
+        assert exc_info.value.error_code == ErrorCode.AUTH_MFA_INVALID

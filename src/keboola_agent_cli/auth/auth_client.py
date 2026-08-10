@@ -33,6 +33,8 @@ from ..constants import (
     AUTH_CLIENT_ID,
     AUTH_DEVICE_PATH,
     AUTH_DEVICE_TOKEN_PATH,
+    AUTH_LOGIN_PATH,
+    AUTH_MFA_PATH,
     AUTH_PKCE_AUTHORIZE_PATH,
     AUTH_PKCE_TOKEN_PATH,
     AUTH_REFRESH_CONTENTION_DEFAULT_DELAY,
@@ -54,6 +56,7 @@ from .models import (
     DevicePollResult,
     DevicePollStatus,
     IntrospectResponse,
+    MfaChallengeResult,
     RevokeResult,
 )
 
@@ -257,6 +260,33 @@ class AuthClient(BaseHttpClient):
     # ------------------------------------------------------------------
     # PKCE
     # ------------------------------------------------------------------
+
+    def login_password(self, email: str, password: str) -> CliTokenResponse | MfaChallengeResult:
+        """Password-grant login (``POST /v1/auth/login``).
+
+        The unattended-capable login path -- unlike PKCE/device, this never
+        opens a browser. Returns a token pair directly, or an
+        `MfaChallengeResult` if the account has MFA configured (resolve it
+        with `verify_mfa_totp`).
+        """
+        response = self._do_request(
+            "POST",
+            AUTH_LOGIN_PATH,
+            json={"grantType": "password", "email": email, "password": password},
+        )
+        data = response.json()
+        if data.get("mfaRequired"):
+            return MfaChallengeResult.model_validate(data)
+        return CliTokenResponse.model_validate(data)
+
+    def verify_mfa_totp(self, mfa_token: str, code: str) -> CliTokenResponse:
+        """Resolve a password-login MFA challenge via TOTP (``POST /v1/auth/mfa``)."""
+        response = self._do_request(
+            "POST",
+            AUTH_MFA_PATH,
+            json={"mfaToken": mfa_token, "type": "totp", "code": code},
+        )
+        return CliTokenResponse.model_validate(response.json())
 
     def authorize_url(self, *, redirect_uri: str, code_challenge: str, state: str) -> str:
         """Build the browser-facing PKCE authorize URL.

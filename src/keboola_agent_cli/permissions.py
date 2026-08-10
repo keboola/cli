@@ -19,6 +19,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # read-only local + introspect check. `auth logout --remove-projects` does
     # touch the registry and is escalated via FLAG_ESCALATIONS below.
     "auth.login": "write",
+    "auth.login-password": "write",
     "auth.logout": "write",
     "auth.status": "read",
     # register-projects only ever writes config.json (session-sentinel

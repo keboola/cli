@@ -28,6 +28,7 @@ from keboola_agent_cli.auth.models import (
     DeviceAuthorization,
     DevicePollStatus,
     IntrospectResponse,
+    MfaChallengeResult,
     RevokeResult,
 )
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code
@@ -132,6 +133,109 @@ class TestExchangePkceCode:
             "state": "the-state",
             "redirectUri": "http://127.0.0.1:12345/callback",
             "codeVerifier": "verifier-value",
+        }
+
+
+# ----------------------------------------------------------------------------
+# Password-grant login
+# ----------------------------------------------------------------------------
+
+
+class TestLoginPassword:
+    def test_no_mfa_returns_token_pair(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+            status_code=200,
+            json={
+                "accessToken": "kbc_at_abc",
+                "refreshToken": "kbc_rt_def",
+                "tokenType": "Bearer",
+                "expiresIn": 3600,
+                "sessionId": "sess-1",
+                "user": {"id": 42, "email": "svc@example.com", "name": "Service"},
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+
+        assert isinstance(result, CliTokenResponse)
+        assert result.access_token == "kbc_at_abc"
+
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.read().decode()) == {
+            "grantType": "password",
+            "email": "svc@example.com",
+            "password": "s3cr3t",
+        }
+        assert "Authorization" not in request.headers
+
+    def test_mfa_required_returns_challenge(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+            status_code=200,
+            json={
+                "mfaRequired": True,
+                "mfaType": "totp",
+                "mfaToken": "kbc_mfa_xyz",
+                "expiresIn": 300,
+                "allowedMethods": ["totp", "recovery_code"],
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+
+        assert isinstance(result, MfaChallengeResult)
+        assert result.mfa_type == "totp"
+        assert result.mfa_token == "kbc_mfa_xyz"
+
+    def test_404_maps_to_auth_not_supported(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login", method="POST", status_code=404, json={}
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+
+class TestVerifyMfaTotp:
+    def test_sends_type_and_code_returns_tokens(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/mfa",
+            method="POST",
+            status_code=200,
+            json={
+                "accessToken": "kbc_at_abc",
+                "refreshToken": "kbc_rt_def",
+                "expiresIn": 3600,
+                "sessionId": "sess-1",
+            },
+        )
+        client = _make_client()
+        try:
+            result = client.verify_mfa_totp("kbc_mfa_xyz", "123456")
+        finally:
+            client.close()
+
+        assert isinstance(result, CliTokenResponse)
+        assert result.access_token == "kbc_at_abc"
+
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.read().decode()) == {
+            "mfaToken": "kbc_mfa_xyz",
+            "type": "totp",
+            "code": "123456",
         }
 
 

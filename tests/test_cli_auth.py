@@ -214,6 +214,101 @@ class TestLogin:
         assert json.loads(result.output)["error"]["code"] == "AUTH_STATE_MISMATCH"
 
 
+class TestLoginPassword:
+    def test_success_forwards_args_and_computed_totp_code(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "s3cr3t",
+                "--totp-secret",
+                "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        kwargs = svc.login_password.call_args.kwargs
+        assert kwargs["email"] == "svc@example.com"
+        assert kwargs["password"] == "s3cr3t"
+        assert kwargs["totp_code"] is not None
+        assert kwargs["totp_code"].isdigit()
+        assert len(kwargs["totp_code"]) == 6
+
+    def test_no_totp_secret_passes_none(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "login-password", "--email", "svc@example.com", "--password", "s3cr3t"],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.login_password.call_args.kwargs["totp_code"] is None
+
+    def test_env_vars_populate_email_and_password(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        with (
+            patch("keboola_agent_cli.cli.AuthService", return_value=svc),
+            patch.dict(
+                "os.environ",
+                {"KBC_LOGIN_EMAIL": "svc@example.com", "KBC_LOGIN_PASSWORD": "s3cr3t"},
+            ),
+        ):
+            result = runner.invoke(app, ["--config-dir", str(config_dir), "auth", "login-password"])
+        assert result.exit_code == 0, result.output
+        kwargs = svc.login_password.call_args.kwargs
+        assert kwargs["email"] == "svc@example.com"
+        assert kwargs["password"] == "s3cr3t"
+
+    def test_mfa_invalid_error_surfaces(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.side_effect = KeboolaApiError(
+            "webauthn-only account", error_code=ErrorCode.AUTH_MFA_INVALID
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "login-password", "--email", "e", "--password", "p"],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "AUTH_MFA_INVALID"
+
+    def test_password_never_appears_in_output(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "SuperSecretPassword123",
+            ],
+        )
+        assert "SuperSecretPassword123" not in result.output
+
+
 class TestPostLoginHook:
     """The optional "register these projects now?" nudge after a plain login."""
 
