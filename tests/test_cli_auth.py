@@ -288,6 +288,29 @@ class TestLoginPassword:
         assert result.exit_code != 0
         assert json.loads(result.stdout)["error"]["code"] == "AUTH_MFA_INVALID"
 
+    def test_malformed_totp_secret_raises_config_error_not_traceback(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "e",
+                "--password",
+                "p",
+                "--totp-secret",
+                "not-valid-base32!!",
+            ],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+        svc.login_password.assert_not_called()
+
     def test_password_never_appears_in_output(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

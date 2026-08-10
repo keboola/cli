@@ -443,13 +443,16 @@ def auth_login_password(
     formatter = get_formatter(ctx)
     service: AuthService = get_service(ctx, "auth_service")
     try:
+        totp_code = compute_totp_code(totp_secret) if totp_secret else None
         result = service.login_password(
             stack=stack,
             email=email,
             password=password,
-            totp_code=compute_totp_code(totp_secret) if totp_secret else None,
+            totp_code=totp_code,
             register_projects=register_projects,
         )
+    except ValueError as exc:
+        _handle_errors(formatter, ConfigError(f"--totp-secret: {exc}"))
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_login_result)

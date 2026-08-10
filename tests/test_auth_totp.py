@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from keboola_agent_cli.auth.totp import compute_totp_code
 
 
@@ -43,3 +45,22 @@ class TestComputeTotpCode:
             plain = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
         assert lower == plain
         assert spaced == plain
+
+    def test_code_rotates_across_period_boundary(self) -> None:
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=29):
+            before = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=30):
+            after = compute_totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        assert before != after
+
+    def test_empty_secret_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            compute_totp_code("")
+
+    def test_whitespace_only_secret_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            compute_totp_code("   ")
+
+    def test_malformed_base32_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="base32"):
+            compute_totp_code("not-valid-base32!!")
