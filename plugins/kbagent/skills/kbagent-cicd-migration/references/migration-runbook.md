@@ -19,9 +19,8 @@ No co-existence, but yes a controlled cutover:
       becomes drift you'll chase. Keep it short.
 - [ ] **Pick a kbagent version** and pin it (`keboola-cli==X.Y.Z` or
       `git+...@vX.Y.Z`). Never unpinned on a prod lane.
-- [ ] **Set GitHub secrets**: one `KBC_TOKEN_<ALIAS>` per project, valued with a
-      PAT from `kbagent auth pat-create --project-id <id>` (v0.81.0+), not a
-      raw Storage token (see `references/secrets-setup.md`).
+- [ ] **Set GitHub secrets**: one `KBC_TOKEN_<ALIAS>` per project (see
+      `references/secrets-setup.md`).
 - [ ] **Create GitHub Environments** `dev` + `prod`; add required reviewers to `prod`.
 - [ ] **Inventory** with the skill's analyzer (dry-run): confirm every project and the
       legacy files it will replace.

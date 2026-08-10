@@ -29,7 +29,7 @@ installed `kbagent` version (`kbagent sync pull --help`); the new CLI evolves fa
 
 | kbc (old) | kbagent (new) | Notes |
 |---|---|---|
-| `KBC_STORAGE_API_TOKEN` | `KBC_TOKEN` | Recommended value: a PAT from `kbagent auth pat-create` (v0.81.0+, `kbc_pat_...`), not a raw Storage token -- kbagent detects the prefix and sends it as `Authorization: Bearer` automatically. A raw Storage token still works as a fallback. See [secrets-setup.md](secrets-setup.md) |
+| `KBC_STORAGE_API_TOKEN` | `KBC_TOKEN` | Storage API token |
 | `KBC_STORAGE_API_HOST` (bare host) | `KBC_STORAGE_API_URL` (full URL) | `connection.keboola.com` → `https://connection.keboola.com` |
 | *(implicit)* | `KBAGENT_PROJECT_FROM_ENV=1` | **Required** opt-in so kbagent synthesizes an ephemeral project from the env in CI (no `config.json` on disk). See `constants.py`'s `ENV_PROJECT_FROM_ENV` and `ConfigStore._inject_env_project` |
 | `KBC_PROJECT_ID`, `KBC_BRANCH_ID`, `KBC_BRANCHES` | *(from manifest + branch-mapping)* | Project id comes from `.keboola/manifest.json`; branch from `.keboola/branch-mapping.json` |
