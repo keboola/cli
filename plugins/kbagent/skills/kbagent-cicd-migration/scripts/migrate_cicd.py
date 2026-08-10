@@ -209,7 +209,7 @@ def gen_validate(projects: list[Project]) -> str:
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
         "      - uses: actions/checkout@v4\n"
-        f"{_install_steps_placeholder()}"
+        f"{_INSTALL_TOKEN}"
         "      # Show drift between the committed config files and each remote\n"
         "      # project. `sync diff` is read-only. The push dry-run below also\n"
         "      # surfaces secret-encryption problems before a real push.\n"
@@ -235,7 +235,7 @@ def gen_pull(projects: list[Project], schedule: str | None) -> str:
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
         "      - uses: actions/checkout@v4\n"
-        f"{_install_steps_placeholder()}"
+        f"{_INSTALL_TOKEN}"
         f"{steps}"
         "      - name: Commit pulled state\n"
         "        run: |\n"
@@ -278,7 +278,7 @@ def gen_push(projects: list[Project], main_branch: str) -> str:
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
         "      - uses: actions/checkout@v4\n"
-        f"{_install_steps_placeholder()}"
+        f"{_INSTALL_TOKEN}"
         "      # `sync push` encrypts #-secrets fail-closed by default. Do NOT add\n"
         "      # --allow-plaintext-on-encrypt-failure in CI.\n"
         f"{steps}"
@@ -287,10 +287,6 @@ def gen_push(projects: list[Project], main_branch: str) -> str:
 
 # Install steps are injected after generation so the version/ref is applied once.
 _INSTALL_TOKEN = "@@INSTALL@@\n"
-
-
-def _install_steps_placeholder() -> str:
-    return _INSTALL_TOKEN
 
 
 # --------------------------------------------------------------------------- #

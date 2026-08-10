@@ -12,12 +12,17 @@ the kbagent orchestrator model from kbc's cwd-per-folder model:
   4. ``sync push --dry-run`` must call the service in dry-run mode and never
      perform a real write.
 
+Items 2-3 are demonstrated on ``sync pull`` only; the identical guard is
+duplicated verbatim in ``diff``/``push`` (see ``commands/sync.py``) but not
+separately exercised here.
+
 Background: a side-by-side comparison against kbc showed that pulls round-trip to
 zero drift and that push is last-write-wins; these guards are the first line of
 defense against an accidental wrong-target or whole-tree operation.
 """
 
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -46,7 +51,12 @@ def _store(config_dir: Path) -> ConfigStore:
     return store
 
 
-def _invoke(args: list[str], tmp_path: Path) -> tuple[int, MagicMock]:
+class InvokeResult(NamedTuple):
+    exit_code: int
+    mock_sync: MagicMock
+
+
+def _invoke(args: list[str], tmp_path: Path) -> InvokeResult:
     """Invoke the CLI with a mocked SyncService; return (exit_code, mock)."""
     store = _store(tmp_path / "config")
     mock_sync = MagicMock()
@@ -59,7 +69,7 @@ def _invoke(args: list[str], tmp_path: Path) -> tuple[int, MagicMock]:
         MockProj.return_value = ProjectService(config_store=store)
         MockSync.return_value = mock_sync
         result = runner.invoke(app, ["--config-dir", str(tmp_path / "config"), *args])
-    return result.exit_code, mock_sync
+    return InvokeResult(result.exit_code, mock_sync)
 
 
 class TestProjectSelectionRequired:
