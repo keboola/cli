@@ -81,10 +81,41 @@ class Pipeline:
         return f"KBC_TOKEN_{self.label}_DEST"
 
 
+_SAFE_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
+_SAFE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+/?$")
+
+
+def _validate_pipelines(pipelines: list[Pipeline]) -> None:
+    """Reject pipeline fields that would break out of generated YAML/shell quoting.
+
+    ``directory``/``*_stack_url`` are admin-authored (a JSON config file or CLI
+    flags), not attacker-controlled at runtime, but the generator still embeds
+    them raw into single-quoted shell strings and YAML `paths:` lists -- a
+    value containing a quote, newline, or `..` would corrupt the generated
+    workflow. Fail fast at generation time instead (CWE-78-adjacent).
+    """
+    labels_seen: dict[str, str] = {}
+    for p in pipelines:
+        if ".." in p.directory.split("/") or not _SAFE_DIRECTORY_RE.match(p.directory):
+            raise ValueError(f"pipeline {p.name!r}: unsafe directory {p.directory!r}")
+        for field, url in (
+            ("source_stack_url", p.source_stack_url),
+            ("dest_stack_url", p.dest_stack_url),
+        ):
+            if not _SAFE_URL_RE.match(url):
+                raise ValueError(f"pipeline {p.name!r}: unsafe {field} {url!r}")
+        if p.label in labels_seen:
+            raise ValueError(
+                f"pipelines {labels_seen[p.label]!r} and {p.name!r} both sanitize to the "
+                f"secret-name label {p.label!r} -- rename one"
+            )
+        labels_seen[p.label] = p.name
+
+
 def _load_pipelines(args: argparse.Namespace) -> list[Pipeline]:
     if args.config:
         data = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        return [
+        pipelines = [
             Pipeline(
                 name=str(p["name"]),
                 directory=str(p["directory"]),
@@ -93,33 +124,44 @@ def _load_pipelines(args: argparse.Namespace) -> list[Pipeline]:
             )
             for p in data
         ]
-    missing = [
-        flag
-        for flag, val in (
-            ("--name", args.name),
-            ("--directory", args.directory),
-            ("--source-stack-url", args.source_stack_url),
-            ("--dest-stack-url", args.dest_stack_url),
-        )
-        if not val
-    ]
-    if missing:
-        print(
-            f"error: --config or all of {', '.join(missing)} must be provided",
-            file=sys.stderr,
-        )
+    else:
+        missing = [
+            flag
+            for flag, val in (
+                ("--name", args.name),
+                ("--directory", args.directory),
+                ("--source-stack-url", args.source_stack_url),
+                ("--dest-stack-url", args.dest_stack_url),
+            )
+            if not val
+        ]
+        if missing:
+            print(
+                f"error: --config or all of {', '.join(missing)} must be provided",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        pipelines = [
+            Pipeline(
+                name=args.name,
+                directory=args.directory,
+                source_stack_url=_normalize_url(args.source_stack_url),
+                dest_stack_url=_normalize_url(args.dest_stack_url),
+            )
+        ]
+    try:
+        _validate_pipelines(pipelines)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
-    return [
-        Pipeline(
-            name=args.name,
-            directory=args.directory,
-            source_stack_url=_normalize_url(args.source_stack_url),
-            dest_stack_url=_normalize_url(args.dest_stack_url),
-        )
-    ]
+    return pipelines
 
 
 def _normalize_url(host: str) -> str:
+    # kbagent's own `KBC_STORAGE_API_URL` consumption normalizes a bare host
+    # to `https://<host>` (see `models.normalize_stack_url`), but the
+    # generator also uses this value in printed messages and YAML before
+    # kbagent ever sees it, so normalize once here too.
     host = host.strip()
     if host.startswith(("http://", "https://")):
         return host
@@ -168,18 +210,61 @@ def _pipeline_step(
     )
 
 
+def _pull_and_merge_step(p: Pipeline) -> str:
+    """Pull SOURCE into a throwaway scratch dir, then merge its *content* --
+    never its `.keboola/manifest.json` -- into the tracked directory.
+
+    The tracked directory's manifest is bootstrapped once from the DEST
+    project (Step 4) and must stay bound to DEST's config IDs forever after;
+    overwriting it with a plain `sync pull --project __env__ --directory
+    '{p.directory}'` against the SOURCE token (the original approach) replaces
+    that manifest with SOURCE's IDs, so every subsequent `sync push` to DEST
+    fails to match any existing config by ID and recreates duplicates on every
+    promotion cycle instead of converging. Pulling into an ephemeral scratch
+    directory and copying only the content over keeps DEST's ID mapping
+    stable while still picking up SOURCE's additions/edits/deletions.
+    """
+    scratch = f"/tmp/promote-scratch/{p.directory}"
+    return (
+        f"      - name: Pull {p.name} from source (scratch)\n"
+        "        env:\n"
+        '          KBAGENT_PROJECT_FROM_ENV: "1"\n'
+        f"          KBC_TOKEN: ${{{{ secrets.{p.source_token_secret} }}}}\n"
+        f"          KBC_STORAGE_API_URL: {p.source_stack_url}\n"
+        "        run: |\n"
+        f"          kbagent sync pull --project __env__ --directory '{scratch}' --force\n"
+        f"      - name: Merge {p.name} content into '{p.directory}' (manifest untouched)\n"
+        "        run: |\n"
+        "          python3 - <<'PYEOF'\n"
+        "          import pathlib, shutil\n"
+        f"          src = pathlib.Path({scratch!r})\n"
+        f"          dst = pathlib.Path({p.directory!r})\n"
+        "          dst.mkdir(parents=True, exist_ok=True)\n"
+        "          for item in list(dst.iterdir()):\n"
+        "              if item.name != '.keboola':\n"
+        "                  shutil.rmtree(item) if item.is_dir() else item.unlink()\n"
+        "          for item in src.iterdir():\n"
+        "              if item.name == '.keboola':\n"
+        "                  continue\n"
+        "              target = dst / item.name\n"
+        "              if item.is_dir():\n"
+        "                  shutil.copytree(item, target)\n"
+        "              else:\n"
+        "                  shutil.copy2(item, target)\n"
+        "          PYEOF\n"
+    )
+
+
 def gen_pull(pipelines: list[Pipeline], schedule: str | None, main_branch: str) -> str:
     on_block = "  workflow_dispatch:\n"
     if schedule:
         on_block += f"  schedule:\n    - cron: '{schedule}'\n"
-    steps = "".join(
-        _pipeline_step(p, "Pull", "pull --force", p.source_token_secret, p.source_stack_url)
-        for p in pipelines
-    )
+    steps = "".join(_pull_and_merge_step(p) for p in pipelines)
     paths = ", ".join(p.directory for p in pipelines)
     return (
         "# Generated by kbagent-promotion-pipeline. Pulls every pipeline's SOURCE\n"
-        "# project and opens/updates one PR against the main branch.\n"
+        "# project into a scratch dir, merges content (not the DEST-bound manifest)\n"
+        "# into the tracked directory, and opens/updates one PR against main.\n"
         "name: kbagent promote - pull\n"
         "on:\n"
         f"{on_block}"
@@ -196,6 +281,12 @@ def gen_pull(pipelines: list[Pipeline], schedule: str | None, main_branch: str) 
         "      - name: Open promotion PR\n"
         "        uses: peter-evans/create-pull-request@v7\n"
         "        with:\n"
+        "          # The default GITHUB_TOKEN cannot be used here: GitHub suppresses\n"
+        "          # `pull_request`-triggered workflow runs (kbagent-promote-validate)\n"
+        "          # for PRs opened by the default token, so validate would silently\n"
+        "          # never run. Use a PAT/GitHub App token instead -- see\n"
+        "          # references/secrets-setup.md.\n"
+        "          token: ${{ secrets.PROMOTION_PR_TOKEN }}\n"
         "          branch: promote/update\n"
         f"          base: {main_branch}\n"
         '          commit-message: "kbagent promote: pull latest config from source project(s)"\n'
@@ -242,16 +333,42 @@ def gen_validate(pipelines: list[Pipeline]) -> str:
     )
 
 
-def gen_push(pipelines: list[Pipeline], main_branch: str) -> str:
-    steps = "".join(
-        _pipeline_step(p, "Push", "push", p.dest_token_secret, p.dest_stack_url) for p in pipelines
+def _push_job(p: Pipeline) -> str:
+    """One job per pipeline, each gated by its own `prod` environment run.
+
+    GitHub's required-reviewer approval is per job *run*, not per environment
+    name -- two jobs in the same workflow run that both reference `prod` each
+    get their own separate approval prompt. The original design put every
+    pipeline's push as a *step* inside one shared job, so a single approval
+    click unlocked every pipeline at once, and one pipeline's failure could
+    leave later pipelines silently un-pushed. Splitting into independent jobs
+    fixes both: per-pipeline approval, and jobs run independently so one
+    failing does not block the others.
+    """
+    job_id = f"push_{p.label.lower()}"
+    return (
+        f"  {job_id}:\n"
+        "    environment: prod\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        f"{_INSTALL_TOKEN}"
+        "      # `sync push` encrypts #-secrets fail-closed by default. Do NOT add\n"
+        "      # --allow-plaintext-on-encrypt-failure in CI.\n"
+        f"{_pipeline_step(p, 'Push', 'push', p.dest_token_secret, p.dest_stack_url)}"
     )
+
+
+def gen_push(pipelines: list[Pipeline], main_branch: str) -> str:
     paths = "\n".join(f"      - '{p.directory}/**'" for p in pipelines)
+    jobs = "".join(_push_job(p) for p in pipelines)
     return (
         "# Generated by kbagent-promotion-pipeline. Pushes every pipeline's\n"
-        "# directory to its DESTINATION project once merged to main.\n"
-        "# Gated by the 'prod' GitHub Environment -- add required reviewers there\n"
-        "# for manual approval even though the trigger is an automatic push.\n"
+        "# directory to its DESTINATION project once merged to main. Each\n"
+        "# pipeline is its OWN job, each gated by the 'prod' GitHub Environment --\n"
+        "# add required reviewers there. Every job run needs its own separate\n"
+        "# approval; approving one pipeline's push never approves another's, and\n"
+        "# one pipeline failing does not block the others.\n"
         "name: kbagent promote - push\n"
         "on:\n"
         "  push:\n"
@@ -261,15 +378,7 @@ def gen_push(pipelines: list[Pipeline], main_branch: str) -> str:
         "permissions:\n"
         "  contents: read\n"
         "jobs:\n"
-        "  push:\n"
-        "    environment: prod\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
-        f"{_INSTALL_TOKEN}"
-        "      # `sync push` encrypts #-secrets fail-closed by default. Do NOT add\n"
-        "      # --allow-plaintext-on-encrypt-failure in CI.\n"
-        f"{steps}"
+        f"{jobs}"
     )
 
 
@@ -292,9 +401,17 @@ def secrets_report(pipelines: list[Pipeline], repo_slug: str) -> str:
             f"  gh secret set {p.dest_token_secret} --repo {repo_slug}   # {p.name} destination project"
         )
     lines.append("")
+    lines.append(
+        "Required GitHub PAT (default GITHUB_TOKEN cannot trigger the validate\n"
+        "check on the PR it opens -- see references/secrets-setup.md):"
+    )
+    lines.append(f"  gh secret set PROMOTION_PR_TOKEN --repo {repo_slug}")
+    lines.append("")
     lines.append("Required GitHub Environment (for push approval gating):")
     lines.append(f"  gh api -X PUT repos/{repo_slug}/environments/prod")
     lines.append("  # Then add required reviewers to 'prod' in the GitHub UI.")
+    lines.append("  # Also add a required status check for 'validate' on the main")
+    lines.append("  # branch's protection rules, or a merge can bypass validate entirely.")
     return "\n".join(lines)
 
 
