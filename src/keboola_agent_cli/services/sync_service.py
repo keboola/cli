@@ -2350,7 +2350,7 @@ class SyncService(BaseService):
                         {
                             "component_id": keboola_meta.get("component_id", "unknown"),
                             "config_id": keboola_meta.get("config_id", ""),
-                            "path": str(config_dir.relative_to(project_root / branch.path)),
+                            "path": config_dir.relative_to(project_root / branch.path).as_posix(),
                         }
                     )
 
