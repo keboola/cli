@@ -330,4 +330,4 @@ make hooks     # install pre-commit hook
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE)

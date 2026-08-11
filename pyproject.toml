@@ -1,10 +1,10 @@
 [project]
 name = "keboola-cli"
-version = "0.81.0"
+version = "0.82.0"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "MIT"
+license = "Apache-2.0"
 authors = [
     { name = "Keboola", email = "dev@keboola.com" },
 ]

@@ -24,6 +24,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.82.0": [
+        "Fix: kbagent is licensed under **Apache 2.0**, and the packaging metadata now says "
+        "so. #544 added an Apache 2.0 `LICENSE` file, but `pyproject.toml`, the deb/rpm "
+        "package, the Homebrew formula, the Claude Code plugin manifest and the README all "
+        "still declared MIT -- so v0.79.0 through v0.81.0 shipped a wheel telling PyPI one "
+        "licence while the LICENSE file in the same distribution said another, and the "
+        "Chocolatey package pointed its `licenseUrl` at the Apache text under an MIT "
+        "declaration. Nothing caught it because each file was individually valid. The wheel "
+        "now carries `License-Expression: Apache-2.0`, and a test pins all five declaration "
+        "sites to the LICENSE file so they cannot drift apart again. No code change; if you "
+        "vendored kbagent under the belief it was MIT, re-check against Apache 2.0.",
+    ],
     "0.81.0": [
         "New (#390): `kbagent doctor` gains an `mcp_tool_tasks` check that finds scheduled "
         "agent tasks still using the deprecated `--type mcp_tool` action, which is removed "
