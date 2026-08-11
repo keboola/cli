@@ -149,11 +149,29 @@ listener, no user interaction of any kind.
   key, a hard constraint of the protocol, not a missing feature here -- this
   command fails fast with `AUTH_MFA_INVALID` naming `auth login` as the
   fallback for that account.
-- The resulting session is stored in `auth.json` and behaves **identically**
-  to a browser-login session from here on: same bearer dispatch, same
-  refresh rotation, same `--register-projects` contract, same `project list`
-  `Auth` column (`session`), same [section 4](#4-what-works-on-a-session-project)
-  restrictions.
+- The resulting session is stored in `auth.json` and, from here on, shares
+  the **same mechanics** as a browser-login session: same bearer dispatch,
+  same refresh rotation, same `--register-projects` contract, same
+  `project list` `Auth` column (`session`), same
+  [section 4](#4-what-works-on-a-session-project) restrictions. Its
+  **privilege** is not always the same -- see the next point.
+- **For an MFA-enabled account, this session carries a live 3-hour "sudo"
+  window that a browser-login session usually does not.** The password
+  flow completes MFA and creates the session in one server-side step
+  (`createSessionAfterMfa`), which stamps the sudo timestamp unconditionally;
+  PKCE/device instead inherit whatever sudo state the browser session
+  already had, which is typically stale or absent. Sudo gates exactly the
+  account-takeover-shaped operations on the Connection UI/API (PAT
+  create/revoke, TOTP delete, WebAuthn delete/register, recovery-code
+  regeneration, revoke-all-sessions) -- none of which kbagent itself calls,
+  but any script holding this session's tokens effectively can for the next
+  3 hours. Treat the CI secrets backing `login-password` accordingly.
+- **Two CI jobs must not share one MFA-enabled account within the same
+  30-second window.** The server accepts each TOTP code exactly once; a
+  second `login-password` call submitting a code for the same time slice
+  fails outright, and a 429/5xx retry never resubmits a stale code either
+  (see the code-level note in `auth/auth_client.py`). Give concurrent
+  matrix-build legs their own service account, or serialize the login step.
 - **Security posture matters here more than for a single project's token.**
   A password (+ TOTP seed) is the account's full ambient identity, not a
   scoped credential -- whoever holds these CI secrets can do anything that

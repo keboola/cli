@@ -72,9 +72,8 @@ a critical failure.
    **Standalone binaries do not take `kbagent update`** -- if
    `kbagent --json version` carries `kbagent.install_channel`, quote its
    `upgrade_command` (or `upgrade_hint` when that is empty) instead (0.79.0+).
-   The entire `auth` command group (`login`/`status`/`logout`) needs
-   **0.80.0+** -- below that, refuse and point at a static Storage token
-   (`project add --token`) instead of attempting a workaround.
+   `auth` needs **0.80.0+**; `login-password` needs **0.81.0+** -- below the
+   floor, refuse and point at a static Storage token (`project add --token`).
 
 7. **ALWAYS USE `--json`**. Every `kbagent` invocation MUST have
    `--json` as the first flag after `kbagent`. This makes output
@@ -153,6 +152,7 @@ a critical failure.
 | Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run] [--keep-on-failure]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived; fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit`. Rollback on push failure (0.41.10+): every successfully-POSTed child is DELETEd in reverse + model deleted if we created it; pass `--keep-on-failure` to preserve partial state | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
 | Encrypt the storage token for a transformation `user_properties` (so a Python container can reach the metastore) | `kbagent semantic-layer token --encrypt --project P --component-id C` (0.41.0+) -- builds `{"#metastore_token": <token>}` from the project's already-stored Storage token and delegates to the existing EncryptService; output is the encrypted envelope ready to paste into the transformation's `user_properties` block | `kbagent encrypt values --project P --component-id C --input '{"#metastore_token": "<plaintext>"}'` (works but the operator has to manually fetch the token first -- the wrapper avoids that step) | hand-running the Encryption API and pasting plaintext into `user_properties` (no `#` prefix means it sits in the config in plaintext) |
 | User asks to "log in" / "authenticate via browser" / set up programmatic auth, or to register a session's projects as aliases | **DO NOT RUN `kbagent auth login` YOURSELF** -- needs a human at the keyboard, no headless path. Tell the user to run `kbagent auth login [--register-projects]` themselves, then continue with `kbagent auth status`. To register projects from an EXISTING session (no re-login), `kbagent auth register-projects --all` or `--project-id ID` (0.80.0+) is non-interactive and agent-safe | -- | attempting `auth login`/the flagless `register-projects` picker from an unattended task; reading the token out of `auth.json`; using the numeric project id as an alias (aliases come from the project NAME) |
+| CI task has account email+password (+ TOTP seed), not a token | `kbagent auth login-password --email E (--password-stdin\|--password P) [--totp-secret SEED]` (0.81.0+) -- ONE flow this agent MAY run unattended | static token if no creds | `auth login` unattended |
 
 If the table does not cover the user's task, **ask clarifying
 questions** instead of guessing. Returning a targeted question is a
@@ -332,6 +332,10 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 - `auth login` is **human-only** -- it opens a browser or prints an RFC 8628
   device code; never run it from an unattended agent task. Ask the user to
   run it themselves, then use `auth status`/`auth logout` normally.
+- **`auth login-password` (0.81.0+) IS the headless path** -- email +
+  password (+ base32 TOTP seed), no browser, agent-runnable with real
+  credentials. WebAuthn-only -> `AUTH_MFA_INVALID`, fall back to `auth
+  login`. MFA accounts get a live 3h sudo window (`docs/auth.md`).
 - **Aliases derive from the project NAME, never the numeric id** --
   `--project 9840` never resolves. Use `kbagent project list` or
   `auth register-projects` (0.80.0+, see matrix above) to find/register the
