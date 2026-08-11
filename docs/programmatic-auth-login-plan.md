@@ -758,3 +758,45 @@ because the existing lock is a Windows no-op (§4.4, §7, risk 3). Non-blocking:
 **NB-3** bearer E2E moved into PR5 (§6), **NB-4** narrowed compat claim + per-consumer
 fail-fast guards (§4.1, §5), **NB-5** callback timeout aligned under the backend's 120 s
 (§4.7). The plaintext-storage decision (§4.2) was explicitly not a review finding.
+
+## 12. Addendum: `auth login-password` (PR #565, v0.81.0)
+
+This plan's scope (§1) was PKCE + device authorization — both require a human at a
+browser. `login-password` (`grantType: password`, `POST /v1/auth/login` + `POST
+/v1/auth/mfa`) is the deliberate exception: the RFC (`programmatic-auth.md:56`) lists
+the password grant in scope and names use case 5 — "E2E tests need a non-browser path
+to obtain user-scoped tokens" — which PKCE/device cannot serve by construction.
+
+Everything downstream of the token exchange is unchanged from §4.5's `_finalize_login`
+tail: same session persistence, same best-effort revoke of the session it replaces, same
+introspection, same `--register-projects` contract. What is new:
+
+- **MFA arrives inline, not as a redirect.** `POST /v1/auth/login` answers HTTP 200 with
+  `mfaRequired` in the body rather than a 4xx — the CLI resolves it in a second
+  request (`POST /v1/auth/mfa`) rather than a second browser round trip. Only the TOTP
+  factor is resolvable this way (`auth/totp.py`, stdlib RFC 6238); WebAuthn/passkey-only
+  accounts fail fast with `AUTH_MFA_INVALID` naming `auth login` as the fallback.
+- **A privilege delta this plan's threat model didn't need to consider.** For an
+  MFA-enabled account, `createSessionAfterMfa` stamps the session's sudo timestamp
+  unconditionally, giving it a live 3-hour sudo window that a PKCE/device session
+  usually does not carry (see `docs/auth.md` and the PR #565 review, finding D1).
+  `login-password` credentials should be held to at least the same care as the manage
+  token that convention #12 already default-denies from env.
+- **Rate limiting and TOTP replay are new failure surfaces specific to this grant.**
+  `/v1/auth/login` rate-limits by email and by IP (5/20 per 15 min) and reports the
+  tightest bucket via `X-RateLimit-*` headers; `POST /v1/auth/mfa` consumes each TOTP
+  time-slice exactly once, so it is excluded from the shared retry loop the same way
+  `refresh` and `poll_device_token` already are (§4, `auth/auth_client.py`) — a retried
+  429/5xx would otherwise resubmit an already-consumed code.
+- **`--password`/`KBC_LOGIN_PASSWORD` were kept, not default-denied like the manage
+  token.** This is a real, unresolved tension with risk 4 above ("never... put on the
+  command line, or exported to subprocess environments") and with convention #12's
+  default-deny-from-env posture — left as an open question for the reviewer rather than
+  resolved unilaterally in this PR (PR #565 review, finding D2).
+- **PATs, not this grant, are the RFC's nominated CI/CD credential**
+  (`programmatic-auth.md:326`) and are already shipped on Connection master
+  (`kbc_pat_*`, `PatCreateAction`/`PatExchangeAction`). kbagent has no PAT handling at
+  all yet. The password grant was chosen here specifically for the E2E-test use case
+  the RFC calls out, not as a general CI credential recommendation; PAT support is a
+  natural follow-up given a password change cascade-revokes sessions (this grant
+  included) while a PAT survives it.
