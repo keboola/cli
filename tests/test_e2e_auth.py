@@ -519,15 +519,23 @@ class TestLoginPasswordCommand:
     this file depend on.
     """
 
-    def test_login_succeeds_and_produces_a_live_session(self, tmp_path: Path) -> None:
-        """No-MFA or TOTP-MFA login (whichever the service account requires),
-        followed by `auth status` reporting it live, then `auth logout` so no
-        orphaned session accumulates on the real stack across CI runs.
+    def test_login_and_register_projects_succeeds(self, tmp_path: Path) -> None:
+        """No-MFA or TOTP-MFA login (whichever the service account requires)
+        with `--register-projects` in the SAME call, followed by `auth
+        status` reporting it live, then `auth logout --remove-projects` so no
+        orphaned session or alias accumulates on the real stack across CI
+        runs.
 
         Exercises the TOTP path specifically when E2E_LOGIN_TOTP_SECRET is
         set -- proving the seed-to-live-code-to-verified-session chain
         (C3/C4 in the PR #565 review) actually round-trips against a real
         stack, not just the unit-test fakes.
+
+        Deliberately ONE login call, not two: the server consumes a TOTP
+        time-slice on first submission and rejects any resubmission within
+        the same ~30s window (the exact C4 constraint this PR documents), so
+        a second `login-password` call moments later in the same test run
+        would itself trip the failure it is supposed to guard against.
         """
         config_dir = tmp_path / "c"
         config_dir.mkdir()
@@ -543,6 +551,7 @@ class TestLoginPasswordCommand:
             os.environ[ENV_LOGIN_PASSWORD],
             "--stack",
             os.environ[ENV_LOGIN_URL],
+            "--register-projects",
         ]
         totp_secret = os.environ.get(ENV_LOGIN_TOTP_SECRET)
         if totp_secret:
@@ -553,6 +562,7 @@ class TestLoginPasswordCommand:
         login_data = json.loads(login_result.output)["data"]
         assert login_data["method"] == "password"
         assert login_data["user_email"]
+        assert login_data["registered_projects"]
 
         status_result = CliRunner().invoke(
             app,
@@ -579,6 +589,7 @@ class TestLoginPasswordCommand:
                 "logout",
                 "--stack",
                 os.environ[ENV_LOGIN_URL],
+                "--remove-projects",
             ],
         )
         assert logout_result.exit_code == 0, logout_result.output
@@ -614,48 +625,6 @@ class TestLoginPasswordCommand:
         assert error["code"] == "AUTH_FLOW_DENIED"
         assert "invalid email or password" in error["message"].lower()
         assert "invalid or expired token" not in error["message"].lower()
-
-    def test_register_projects_registers_accessible_projects(self, tmp_path: Path) -> None:
-        """`--register-projects` writes at least one alias into config.json,
-        exactly like `auth login --register-projects` already does."""
-        config_dir = tmp_path / "c"
-        config_dir.mkdir()
-        args = [
-            "--json",
-            "--config-dir",
-            str(config_dir),
-            "auth",
-            "login-password",
-            "--email",
-            os.environ[ENV_LOGIN_EMAIL],
-            "--password",
-            os.environ[ENV_LOGIN_PASSWORD],
-            "--stack",
-            os.environ[ENV_LOGIN_URL],
-            "--register-projects",
-        ]
-        totp_secret = os.environ.get(ENV_LOGIN_TOTP_SECRET)
-        if totp_secret:
-            args += ["--totp-secret", totp_secret]
-
-        result = CliRunner().invoke(app, args)
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)["data"]
-        assert data["registered_projects"]
-
-        CliRunner().invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(config_dir),
-                "auth",
-                "logout",
-                "--stack",
-                os.environ[ENV_LOGIN_URL],
-                "--remove-projects",
-            ],
-        )
 
 
 # ---------------------------------------------------------------------------
