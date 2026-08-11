@@ -66,6 +66,19 @@ def test_readme_does_not_still_claim_mit() -> None:
     assert "Apache" in body
 
 
+def test_chocolatey_points_its_license_url_at_the_repo_license() -> None:
+    """The nuspec has no SPDX field; its licenceUrl is the whole declaration.
+
+    A URL to the LICENSE file self-updates with the repository, which is why
+    this channel never went stale -- but only as long as it points THERE and
+    not at a hard-coded licence page.
+    """
+    nuspec = (REPO_ROOT / "build/package/chocolatey/keboola-cli2.nuspec").read_text(
+        encoding="utf-8"
+    )
+    assert "<licenseUrl>https://github.com/keboola/cli/blob/main/LICENSE</licenseUrl>" in nuspec
+
+
 def test_no_packaging_file_still_says_mit() -> None:
     """Catch a sixth declaration site added later without updating this test."""
     offenders = []
