@@ -210,6 +210,14 @@ jobs:
       # fcntl does not exist there). Keeping this green is the point: a red
       # suite nobody can act on is worse than no suite, because it reads as
       # coverage while hiding things.
+      # The targeted steps above run against the default dependency set, but
+      # the full suite imports the `serve` tests, so it needs the same extras
+      # the Linux job installs. Without this the gate fails on
+      # `ModuleNotFoundError: No module named 'fastapi'` -- an artefact of the
+      # job's own setup rather than anything about Windows.
+      - name: Install server extras for the full run
+        run: uv sync --extra server
+
       - name: Full test suite on Windows
         run: >
           uv run pytest tests/
