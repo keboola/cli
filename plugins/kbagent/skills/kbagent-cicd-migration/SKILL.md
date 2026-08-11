@@ -15,6 +15,13 @@ description: >
 
 # kbc -> kbagent CI/CD Migration
 
+> **Verified against:** kbagent v0.80.0, live-verified 2026-08-06 through
+> 2026-08-10 (project 153, real repro, not a static code read). Every dated
+> claim below and in `references/*.md` is a point-in-time repro note, not a
+> version floor -- if kbagent has moved well past 0.80.x when you read this,
+> treat behavior claims as "true as of that version" and spot-check anything
+> load-bearing against current `main` rather than assuming it still holds.
+
 Guides a customer through porting a `kbc` GitHub CI/CD pipeline (the
 [CLI-based-sync-demo](https://github.com/keboola/CLI-based-sync-demo) shape:
 per-project pull/push, multi-project promotion, branch-gated deploys) to the new

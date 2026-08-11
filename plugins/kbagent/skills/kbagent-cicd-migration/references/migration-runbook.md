@@ -1,5 +1,9 @@
 # Migration runbook — kbc → kbagent (PR sequence)
 
+> **Verified against:** kbagent v0.80.0, live-verified 2026-08-06 (see
+> `SKILL.md`'s "Verified against" note). Dated claims below are point-in-time
+> repro notes, not version floors.
+
 The ordered, low-risk way to cut a repo over. This is a **clean cutover**, not a
 coexistence: kbc (`config.json`/`meta.json`) and kbagent (`_config.yml`) cannot both
 own the same tree (live-verified — see the SKILL.md reality note). Plan it as one

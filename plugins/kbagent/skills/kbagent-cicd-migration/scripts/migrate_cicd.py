@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,13 +87,33 @@ def _alias_from_dir(directory: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", directory).strip("_").upper() or "PROJECT"
 
 
+_SAFE_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$")
+
+
 def discover_projects(repo: Path) -> list[Project]:
-    """Find every ``.keboola/manifest.json`` and parse it into a Project."""
+    """Find every ``.keboola/manifest.json`` and parse it into a Project.
+
+    Rejects a directory name outside a safe charset before it ever reaches a
+    generated workflow: ``_project_step`` also `shlex.quote()`s it before
+    embedding it in a shell command, but this directory name (unlike the
+    stack URL) is a real on-disk folder name discovered by globbing the
+    repo -- in a multi-contributor repo, anyone who can land a PR adding a
+    folder + `.keboola/manifest.json` before the operator runs this
+    generator controls the string. Reject at discovery time rather than
+    relying solely on quoting downstream.
+    """
     projects: list[Project] = []
     for manifest_path in sorted(repo.glob("**/.keboola/manifest.json")):
         project_dir = manifest_path.parent.parent
         rel = project_dir.relative_to(repo).as_posix()
         rel = "." if rel == "" else rel
+        if rel != "." and not _SAFE_DIRECTORY_RE.match(rel):
+            print(
+                f"  ! skipping {manifest_path}: unsafe directory name {rel!r} "
+                "(must match [A-Za-z0-9._-] only)",
+                file=sys.stderr,
+            )
+            continue
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -156,7 +177,7 @@ def _install_steps(version: str | None, git_ref: str | None) -> str:
         spec = "keboola-cli"
     return (
         "      - name: Install uv\n"
-        "        uses: astral-sh/setup-uv@v5\n"
+        "        uses: astral-sh/setup-uv@v7\n"
         "      - name: Install kbagent\n"
         f"        run: uv tool install '{spec}'\n"
         "      - name: Show version\n"
@@ -185,7 +206,8 @@ def _project_step(p: Project, command: str, step_name: str, json_output: bool = 
         f"          KBC_TOKEN: ${{{{ secrets.{p.token_secret} }}}}\n"
         f"          KBC_STORAGE_API_URL: {p.stack_url}\n"
         "        run: |\n"
-        f"          {prefix}sync {command} --project __env__ --directory '{p.directory}'\n"
+        f"          {prefix}sync {command} --project __env__ "
+        f"--directory {shlex.quote(p.directory)}\n"
     )
 
 
@@ -208,7 +230,7 @@ def gen_validate(projects: list[Project]) -> str:
         "  validate:\n"
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/checkout@v5\n"
         f"{_INSTALL_TOKEN}"
         "      # Show drift between the committed config files and each remote\n"
         "      # project. `sync diff` is read-only. The push dry-run below also\n"
@@ -234,7 +256,7 @@ def gen_pull(projects: list[Project], schedule: str | None) -> str:
         "  pull:\n"
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/checkout@v5\n"
         f"{_INSTALL_TOKEN}"
         f"{steps}"
         "      - name: Commit pulled state\n"
@@ -277,7 +299,7 @@ def gen_push(projects: list[Project], main_branch: str) -> str:
         f"    environment: {env_expr}\n"
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/checkout@v5\n"
         f"{_INSTALL_TOKEN}"
         "      # `sync push` encrypts #-secrets fail-closed by default. Do NOT add\n"
         "      # --allow-plaintext-on-encrypt-failure in CI.\n"

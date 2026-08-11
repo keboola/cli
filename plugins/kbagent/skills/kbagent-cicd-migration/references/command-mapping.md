@@ -3,6 +3,10 @@
 Authoritative mapping used by the migration generator. Verify flags against your
 installed `kbagent` version (`kbagent sync pull --help`); the new CLI evolves fast.
 
+> **Verified against:** kbagent v0.80.0, live-verified 2026-08-06 (see
+> `SKILL.md`'s "Verified against" note). Dated claims below are point-in-time
+> repro notes, not version floors.
+
 ## Install
 
 | kbc (old) | kbagent (new) |

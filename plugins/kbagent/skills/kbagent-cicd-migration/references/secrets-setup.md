@@ -31,7 +31,18 @@ gh api -X PUT "repos/$REPO/environments/prod"
 ```
 
 Then in the GitHub UI (or via the environments API):
-1. Scope `KBC_TOKEN_*` for production projects to the **prod** environment.
+1. Scope `KBC_TOKEN_*` for production projects to the **prod** environment --
+   but only for `kbagent-push.yml`'s `push` job, which is the only generated
+   job that declares `environment: prod`. `kbagent-validate.yml`'s `validate`
+   job runs on every `pull_request` with **no** `environment:` key (it's
+   read-only: `sync diff` + `sync push --dry-run`, never a real write), so an
+   environment-scoped secret is invisible to it and every PR-time diff/dry-run
+   against a prod project would fail auth. If you scope a prod token to the
+   `prod` environment, either (a) keep an unscoped copy of that same secret
+   available to `validate` too, or (b) accept that `validate` simply won't run
+   its dry-run check against prod-scoped projects until the push step (which
+   still gets full approval gating). Do not scope the secret and expect
+   `validate` to see it -- that combination silently breaks PR-time checks.
 2. Add **required reviewers** to the `prod` environment so `kbagent push` to prod
    blocks on manual approval (this replaces the demo's environment gating).
 3. Optionally restrict the `prod` environment to the `main` branch.
