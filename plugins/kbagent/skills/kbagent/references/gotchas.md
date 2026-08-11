@@ -3423,3 +3423,25 @@ possible remedy.
   as actionable was previously reporting an unfixable problem on every run.
 - **POSIX behaviour is unchanged** — a config file that is not `0600` still
   warns there, because there the bits mean something.
+
+## Windows auto-update did not work at all from 0.78.0 to 0.80.1 (since v0.80.2)
+
+If a Windows user reports being on an old kbagent, this is why: between 0.78.0
+and 0.80.1 inclusive, the deferred self-update was scheduled and then never
+applied. `kbagent update` printed `(scheduled)` and every later launch printed
+"Updating in the background", while the version never moved.
+
+- **It fails safe.** Nothing is corrupted (unlike the original #528); the
+  install stays complete and usable. The update simply never arrives, and the
+  24-hour single-flight marker suppresses retries in the meantime — so the
+  banner keeps promising an update that cannot happen.
+- **Do not tell a stuck user to run `kbagent update`** on an affected version.
+  It takes the same broken path. The reinstall is the only way out:
+
+      uv tool install --force --reinstall "keboola-cli @ https://github.com/keboola/cli/releases/download/v0.80.2/keboola_cli-0.80.2-py3-none-any.whl"
+
+- **A version between 0.78.0 and 0.80.1 on Windows means the user has been
+  stuck for a while**, and is missing every Windows fix from 0.80.1 —
+  `job run --idempotency-key`, `storage download-table`, `doctor`, and
+  redirected-output encoding all landed there.
+- POSIX was never affected; it uses the inline install plus re-exec.
