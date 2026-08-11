@@ -3360,6 +3360,38 @@ depend on the active console codepage.
   string-compares raw stdout bytes on Windows might.
 - **Captured or replaced streams fall back to the plain text write** (there is
   no binary buffer to bypass), so in-process test harnesses behave as before.
+- Human (Rich) output got the same guarantee later, by a different mechanism --
+  see the next entry.
+
+## Redirected human output is UTF-8 too, and no longer crashes (since v0.80.1)
+
+When stdout is **not** a terminal, kbagent reconfigures it to UTF-8. So every
+byte you capture from kbagent -- machine or human, `--json` or Rich table -- is
+UTF-8 on every platform.
+
+- **What this fixes.** Before v0.80.1, `kbagent semantic-layer --help` and
+  `kbagent context` exited **1** with `UnicodeEncodeError` on Windows whenever
+  their output was piped or redirected, and any Rich table truncated by width
+  emitted a lone `0x85` byte for its ellipsis. An agent shelling out and
+  capturing stdout got a crash or undecodable bytes; the same command typed
+  into a terminal worked fine, which made it look unreproducible.
+- **The split is terminal vs not, not which codepage is set.** Since PEP 528,
+  CPython writes to a real Windows console through the console API and already
+  reports `utf-8`, so interactive sessions were never affected. Only the
+  redirected path fell back to the locale encoding (cp1252 / cp1250). Setting
+  `chcp` changes nothing once stdout is a pipe.
+- **Terminals are deliberately left untouched.** Forcing UTF-8 bytes at a
+  console whose codepage is cp852 would replace a working display with
+  mojibake. Do not "fix" this by forcing UTF-8 everywhere.
+- **Always decode kbagent output as UTF-8**, never with
+  `locale.getpreferredencoding()`. Same rule the `--json` entry above gives, now
+  true for human output as well.
+- **Redirected Windows output now matches POSIX byte for byte**, including the
+  box-drawing characters Rich previously downgraded to ASCII when it thought the
+  stream could not encode them. A test that string-compares captured human
+  output across platforms will see them agree where they used to differ.
+- **On kbagent older than v0.80.1**, the workaround is `PYTHONUTF8=1` or
+  `PYTHONIOENCODING=utf-8` in the environment you spawn kbagent from.
 
 ## Two commands were broken on Windows until v0.80.1 (since v0.80.1)
 
