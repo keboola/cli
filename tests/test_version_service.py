@@ -1798,4 +1798,71 @@ class TestFrozenBuildVersionOutput:
             result = VersionService().get_versions()
         assert "install_channel" not in result["kbagent"]
         assert "upgrade_hint" not in result["kbagent"]
-        assert "uv tool install" in result["kbagent"]["upgrade_command"]
+        # `uv` is resolved to an absolute path, which on Windows is
+        # `...\\uv.EXE` -- assert the command shape, not one spelling of it.
+        upgrade = result["kbagent"]["upgrade_command"]
+        assert "tool install" in upgrade
+        assert "uv" in upgrade.lower()
+
+
+class TestUnknownLatestVersionIsNotAFailure:
+    """A failed version lookup must not read as a broken install.
+
+    Both situations used to reach the same `command is None` branch and print
+    the same thing, so a transient GitHub rate limit -- 60 unauthenticated
+    requests per hour, shared by every tool behind one IP -- told the user
+    their self-update was broken and handed them
+    `uv tool install --force --reinstall`, a command with no package in it.
+    """
+
+    def test_unknown_latest_reports_the_real_cause_and_no_fake_command(self) -> None:
+        plan = KbagentUpdatePlan(
+            current_version="0.80.3",
+            latest_version=None,
+            up_to_date=None,
+            command=None,
+            recovery_command=None,
+        )
+
+        result = VersionService._update_kbagent(plan)
+
+        assert result["reason"] == "latest_version_unknown"
+        assert result["updated"] is False
+        # Nothing was attempted, so nothing was "planned" either.
+        assert result["planned"] is False
+        assert "Could not determine the latest kbagent version" in result["message"]
+        assert "rate limit" in result["message"]
+        assert "0.80.3 was left untouched" in result["message"].replace("v0.80.3", "0.80.3")
+        # The old text, and the unrunnable command it suggested, must be gone.
+        assert "Could not prepare a self-update command" not in result["message"]
+        assert "recovery_command" not in result
+
+    def test_known_latest_without_a_command_still_says_so(self) -> None:
+        """The genuine local failure keeps its own, different message."""
+        plan = KbagentUpdatePlan(
+            current_version="0.80.3",
+            latest_version="0.80.4",
+            up_to_date=False,
+            command=None,
+            recovery_command="uv tool install --force --reinstall 'keboola-cli @ x'",
+        )
+
+        result = VersionService._update_kbagent(plan)
+
+        assert "Could not prepare a self-update command for v0.80.4" in result["message"]
+        assert "uv tool install --force --reinstall 'keboola-cli @ x'" in result["message"]
+
+    def test_no_recovery_command_points_at_the_releases_page_instead(self) -> None:
+        """Never render `Recover with: None`, and never a command with no package."""
+        plan = KbagentUpdatePlan(
+            current_version="0.80.3",
+            latest_version="0.80.4",
+            up_to_date=False,
+            command=None,
+            recovery_command=None,
+        )
+
+        result = VersionService._update_kbagent(plan)
+
+        assert "Recover with: None" not in result["message"]
+        assert "releases/latest" in result["message"]

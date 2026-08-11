@@ -24,7 +24,12 @@ from keboola_agent_cli.auto_update import (
     maybe_auto_update,
     report_finished_deferred_update,
 )
-from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_SKIP_UPDATE, MCP_UPGRADE_TIMEOUT
+from keboola_agent_cli.constants import (
+    ENV_AUTO_UPDATE,
+    ENV_DEFER_UPDATE,
+    ENV_SKIP_UPDATE,
+    MCP_UPGRADE_TIMEOUT,
+)
 from keboola_agent_cli.frozen_dist import FrozenChannel, FrozenDistribution
 from keboola_agent_cli.services.version_service import KbagentUpdatePlan, McpUpdatePlan
 from keboola_agent_cli.update_runner import (
@@ -38,6 +43,21 @@ from keboola_agent_cli.update_runner import (
 # ---------------------------------------------------------------------------
 # _should_skip
 # ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _pin_the_inline_update_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Decide the install path explicitly instead of inheriting the platform's.
+
+    `should_defer()` defaults to True on Windows, so tests here that exercise
+    the inline install + re-exec silently stopped exercising anything when run
+    on Windows -- `_perform_update` was simply never reached. Pinning the
+    documented escape hatch makes the path under test the same everywhere.
+
+    Tests that are *about* deferral patch `should_defer` directly, which
+    replaces the function and therefore wins over this env var.
+    """
+    monkeypatch.setenv(ENV_DEFER_UPDATE, "0")
+
+
 class TestTopLevelSubcommandVersioning:
     """_top_level_subcommand_is_versioning resolves the real subcommand (issue #353)."""
 

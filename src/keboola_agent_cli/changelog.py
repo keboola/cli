@@ -56,6 +56,30 @@ CHANGELOG: dict[str, list[str]] = {
         "contract `tool list` / `tool call` already use. `kbagent serve`'s `/agents` route "
         "carries the same key, so the Web UI flags them too -- that population is the least "
         "likely to ever run `kbagent doctor`.",
+        "UX: a failed version lookup no longer reports itself as a broken "
+        "self-update. `kbagent update` printed `update FAILED: Could not "
+        "prepare a self-update command. Recover with: uv tool install --force "
+        "--reinstall` -- wrong about the cause, and the command it offered had "
+        "no package in it, so pasting it did nothing. Both situations reached "
+        "one branch: not knowing WHAT to install (usually transient -- no "
+        "network, or GitHub's unauthenticated 60-requests/hour rate limit, "
+        "which is per IP and shared by every tool on your connection) and "
+        "knowing the version but failing to build a command (a real local "
+        "problem). They are now reported separately, the transient case says "
+        "so and says your install was left untouched, and a recovery command "
+        "is only printed when it is actually runnable.",
+        "Tests: the full suite now runs on Windows in CI as a gate. It never "
+        "did -- the windows-latest job ran a narrow slice, because a real run "
+        "was 55 failures and nothing can gate on that. Those were test "
+        "portability, not product bugs, and are now explicit POSIX-only skips "
+        "(mode bits are not the access-control mechanism on Windows; `fcntl` "
+        "does not exist there); the `auto_update` tests were fixed rather than "
+        "skipped, by pinning the install path they mean to exercise instead of "
+        "inheriting the platform default. Console width is pinned in conftest "
+        "so table assertions stop depending on the host. Two real Windows "
+        "defects had been sitting in that noise -- the WinError 5 idempotency "
+        "crash and the backslash manifest paths -- which is what a permanently "
+        "red suite costs: it reads as coverage while hiding things.",
     ],
     "0.80.4": [
         "Fix: a sync manifest written on Windows was unusable by everyone else "

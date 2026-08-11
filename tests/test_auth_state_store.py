@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,10 @@ def _make_session(stack_url: str = "https://connection.keboola.com") -> StackSes
     )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+)
 class TestFilePermissions:
     def test_saved_file_is_0600(self, tmp_config_dir: Path) -> None:
         store = AuthStateStore(config_dir=tmp_config_dir)

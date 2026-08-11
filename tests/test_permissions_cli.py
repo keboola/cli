@@ -1,6 +1,7 @@
 """Tests for permissions CLI commands and enforcement via CliRunner."""
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -533,13 +534,17 @@ class TestInitReadOnly:
         assert "cli:write" in config_data["permissions"]["deny"]
         assert "tool:write" in config_data["permissions"]["deny"]
 
-        # Verify config.json is owner-read-only (0400)
-        import stat
+        # Verify config.json is owner-read-only (0400). POSIX only: Windows
+        # reports 0o666 for anything writable regardless of its ACL, so these
+        # bits carry no information there -- the policy assertions above are
+        # what matter on that platform, and they still run.
+        if sys.platform != "win32":
+            import stat
 
-        file_mode = local_config_path.stat().st_mode
-        assert not (file_mode & stat.S_IWUSR), "config.json should not be user-writable"
-        assert not (file_mode & stat.S_IRGRP), "config.json should not be group-readable"
-        assert file_mode & stat.S_IRUSR, "config.json should be owner-readable"
+            file_mode = local_config_path.stat().st_mode
+            assert not (file_mode & stat.S_IWUSR), "config.json should not be user-writable"
+            assert not (file_mode & stat.S_IRGRP), "config.json should not be group-readable"
+            assert file_mode & stat.S_IRUSR, "config.json should be owner-readable"
 
         # Verify .claude/settings.json was created with comprehensive deny rules
         claude_settings_path = work_dir / ".claude" / "settings.json"
