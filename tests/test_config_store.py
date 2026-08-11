@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -82,6 +83,10 @@ class TestSaveAndLoad:
         assert (nested_dir / "config.json").exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+)
 class TestFilePermissions:
     """Tests for file permission security."""
 
@@ -671,6 +676,10 @@ class TestMissingDirectory:
         assert "test" in config.projects
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="relies on chmod to deny access, which Windows ACLs ignore for the file owner",
+)
 class TestPermissionDenied:
     """Tests for permission-related errors."""
 
@@ -704,6 +713,10 @@ class TestPermissionDenied:
             config_file.chmod(0o644)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+)
 class TestDirectoryPermissions:
     """Tests for S3: config directory permissions."""
 
@@ -1143,6 +1156,10 @@ class TestBackupOnSave:
         current = json.loads((tmp_config_dir / "config.json").read_text())
         assert set(current["projects"]) == {"a", "b"}
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+    )
     def test_backup_has_owner_only_permissions(self, tmp_config_dir: Path) -> None:
         """The backup contains tokens, so it must be 0600 like config.json."""
         store = ConfigStore(config_dir=tmp_config_dir)

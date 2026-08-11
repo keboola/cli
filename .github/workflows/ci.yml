@@ -199,6 +199,25 @@ jobs:
       - name: Test lock-then-replace file stores on Windows (issue #427)
         run: uv run pytest tests/test_job_idempotency_store.py -v
 
+      # The whole suite, as a gate. It never ran here before: a real run was 55
+      # failures, and nobody can gate on that, so nothing did -- which let real
+      # Windows defects sit in the noise for entire releases. Two of them did:
+      # the WinError 5 above, and a manifest written with backslash paths into
+      # a git-tracked file (#576), which broke every POSIX teammate.
+      #
+      # The 55 were test portability, not product bugs, and are now expressed
+      # as explicit POSIX-only skips (mode bits are not Windows access control;
+      # fcntl does not exist there). Keeping this green is the point: a red
+      # suite nobody can act on is worse than no suite, because it reads as
+      # coverage while hiding things.
+      - name: Full test suite on Windows
+        run: >
+          uv run pytest tests/
+          --ignore=tests/test_e2e.py
+          --ignore=tests/test_e2e_auth.py
+          --ignore=tests/test_server_semantic_layer_routes_e2e.py
+          -q
+
       - name: Assert the SPA is bundled (Bug 1 fixed)
         run: python scripts/check_wheel_ui.py --expect-ui
 

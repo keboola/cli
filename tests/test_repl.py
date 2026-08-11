@@ -2,6 +2,7 @@
 
 import os
 import stat
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -301,6 +302,10 @@ class TestReplFirewallPropagation:
         )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+)
 class TestHistoryPathPermissions:
     """Issue #269 sec-04 -- REPL history file must be 0600 to avoid token leaks."""
 

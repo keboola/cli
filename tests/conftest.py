@@ -9,6 +9,19 @@ from keboola_agent_cli.output import OutputFormatter
 
 
 @pytest.fixture(autouse=True)
+def _deterministic_console_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the width Rich renders at, so assertions do not depend on the host.
+
+    Rich truncates table cells to fit the console and infers that width from
+    the environment. A test asserting a value appears in a rendered table
+    therefore passes or fails according to the machine it runs on -- which is
+    how `organization-project` came to be silently cut in half on Windows CI
+    while passing locally. Wide enough that nothing under test is elided.
+    """
+    monkeypatch.setenv("COLUMNS", "200")
+
+
+@pytest.fixture(autouse=True)
 def _force_stdio_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force stdio transport in all tests to prevent spawning persistent server."""
     monkeypatch.setenv("KBAGENT_MCP_TRANSPORT", "stdio")

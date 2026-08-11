@@ -1,11 +1,22 @@
-"""Tests for file locking in ConfigStore."""
+"""Tests for file locking in ConfigStore.
+
+POSIX-only as a module: every test here is about `fcntl.flock`, which does not
+exist on Windows. `_try_flock` degrades to a no-op there by design (see
+`config_store._HAS_FCNTL`), so there is no behaviour left to assert -- the
+cross-platform guarantee is the atomic `os.replace`, covered elsewhere.
+"""
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from keboola_agent_cli.config_store import ConfigStore, _try_flock
 from keboola_agent_cli.models import AppConfig, ProjectConfig
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="fcntl.flock is POSIX-only")
 
 
 class TestTryFlock:

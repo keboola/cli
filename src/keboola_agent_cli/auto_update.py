@@ -763,9 +763,15 @@ def maybe_auto_update() -> None:
         if kbagent_plan.up_to_date is not False:
             return
         if kbagent_plan.command is None:
+            # Only offer a recovery line when there is one; `Recover with: None`
+            # is worse than saying nothing. A failed version lookup never gets
+            # here -- `up_to_date` is None then, and the guard above returns
+            # first, deliberately keeping a transient network blip silent
+            # instead of nagging on every single command.
+            recovery = kbagent_plan.recovery_command
             sys.stderr.write(
-                "Auto-update could not prepare a reinstall command. "
-                f"Recover with: {kbagent_plan.recovery_command}\n"
+                "Auto-update could not prepare a reinstall command."
+                + (f" Recover with: {recovery}\n" if recovery else "\n")
             )
             return
 

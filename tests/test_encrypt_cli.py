@@ -7,9 +7,11 @@ patched services in ctx.obj.
 """
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -238,6 +240,10 @@ class TestEncryptValuesFileInput:
 class TestEncryptValuesOutputFile:
     """Tests for --output-file option."""
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+    )
     def test_encrypt_values_output_file(self, tmp_path: Path) -> None:
         """--output-file writes encrypted JSON with 0600 permissions."""
         config_dir = tmp_path / "config"

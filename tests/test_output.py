@@ -530,7 +530,10 @@ class TestFormatLineageTable:
 
     def test_lineage_table_with_edges(self) -> None:
         """format_lineage_table renders data flow table with edge details."""
-        console = Console(file=StringIO(), no_color=True, force_terminal=False)
+        # Explicit width: Rich truncates cells to fit, and the default it picks
+        # differs per host, so without this the assertions below depend on the
+        # machine rather than on the rendering.
+        console = Console(file=StringIO(), no_color=True, force_terminal=False, width=200)
         data = {
             "edges": [
                 {

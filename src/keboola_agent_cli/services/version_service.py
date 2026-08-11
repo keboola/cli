@@ -1139,6 +1139,29 @@ class VersionService:
                 ),
             }
 
+        # Two very different situations reach `command is None`, and reporting
+        # them identically sent users chasing the wrong thing: not knowing what
+        # to install is usually a transient network or GitHub rate-limit blip,
+        # while knowing the version but failing to build a command is a real
+        # local problem. Separate them, and never print a recovery command that
+        # is not runnable -- the old fallback rendered as a bare
+        # `uv tool install --force --reinstall` with no package to install.
+        if kbagent_latest is None:
+            return {
+                "planned": False,
+                "updated": False,
+                "up_to_date": up_to_date,
+                "current_version": old_version,
+                "latest_version": None,
+                "reason": "latest_version_unknown",
+                "message": (
+                    f"Could not determine the latest kbagent version, so v{old_version} "
+                    "was left untouched. This is usually temporary -- no network, or "
+                    "GitHub's unauthenticated API rate limit (60 requests/hour per IP, "
+                    "shared by every tool on your connection). Try again in a few minutes."
+                ),
+            }
+
         if plan.command is None:
             return {
                 "planned": True,
@@ -1147,8 +1170,14 @@ class VersionService:
                 "current_version": old_version,
                 "latest_version": kbagent_latest,
                 "message": (
-                    "Could not prepare a self-update command. "
-                    f"Recover with: {plan.recovery_command or 'uv tool install --force --reinstall'}"
+                    f"Could not prepare a self-update command for v{kbagent_latest}. "
+                    f"Recover with: {plan.recovery_command}"
+                    if plan.recovery_command
+                    else (
+                        f"Could not prepare a self-update command for v{kbagent_latest}. "
+                        "Reinstall kbagent from the release wheel for that version: "
+                        "https://github.com/keboola/cli/releases/latest"
+                    )
                 ),
                 "recovery_command": plan.recovery_command,
             }

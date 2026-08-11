@@ -6,6 +6,7 @@ These cover the new per-run JSONL files added in v0.10.x to enable
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,10 @@ class TestAppendAndLoadEvents:
         assert loaded[0]["event"] == "ok"
         assert loaded[1]["event"] == "ok2"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX mode bits are not the access-control mechanism on Windows: os.chmod cannot narrow an ACL and stat reports 0o666 for anything writable",
+    )
     def test_file_permissions_are_0600(self, store: AgentStore, tmp_path: Path) -> None:
         store.append_events("t", "r", [{"event": "x", "data": {}, "seq": 0}])
         path = tmp_path / "kbagent" / "agent_runs" / "t" / "r.jsonl"
