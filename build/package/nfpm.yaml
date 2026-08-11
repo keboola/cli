@@ -19,7 +19,7 @@ description: |
   Self-contained native binary; no Python runtime required.
 vendor: "Keboola"
 homepage: "https://github.com/keboola/cli"
-license: "MIT"
+license: "Apache-2.0"
 
 contents:
   - src: ${BIN_PATH}

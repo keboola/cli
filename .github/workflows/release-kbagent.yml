@@ -501,6 +501,13 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
+      # NOTE for whoever gets this job working: `wingetcreate update` only bumps
+      # the version and installer URL -- it does NOT write locale fields. The
+      # FIRST successful submission must therefore set `License: Apache-2.0`
+      # itself, because every later run inherits whatever that manifest said.
+      # Do not copy the existing `Keboola.KeboolaCLI` manifest: that is the
+      # legacy Go CLI from keboola/keboola-as-code, a different product under a
+      # different (MIT) licence. `Keboola.KeboolaCLI2` has never been submitted.
       - name: Submit to winget-pkgs
         shell: bash
         env:
