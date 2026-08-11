@@ -9,7 +9,10 @@ description: >
   (backup/restore), data apps (create/deploy/logs/secrets), flows and
   schedules, members and invitations, feature flags, OTLP data streams,
   scoped Storage tokens, the semantic layer (models, metrics, constraints),
-  the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
+  the Developer Portal, browser login. For migrating an existing kbc
+  (keboola-as-code) GitHub CI/CD pipeline to kbagent sync, see the sibling
+  kbagent-cicd-migration skill instead.
+  Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   workspace SQL, data app, streamlit deploy, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
@@ -400,6 +403,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
+| **Migrating a `kbc` (keboola-as-code) GitHub CI/CD pipeline to kbagent sync** | [kbagent-cicd-migration](../kbagent-cicd-migration/SKILL.md) (sibling skill) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |

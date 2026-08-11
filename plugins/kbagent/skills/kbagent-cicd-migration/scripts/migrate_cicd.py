@@ -107,10 +107,10 @@ def discover_projects(repo: Path) -> list[Project]:
         project_dir = manifest_path.parent.parent
         rel = project_dir.relative_to(repo).as_posix()
         rel = "." if rel == "" else rel
-        if rel != "." and not _SAFE_DIRECTORY_RE.match(rel):
+        if rel != "." and (".." in rel.split("/") or not _SAFE_DIRECTORY_RE.match(rel)):
             print(
                 f"  ! skipping {manifest_path}: unsafe directory name {rel!r} "
-                "(must match [A-Za-z0-9._-] only)",
+                "(must start with a letter/digit/./_ and contain only those plus / -)",
                 file=sys.stderr,
             )
             continue

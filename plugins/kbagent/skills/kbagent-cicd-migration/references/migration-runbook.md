@@ -34,7 +34,7 @@ No co-existence, but yes a controlled cutover:
 Do the projects one at a time; **start with a non-prod project (e.g. `dev`/`L0`)**.
 
 **Use plain `sync init` — never `--adopt-existing`.** Root-caused on project 153
-(kbagent v0.80.0, 2026-08): `--adopt-existing` carries kbc's row paths
+(see "Verified against" above): `--adopt-existing` carries kbc's row paths
 (`values/...` for `keboola.variables`, `codes/...` for `keboola.shared-code`) and
 kbc's `relations`-based companion-config paths straight into the kbagent manifest
 without translating them. That permanently leaves phantom `added`/`deleted`
@@ -54,8 +54,8 @@ modified, 0 deleted` — genuinely clean, not "a small acceptable residual."
 write to the identical path, `<DIR>/.keboola/manifest.json`, and plain `sync init`
 refuses to run while that file exists (`Error: Manifest already exists at
 .../.keboola/manifest.json. Use 'sync pull' to update, 'sync init
---adopt-existing' ..., or delete .keboola/ to reinitialize.`) — confirmed live,
-2026-08-06. This is the ONE file you delete before `init`, not the
+--adopt-existing' ..., or delete .keboola/ to reinitialize.`) — reproduced (see
+"Verified against" above). This is the ONE file you delete before `init`, not the
 `config.json`/`meta.json` config tree — those stay in place and get cleaned up
 only after the pull below.
 
@@ -93,8 +93,8 @@ configs under `other/<component_id>/...`, the old `app/`, `processor/`, and
 `config.json`/`meta.json` (already removed above), kbc also writes
 `description.md` and the code body itself (`code.sql`/`code.py`/`code.txt`/
 `code.txt` under `_shared/.../codes/...`) into these folders, none of which
-kbagent reads either. A `find -empty -delete` is a no-op against them — confirmed
-live, 2026-08-06 (19 leftover files, zero dirs matched `-empty`). Remove the
+kbagent reads either. A `find -empty -delete` is a no-op against them — reproduced
+(19 leftover files, zero dirs matched `-empty`). Remove the
 whole subtree instead, in the same commit as the `config.json`/`meta.json`
 cleanup:
 ```bash
@@ -157,9 +157,9 @@ you choose it — it's additive and doesn't require re-converting the config tre
 ## Hard guardrails (repeat to the user)
 - **Never** `kbagent sync push` (without `--dry-run`) against an adopted-but-not-yet-
   pulled kbc tree. In the original 2026-06 live test this reported every config as
-  "to delete" (136) and `--force` would have wiped the project; re-verified on
-  kbagent v0.80.0 (2026-08, same project) this no longer happens — `sync diff` now
-  reports untouched configs as `never_fetched`, not `deleted`. Treat the old figure as
+  "to delete" (136) and `--force` would have wiped the project; re-verified since
+  (see "Verified against" above, same project) this no longer happens — `sync diff`
+  now reports untouched configs as `never_fetched`, not `deleted`. Treat the old figure as
   a historical regression, not current behavior, but keep the rule: always
   `sync pull` and confirm a clean `sync diff` before the first real push, on any
   kbagent version.

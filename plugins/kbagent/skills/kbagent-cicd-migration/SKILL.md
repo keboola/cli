@@ -58,14 +58,14 @@ hard incompatibilities make this a deliberate cutover (verified against the code
   by reading the reformat. Merging it to `main` is effectively a tooling version bump.
 - Until cutover, keep the legacy `kbc` workflows; afterwards delete them in the same PR.
 
-> **Current finding (project 153, kbagent v0.80.0, live-verified 2026-08-06) — use
-> plain `sync init`, never `--adopt-existing`, for the conversion:**
+> **Finding (project 153, see "Verified against" above) — use plain
+> `sync init`, never `--adopt-existing`, for the conversion:**
 > `--adopt-existing` carries kbc's row paths (`values/{name}` for
 > `keboola.variables`, `codes/{name}` for `keboola.shared-code`) straight into the
 > kbagent manifest without translating them to kbagent's own `rows/{name}`
 > convention. kbagent's untracked-config scanner only recognizes a literal `rows/`
 > path segment, so it reports those inherited rows as brand-new top-level configs
-> — confirmed live: `sync status`/`sync diff` stayed at 9 added / 1-2 deleted even
+> — reproduced: `sync status`/`sync diff` stayed at 9 added / 1-2 deleted even
 > after the orphan-file cleanup, and pushing would `create_config` duplicate
 > siblings instead of updating the rows they actually are. Plain `sync init`
 > avoids this: it starts a genuinely empty manifest and lets `sync pull` populate
