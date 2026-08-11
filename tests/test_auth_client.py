@@ -248,22 +248,19 @@ class TestLoginPassword:
         assert "SSO login required for this account" in excinfo.value.message
         assert "kbagent auth login" in excinfo.value.message
 
-    def test_429_reports_rate_limit_reset(self, httpx_mock, monkeypatch) -> None:
-        # login_password still goes through the shared retry loop (only
-        # verify_mfa_totp bypasses it, per C4) -- stub the sleep and supply a
-        # 429 for every attempt so the final, exhausted-retries error is the
-        # one under test.
-        import keboola_agent_cli.http_base as http_base_module
-
-        monkeypatch.setattr(http_base_module.time, "sleep", lambda _seconds: None)
-        for _ in range(3):
-            httpx_mock.add_response(
-                url=f"{STACK_URL}/v1/auth/login",
-                method="POST",
-                status_code=429,
-                headers={"X-RateLimit-Reset": "2026-08-11T07:00:00Z"},
-                json={"error": "Too many attempts"},
-            )
+    def test_429_reports_rate_limit_reset(self, httpx_mock) -> None:
+        # login_password bypasses the shared retry loop (round-2 review
+        # finding O001 -- a retried login burns extra requests against the
+        # rate-limit bucket before this very message is even read), so
+        # exactly ONE 429 is registered; a second request with no matching
+        # mock would fail the test outright, proving no retry happened.
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+            status_code=429,
+            headers={"X-RateLimit-Reset": "2026-08-11T07:00:00Z"},
+            json={"error": "Too many attempts"},
+        )
         client = _make_client()
         try:
             with pytest.raises(KeboolaApiError) as excinfo:
@@ -272,6 +269,40 @@ class TestLoginPassword:
             client.close()
         assert excinfo.value.status_code == 429
         assert "2026-08-11T07:00:00Z" in excinfo.value.message
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_timeout_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        """Round-2 review O002: bypassing the retry loop must not also mean
+        losing `_do_request`'s transport-error mapping -- a network blip
+        must not escape as a raw traceback."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("read timed out"),
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.TIMEOUT
+        assert map_error_to_exit_code(excinfo.value) == 4
+
+    def test_connect_failure_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        httpx_mock.add_exception(
+            httpx.ConnectError("no route to host"),
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.CONNECTION_ERROR
+        assert map_error_to_exit_code(excinfo.value) == 4
 
 
 class TestVerifyMfaTotp:
@@ -340,6 +371,40 @@ class TestVerifyMfaTotp:
             client.close()
         assert excinfo.value.error_code == ErrorCode.AUTH_FLOW_DENIED
         assert "token" not in excinfo.value.message.lower()
+
+    def test_timeout_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        """Round-2 review O002/S001: `verify_mfa_totp` bypasses the retry
+        loop deliberately (C4), but that must not also mean losing
+        `_do_request`'s transport-error mapping -- previously a network blip
+        mid-MFA propagated as a raw, unhandled `httpx` exception."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("read timed out"),
+            url=f"{STACK_URL}/v1/auth/mfa",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.verify_mfa_totp("kbc_mfa_xyz", "123456")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.TIMEOUT
+        assert map_error_to_exit_code(excinfo.value) == 4
+
+    def test_connect_failure_is_reported_as_a_network_error(self, httpx_mock) -> None:
+        httpx_mock.add_exception(
+            httpx.ConnectError("no route to host"),
+            url=f"{STACK_URL}/v1/auth/mfa",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.verify_mfa_totp("kbc_mfa_xyz", "123456")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.CONNECTION_ERROR
+        assert map_error_to_exit_code(excinfo.value) == 4
 
 
 # ----------------------------------------------------------------------------
@@ -1487,3 +1552,40 @@ class Test404OnEveryEndpoint:
 
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
         assert STACK_URL in excinfo.value.message
+
+
+# ----------------------------------------------------------------------------
+# Round-2 review O003: error mapping must not depend on `response.request`
+# ----------------------------------------------------------------------------
+
+
+class TestMapAuthErrorOnABareResponse:
+    """`httpx.Response.request` raises `RuntimeError` (never returns `None`)
+    when the response was never sent through a client -- exactly the shape
+    `httpx.Response(...)` constructed directly in a test produces (the same
+    pattern `tests/test_client.py::TestExtractCloudErrorCode` already uses).
+    Both error-mapping methods below must handle that shape without
+    crashing; neither reads `.request` since the O001 refactor made
+    `is_mfa`/endpoint identity an explicit argument instead of something
+    sniffed from the transport object."""
+
+    def test_map_auth_error_never_touches_response_request(self) -> None:
+        client = _make_client()
+        try:
+            response = httpx.Response(404, json={"error": "Not Found"})
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client._map_auth_error(response)
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+
+    def test_raise_password_login_error_never_touches_response_request(self) -> None:
+        client = _make_client()
+        try:
+            response = httpx.Response(401, json={"error": "Invalid credentials"})
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client._raise_password_login_error(response, is_mfa=False)
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_FLOW_DENIED
+        assert "Invalid email or password" in excinfo.value.message

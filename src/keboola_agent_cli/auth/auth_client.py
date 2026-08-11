@@ -10,15 +10,21 @@ rather than on the client, and `revoke` is a public endpoint that takes the
 token to revoke in its request body.
 
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
-:class:`BaseHttpClient`, with three deliberate exceptions that keep the mapping
+:class:`BaseHttpClient`, with four deliberate exceptions that keep the mapping
 but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
 state, not a failure), `refresh` (a blind retry would re-present the refresh
 token, and it runs under a wall-clock ceiling the retry loop would outlast),
-and `verify_mfa_totp` (the server records each TOTP time-slice as consumed on
-first submission, so a retry would replay a code guaranteed to be rejected --
-burning one of the account's limited MFA attempts for nothing).
-`refresh` makes one narrow exception of its own for a rotation deadlock, which
-the server reports in a form that proves nothing rotated. See their docstrings.
+and `login_password`/`verify_mfa_totp` (a blind retry against `/v1/auth/login`
+burns extra requests against the account's rate-limit bucket before the
+server's own `X-RateLimit-Reset` guidance is even read, and against
+`/v1/auth/mfa` would replay a TOTP code the server already marked consumed --
+burning one of the account's limited MFA attempts for nothing). The last
+three share `_request_bypassing_retry`, which maps transport failures
+(`httpx.TimeoutException`/`httpx.TransportError`) the way `_do_request` would
+have, since bypassing the retry loop must not also mean losing that mapping.
+`refresh` makes one further narrow exception of its own for a rotation
+deadlock, which the server reports in a form that proves nothing rotated.
+See their docstrings.
 """
 
 from __future__ import annotations
@@ -271,12 +277,24 @@ class AuthClient(BaseHttpClient):
         opens a browser. Returns a token pair directly, or an
         `MfaChallengeResult` if the account has MFA configured (resolve it
         with `verify_mfa_totp`).
+
+        Bypasses `_do_request`/the shared retry loop (see the module
+        docstring): a blind retry here burns extra requests against the
+        account's rate-limit bucket before `_raise_password_login_error`'s
+        own `X-RateLimit-Reset` handling is ever consulted, and a retry
+        after the server already created a session (e.g. a read timeout
+        while the response was in flight) mints a second live session that
+        never reaches `AuthService._finalize_login` -- an orphan `auth
+        logout` has no record of and can never revoke.
         """
-        response = self._do_request(
+        response = self._request_bypassing_retry(
             "POST",
             AUTH_LOGIN_PATH,
             json={"grantType": "password", "email": email, "password": password},
+            action="Signing in",
         )
+        if response.status_code >= 400:
+            self._raise_password_login_error(response, is_mfa=False)
         data = response.json()
         if data.get("mfaRequired"):
             return MfaChallengeResult.model_validate(data)
@@ -286,20 +304,21 @@ class AuthClient(BaseHttpClient):
         """Resolve a password-login MFA challenge via TOTP (``POST /v1/auth/mfa``).
 
         Bypasses `_do_request`/the shared retry loop -- the same deliberate
-        exception `poll_device_token` and `refresh` already make (see the
-        module docstring). The server consumes a TOTP time-slice on its
-        first submission and rejects any resubmission of it, so a 429/5xx
-        retry here would resend the same code and be rejected by
-        construction, burning one of the account's limited MFA attempts for
-        a failure that was never the credential's fault.
+        exception `login_password`, `poll_device_token`, and `refresh`
+        already make (see the module docstring). The server consumes a TOTP
+        time-slice on its first submission and rejects any resubmission of
+        it, so a 429/5xx retry here would resend the same code and be
+        rejected by construction, burning one of the account's limited MFA
+        attempts for a failure that was never the credential's fault.
         """
-        response = self._client.request(
+        response = self._request_bypassing_retry(
             "POST",
             AUTH_MFA_PATH,
             json={"mfaToken": mfa_token, "type": "totp", "code": code},
+            action="Verifying the MFA code",
         )
         if response.status_code >= 400:
-            self._map_auth_error(response)
+            self._raise_password_login_error(response, is_mfa=True)
         return CliTokenResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
@@ -539,35 +558,58 @@ class AuthClient(BaseHttpClient):
 
         raise AssertionError("unreachable: the final attempt always returns or raises")
 
-    def _post_refresh(self, refresh_token: str) -> httpx.Response:
-        """Issue one refresh request, mapping transport failures to network codes."""
+    def _request_bypassing_retry(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any],
+        timeout: httpx.Timeout | float | None = None,
+        action: str,
+    ) -> httpx.Response:
+        """Issue one request outside the shared retry loop, still mapping
+        transport failures the way `_do_request` would have.
+
+        Shared by `login_password`, `verify_mfa_totp`, and `refresh`
+        (via `_post_refresh`) -- each bypasses the retry loop for its own
+        reason (see their docstrings and the module docstring), but
+        bypassing retry must not also mean losing the
+        `TimeoutException`/`TransportError` -> structured-error mapping
+        `_do_request` gives every other call; without it, a network blip
+        would escape as a raw traceback instead of a `--json` error
+        envelope. `action` names what the caller was doing
+        ("Signing in", "Refreshing your Keboola login", ...), reused in
+        both message templates below.
+        """
+        kwargs: dict[str, Any] = {"json": json}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         try:
-            return self._client.request(
-                "POST",
-                AUTH_TOKEN_REFRESH_PATH,
-                json={"refreshToken": refresh_token},
-                timeout=AUTH_REFRESH_TIMEOUT,
-            )
+            return self._client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
             raise KeboolaApiError(
-                message=(
-                    f"Refreshing your Keboola login at {self._base_url} timed out. "
-                    "Run the command again."
-                ),
+                message=f"{action} at {self._base_url} timed out. Run the command again.",
                 status_code=0,
                 error_code=ErrorCode.TIMEOUT,
                 retryable=True,
             ) from exc
         except httpx.TransportError as exc:
             raise KeboolaApiError(
-                message=(
-                    f"Cannot reach {self._base_url} to refresh your Keboola login "
-                    f"({type(exc).__name__})."
-                ),
+                message=f"Cannot reach {self._base_url} ({action}: {type(exc).__name__}).",
                 status_code=0,
                 error_code=ErrorCode.CONNECTION_ERROR,
                 retryable=True,
             ) from exc
+
+    def _post_refresh(self, refresh_token: str) -> httpx.Response:
+        """Issue one refresh request, mapping transport failures to network codes."""
+        return self._request_bypassing_retry(
+            "POST",
+            AUTH_TOKEN_REFRESH_PATH,
+            json={"refreshToken": refresh_token},
+            timeout=AUTH_REFRESH_TIMEOUT,
+            action="Refreshing your Keboola login",
+        )
 
     def _raise_contention_exhausted(self, response: httpx.Response) -> NoReturn:
         """Report a rotation deadlock that survived every replay.
@@ -742,28 +784,23 @@ class AuthClient(BaseHttpClient):
     def _map_auth_error(self, response: httpx.Response) -> NoReturn:
         """Map a failed auth-endpoint response, escalating 404 to a dedicated code.
 
-        `/v1/auth/login` and `/v1/auth/mfa` get their own mapping
-        (`_raise_password_login_error`) before the generic rules below: both
-        are unauthenticated-by-definition endpoints where a 401 means "wrong
-        credential", not "stale token", so the inherited `INVALID_TOKEN`
-        wording (and its `mask_token("")` interpolation) would misdiagnose
-        the command's single most likely failure. See PR #565 review.
+        `login_password`/`verify_mfa_totp` never reach this method -- both
+        bypass `_do_request` and call `_raise_password_login_error` directly
+        (they already know which of the two password-grant endpoints they
+        are; sniffing it back out of the response would just be re-deriving
+        what the caller already had), so this stays purely the generic
+        mapping shared by every other auth endpoint.
 
-        For every other auth endpoint, a 404 means programmatic auth (or the
-        specific flow) is not enabled on this stack -- a fail-closed feature
-        flag -- not "wrong URL". Surfacing the generic `NOT_FOUND` code would
-        send the user chasing a routing bug that does not exist; this maps it
-        to `AUTH_NOT_SUPPORTED_ON_STACK` with a message naming the
-        static-token fallback instead. Every other status delegates to the
-        shared `BaseHttpClient` mapping -- no retry loop is added around the
-        404 case, since a disabled feature flag will not become enabled by
+        A 404 here means programmatic auth (or the specific flow) is not
+        enabled on this stack -- a fail-closed feature flag -- not "wrong
+        URL". Surfacing the generic `NOT_FOUND` code would send the user
+        chasing a routing bug that does not exist; this maps it to
+        `AUTH_NOT_SUPPORTED_ON_STACK` with a message naming the static-token
+        fallback instead. Every other status delegates to the shared
+        `BaseHttpClient` mapping -- no retry loop is added around the 404
+        case, since a disabled feature flag will not become enabled by
         retrying.
         """
-        if response.request is not None and response.request.url.path in (
-            AUTH_LOGIN_PATH,
-            AUTH_MFA_PATH,
-        ):
-            self._raise_password_login_error(response)
         if response.status_code == 404:
             raise KeboolaApiError(
                 message=(
@@ -781,14 +818,22 @@ class AuthClient(BaseHttpClient):
         # divergence explicit rather than relax this method's NoReturn type.
         raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
 
-    def _raise_password_login_error(self, response: httpx.Response) -> NoReturn:
+    def _raise_password_login_error(self, response: httpx.Response, *, is_mfa: bool) -> NoReturn:
         """Map a failed `/v1/auth/login` or `/v1/auth/mfa` response.
 
         These two endpoints are the password-grant login path
         (`login_password` / `verify_mfa_totp`) and see a different failure
         surface than every other auth endpoint: there is no client-level
         credential to be "invalid or expired" here, only a submitted email,
-        password, or TOTP code that the server rejected outright.
+        password, or TOTP code that the server rejected outright. `is_mfa`
+        is passed explicitly by the caller -- `login_password` and
+        `verify_mfa_totp` already know unambiguously which endpoint they
+        just called, so there is nothing to gain from re-deriving it by
+        inspecting `response.request.url.path` (which, past being needless,
+        is also fragile: `httpx.Response.request` raises `RuntimeError`
+        rather than returning `None` when unset, so a bare
+        `httpx.Response(...)` built directly -- as tests elsewhere in this
+        repo do -- would crash this method instead of falling through).
 
         - 401 -- wrong email/password on `/v1/auth/login`, or a wrong/expired
           TOTP code on `/v1/auth/mfa`; the message is picked by which path
@@ -811,7 +856,6 @@ class AuthClient(BaseHttpClient):
         """
         status = response.status_code
         if status == 401:
-            is_mfa = response.request is not None and response.request.url.path == AUTH_MFA_PATH
             message = "Invalid or expired TOTP code." if is_mfa else "Invalid email or password."
             raise KeboolaApiError(
                 message=message,
@@ -822,9 +866,9 @@ class AuthClient(BaseHttpClient):
         if status == 403:
             raise KeboolaApiError(
                 message=(
-                    f"{self._extract_api_message(response)} If this account requires "
-                    "SSO or its MFA cannot be resolved without a browser, use "
-                    "`kbagent auth login` instead."
+                    f"{self._truncate(self._extract_error_message(response))} If this "
+                    "account requires SSO or its MFA cannot be resolved without a "
+                    "browser, use `kbagent auth login` instead."
                 ),
                 status_code=403,
                 error_code=ErrorCode.ACCESS_DENIED,
@@ -852,26 +896,6 @@ class AuthClient(BaseHttpClient):
             )
         super()._raise_api_error(response, self._base_url)
         raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
-
-    def _extract_api_message(self, response: httpx.Response) -> str:
-        """Pull the server's own error message out of a JSON error body.
-
-        A minimal, login-endpoint-scoped version of the extraction
-        `BaseHttpClient._raise_api_error` does internally -- duplicated
-        rather than imported because that method is private and couples the
-        extraction to `self._masked_token`, which this unauthenticated
-        client does not have.
-        """
-        try:
-            body = response.json()
-        except Exception:
-            return self._truncate(response.text)
-        if not isinstance(body, dict):
-            return self._truncate(str(body))
-        message = body.get("error") or body.get("exception") or body.get("message")
-        if not isinstance(message, str) or not message:
-            message = json.dumps(body)
-        return self._truncate(message)
 
     @staticmethod
     def _truncate(message: str) -> str:
