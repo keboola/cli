@@ -32,6 +32,7 @@ from ..auth.pkce import (
 from ..auth.sentinel import is_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
+from ..auth.totp import compute_totp_code
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
@@ -286,17 +287,25 @@ class AuthService:
         stack: str | None = None,
         email: str,
         password: str,
-        totp_code: str | None = None,
+        totp_secret: str | None = None,
         register_projects: bool = False,
     ) -> LoginResult:
         """Password-grant login -- the unattended, CI-safe alternative to `login()`.
 
         Never opens a browser and completes entirely over HTTP, so it is
         safe to run from a secret-backed CI workflow (unlike `login()`,
-        which requires a human at a browser or device). `totp_code` resolves
-        an MFA challenge for an account with TOTP-based MFA configured;
-        WebAuthn-only accounts cannot use this method -- that ceremony
-        needs a browser, which is exactly what this path exists to avoid.
+        which requires a human at a browser or device). `totp_secret` (the
+        account's base32 TOTP seed) resolves an MFA challenge for an account
+        with TOTP-based MFA configured; WebAuthn-only accounts cannot use
+        this method -- that ceremony needs a browser, which is exactly what
+        this path exists to avoid.
+
+        The code is computed here, immediately before the MFA request, not
+        by the caller before `login_password` was even invoked: the login
+        round trip through `_do_request`'s retry loop can itself take up to
+        ~90s (3 attempts, 30s read timeout, backoff), and a code computed
+        before it can drift out of the server's TOTP tolerance window by the
+        time it would be submitted. See PR #565 review (C3).
 
         The rest of the algorithm (session persistence, best-effort revoke
         of the session it replaces, introspection, optional project
@@ -315,11 +324,15 @@ class AuthService:
                         error_code=ErrorCode.AUTH_MFA_INVALID,
                         retryable=False,
                     )
-                if not totp_code:
+                if not totp_secret:
                     raise ConfigError(
                         "This account requires a TOTP code to sign in -- pass "
                         "--totp-secret (kbagent computes the code from it)."
                     )
+                try:
+                    totp_code = compute_totp_code(totp_secret)
+                except ValueError as exc:
+                    raise ConfigError(f"--totp-secret: {exc}") from exc
                 tokens = client.verify_mfa_totp(result.mfa_token, totp_code)
             else:
                 tokens = result

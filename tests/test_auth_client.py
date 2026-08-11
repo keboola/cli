@@ -207,6 +207,71 @@ class TestLoginPassword:
         finally:
             client.close()
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "Programmatic auth" in excinfo.value.message
+
+    def test_401_wrong_password_says_invalid_credentials_not_invalid_token(
+        self, httpx_mock
+    ) -> None:
+        """PR #565 review C2: a wrong password must not surface the generic
+        `INVALID_TOKEN` "Invalid or expired token (token: ****)" wording --
+        there is no client-level token here, only a rejected credential."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+            status_code=401,
+            json={"error": "Invalid credentials"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "wrong")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_FLOW_DENIED
+        assert "token" not in excinfo.value.message.lower()
+        assert "Invalid email or password" in excinfo.value.message
+
+    def test_403_sso_required_names_auth_login(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/login",
+            method="POST",
+            status_code=403,
+            json={"error": "SSO login required for this account"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "s3cr3t")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.ACCESS_DENIED
+        assert "SSO login required for this account" in excinfo.value.message
+        assert "kbagent auth login" in excinfo.value.message
+
+    def test_429_reports_rate_limit_reset(self, httpx_mock, monkeypatch) -> None:
+        # login_password still goes through the shared retry loop (only
+        # verify_mfa_totp bypasses it, per C4) -- stub the sleep and supply a
+        # 429 for every attempt so the final, exhausted-retries error is the
+        # one under test.
+        import keboola_agent_cli.http_base as http_base_module
+
+        monkeypatch.setattr(http_base_module.time, "sleep", lambda _seconds: None)
+        for _ in range(3):
+            httpx_mock.add_response(
+                url=f"{STACK_URL}/v1/auth/login",
+                method="POST",
+                status_code=429,
+                headers={"X-RateLimit-Reset": "2026-08-11T07:00:00Z"},
+                json={"error": "Too many attempts"},
+            )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.login_password("svc@example.com", "wrong")
+        finally:
+            client.close()
+        assert excinfo.value.status_code == 429
+        assert "2026-08-11T07:00:00Z" in excinfo.value.message
 
 
 class TestVerifyMfaTotp:
@@ -237,6 +302,44 @@ class TestVerifyMfaTotp:
             "type": "totp",
             "code": "123456",
         }
+
+    def test_a_429_is_not_retried(self, httpx_mock) -> None:
+        """PR #565 review C4: the server consumes a TOTP time-slice on first
+        submission and rejects any resubmission, so a shared-loop retry would
+        replay the same code and burn one of the account's MFA attempts for a
+        failure that was never the code's fault. Only ONE 429 is registered --
+        a second request with no matching mock would fail the test outright,
+        proving no retry was attempted."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/mfa",
+            method="POST",
+            status_code=429,
+            json={"error": "Too many attempts"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.verify_mfa_totp("kbc_mfa_xyz", "123456")
+        finally:
+            client.close()
+        assert excinfo.value.status_code == 429
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_invalid_code_is_not_the_generic_invalid_token_message(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v1/auth/mfa",
+            method="POST",
+            status_code=401,
+            json={"error": "Invalid MFA code"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.verify_mfa_totp("kbc_mfa_xyz", "000000")
+        finally:
+            client.close()
+        assert excinfo.value.error_code == ErrorCode.AUTH_FLOW_DENIED
+        assert "token" not in excinfo.value.message.lower()
 
 
 # ----------------------------------------------------------------------------

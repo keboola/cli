@@ -30,7 +30,6 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..auth.models import DeviceAuthorization
-from ..auth.totp import compute_totp_code
 from ..constants import ENV_KBC_LOGIN_EMAIL, ENV_KBC_LOGIN_PASSWORD, ENV_KBC_LOGIN_TOTP_SECRET
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter
@@ -470,16 +469,13 @@ def auth_login_password(
             formatter, ConfigError("Pass --password, --password-stdin, or set KBC_LOGIN_PASSWORD.")
         )
     try:
-        totp_code = compute_totp_code(totp_secret) if totp_secret else None
         result = service.login_password(
             stack=stack,
             email=email,
             password=password,
-            totp_code=totp_code,
+            totp_secret=totp_secret,
             register_projects=register_projects,
         )
-    except ValueError as exc:
-        _handle_errors(formatter, ConfigError(f"--totp-secret: {exc}"))
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_login_result)

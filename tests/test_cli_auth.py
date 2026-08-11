@@ -215,7 +215,10 @@ class TestLogin:
 
 
 class TestLoginPassword:
-    def test_success_forwards_args_and_computed_totp_code(self, tmp_path: Path) -> None:
+    def test_success_forwards_totp_secret(self, tmp_path: Path) -> None:
+        """The CLI forwards the raw base32 seed as-is -- since C3/C4, the code
+        is computed inside `AuthService.login_password` itself, immediately
+        before the MFA request, not here (see PR #565 review)."""
         config_dir = tmp_path / "c"
         config_dir.mkdir()
         svc = MagicMock()
@@ -238,9 +241,7 @@ class TestLoginPassword:
         kwargs = svc.login_password.call_args.kwargs
         assert kwargs["email"] == "svc@example.com"
         assert kwargs["password"] == "s3cr3t"
-        assert kwargs["totp_code"] is not None
-        assert kwargs["totp_code"].isdigit()
-        assert len(kwargs["totp_code"]) == 6
+        assert kwargs["totp_secret"] == "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 
     def test_no_totp_secret_passes_none(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -253,7 +254,7 @@ class TestLoginPassword:
             ["auth", "login-password", "--email", "svc@example.com", "--password", "s3cr3t"],
         )
         assert result.exit_code == 0, result.output
-        assert svc.login_password.call_args.kwargs["totp_code"] is None
+        assert svc.login_password.call_args.kwargs["totp_secret"] is None
 
     def test_password_stdin_reads_piped_password(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -315,10 +316,16 @@ class TestLoginPassword:
         assert result.exit_code != 0
         assert json.loads(result.stdout)["error"]["code"] == "AUTH_MFA_INVALID"
 
-    def test_malformed_totp_secret_raises_config_error_not_traceback(self, tmp_path: Path) -> None:
+    def test_malformed_totp_secret_raises_config_error(self, tmp_path: Path) -> None:
+        """A bad --totp-secret is validated inside `AuthService.login_password`
+        (see `TestLoginPassword.test_malformed_totp_secret_raises_config_error_not_value_error`
+        in test_auth_service.py) -- here the CLI layer's job is only to map
+        the ConfigError the (mocked) service raises to exit code 5, same as
+        `test_missing_password_is_config_error` above."""
         config_dir = tmp_path / "c"
         config_dir.mkdir()
         svc = MagicMock()
+        svc.login_password.side_effect = ConfigError("--totp-secret: not valid base32")
         result = _invoke(
             config_dir,
             svc,
@@ -336,7 +343,6 @@ class TestLoginPassword:
         )
         assert result.exit_code != 0
         assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
-        svc.login_password.assert_not_called()
 
     def test_password_never_appears_in_output(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"

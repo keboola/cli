@@ -12,6 +12,7 @@ from collections.abc import Callable, Generator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -1288,13 +1289,19 @@ class TestLoginPassword:
         client.introspect_response = _introspect()
         service = _make_service(store, state_store, client)
 
-        result = service.login_password(
-            stack=STACK_URL, email="svc@example.com", password="s3cr3t", totp_code="123456"
-        )
+        # RFC 6238 test-vector seed at T=59s -> 8-digit ref 94287082, so the
+        # 6-digit code (compute_totp_code's default) is its last 6 digits.
+        with patch("keboola_agent_cli.auth.totp.time.time", return_value=59):
+            result = service.login_password(
+                stack=STACK_URL,
+                email="svc@example.com",
+                password="s3cr3t",
+                totp_secret="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            )
 
         assert result.method == "password"
         assert client.calls[0] == ("login_password", ("svc@example.com", "s3cr3t"))
-        assert client.calls[1] == ("verify_mfa_totp", ("kbc_mfa_xyz", "123456"))
+        assert client.calls[1] == ("verify_mfa_totp", ("kbc_mfa_xyz", "287082"))
 
     def test_totp_challenge_without_code_raises_config_error(self, store, state_store) -> None:
         client = _FakeAuthClient()
@@ -1305,6 +1312,26 @@ class TestLoginPassword:
 
         with pytest.raises(ConfigError):
             service.login_password(stack=STACK_URL, email="svc@example.com", password="s3cr3t")
+        assert not any(c[0] == "verify_mfa_totp" for c in client.calls)
+
+    def test_malformed_totp_secret_raises_config_error_not_value_error(
+        self, store, state_store
+    ) -> None:
+        """A bad --totp-secret must surface as ConfigError, never a raw
+        ValueError/pydantic traceback (PR #565 review C1)."""
+        client = _FakeAuthClient()
+        client.login_password_response = MfaChallengeResult(
+            mfaRequired=True, mfaType="totp", mfaToken="kbc_mfa_xyz", allowedMethods=["totp"]
+        )
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError, match="--totp-secret"):
+            service.login_password(
+                stack=STACK_URL,
+                email="svc@example.com",
+                password="s3cr3t",
+                totp_secret="not-valid-base32!!!",
+            )
         assert not any(c[0] == "verify_mfa_totp" for c in client.calls)
 
     def test_webauthn_challenge_raises_mfa_invalid(self, store, state_store) -> None:

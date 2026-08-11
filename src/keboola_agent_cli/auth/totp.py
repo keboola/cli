@@ -23,9 +23,13 @@ def compute_totp_code(secret_b32: str, *, digits: int = 6, period: int = 30) -> 
     Raises ``ValueError`` on a blank or malformed secret -- callers should map
     that to a structured CLI error rather than letting it propagate raw.
     """
-    cleaned = secret_b32.strip().upper().replace(" ", "")
+    cleaned = secret_b32.strip().upper().replace(" ", "").replace("-", "")
     if not cleaned:
         raise ValueError("TOTP secret is empty")
+    # b32decode requires a length that is a multiple of 8; some enrollment
+    # UIs hand out an unpadded seed, so pad it back rather than reject a
+    # legitimate secret as "not valid base32".
+    cleaned += "=" * (-len(cleaned) % 8)
     try:
         key = base64.b32decode(cleaned, casefold=True)
     except binascii.Error as exc:

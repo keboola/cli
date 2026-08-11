@@ -130,6 +130,11 @@ class MfaChallengeResult(BaseModel):
     (`AuthClient.verify_mfa_totp` for the TOTP factor; WebAuthn/recovery-code
     are not wired here, since `login_password` exists specifically for the
     no-browser CI path and WebAuthn needs one).
+
+    `allowed_methods` always includes ``"recovery_code"``, even for a
+    WebAuthn-only account -- the server does not model a `webauthn` method
+    on this response separately (harmless here under `extra="allow"`; there
+    is simply no `verify_mfa_webauthn` counterpart to call with it).
     """
 
     mfa_required: bool = Field(default=True, alias="mfaRequired")

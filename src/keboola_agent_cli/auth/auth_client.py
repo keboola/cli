@@ -10,10 +10,13 @@ rather than on the client, and `revoke` is a public endpoint that takes the
 token to revoke in its request body.
 
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
-:class:`BaseHttpClient`, with two deliberate exceptions that keep the mapping
+:class:`BaseHttpClient`, with three deliberate exceptions that keep the mapping
 but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
-state, not a failure) and `refresh` (a blind retry would re-present the refresh
-token, and it runs under a wall-clock ceiling the retry loop would outlast).
+state, not a failure), `refresh` (a blind retry would re-present the refresh
+token, and it runs under a wall-clock ceiling the retry loop would outlast),
+and `verify_mfa_totp` (the server records each TOTP time-slice as consumed on
+first submission, so a retry would replay a code guaranteed to be rejected --
+burning one of the account's limited MFA attempts for nothing).
 `refresh` makes one narrow exception of its own for a rotation deadlock, which
 the server reports in a form that proves nothing rotated. See their docstrings.
 """
@@ -280,12 +283,23 @@ class AuthClient(BaseHttpClient):
         return CliTokenResponse.model_validate(data)
 
     def verify_mfa_totp(self, mfa_token: str, code: str) -> CliTokenResponse:
-        """Resolve a password-login MFA challenge via TOTP (``POST /v1/auth/mfa``)."""
-        response = self._do_request(
+        """Resolve a password-login MFA challenge via TOTP (``POST /v1/auth/mfa``).
+
+        Bypasses `_do_request`/the shared retry loop -- the same deliberate
+        exception `poll_device_token` and `refresh` already make (see the
+        module docstring). The server consumes a TOTP time-slice on its
+        first submission and rejects any resubmission of it, so a 429/5xx
+        retry here would resend the same code and be rejected by
+        construction, burning one of the account's limited MFA attempts for
+        a failure that was never the credential's fault.
+        """
+        response = self._client.request(
             "POST",
             AUTH_MFA_PATH,
             json={"mfaToken": mfa_token, "type": "totp", "code": code},
         )
+        if response.status_code >= 400:
+            self._map_auth_error(response)
         return CliTokenResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
@@ -728,16 +742,28 @@ class AuthClient(BaseHttpClient):
     def _map_auth_error(self, response: httpx.Response) -> NoReturn:
         """Map a failed auth-endpoint response, escalating 404 to a dedicated code.
 
-        A 404 here means programmatic auth (or the specific flow) is not
-        enabled on this stack -- a fail-closed feature flag -- not "wrong
-        URL". Surfacing the generic `NOT_FOUND` code would send the user
-        chasing a routing bug that does not exist; this maps it to
-        `AUTH_NOT_SUPPORTED_ON_STACK` with a message naming the static-token
-        fallback instead. Every other status delegates to the shared
-        `BaseHttpClient` mapping -- no retry loop is added around the 404
-        case, since a disabled feature flag will not become enabled by
+        `/v1/auth/login` and `/v1/auth/mfa` get their own mapping
+        (`_raise_password_login_error`) before the generic rules below: both
+        are unauthenticated-by-definition endpoints where a 401 means "wrong
+        credential", not "stale token", so the inherited `INVALID_TOKEN`
+        wording (and its `mask_token("")` interpolation) would misdiagnose
+        the command's single most likely failure. See PR #565 review.
+
+        For every other auth endpoint, a 404 means programmatic auth (or the
+        specific flow) is not enabled on this stack -- a fail-closed feature
+        flag -- not "wrong URL". Surfacing the generic `NOT_FOUND` code would
+        send the user chasing a routing bug that does not exist; this maps it
+        to `AUTH_NOT_SUPPORTED_ON_STACK` with a message naming the
+        static-token fallback instead. Every other status delegates to the
+        shared `BaseHttpClient` mapping -- no retry loop is added around the
+        404 case, since a disabled feature flag will not become enabled by
         retrying.
         """
+        if response.request is not None and response.request.url.path in (
+            AUTH_LOGIN_PATH,
+            AUTH_MFA_PATH,
+        ):
+            self._raise_password_login_error(response)
         if response.status_code == 404:
             raise KeboolaApiError(
                 message=(
@@ -754,6 +780,98 @@ class AuthClient(BaseHttpClient):
         # checker cannot see that across the base-class call, so make the
         # divergence explicit rather than relax this method's NoReturn type.
         raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
+
+    def _raise_password_login_error(self, response: httpx.Response) -> NoReturn:
+        """Map a failed `/v1/auth/login` or `/v1/auth/mfa` response.
+
+        These two endpoints are the password-grant login path
+        (`login_password` / `verify_mfa_totp`) and see a different failure
+        surface than every other auth endpoint: there is no client-level
+        credential to be "invalid or expired" here, only a submitted email,
+        password, or TOTP code that the server rejected outright.
+
+        - 401 -- wrong email/password on `/v1/auth/login`, or a wrong/expired
+          TOTP code on `/v1/auth/mfa`; the message is picked by which path
+          failed. Mapped to `AUTH_FLOW_DENIED` (already used for a denied
+          PKCE/device flow), not the inherited "Invalid or expired token"
+          wording -- there is no client-level token to be stale here.
+        - 403 -- the server's own message is surfaced verbatim and
+          `kbagent auth login` is named, because the two real causes here
+          (an SSO-enforced account, or a super-admin account whose MFA the
+          password grant cannot resolve) both require the browser flow, not
+          a retry of this one.
+        - 404 -- unlike every other auth endpoint this is *not* browser
+          login, so the message says "programmatic auth" rather than
+          "Browser login".
+        - 429 -- `/v1/auth/login` rate-limits by email and by IP over a
+          15-minute window and reports the tightest bucket via
+          `X-RateLimit-Reset` on every response from these two endpoints
+          specifically so a client can self-throttle. Surfacing it turns a
+          generic `API error 429` into "try again at <time>".
+        """
+        status = response.status_code
+        if status == 401:
+            is_mfa = response.request is not None and response.request.url.path == AUTH_MFA_PATH
+            message = "Invalid or expired TOTP code." if is_mfa else "Invalid email or password."
+            raise KeboolaApiError(
+                message=message,
+                status_code=401,
+                error_code=ErrorCode.AUTH_FLOW_DENIED,
+                retryable=False,
+            )
+        if status == 403:
+            raise KeboolaApiError(
+                message=(
+                    f"{self._extract_api_message(response)} If this account requires "
+                    "SSO or its MFA cannot be resolved without a browser, use "
+                    "`kbagent auth login` instead."
+                ),
+                status_code=403,
+                error_code=ErrorCode.ACCESS_DENIED,
+                retryable=False,
+            )
+        if status == 404:
+            raise KeboolaApiError(
+                message=(
+                    f"Programmatic auth is not enabled on this Keboola stack yet "
+                    f"({self._base_url}). Use a static Storage token instead: "
+                    "kbagent project add --project <alias> --url <stack> --token <token>."
+                ),
+                status_code=404,
+                error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+                retryable=False,
+            )
+        if status == 429:
+            reset = response.headers.get("X-RateLimit-Reset")
+            when = f" Try again after {reset}." if reset else " Try again later."
+            raise KeboolaApiError(
+                message=f"Too many failed login attempts.{when}",
+                status_code=429,
+                error_code=ErrorCode.API_ERROR,
+                retryable=False,
+            )
+        super()._raise_api_error(response, self._base_url)
+        raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
+
+    def _extract_api_message(self, response: httpx.Response) -> str:
+        """Pull the server's own error message out of a JSON error body.
+
+        A minimal, login-endpoint-scoped version of the extraction
+        `BaseHttpClient._raise_api_error` does internally -- duplicated
+        rather than imported because that method is private and couples the
+        extraction to `self._masked_token`, which this unauthenticated
+        client does not have.
+        """
+        try:
+            body = response.json()
+        except Exception:
+            return self._truncate(response.text)
+        if not isinstance(body, dict):
+            return self._truncate(str(body))
+        message = body.get("error") or body.get("exception") or body.get("message")
+        if not isinstance(message, str) or not message:
+            message = json.dumps(body)
+        return self._truncate(message)
 
     @staticmethod
     def _truncate(message: str) -> str:
