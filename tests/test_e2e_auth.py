@@ -25,6 +25,16 @@ different credential shape and must never be conflated with `E2E_API_TOKEN`):
        this file never needs write access to config/workspace commands
        (out of scope -- those are covered by `TestFullE2E` in test_e2e.py).
 
+3. Separate gate, only for `TestLoginPasswordCommand` (`auth login-password`
+   itself, PR #565): E2E_URL_US_EAST4 (a GitHub Actions repo VARIABLE, not a
+   secret -- it is a plain stack hostname, non-sensitive) plus
+   E2E_LOGIN_EMAIL / E2E_LOGIN_PASSWORD secrets, and optionally
+   E2E_LOGIN_TOTP_SECRET if that dedicated service account has TOTP-based
+   MFA configured. Deliberately its own stack/account, kept apart from
+   E2E_URL / E2E_SESSION_REFRESH_TOKEN below -- these tests drive real
+   logins/logouts against it and must never disturb the shared session the
+   other classes in this file depend on.
+
 How to provision E2E_SESSION_REFRESH_TOKEN without ever typing it on the
 command line or committing it anywhere:
 
@@ -33,11 +43,19 @@ command line or committing it anywhere:
     # cleartext by design -- see docs/programmatic-auth-login-plan.md 4.2)
     # for that stack, and export it into the CI secret store as
     # E2E_SESSION_REFRESH_TOKEN. Never echo it into a log or terminal.
+    #
+    # Since v0.81.0 the same provisioning step can run fully unattended
+    # given a service account's credentials, no browser required:
+    #     kbagent auth login-password --stack <stack-url> \\
+    #         --email "$SVC_EMAIL" --password-stdin <<< "$SVC_PASSWORD"
 
 Run:
     E2E_URL=connection.keboola.com \\
     E2E_SESSION_REFRESH_TOKEN=kbc_rt_... \\
     E2E_SESSION_PROJECT_ID=12345 \\
+    E2E_URL_US_EAST4=connection.us-east4.gcp.keboola.com \\
+    E2E_LOGIN_EMAIL=svc@example.com \\
+    E2E_LOGIN_PASSWORD=... \\
         make test-e2e-auth
 
 `make test-e2e-auth` runs this file on its own; the default `make test-e2e`
@@ -104,6 +122,28 @@ skip_without_session_credentials = pytest.mark.skipif(
         f"and {ENV_SESSION_PROJECT_ID} (a pre-provisioned session on a stack with the "
         "programmatic-auth feature flag enabled). See the module docstring for how to "
         "provision one."
+    ),
+)
+
+ENV_LOGIN_URL = "E2E_URL_US_EAST4"
+ENV_LOGIN_EMAIL = "E2E_LOGIN_EMAIL"
+ENV_LOGIN_PASSWORD = "E2E_LOGIN_PASSWORD"
+ENV_LOGIN_TOTP_SECRET = "E2E_LOGIN_TOTP_SECRET"
+
+HAS_LOGIN_CREDENTIALS = bool(
+    os.environ.get(ENV_LOGIN_URL)
+    and os.environ.get(ENV_LOGIN_EMAIL)
+    and os.environ.get(ENV_LOGIN_PASSWORD)
+)
+
+skip_without_login_credentials = pytest.mark.skipif(
+    not HAS_LOGIN_CREDENTIALS,
+    reason=(
+        f"`auth login-password` E2E tests require {ENV_LOGIN_URL}, {ENV_LOGIN_EMAIL} and "
+        f"{ENV_LOGIN_PASSWORD} (a dedicated, least-privileged service account -- never "
+        f"a real person's login). {ENV_LOGIN_TOTP_SECRET} is additionally required if "
+        "that account has TOTP-based MFA configured; when absent, the account must "
+        "have no MFA (or the login test skips the TOTP-specific assertion)."
     ),
 )
 
@@ -459,6 +499,163 @@ class TestAuthStatusCommand:
 
         assert result.exit_code == 3, result.output
         assert json.loads(result.output)["data"]["status"] == "missing"
+
+
+# ---------------------------------------------------------------------------
+# 4b. `auth login-password` -- the ONE auth command that IS fully unattended
+# (PR #565 review, finding B1: unlike the PKCE/device flows above, this one
+# has no exemption from CLAUDE.md convention #16 -- it needs no human and no
+# browser, so it is the one that can and must be covered end to end).
+# ---------------------------------------------------------------------------
+
+
+@skip_without_login_credentials
+@pytest.mark.e2e
+@pytest.mark.e2e_auth
+class TestLoginPasswordCommand:
+    """Drives the real `kbagent auth login-password` command against a real
+    stack, each test in its own throwaway `--config-dir` so nothing here
+    touches the shared `E2E_SESSION_REFRESH_TOKEN` session other tests in
+    this file depend on.
+    """
+
+    def test_login_succeeds_and_produces_a_live_session(self, tmp_path: Path) -> None:
+        """No-MFA or TOTP-MFA login (whichever the service account requires),
+        followed by `auth status` reporting it live, then `auth logout` so no
+        orphaned session accumulates on the real stack across CI runs.
+
+        Exercises the TOTP path specifically when E2E_LOGIN_TOTP_SECRET is
+        set -- proving the seed-to-live-code-to-verified-session chain
+        (C3/C4 in the PR #565 review) actually round-trips against a real
+        stack, not just the unit-test fakes.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        args = [
+            "--json",
+            "--config-dir",
+            str(config_dir),
+            "auth",
+            "login-password",
+            "--email",
+            os.environ[ENV_LOGIN_EMAIL],
+            "--password",
+            os.environ[ENV_LOGIN_PASSWORD],
+            "--stack",
+            os.environ[ENV_LOGIN_URL],
+        ]
+        totp_secret = os.environ.get(ENV_LOGIN_TOTP_SECRET)
+        if totp_secret:
+            args += ["--totp-secret", totp_secret]
+
+        login_result = CliRunner().invoke(app, args)
+        assert login_result.exit_code == 0, login_result.output
+        login_data = json.loads(login_result.output)["data"]
+        assert login_data["method"] == "password"
+        assert login_data["user_email"]
+
+        status_result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(config_dir),
+                "auth",
+                "status",
+                "--stack",
+                os.environ[ENV_LOGIN_URL],
+            ],
+        )
+        assert status_result.exit_code == 0, status_result.output
+        assert json.loads(status_result.output)["data"]["status"] in {"live", "refreshed"}
+
+        logout_result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(config_dir),
+                "auth",
+                "logout",
+                "--stack",
+                os.environ[ENV_LOGIN_URL],
+            ],
+        )
+        assert logout_result.exit_code == 0, logout_result.output
+
+    def test_wrong_password_reports_invalid_credentials(self, tmp_path: Path) -> None:
+        """Regression guard for PR #565 review finding C2: a wrong password
+        must report a plain 'invalid email or password', exit 3 -- never the
+        generic `INVALID_TOKEN` "Invalid or expired token (token: ****)"
+        wording, which misdiagnoses the command's single most likely
+        real-world failure."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(config_dir),
+                "auth",
+                "login-password",
+                "--email",
+                os.environ[ENV_LOGIN_EMAIL],
+                "--password",
+                "definitely-the-wrong-password-e2e-probe",
+                "--stack",
+                os.environ[ENV_LOGIN_URL],
+            ],
+        )
+
+        assert result.exit_code == 3, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "AUTH_FLOW_DENIED"
+        assert "invalid email or password" in error["message"].lower()
+        assert "invalid or expired token" not in error["message"].lower()
+
+    def test_register_projects_registers_accessible_projects(self, tmp_path: Path) -> None:
+        """`--register-projects` writes at least one alias into config.json,
+        exactly like `auth login --register-projects` already does."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        args = [
+            "--json",
+            "--config-dir",
+            str(config_dir),
+            "auth",
+            "login-password",
+            "--email",
+            os.environ[ENV_LOGIN_EMAIL],
+            "--password",
+            os.environ[ENV_LOGIN_PASSWORD],
+            "--stack",
+            os.environ[ENV_LOGIN_URL],
+            "--register-projects",
+        ]
+        totp_secret = os.environ.get(ENV_LOGIN_TOTP_SECRET)
+        if totp_secret:
+            args += ["--totp-secret", totp_secret]
+
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["registered_projects"]
+
+        CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(config_dir),
+                "auth",
+                "logout",
+                "--stack",
+                os.environ[ENV_LOGIN_URL],
+                "--remove-projects",
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
