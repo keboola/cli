@@ -25,29 +25,6 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.80.1": [
-        "Fix (#528): the deferred Windows self-update never ran, so kbagent has not "
-        "auto-updated on Windows since 0.78.0. The helper was spawned with "
-        "`DETACHED_PROCESS`, which gives the child no console at all -- and "
-        "`powershell.exe` is a console application whose host cannot start without "
-        "one, so it exited **0, immediately, with an empty stderr**, having executed "
-        "nothing. A zero exit code is the worst shape this failure can take: the "
-        "spawn looked successful, the marker was written, and the single-flight "
-        "guard then suppressed every retry for the full 24-hour staleness window "
-        'while each launch still printed "Updating in the background". It fails '
-        "safe -- nothing is corrupted, unlike the original #528 -- but the update "
-        "silently never arrives. The helper now uses `CREATE_NO_WINDOW`, which "
-        "creates a console and simply never shows it. Verified end to end on a "
-        "fresh Windows 11 machine: 0.79.0 -> 0.80.0 with exit code 0 and a complete "
-        "install log, where the shipped build wrote no log at all.",
-        "Fix (tests, #528): the regression above sat in the seam between two test "
-        "layers -- the waiter script's text was asserted as a string, and the spawn "
-        "was tested with `subprocess.Popen` mocked, so the one combination that "
-        "ships (this script, these creation flags) was never executed. The Windows "
-        "CI suite ran the script through `subprocess.run`, which supplies the very "
-        "console the real flags withheld, so it could not reproduce the failure. A "
-        "new Windows-only test performs the real detached spawn and asserts the "
-        "helper is still alive afterwards; a cross-platform test pins the flag "
-        "choice so `DETACHED_PROCESS` cannot come back.",
         "Fix (#427): `kbagent job run --idempotency-key` was completely broken on "
         "Windows -- every run raised `PermissionError: [WinError 5] Access is "
         "denied`. `JobIdempotencyStore` took its advisory lock on the state file "
