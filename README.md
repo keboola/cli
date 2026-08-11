@@ -20,6 +20,38 @@ Prefer to build from source, or pin a specific ref?
 uv tool install git+https://github.com/keboola/cli
 ```
 
+### Windows
+
+The `curl ... | sh` one-liner at the top needs a POSIX shell. Windows has shipped `curl.exe` since Windows 10 1803, but it has no `sh` -- so the command gets halfway and then fails with `'sh' is not recognized`, in both `cmd` and PowerShell. Installing Git for Windows does not fix it either: the installer only puts `C:\Program Files\Git\cmd` on `PATH`, and `sh.exe` lives in `usr\bin`.
+
+Pick whichever fits the machine:
+
+**PowerShell, no POSIX shell needed** -- the same wheel install.sh would have fetched:
+
+```powershell
+winget install --id astral-sh.uv -e            # skip if uv is already installed
+$ver = (Invoke-RestMethod "https://api.github.com/repos/keboola/cli/releases/latest").tag_name.TrimStart('v')
+uv tool install --force `
+  "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v$ver/keboola_cli-$ver-py3-none-any.whl"
+uv tool update-shell                            # puts %USERPROFILE%\.local\bin on PATH
+```
+
+Works in the in-box Windows PowerShell 5.1 -- no PowerShell 7 needed.
+
+Then **open a new shell** -- `uv tool update-shell` edits the persisted `PATH`, and the current session will not see it.
+
+**Already have Git for Windows?** Run the documented script through its bash:
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" -lc "curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh"
+```
+
+**No Python on the machine?** Every release ships a self-contained binary -- download `keboola-cli2_<version>_windows_amd64.zip` from the [releases page](https://github.com/keboola/cli/releases/latest), unpack it, and put the folder on `PATH`. It carries its own interpreter, needs neither Python nor uv, and (since 0.79.0) will not try to self-update -- it tells you to re-download instead.
+
+A note on package managers, so nobody loses an afternoon to it: there is **no WinGet package** -- nothing has been submitted to `microsoft/winget-pkgs` -- and the **Chocolatey package lags far behind** (`keboola-cli2` was still on 0.66.1 while the current release was 0.80.0). Check its version before trusting it, or just use one of the three paths above.
+
+A fresh Windows install has no real Python either: `python` resolves to a Microsoft Store stub that only prints an ad for the Store, so a script that probes "is `python` on PATH?" will wrongly conclude yes. None of the paths above need Python on `PATH` -- uv brings its own.
+
 Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server; the self-update prefers the prebuilt wheel when available. Run `kbagent changelog` to see what changed.
 
 ## Web UI (optional)

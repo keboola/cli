@@ -183,7 +183,20 @@ class DoctorService:
                 "message": f"Config file not found at {config_path}. Run 'kbagent project add' to create it.",
             }
 
-        # Check permissions (Unix only)
+        # POSIX only, and enforced as such -- the comment used to say "Unix only"
+        # while the code ran everywhere. Windows reports 0o666 for any writable
+        # file no matter how the ACL actually reads, so this check warned every
+        # Windows user about permissions they had no way to "fix". Access there
+        # is governed by the profile ACL, not by mode bits; same reasoning as
+        # `auth/state_store.py::_fix_permissions_if_needed`.
+        if os.name == "nt":
+            return {
+                "check": "config_file",
+                "name": "Config file",
+                "status": "pass",
+                "message": f"Config file exists at {config_path} (POSIX mode bits not checked on Windows).",
+            }
+
         try:
             file_stat = os.stat(config_path)
             mode = stat.S_IMODE(file_stat.st_mode)

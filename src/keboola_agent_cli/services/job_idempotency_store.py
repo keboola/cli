@@ -11,9 +11,20 @@ This module closes that gap on the client side: a small persistent map of
 probe-before-create helper (:func:`run_idempotent_job`). A replayed call with the
 same key returns the prior job instead of firing the side effect again.
 
-Persistence mirrors :class:`~keboola_agent_cli.config_store.ConfigStore`: an
-atomic write under an exclusive ``fcntl`` lock with ``0600`` permissions, so
-concurrent ``run_job`` calls keyed by different keys do not corrupt the file.
+Persistence mirrors :class:`~keboola_agent_cli.auth.state_store.AuthStateStore`:
+an atomic tmp+rename write with ``0600`` permissions, serialised by a REAL
+cross-platform advisory lock (``filelock``) on a ``.lock`` sidecar -- so
+concurrent ``run_job`` calls do not corrupt the file or lose each other's
+entries.
+
+Two deliberate choices, both learned the hard way on Windows:
+- The lock lives on a **sidecar**, never on the state file itself. Windows
+  refuses to ``os.replace()`` over a file that still has an open handle, so
+  locking the target made every write fail with ``PermissionError``.
+- The lock is ``filelock``, not ``ConfigStore``'s ``fcntl`` helper, which is a
+  silent no-op on Windows. A lost entry here is not a cosmetic corruption: it
+  makes the next replay create a **duplicate job**, which is the exact side
+  effect this store exists to prevent.
 
 Scope / limits:
 - Dedup is **per store file** (per config-dir / per machine). A replay from a
@@ -27,26 +38,22 @@ Scope / limits:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..errors import ErrorCode, KeboolaApiError
+import filelock
+
+from ..constants import JOB_IDEMPOTENCY_LOCK_TIMEOUT
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 
 logger = logging.getLogger(__name__)
-
-# fcntl is POSIX-only; on Windows we skip locking (same trade-off as ConfigStore).
-try:
-    import fcntl
-
-    _HAVE_FCNTL = True
-except ImportError:  # pragma: no cover - Windows
-    _HAVE_FCNTL = False
 
 _STORE_VERSION = 1
 
@@ -54,12 +61,6 @@ _STORE_VERSION = 1
 # Mirrors ``JobResult.failed``. ``warning`` is a soft-success terminal and is
 # deliberately NOT here (we don't re-run a job that warned).
 _FAILED_STATUSES: frozenset[str] = frozenset({"error", "terminated", "cancelled"})
-
-
-def _flock(fd: int, operation: int) -> None:
-    """Best-effort advisory lock; a no-op where fcntl is unavailable."""
-    if _HAVE_FCNTL:
-        fcntl.flock(fd, operation)
 
 
 @dataclass(frozen=True)
@@ -102,10 +103,47 @@ class JobIdempotencyStore:
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
+        # A lock file SEPARATE from the state file. Taking the lock on the state
+        # file itself works on POSIX but is fatal on Windows: `os.replace()`
+        # cannot rename over a file that still has an open handle, so every write
+        # died with `PermissionError [WinError 5]`.
+        self._lock_path = self._path.with_name(self._path.name + ".lock")
+        # `filelock`, not ConfigStore's `fcntl` helper -- that helper is a silent
+        # no-op on Windows, which would leave the read-modify-write below
+        # unserialised there. Reentrant per thread, so a nested `_locked()` does
+        # not deadlock. Same reasoning as `auth/state_store.py`.
+        self._file_lock = filelock.FileLock(
+            str(self._lock_path), timeout=JOB_IDEMPOTENCY_LOCK_TIMEOUT
+        )
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Serialise a read-modify-write against every other kbagent process."""
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self._file_lock.acquire(timeout=JOB_IDEMPOTENCY_LOCK_TIMEOUT)
+        except filelock.Timeout as exc:
+            raise ConfigError(
+                f"Could not acquire lock on {self._lock_path} within "
+                f"{JOB_IDEMPOTENCY_LOCK_TIMEOUT}s. Another kbagent process may be "
+                "stuck holding it."
+            ) from exc
+        try:
+            yield
+        finally:
+            self._file_lock.release()
+
+    def _write_atomically(self, data: dict[str, Any]) -> None:
+        """Serialise ``data`` to a 0600 temp file and rename it into place."""
+        tmp_path = self._path.with_suffix(".tmp")
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(str(tmp_path), str(self._path))
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
@@ -147,44 +185,23 @@ class JobIdempotencyStore:
             branch_id=branch_id,
             created_at=datetime.now(UTC).isoformat(),
         )
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_fd = os.open(str(self._path), os.O_RDONLY | os.O_CREAT, 0o600)
-        try:
-            _flock(lock_fd, fcntl.LOCK_EX if _HAVE_FCNTL else 0)
+        with self._locked():
             # Read-modify-write *inside* the lock so concurrent records (distinct
             # keys) don't clobber each other.
             data = self._read()
             data["version"] = _STORE_VERSION
             data.setdefault("entries", {})[key] = entry._to_dict()
-            tmp_path = self._path.with_suffix(".tmp")
-            fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2)
-            os.replace(str(tmp_path), str(self._path))
-        finally:
-            if _HAVE_FCNTL:
-                _flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+            self._write_atomically(data)
         return entry
 
     def forget(self, key: str) -> None:
         """Drop the entry for ``key`` (e.g. to force a fresh run next time)."""
         if not self._path.exists():
             return
-        lock_fd = os.open(str(self._path), os.O_RDONLY | os.O_CREAT, 0o600)
-        try:
-            _flock(lock_fd, fcntl.LOCK_EX if _HAVE_FCNTL else 0)
+        with self._locked():
             data = self._read()
             if data.get("entries", {}).pop(key, None) is not None:
-                tmp_path = self._path.with_suffix(".tmp")
-                fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, indent=2)
-                os.replace(str(tmp_path), str(self._path))
-        finally:
-            if _HAVE_FCNTL:
-                _flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+                self._write_atomically(data)
 
 
 def _job_is_failed(job: dict[str, Any]) -> bool:

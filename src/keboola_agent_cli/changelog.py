@@ -24,6 +24,55 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.1": [
+        "Fix (#427): `kbagent job run --idempotency-key` was completely broken on "
+        "Windows -- every run raised `PermissionError: [WinError 5] Access is "
+        "denied`. `JobIdempotencyStore` took its advisory lock on the state file "
+        "*itself* and then renamed the new copy over it; POSIX is happy to replace "
+        "a file that still has an open handle, Windows refuses. `ConfigStore` "
+        "already had this right with a separate `.lock` sidecar, and the store now "
+        "follows the same pattern -- so the lock, the 0600 temp file and the atomic "
+        "`os.replace` all keep working, on both platforms. `forget()` had the same "
+        "flaw and is fixed with it. Found by running the full suite on a real "
+        "Windows box, where it accounted for 25 failures.",
+        "Fix: `kbagent storage download-table` (and every other sliced download) "
+        "failed on Windows with `PermissionError: [Errno 13] Permission denied`. "
+        "The slice loop created a `tempfile.NamedTemporaryFile` and then handed "
+        "its *name* to the streaming downloader, which opens the path a second "
+        "time -- and a `NamedTemporaryFile` cannot be reopened by name on Windows "
+        "while its own handle is open (a documented platform difference). It now "
+        "uses `mkstemp` plus an immediate close, which gives the same "
+        "collision-free name without holding it open. Found by running the E2E "
+        "suite against a real project from Windows; unit tests could not catch it "
+        "because they mock the download.",
+        "Fix: the job idempotency store now takes a REAL cross-process lock "
+        "(`filelock`) instead of the `fcntl` helper, which is a silent no-op on "
+        "Windows. Until the `os.replace` fix above, `record()` crashed there so "
+        "the point was moot; now that it runs, an unserialised read-modify-write "
+        "could drop a concurrent writer's entry -- and a dropped entry makes the "
+        "next replay create a duplicate job, the exact side effect the store "
+        "exists to prevent. `auth/state_store.py` already chose `filelock` for "
+        'the same reason. The former "concurrency" test was a sequential loop; '
+        "a real one now spawns parallel writer processes and is confirmed to fail "
+        "when the lock is stubbed out.",
+        "Fix: `kbagent doctor` no longer warns every Windows user about config "
+        "file permissions they cannot change. The `config_file` check compared "
+        '`stat` mode bits against 0600 and its comment claimed "Unix only" while '
+        "the code ran everywhere -- Windows reports 0o666 for any writable file "
+        "regardless of how the ACL actually reads, so the check reported a "
+        "permanent `warn` with no possible remedy. It now short-circuits on "
+        "Windows and reports the file without grading mode bits, the same "
+        "reasoning `auth/state_store.py` already applied. Access there is governed "
+        "by the profile ACL, not by POSIX bits; no behaviour change on POSIX.",
+        "Note (tests): the full suite has never run on Windows in CI -- the "
+        "windows-latest job runs only the semantic-layer export tests, the "
+        "self-update runner and a wheel smoke test. A real Windows run shows 55 "
+        "failures out of 5404, and the idempotency bug above was a genuine product "
+        "defect hiding among them. `tests/test_job_idempotency_store.py` is now in "
+        "the Windows job; the rest are mostly POSIX-only permission assertions "
+        "(`os.chmod` cannot narrow an ACL) and unguarded `fcntl` imports, which "
+        "need skips before the whole suite can be gated on Windows.",
+    ],
     "0.80.0": [
         "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
         "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "

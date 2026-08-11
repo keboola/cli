@@ -1,7 +1,10 @@
 """Tests for DoctorService - health check logic extracted from doctor command."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
@@ -77,8 +80,17 @@ class TestDoctorServiceCheckConfigFile:
 
         assert result["check"] == "config_file"
         assert result["status"] == "pass"
-        assert "correct permissions" in result["message"]
+        # Windows takes the early return: mode bits there describe nothing the
+        # user controls, so the check reports the file without grading it.
+        expected = "not checked on Windows" if os.name == "nt" else "correct permissions"
+        assert expected in result["message"]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="POSIX mode bits are not the access-control mechanism on Windows; "
+        "os.chmod(0o644) there does not produce a group-readable file, and the "
+        "check deliberately short-circuits before grading them",
+    )
     def test_config_file_wrong_permissions(self, tmp_config_dir: Path) -> None:
         """When config file exists with wrong permissions, returns 'warn' status."""
         store = ConfigStore(config_dir=tmp_config_dir)

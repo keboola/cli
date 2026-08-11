@@ -3360,3 +3360,34 @@ depend on the active console codepage.
   string-compares raw stdout bytes on Windows might.
 - **Captured or replaced streams fall back to the plain text write** (there is
   no binary buffer to bypass), so in-process test harnesses behave as before.
+
+## Two commands were broken on Windows until v0.80.1 (since v0.80.1)
+
+Both failed on **every** invocation on Windows, and both worked fine on
+macOS/Linux — so a failure report from a Windows user is not a project or
+permission problem, it is the platform.
+
+- **`kbagent job run --idempotency-key ...`** raised
+  `PermissionError: [WinError 5] Access is denied` before recording anything.
+  The dedup store locked the same file it then renamed over, and Windows
+  refuses to replace a file that still has an open handle. On kbagent older
+  than v0.80.1, omit `--idempotency-key` on Windows and dedupe on your side;
+  the flag never persisted a single entry there, so nothing was ever replayed.
+- **`kbagent storage download-table`** (and any sliced download) raised
+  `PermissionError: [Errno 13] Permission denied`. A temp file was reopened by
+  name while still open, which Windows forbids. No workaround below v0.80.1
+  other than `storage unload-table --download`.
+
+## `doctor` no longer warns about config-file permissions on Windows (since v0.80.1)
+
+The `config_file` check compared POSIX mode bits against `0600`. Windows
+reports `0o666` for any writable file regardless of its ACL, so the check
+returned `"status": "warn"` permanently, for every Windows user, with no
+possible remedy.
+
+- **If you parse `kbagent --json doctor`**, that check now returns
+  `"status": "pass"` on Windows, with a message ending
+  `(POSIX mode bits not checked on Windows)`. An agent that treated any `warn`
+  as actionable was previously reporting an unfixable problem on every run.
+- **POSIX behaviour is unchanged** — a config file that is not `0600` still
+  warns there, because there the bits mean something.

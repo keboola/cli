@@ -7,6 +7,7 @@ collision guard when a key is reused for a different component/config.
 """
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,46 @@ class TestStorePersistence:
             store.record(f"K{i}", job_id=f"j{i}", component_id="c", config_id="cfg")
         for i in range(20):
             assert _entry(store, f"K{i}").job_id == f"j{i}"
+
+    def test_parallel_processes_do_not_lose_entries(self, store: JobIdempotencyStore) -> None:
+        """Real cross-process contention, which the loop above does not exercise.
+
+        `record()` is a read-modify-write, so without a lock that actually holds
+        across processes two writers interleave and one silently drops the
+        other's entry. A dropped entry is not cosmetic: the next replay of that
+        key finds nothing and creates a **duplicate job** -- the exact side
+        effect this store exists to prevent.
+
+        This is why the lock is `filelock` rather than ConfigStore's `fcntl`
+        helper, which is a silent no-op on Windows.
+
+        Confirmed to fail with the lock stubbed out -- as it happens by crashing
+        rather than by losing an entry, because every writer builds the same
+        `.tmp` path and one renames it out from under another
+        (`FileNotFoundError`). Serialising the section fixes both failure modes;
+        which one you get is a matter of timing.
+        """
+        workers, per_worker = 6, 8
+        program = (
+            "import sys;"
+            "from keboola_agent_cli.services.job_idempotency_store import JobIdempotencyStore;"
+            "s = JobIdempotencyStore(sys.argv[1]);"
+            "w = sys.argv[2];"
+            f"[s.record(f'w{{w}}-k{{i}}', job_id=f'j{{w}}{{i}}', component_id='c', config_id='cfg')"
+            f" for i in range({per_worker})]"
+        )
+        procs = [
+            subprocess.Popen([sys.executable, "-c", program, str(store.path), str(w)])
+            for w in range(workers)
+        ]
+        for proc in procs:
+            assert proc.wait(timeout=120) == 0, "a writer subprocess failed"
+
+        for w in range(workers):
+            for i in range(per_worker):
+                entry = store.lookup(f"w{w}-k{i}")
+                assert entry is not None, f"lost entry w{w}-k{i} -- writers were not serialised"
+                assert entry.job_id == f"j{w}{i}"
 
 
 class TestRunIdempotentJob:

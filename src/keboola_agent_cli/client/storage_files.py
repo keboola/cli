@@ -183,6 +183,7 @@ class _StorageFilesMixin(_CoreClient):
         Returns:
             Number of bytes written.
         """
+        import os
         import shutil
         import tempfile
 
@@ -198,13 +199,23 @@ class _StorageFilesMixin(_CoreClient):
                 entry_url = entry.get("url", "")
                 slice_url = downloader.resolve_slice_url(base_url, entry_url, file_detail)
                 is_gz = entry_url.split("?")[0].endswith(".gz")
-                with tempfile.NamedTemporaryFile(
-                    dir=out_path.parent, prefix=".slice-", delete=True
-                ) as tmp:
-                    downloader.stream_to_file(slice_url, tmp.name, decompress_gzip=is_gz)
-                    tmp.seek(0)
-                    shutil.copyfileobj(tmp, out_fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
-                    total += Path(tmp.name).stat().st_size
+                # `mkstemp` + immediate close, NOT `NamedTemporaryFile`. We hand
+                # the *path* to `stream_to_file`, which opens it a second time --
+                # and a `NamedTemporaryFile` cannot be reopened by name on
+                # Windows while its own handle is open (documented platform
+                # difference), so every sliced download died there with
+                # `PermissionError: [Errno 13] Permission denied`. mkstemp gives
+                # the same collision-free name without holding it open.
+                fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=".slice-")
+                os.close(fd)
+                tmp_path = Path(tmp_name)
+                try:
+                    downloader.stream_to_file(slice_url, tmp_name, decompress_gzip=is_gz)
+                    with tmp_path.open("rb") as tmp:
+                        shutil.copyfileobj(tmp, out_fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+                    total += tmp_path.stat().st_size
+                finally:
+                    tmp_path.unlink(missing_ok=True)
 
         return total
 

@@ -191,6 +191,14 @@ jobs:
       - name: Test the deferred self-update helper on Windows (issue #528)
         run: uv run pytest tests/test_update_runner.py -v
 
+      # `os.replace()` cannot rename over a file Windows still holds open, so a
+      # store that locks its own state file dies with WinError 5 on every write
+      # while passing everywhere on POSIX. That shipped: `job run
+      # --idempotency-key` was unusable on Windows for a full release. Anything
+      # doing lock-then-atomic-replace has to prove it here.
+      - name: Test lock-then-replace file stores on Windows (issue #427)
+        run: uv run pytest tests/test_job_idempotency_store.py -v
+
       - name: Assert the SPA is bundled (Bug 1 fixed)
         run: python scripts/check_wheel_ui.py --expect-ui
 
