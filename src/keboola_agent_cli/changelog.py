@@ -72,6 +72,20 @@ CHANGELOG: dict[str, list[str]] = {
         "the Windows job; the rest are mostly POSIX-only permission assertions "
         "(`os.chmod` cannot narrow an ACL) and unguarded `fcntl` imports, which "
         "need skips before the whole suite can be gated on Windows.",
+        "Fix: redirected `kbagent` output no longer depends on the machine's codepage "
+        "on Windows. `kbagent semantic-layer --help` and `kbagent context` exited 1 "
+        "with `UnicodeEncodeError` the moment their output was piped or redirected, "
+        "and any Rich table truncated by width emitted a lone `0x85` for its ellipsis. "
+        "Since PEP 528 a real Windows console is written through the console API and "
+        "already reports `utf-8`, so an interactive session was never affected -- but "
+        "a pipe or a file falls back to the locale encoding (cp1252 on a Czech box), "
+        "which cannot represent an arrow, an em dash, or a box-drawing glyph. Whenever "
+        "stdout/stderr is NOT a terminal, kbagent now reconfigures it to UTF-8; "
+        "terminals are deliberately left untouched, because forcing UTF-8 bytes at a "
+        "cp852 console would replace a working display with mojibake. Redirected "
+        "Windows output now matches POSIX byte for byte. Issue #546 fixed this class "
+        "for `--json` by writing to `sys.stdout.buffer`; this covers the human/Rich "
+        "path, which cannot bypass the encoder because Rich owns the writes.",
     ],
     "0.80.0": [
         "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "

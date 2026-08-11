@@ -15,6 +15,7 @@ from keboola_agent_cli.output import (
     OutputFormatter,
     _format_duration,
     _seconds_to_human,
+    force_utf8_when_redirected,
     format_config_detail,
     format_configs_table,
     format_doctor_panel,
@@ -1217,3 +1218,79 @@ class TestStreamedAgentEventsAreUtf8:
 
         # Readable without an explicit flush by the test.
         assert stdout.raw.getvalue().endswith(b"\n")
+
+
+class TestForceUtf8WhenRedirected:
+    """Redirected output must not depend on the machine's codepage.
+
+    Since PEP 528 a real Windows console already reports ``utf-8`` and renders
+    anything; the moment stdout becomes a pipe or a file, Python falls back to
+    the locale encoding (cp1252 on a Czech box) and Rich's output -- an arrow in
+    a docstring, a truncation ellipsis -- raises ``UnicodeEncodeError``. Only
+    the redirected half is touched, so interactive terminals cannot regress.
+    """
+
+    class _Stream:
+        """Minimal stand-in exposing the parts of TextIOWrapper we rely on."""
+
+        def __init__(self, *, encoding: str, tty: bool, errors: str = "surrogateescape") -> None:
+            self.encoding = encoding
+            self.errors = errors
+            self._tty = tty
+            self.reconfigured: list[dict[str, str]] = []
+
+        def isatty(self) -> bool:
+            return self._tty
+
+        def reconfigure(self, *, encoding: str, errors: str) -> None:
+            self.reconfigured.append({"encoding": encoding, "errors": errors})
+            self.encoding = encoding
+            self.errors = errors
+
+    def _run(self, monkeypatch: pytest.MonkeyPatch, out: object, err: object) -> None:
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", err)
+        force_utf8_when_redirected()
+
+    def test_redirected_non_utf8_stream_is_switched_to_utf8(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._Stream(encoding="cp1252", tty=False)
+        err = self._Stream(encoding="cp1252", tty=False)
+        self._run(monkeypatch, out, err)
+        assert out.reconfigured == [{"encoding": "utf-8", "errors": "surrogateescape"}]
+        assert err.reconfigured == [{"encoding": "utf-8", "errors": "surrogateescape"}]
+
+    def test_a_terminal_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Forcing UTF-8 bytes at a cp852 console would create mojibake, not fix it."""
+        out = self._Stream(encoding="cp852", tty=True)
+        self._run(monkeypatch, out, out)
+        assert out.reconfigured == []
+
+    @pytest.mark.parametrize("spelling", ["utf-8", "UTF-8", "utf8"])
+    def test_already_utf8_is_not_touched(
+        self, spelling: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POSIX, and a real Windows console, land here -- nothing to do."""
+        out = self._Stream(encoding=spelling, tty=False)
+        self._run(monkeypatch, out, out)
+        assert out.reconfigured == []
+
+    def test_error_handler_is_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`surrogateescape` is what round-trips undecodable filename bytes."""
+        out = self._Stream(encoding="cp1252", tty=False, errors="backslashreplace")
+        self._run(monkeypatch, out, out)
+        assert out.reconfigured[0]["errors"] == "backslashreplace"
+
+    def test_stream_without_reconfigure_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """pytest's capture objects and StringIO have no `reconfigure`."""
+        self._run(monkeypatch, StringIO(), StringIO())  # must not raise
+
+    def test_a_stream_that_refuses_is_survived(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A detached or already-closed stream must not take the CLI down."""
+
+        class Hostile(TestForceUtf8WhenRedirected._Stream):
+            def reconfigure(self, *, encoding: str, errors: str) -> None:
+                raise OSError("stream is detached")
+
+        self._run(monkeypatch, Hostile(encoding="cp1252", tty=False), StringIO())

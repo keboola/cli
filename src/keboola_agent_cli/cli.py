@@ -46,7 +46,7 @@ from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
 from .errors import ErrorCode, PermissionDeniedError
 from .models import PermissionPolicy
-from .output import OutputFormatter
+from .output import OutputFormatter, force_utf8_when_redirected
 from .permissions import PermissionEngine
 from .services.agent_service import AgentService
 from .services.auth_service import AuthService
@@ -82,6 +82,10 @@ from .services.token_service import TokenService
 from .services.variables_service import VariablesService
 from .services.version_service import VersionService
 from .services.workspace_service import WorkspaceService
+
+# At import, not inside the root callback: Click renders `--help` while parsing,
+# before any callback runs, and `--help` is one of the surfaces that crashed.
+force_utf8_when_redirected()
 
 app = typer.Typer(
     name="kbagent",

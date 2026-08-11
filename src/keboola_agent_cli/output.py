@@ -14,6 +14,58 @@ from rich.text import Text
 from .models import ErrorResponse, SuccessResponse
 
 
+def force_utf8_when_redirected() -> None:
+    """Make redirected stdout/stderr UTF-8, so output never depends on a codepage.
+
+    Windows only in practice, and only when the stream is **not** a terminal --
+    which is exactly the split that makes this safe. Since PEP 528, CPython
+    writes to a real Windows console through the console API, so an interactive
+    ``kbagent`` already reports ``encoding=utf-8`` and renders anything. The
+    moment stdout is a pipe or a file, that path is gone and Python falls back
+    to the locale encoding (cp1252 on a Czech machine), which cannot represent
+    most of what Rich emits. Measured on Windows 11:
+
+    ==================  ============  ==================
+    stdout              ``encoding``  ``"\\u2194"``
+    ==================  ============  ==================
+    console             ``utf-8``     encodes
+    pipe / file         ``cp1252``    ``UnicodeEncodeError``
+    ==================  ============  ==================
+
+    So ``kbagent semantic-layer --help`` and ``kbagent context`` crash with exit
+    1 the moment their output is piped or redirected, and tables truncated by
+    Rich emit a lone ``0x85`` for their ellipsis. That is the CLI's primary
+    audience: scripts, CI, and AI agents capturing output.
+
+    Issue #546 fixed the same class of bug for ``--json`` by writing bytes
+    straight to ``sys.stdout.buffer`` (see :func:`write_machine_output`); this
+    covers the human/Rich path, which cannot bypass the encoder because Rich
+    owns the writes.
+
+    Interactive terminals are deliberately left untouched -- they already work,
+    and forcing UTF-8 bytes at a console whose codepage is cp852 would turn a
+    working display into mojibake. Best effort throughout: a replaced or
+    captured stream that cannot be reconfigured is simply left as it is.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if stream.isatty():
+                continue
+            if (stream.encoding or "").replace("-", "").replace("_", "").lower() == "utf8":
+                continue
+            # Preserve the stream's existing error handler: the default is
+            # `surrogateescape`, which is what round-trips undecodable bytes
+            # from filenames back out unchanged.
+            reconfigure(encoding="utf-8", errors=stream.errors or "strict")
+        except (AttributeError, OSError, ValueError):
+            # Not reconfigurable (pytest capture, a custom stream). The caller
+            # is no worse off than before.
+            continue
+
+
 def write_machine_output(text: str) -> None:
     """Write a machine-readable line to stdout as UTF-8, whatever the console is.
 
