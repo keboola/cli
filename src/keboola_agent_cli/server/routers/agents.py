@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ...constants import AI_PROMPT_HELPER_TIMEOUT
+from ...mcp_parity import annotate_mcp_tool_deprecation
 from ..agent_runner import (
     compute_next_run,
     run_task_once,
@@ -111,7 +112,9 @@ def list_tasks(request: Request) -> dict[str, Any]:
     """All persisted agent tasks (cron-scheduled + manual)."""
     store = _store(request)
     tasks = store.load_tasks()
-    return {"tasks": [t.model_dump(mode="json") for t in tasks]}
+    # Same additive `deprecation` key the CLI adds -- the Web UI reads this
+    # route, and its users are the least likely to run `kbagent doctor`.
+    return {"tasks": [annotate_mcp_tool_deprecation(t.model_dump(mode="json")) for t in tasks]}
 
 
 @router.post("", summary="Create a scheduled task")

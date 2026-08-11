@@ -35,6 +35,31 @@ from dataclasses import dataclass
 MCP_REMOVAL_VERSION: str = "0.85.0"
 MCP_REMOVAL_TARGET_DATE: str = "end of August 2026"
 
+# Warning for `agent --type mcp_tool`. Lives here rather than in commands/ so
+# BOTH front doors can reach it without the server importing the command layer:
+# `kbagent agent list` and the `kbagent serve` /agents route must flag the same
+# tasks, and the Web UI population is the LEAST likely to ever run
+# `kbagent doctor`.
+MCP_TOOL_ACTION_DEPRECATION = (
+    "agent action type 'mcp_tool' is deprecated (epic #390); prefer --type "
+    "cli_command with the native kbagent command (see `kbagent tool list` "
+    f"cli_equivalent column). It is REMOVED in kbagent v{MCP_REMOVAL_VERSION} "
+    f"({MCP_REMOVAL_TARGET_DATE}) -- migrate scheduled tasks before then or they "
+    "will start failing on their next run."
+)
+
+
+def annotate_mcp_tool_deprecation(task: dict) -> dict:
+    """Add an additive ``deprecation`` key to a task using the MCP passthrough.
+
+    Additive and only on affected tasks, so every existing consumer sees a
+    byte-identical payload -- the same contract ``tool list`` / ``tool call``
+    already use. Mutates and returns the same dict.
+    """
+    if (task.get("action") or {}).get("type") == "mcp_tool":
+        task["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
+    return task
+
 
 @dataclass(frozen=True)
 class ParityEntry:

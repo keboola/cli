@@ -195,6 +195,12 @@ Versioning convention:
   unlike an interactive `tool call` they get no warning at removal time: a
   scheduled task simply starts failing on its next cron tick. Use the
   `cli_equivalent` from `kbagent tool list` to rewrite each one.
+- **Find the affected tasks (since v0.81.0)**: `kbagent doctor` has an
+  `mcp_tool_tasks` check that warns with the task ids, the tool each one
+  calls and its native replacement (`details.tasks[]` in `--json`, each with
+  `native_command`). `kbagent agent list` marks those rows DEPRECATED and its
+  `--json` adds an additive per-task `deprecation` key -- present ONLY on
+  affected tasks, so every other consumer sees a byte-identical payload.
 
 ## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
 

@@ -21,9 +21,27 @@ from .. import __version__
 from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
+from ..mcp_parity import (
+    MCP_REMOVAL_TARGET_DATE,
+    MCP_REMOVAL_VERSION,
+    native_equivalent,
+)
 from ..models import AppConfig
 from .base import ClientFactory, make_client_factory
 from .mcp_service import McpService, ensure_mcp_installed
+
+# Cap on how many offending items a single check names inline; the rest are
+# summarised as "+N more" and the full list travels in `details` for --json.
+_MAX_LISTED_TASKS = 5
+AGENTS_FILENAME = "agents.json"
+
+
+def _native_command_for(tool: str | None) -> str | None:
+    """Native CLI replacement for an MCP tool name, if the parity map knows one."""
+    if not tool:
+        return None
+    entry = native_equivalent(tool)
+    return f"kbagent {entry.command}" if entry is not None else None
 
 
 class DoctorService:
@@ -86,6 +104,9 @@ class DoctorService:
         # Check 8: Plaintext #-secrets in synced configs (issue #378)
         sync_secret_check = self._check_sync_secrets()
         all_checks.append(sync_secret_check)
+
+        mcp_tool_task_check = self._check_mcp_tool_tasks()
+        all_checks.append(mcp_tool_task_check)
 
         # Build summary
         total = len(all_checks)
@@ -156,6 +177,119 @@ class DoctorService:
                 f"{shown}{more}. Re-push on kbagent >=0.54.0 to encrypt, then ROTATE the "
                 f"credential -- config version history keeps the old plaintext."
             ),
+        }
+
+    def _check_mcp_tool_tasks(self) -> dict[str, Any]:
+        """Check 9: flag scheduled tasks that use the MCP passthrough (epic #390).
+
+        ``agent --type mcp_tool`` is removed in the version named by
+        :data:`MCP_REMOVAL_VERSION`. Unlike an interactive ``tool call`` -- which
+        warns on every invocation right up to removal -- these tasks live in
+        ``agents.json`` and then run unattended, so nobody is present to be
+        warned when they break: a cron task simply starts failing. This check is
+        the standing reminder in the one command people run when something feels
+        off. Read-only: filesystem only, no API call, no MCP spawn.
+        """
+        # Local import: keeps the server package off the doctor cold-start path.
+        from ..server.agents_store import AgentStore
+
+        agents_path = self._config_store.config_dir / AGENTS_FILENAME
+        if not agents_path.exists():
+            return {
+                "check": "mcp_tool_tasks",
+                "name": "Deprecated mcp_tool agent tasks",
+                "status": "skip",
+                "message": f"No {AGENTS_FILENAME} in the config dir -- no agent tasks registered.",
+            }
+
+        # AgentStore.load_tasks() is deliberately forgiving -- it swallows a
+        # corrupt file and an invalid entry alike and returns whatever it could
+        # parse. That is right for the scheduler (one bad entry must not stop
+        # the rest) and wrong for a health check: "0 tasks" from an unreadable
+        # file would render as a clean bill of health for someone whose
+        # soon-to-break tasks we simply could not see. So read the raw file
+        # ourselves and report what we could NOT account for.
+        try:
+            raw = json.loads(agents_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "check": "mcp_tool_tasks",
+                "name": "Deprecated mcp_tool agent tasks",
+                "status": "warn",
+                "message": (
+                    f"Could not read {AGENTS_FILENAME} ({exc}), so tasks using the "
+                    f"deprecated 'mcp_tool' action could not be checked. Fix the file to "
+                    f"find out whether any need migrating before v{MCP_REMOVAL_VERSION}."
+                ),
+            }
+        if not isinstance(raw, list):
+            return {
+                "check": "mcp_tool_tasks",
+                "name": "Deprecated mcp_tool agent tasks",
+                "status": "warn",
+                "message": (
+                    f"{AGENTS_FILENAME} is not a JSON list, so it holds no usable tasks and "
+                    f"none could be checked for the deprecated 'mcp_tool' action."
+                ),
+            }
+
+        tasks = AgentStore(config_dir=self._config_store.config_dir).load_tasks()
+        unreadable = len(raw) - len(tasks)
+
+        affected = [t for t in tasks if getattr(t.action, "type", None) == "mcp_tool"]
+        if not affected:
+            if unreadable > 0:
+                return {
+                    "check": "mcp_tool_tasks",
+                    "name": "Deprecated mcp_tool agent tasks",
+                    "status": "warn",
+                    "message": (
+                        f"{unreadable} of {len(raw)} entries in {AGENTS_FILENAME} could not be "
+                        f"parsed and were skipped, so they could not be checked for the "
+                        f"deprecated 'mcp_tool' action. The {len(tasks)} readable task(s) are "
+                        f"clean."
+                    ),
+                }
+            return {
+                "check": "mcp_tool_tasks",
+                "name": "Deprecated mcp_tool agent tasks",
+                "status": "pass",
+                "message": f"No tasks use the deprecated 'mcp_tool' action ({len(tasks)} checked).",
+            }
+
+        shown = ", ".join(
+            f"{t.id} ({t.action.params.get('tool', '?')})" for t in affected[:_MAX_LISTED_TASKS]
+        )
+        more = (
+            f" (+{len(affected) - _MAX_LISTED_TASKS} more)"
+            if len(affected) > _MAX_LISTED_TASKS
+            else ""
+        )
+        return {
+            "check": "mcp_tool_tasks",
+            "name": "Deprecated mcp_tool agent tasks",
+            "status": "warn",
+            "message": (
+                f"{len(affected)} scheduled task(s) use the deprecated 'mcp_tool' action, "
+                f"REMOVED in kbagent v{MCP_REMOVAL_VERSION} ({MCP_REMOVAL_TARGET_DATE}): "
+                f"{shown}{more}. They run unattended, so they get NO warning at removal -- "
+                f"they just start failing. Migrate each to --type cli_command; "
+                f"`kbagent tool list` prints the native command per tool."
+            ),
+            "details": {
+                "removal_version": MCP_REMOVAL_VERSION,
+                "tasks": [
+                    {
+                        "id": t.id,
+                        "name": t.name,
+                        "tool": t.action.params.get("tool"),
+                        "cron": None if t.manual else t.cron,
+                        "enabled": t.enabled,
+                        "native_command": _native_command_for(t.action.params.get("tool")),
+                    }
+                    for t in affected
+                ],
+            },
         }
 
     def _check_config_source(self) -> dict[str, Any]:

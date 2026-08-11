@@ -590,7 +590,7 @@ wheels = [
 
 [[package]]
 name = "keboola-cli"
-version = "0.80.4"
+version = "0.81.0"
 source = { editable = "." }
 dependencies = [
     { name = "croniter" },

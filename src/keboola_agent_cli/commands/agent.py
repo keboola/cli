@@ -23,7 +23,12 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, ErrorCode
-from ..mcp_parity import MCP_REMOVAL_TARGET_DATE, MCP_REMOVAL_VERSION
+from ..mcp_parity import (
+    MCP_REMOVAL_TARGET_DATE,
+    MCP_REMOVAL_VERSION,
+    MCP_TOOL_ACTION_DEPRECATION,
+    annotate_mcp_tool_deprecation,
+)
 from ..output import OutputFormatter, write_machine_output
 from ..server.agents_store import AgentAction, Trigger
 from ..services.agent_service import AgentService
@@ -36,18 +41,6 @@ agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 # stderr warning in human mode, additive "deprecation" envelope key in
 # JSON mode. Creation is never blocked; agents.json / REST payloads are
 # unchanged.
-# The deadline matters MORE here than on `tool call`. An interactive `tool call`
-# warns on every invocation right up to removal; a scheduled task is written to
-# agents.json once and then runs unattended, so creation time is the only moment
-# its owner is present to hear the date. Removing the action type without this
-# turns those tasks into a silent cron failure.
-MCP_TOOL_ACTION_DEPRECATION = (
-    "agent action type 'mcp_tool' is deprecated (epic #390); prefer --type "
-    "cli_command with the native kbagent command (see `kbagent tool list` "
-    f"cli_equivalent column). It is REMOVED in kbagent v{MCP_REMOVAL_VERSION} "
-    f"({MCP_REMOVAL_TARGET_DATE}) -- migrate scheduled tasks before then or they "
-    "will start failing on their next run."
-)
 
 
 @agent_app.callback(invoke_without_command=True)
@@ -262,16 +255,32 @@ def _render_tasks_table(console: Any, data: dict[str, Any]) -> None:
             state_bits.append("[green]enabled[/green]")
         state = " ".join(state_bits) or "-"
         action = task.get("action") or {}
+        action_type = action.get("type", "?")
         table.add_row(
             str(task.get("id", "")),
             task.get("name", ""),
             "" if task.get("manual") else task.get("cron", "") or "-",
-            action.get("type", "?"),
+            action_type,
             state,
             task.get("last_run_at") or "-",
             task.get("next_run_at") or "-",
         )
     console.print(table)
+
+    # Footnote rather than a marker inside the Type cell: that column is narrow
+    # enough that Rich truncated the tag to "DEPRECA…", which is worse than not
+    # flagging it at all. Below the table there is room to name the affected
+    # tasks AND what to do about them.
+    deprecated = [t for t in tasks if (t.get("action") or {}).get("type") == "mcp_tool"]
+    if deprecated:
+        ids = ", ".join(str(t.get("id", "?")) for t in deprecated)
+        console.print(
+            f"[yellow]{len(deprecated)} task(s) use the deprecated 'mcp_tool' action "
+            f"({ids}) -- REMOVED in kbagent v{MCP_REMOVAL_VERSION} "
+            f"({MCP_REMOVAL_TARGET_DATE}).[/yellow] They run unattended, so they get no "
+            f"warning at removal. Run [cyan]kbagent doctor[/cyan] for the native "
+            f"replacement of each."
+        )
 
 
 def _render_task_detail(console: Any, task: dict[str, Any]) -> None:
@@ -513,7 +522,7 @@ def agent_list(ctx: typer.Context) -> None:
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    payload = {"tasks": [t.model_dump(mode="json") for t in tasks]}
+    payload = {"tasks": [annotate_mcp_tool_deprecation(t.model_dump(mode="json")) for t in tasks]}
     formatter.output(payload, _render_tasks_table)
 
 

@@ -414,7 +414,7 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 
 ## Utility
 - `init [--from-global] [--project ALIAS ...]` -- create local `.kbagent/` workspace (per-directory isolation); `--project ALIAS` (repeatable) copies only the named project(s) and implies `--from-global`
-- `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary. Includes a `sync_secrets` check (since 0.55.0): when run inside a sync working tree (`.keboola/manifest.json`), warns if any in-sync config holds plaintext `#`-secrets (#378); `skip` outside a sync tree
+- `doctor [--fix]` -- health checks; `--fix` auto-installs MCP server binary. Includes a `sync_secrets` check (since 0.55.0): when run inside a sync working tree (`.keboola/manifest.json`), warns if any in-sync config holds plaintext `#`-secrets (#378); `skip` outside a sync tree. Also an `mcp_tool_tasks` check (since 0.81.0): warns when `agents.json` holds scheduled tasks using the deprecated `mcp_tool` action (removed in v0.85.0), listing each task's tool and native replacement in `details.tasks[]`
 - `version` -- show version and check for MCP server updates; on a standalone binary it advertises the native channel's upgrade command instead of `kbagent update` (v0.79.0+)
 - `context` -- full usage instructions for AI agents
 
