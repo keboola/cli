@@ -48,6 +48,23 @@ _QUALIFIED_3 = re.compile(r'"KBC_USE4_(\d+)"\s*\.\s*"([^"]+)"\s*\.\s*"([^"]+)"')
 _QUALIFIED_2 = re.compile(r'"([^"]+)"\s*\.\s*"([^"]+)"')
 
 
+def _read_source(path: Path) -> str:
+    """Read a transformation's code, whatever bytes the file actually holds.
+
+    ``Path.read_text()`` decodes with the platform default, which on a Czech or
+    Polish Windows box is cp1250 -- so a single accented character in a SQL
+    comment aborted the whole lineage build with ``UnicodeDecodeError`` (issue
+    #570). Keboola serves this content as UTF-8, so UTF-8 is the right guess
+    everywhere, and forcing it also makes a build reproducible across machines.
+
+    ``errors="replace"`` because the goal here is finding table references: a
+    file that genuinely holds non-UTF-8 bytes (a locally-edited transformation
+    saved in the OS codepage) should cost a mangled comment, never the entire
+    graph. Table identifiers are ASCII, so nothing load-bearing is lost.
+    """
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def extract_sql_table_refs(sql: str, project_id: int) -> list[tuple[int, str, str]]:
     """Extract table references from Snowflake SQL using a state machine.
 
@@ -632,10 +649,10 @@ class DeepLineageService:
         code_py = full_path / "code.py"
 
         if transform_sql.exists():
-            code = transform_sql.read_text()
+            code = _read_source(transform_sql)
             code_type = "sql"
         elif code_py.exists():
-            code = code_py.read_text()
+            code = _read_source(code_py)
             code_type = "python"
 
         # Include config row mappings

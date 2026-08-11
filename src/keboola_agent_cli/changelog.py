@@ -24,6 +24,28 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.3": [
+        "Fix (#570): `kbagent lineage build` crashed with `UnicodeDecodeError` on "
+        "Windows when a transformation's `transform.sql` or `code.py` contained "
+        "non-ASCII text -- an accented word in a Czech comment was enough to abort "
+        "the whole graph. The reads used `Path.read_text()`, which decodes with "
+        "the platform default: cp1250 on a Czech box, where UTF-8's continuation "
+        "bytes are undefined. Keboola serves this content as UTF-8, so UTF-8 is "
+        "now explicit, which also makes a build reproducible across machines "
+        "instead of varying with the host locale. Files that genuinely hold "
+        "non-UTF-8 bytes -- a transformation edited locally and saved in the OS "
+        'codepage -- decode with `errors="replace"`: table identifiers are '
+        "ASCII, so a mangled comment costs nothing and never costs the graph. The "
+        "`PYTHONUTF8=1` workaround is no longer needed. Thanks to "
+        "@papousek-radan for the report.",
+        "Fix (#570): the same unqualified `Path.read_text()` in "
+        "`dev-portal create --data` / `patch --value-file` and "
+        "`semantic-layer reference-data set --members-file` now reads UTF-8 too. "
+        "Those parse their input as data rather than scan it, so they stay "
+        "strict: a decode error there is honest and identical on every OS, "
+        "whereas the platform default silently produced different results per "
+        "machine.",
+    ],
     "0.80.2": [
         "Fix (#571): the deferred Windows self-update never applied. kbagent has "
         "not auto-updated on Windows since the deferred path landed in 0.78.0 -- "

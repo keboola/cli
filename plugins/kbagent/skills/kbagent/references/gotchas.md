@@ -3445,3 +3445,22 @@ applied. `kbagent update` printed `(scheduled)` and every later launch printed
   `job run --idempotency-key`, `storage download-table`, `doctor`, and
   redirected-output encoding all landed there.
 - POSIX was never affected; it uses the inline install plus re-exec.
+
+## Source files are read as UTF-8, not the host codepage (since v0.80.3)
+
+`lineage build` reads `transform.sql` / `code.py` as UTF-8 regardless of the
+machine's locale, and tolerates files that are not valid UTF-8.
+
+- **Before v0.80.3** the reads used the platform default. On a Czech or Polish
+  Windows box (cp1250) a single accented character in a SQL comment aborted the
+  entire build with `UnicodeDecodeError`. Workaround on older versions:
+  `PYTHONUTF8=1`.
+- **A build is now reproducible across machines.** Previously the same synced
+  tree could decode differently on Windows and on Linux, so a lineage graph was
+  quietly host-dependent.
+- **Undecodable bytes cost a comment, not the graph** -- `errors="replace"`.
+  Table identifiers are ASCII, so references are never lost.
+- **Data inputs stay strict**: `dev-portal create --data`, `patch
+  --value-file`, and `semantic-layer reference-data set --members-file` read
+  UTF-8 without a fallback, so a genuinely mis-encoded input file fails loudly
+  and identically everywhere rather than being silently mis-parsed.

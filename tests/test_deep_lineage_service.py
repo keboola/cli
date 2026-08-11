@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from keboola_agent_cli.config_store import ConfigStore
@@ -15,6 +16,7 @@ from keboola_agent_cli.services.deep_lineage_service import (
     Table,
     _collect_create_targets,
     _collect_cte_names,
+    _read_source,
     _strip_comments_and_strings,
     extract_sql_table_refs,
 )
@@ -939,3 +941,48 @@ class TestRenderErDiagramXssRegression:
         )
         assert "<img" not in rendered
         assert "&lt;img" in rendered
+
+
+class TestSourceReadsAreUtf8:
+    """Transformation code must decode the same on every host (issue #570).
+
+    `Path.read_text()` uses the platform default encoding. On a Czech or Polish
+    Windows box that is cp1250, so one accented character in a SQL comment
+    aborted the entire `lineage build` with `UnicodeDecodeError`. These run
+    everywhere by driving the decode explicitly rather than by depending on the
+    host's locale.
+    """
+
+    def test_utf8_content_survives_a_cp1250_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exact reported crash: UTF-8 bytes read on a cp1250 host."""
+        sql = tmp_path / "transform.sql"
+        # U+0159 encodes to 0xC5 0x99 in UTF-8; 0x99 is undefined in cp1250,
+        # which is what raised in the report.
+        sql.write_bytes("-- příprava dat\nSELECT 1 FROM t;\n".encode())
+
+        real_read_text = Path.read_text
+
+        def cp1250_default(
+            self: Path, encoding: str | None = None, errors: str | None = None
+        ) -> str:
+            # Mimic a Windows host: no explicit encoding means cp1250.
+            return real_read_text(self, encoding=encoding or "cp1250", errors=errors)
+
+        monkeypatch.setattr(Path, "read_text", cp1250_default)
+
+        code = _read_source(sql)
+        assert "SELECT 1 FROM t" in code
+        assert "příprava" in code, "UTF-8 content must round-trip intact"
+
+    def test_genuinely_undecodable_bytes_do_not_abort_the_build(self, tmp_path: Path) -> None:
+        """A locally-edited file saved in the OS codepage costs a comment, not the graph."""
+        sql = tmp_path / "transform.sql"
+        # 0x81 is invalid UTF-8 and is the byte from the report's traceback.
+        sql.write_bytes(b"-- koment\x81\nSELECT 1 FROM in.c_bucket.tbl;\n")
+
+        code = _read_source(sql)
+
+        # The table reference -- the only thing lineage actually needs -- survives.
+        assert "in.c_bucket.tbl" in code
