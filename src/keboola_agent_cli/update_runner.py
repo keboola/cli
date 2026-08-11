@@ -65,7 +65,28 @@ logger = logging.getLogger(__name__)
 
 # Windows-only process-creation flags. Absent on POSIX, where the detached
 # helper path is never taken; `getattr` keeps the module importable there.
-_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+#
+# `CREATE_NO_WINDOW`, and deliberately NOT `DETACHED_PROCESS` (issue #571). The
+# two read as synonyms -- "run this hidden in the background" -- but differ in
+# the one way that matters: `DETACHED_PROCESS` gives the child no console *at
+# all*, and `powershell.exe` is a console application whose host cannot start
+# without one. It exits 0, in under a second, having executed nothing.
+#
+# Zero, silently, is the worst shape this failure can take. `Popen` returns a
+# live-looking handle, the marker is already written, and the single-flight
+# guard then suppresses every retry for the full 24-hour staleness window while
+# each launch keeps printing "Updating in the background". Nothing is corrupted
+# -- it fails safe -- but the update never arrives and nobody is told.
+#
+# Measured on one Windows 11 box, back to back, fresh install of the same wheel
+# per trial, only this flag changed:
+#
+#     DETACHED_PROCESS   0/3 updated, no exit file, helper never visible in
+#                        the process list across 46 s of 1.5 s sampling
+#     CREATE_NO_WINDOW   3/3 updated, exit file and full install log written
+#
+# `CREATE_NO_WINDOW` still creates a console, it just never shows it.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 # Fallback location of the in-box Windows PowerShell, used when PATH lookup
@@ -486,7 +507,7 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
-            creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
+            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
         )
     except OSError:
         logger.debug("Could not spawn the deferred-update helper", exc_info=True)

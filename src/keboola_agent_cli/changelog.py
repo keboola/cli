@@ -24,6 +24,39 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.2": [
+        "Fix (#571): the deferred Windows self-update never applied. kbagent has "
+        "not auto-updated on Windows since the deferred path landed in 0.78.0 -- "
+        "`kbagent update` reported `(scheduled)`, the marker was written, and "
+        "nothing else ever happened. The helper was spawned with "
+        "`DETACHED_PROCESS`, which gives the child no console at all, and "
+        "`powershell.exe` is a console application whose host cannot start "
+        "without one: it exits 0, in under a second, having executed nothing. A "
+        "zero exit code with no output is the worst shape such a failure can "
+        "take -- the spawn looks successful, so the single-flight guard then "
+        "suppressed every retry for the full 24-hour staleness window while each "
+        'launch kept printing "Updating in the background". It failed safe, '
+        "unlike the original #528: nothing was corrupted, the update simply never "
+        "arrived. Now spawned with `CREATE_NO_WINDOW`, which creates a console "
+        "and never shows it. Measured on one Windows 11 box back to back, fresh "
+        "install of the same wheel per trial, only the flag changed: "
+        "`DETACHED_PROCESS` 0/3 updated with no exit file and no helper ever "
+        "visible in the process list; `CREATE_NO_WINDOW` 3/3 updated with the "
+        "exit file and full install log written. Thanks to @papousek-radan, "
+        'whose "we never saw the deferred update actually arrive" is what '
+        "reopened this after I had wrongly closed it.",
+        "Fix (tests, #571): the regression sat in the seam between two test "
+        "layers -- the waiter script's text was asserted as a string and the "
+        "spawn was tested with `subprocess.Popen` mocked, so the pairing that "
+        "actually ships was never executed. The Windows CI suite ran the script "
+        "through `subprocess.run`, which supplies the very console the real "
+        "flags withheld, so it could not reproduce the failure either. A new "
+        "Windows-only test performs the real spawn and asserts on the process "
+        'rather than on a file, because "never spawned" and "spawned and '
+        'died instantly" leave identical evidence on disk -- which is why this '
+        "took three rounds to pin down. Both new tests are confirmed to fail "
+        "with the old flag restored.",
+    ],
     "0.80.1": [
         "Fix (#427): `kbagent job run --idempotency-key` was completely broken on "
         "Windows -- every run raised `PermissionError: [WinError 5] Access is "
