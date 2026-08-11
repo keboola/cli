@@ -9,10 +9,7 @@ description: >
   (backup/restore), data apps (create/deploy/logs/secrets), flows and
   schedules, members and invitations, feature flags, OTLP data streams,
   scoped Storage tokens, the semantic layer (models, metrics, constraints),
-  the Developer Portal, browser login. For migrating an existing kbc
-  (keboola-as-code) GitHub CI/CD pipeline to kbagent sync, see the sibling
-  kbagent-cicd-migration skill instead.
-  Triggers: kbagent, Keboola, keboola
+  the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   workspace SQL, data app, streamlit deploy, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
