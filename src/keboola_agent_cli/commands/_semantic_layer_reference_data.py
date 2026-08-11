@@ -111,7 +111,11 @@ def _print_reference_data_delete_result(console: Console, data: dict) -> None:
 def _load_members(formatter: Any, members_file: str) -> list[dict]:
     """Read a JSON array of member objects from a file or ``-`` (stdin)."""
     try:
-        raw = sys.stdin.read() if members_file == "-" else Path(members_file).read_text()
+        raw = (
+            sys.stdin.read()
+            if members_file == "-"
+            else Path(members_file).read_text(encoding="utf-8")
+        )
     except OSError as exc:
         formatter.error(
             message=f"Could not read members file {members_file!r}: {exc}",

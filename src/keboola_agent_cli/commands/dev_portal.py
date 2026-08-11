@@ -317,7 +317,7 @@ def _load_payload(data: str | None) -> dict:
         raise typer.BadParameter("--data is required")
     if data == "-":
         return json.loads(sys.stdin.read())
-    return json.loads(Path(data).read_text())
+    return json.loads(Path(data).read_text(encoding="utf-8"))
 
 
 def _render_pending(formatter: OutputFormatter, pending: PendingWrite) -> None:
@@ -435,7 +435,7 @@ def patch_cmd(
         payload = _load_payload(data)
     elif property_:
         if value_file:
-            raw = Path(value_file).read_text()
+            raw = Path(value_file).read_text(encoding="utf-8")
         elif value is not None:
             raw = value
         else:
