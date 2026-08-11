@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -451,10 +452,10 @@ class TestWaiterScriptOnWindows:
         the handle so the helper can be observed and cleaned up.
         """
         real_popen = subprocess.Popen
-        spawned: list[subprocess.Popen] = []
+        spawned: list[subprocess.Popen[Any]] = []
 
-        def spy(argv: list[str], **kwargs: object) -> subprocess.Popen:
-            process = real_popen(argv, **kwargs)  # type: ignore[arg-type]
+        def spy(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+            process = real_popen(argv, **kwargs)
             spawned.append(process)
             return process
 

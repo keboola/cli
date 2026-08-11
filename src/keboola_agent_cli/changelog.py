@@ -58,6 +58,26 @@ CHANGELOG: dict[str, list[str]] = {
         "`os.replace` all keep working, on both platforms. `forget()` had the same "
         "flaw and is fixed with it. Found by running the full suite on a real "
         "Windows box, where it accounted for 25 failures.",
+        "Fix: `kbagent storage download-table` (and every other sliced download) "
+        "failed on Windows with `PermissionError: [Errno 13] Permission denied`. "
+        "The slice loop created a `tempfile.NamedTemporaryFile` and then handed "
+        "its *name* to the streaming downloader, which opens the path a second "
+        "time -- and a `NamedTemporaryFile` cannot be reopened by name on Windows "
+        "while its own handle is open (a documented platform difference). It now "
+        "uses `mkstemp` plus an immediate close, which gives the same "
+        "collision-free name without holding it open. Found by running the E2E "
+        "suite against a real project from Windows; unit tests could not catch it "
+        "because they mock the download.",
+        "Fix: the job idempotency store now takes a REAL cross-process lock "
+        "(`filelock`) instead of the `fcntl` helper, which is a silent no-op on "
+        "Windows. Until the `os.replace` fix above, `record()` crashed there so "
+        "the point was moot; now that it runs, an unserialised read-modify-write "
+        "could drop a concurrent writer's entry -- and a dropped entry makes the "
+        "next replay create a duplicate job, the exact side effect the store "
+        "exists to prevent. `auth/state_store.py` already chose `filelock` for "
+        'the same reason. The former "concurrency" test was a sequential loop; '
+        "a real one now spawns parallel writer processes and is confirmed to fail "
+        "when the lock is stubbed out.",
         "Fix: `kbagent doctor` no longer warns every Windows user about config "
         "file permissions they cannot change. The `config_file` check compared "
         '`stat` mode bits against 0600 and its comment claimed "Unix only" while '

@@ -152,6 +152,13 @@ DEFAULT_JOB_MODE: str = "run"
 # alongside config.json; maps idempotency_key -> prior job so a replayed
 # `kbagent job run --idempotency-key` does not fire a duplicate side effect.
 JOB_IDEMPOTENCY_FILENAME: str = "job_idempotency.json"
+# Sidecar lock, never the state file itself: `os.replace()` cannot rename over a
+# file Windows still holds open, which made every `record()` fail there.
+JOB_IDEMPOTENCY_LOCK_FILENAME: str = "job_idempotency.json.lock"
+# How long to wait for a competing kbagent to finish its read-modify-write. The
+# critical section is a small JSON rewrite, so contention should clear in
+# milliseconds; this only bounds the wait on a process that died holding it.
+JOB_IDEMPOTENCY_LOCK_TIMEOUT: float = 30.0
 # Default log-tail length surfaced on FAILED/WARNING/TERMINATED jobs.
 DEFAULT_LOG_TAIL_LINES: int = 200
 # Upper bound to prevent accidentally pulling tens of thousands of events
