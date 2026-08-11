@@ -1,6 +1,7 @@
 """Tests for sync manifest models and load/save functions."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -275,3 +276,48 @@ class TestManifestExtraFields:
         # Extra field on nested model
         project_dumped = loaded.project.model_dump(mode="json", by_alias=True)
         assert project_dumped["unknownField"] == "kept"
+
+
+class TestManifestPathsArePortable:
+    """The manifest is tracked in git, so its paths must be OS-neutral.
+
+    The asymmetry is what makes this dangerous: `Path()` on Windows accepts
+    `a/b`, but on POSIX `a\\b` is a single filename containing a backslash. A
+    manifest written on Windows therefore stops resolving for every teammate on
+    macOS or Linux, while the reverse direction works and hides the problem.
+    """
+
+    def test_windows_separators_are_normalised_on_load(self) -> None:
+        """A manifest already committed by a Windows kbagent repairs itself."""
+        cfg = ManifestConfiguration(
+            branchId=1,
+            componentId="keboola.ex-http",
+            id="123",
+            path=r"extractor\keboola.ex-http\adopted-extractor",
+        )
+        assert cfg.path == "extractor/keboola.ex-http/adopted-extractor"
+
+    def test_branch_and_row_paths_are_normalised_too(self) -> None:
+        assert ManifestBranch(id=1, path=r"main\nested").path == "main/nested"
+        assert ManifestConfigRow(id="r1", path=r"rows\first").path == "rows/first"
+
+    def test_posix_paths_are_left_alone(self) -> None:
+        """The common case must be untouched, not round-tripped through a rewrite."""
+        cfg = ManifestConfiguration(branchId=1, componentId="c", id="1", path="extractor/c/name")
+        assert cfg.path == "extractor/c/name"
+
+    def test_a_saved_manifest_holds_forward_slashes(self, tmp_path: Path) -> None:
+        """End to end: what lands in git is portable regardless of the writer's OS."""
+        manifest = Manifest(
+            project=ManifestProject(id=1, apiHost="connection.keboola.com"),
+            naming=ManifestNaming(),
+            branches=[ManifestBranch(id=1, path="main")],
+            configurations=[
+                ManifestConfiguration(branchId=1, componentId="c", id="1", path=r"extractor\c\name")
+            ],
+        )
+        save_manifest(tmp_path, manifest)
+
+        raw = (tmp_path / ".keboola" / "manifest.json").read_text(encoding="utf-8")
+        assert "extractor/c/name" in raw
+        assert "\\\\" not in raw, "a backslash in the tracked manifest breaks POSIX checkouts"

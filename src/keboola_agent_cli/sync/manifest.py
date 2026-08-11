@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, MANIFEST_VERSION
 
@@ -59,6 +59,26 @@ class ManifestNaming(BaseModel):
     data_app_config: str = Field(default="app/{component_id}/{config_name}", alias="dataAppConfig")
 
 
+def _posix_path(value: str) -> str:
+    r"""Normalise a manifest path to forward slashes.
+
+    The manifest is a **tracked** file -- the point of a sync tree is that a
+    team shares it through git -- so its paths must mean the same thing on
+    every machine. The asymmetry is what makes this bite: ``Path()`` on Windows
+    happily accepts ``a/b``, but on POSIX ``a\b`` is a single filename that
+    merely contains a backslash. So a manifest written on Windows silently
+    stops resolving for everyone else on the team, while the reverse direction
+    works fine and hides the problem.
+
+    Applied on load as well as on write, so a manifest already committed by a
+    Windows kbagent repairs itself on the next read instead of needing a hand
+    edit. Component and config names are slugified by :mod:`.naming` long
+    before they reach a path, so a backslash here is always a separator and
+    never part of a real name.
+    """
+    return value.replace("\\", "/")
+
+
 class ManifestBranch(BaseModel):
     """A branch entry in the manifest."""
 
@@ -67,6 +87,11 @@ class ManifestBranch(BaseModel):
     id: int
     path: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("path")
+    @classmethod
+    def _normalise_path(cls, value: str) -> str:
+        return _posix_path(value)
 
 
 class ManifestConfigRow(BaseModel):
@@ -85,6 +110,11 @@ class ManifestConfigRow(BaseModel):
     path: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("path")
+    @classmethod
+    def _normalise_path(cls, value: str) -> str:
+        return _posix_path(value)
+
 
 class ManifestConfiguration(BaseModel):
     """A single configuration reference inside the manifest."""
@@ -97,6 +127,11 @@ class ManifestConfiguration(BaseModel):
     path: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     rows: list[ManifestConfigRow] = Field(default_factory=list)
+
+    @field_validator("path")
+    @classmethod
+    def _normalise_path(cls, value: str) -> str:
+        return _posix_path(value)
 
 
 # ---------------------------------------------------------------------------

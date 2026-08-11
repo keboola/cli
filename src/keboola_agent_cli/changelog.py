@@ -24,6 +24,28 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.4": [
+        "Fix: a sync manifest written on Windows was unusable by everyone else "
+        "on the team. `.keboola/manifest.json` is a **tracked** file -- sharing "
+        "the synced tree through git is the point of the sync workflow -- but "
+        "`sync push --adopt-existing` recorded config paths with the host's "
+        "separator, so a Windows machine committed "
+        "`extractor\\keboola.ex-http\\name`. The asymmetry is what hid it: "
+        "`Path()` on Windows accepts forward slashes, so POSIX-written "
+        "manifests work everywhere, while on POSIX a backslash path is a single "
+        "filename that matches nothing. Paths are now written with `as_posix()` "
+        "and normalised on load, so a manifest already committed by a Windows "
+        "kbagent repairs itself on the next read instead of needing a hand "
+        "edit. Found by running the full test suite on Windows rather than by a "
+        "report -- see the note below.",
+        "Note (tests): this is the first Windows-only defect the project found "
+        "itself. The full suite has never run on Windows in CI (only a narrow "
+        "slice does), and a real run was 55 failures -- unusable as a gate, so "
+        "nobody enabled it, so anything could hide in it. Working through those "
+        "failures to make gating possible is what surfaced this one, among "
+        "otherwise routine test-portability noise. The remaining failures are "
+        "POSIX-only permission assertions and unguarded `fcntl` imports.",
+    ],
     "0.80.3": [
         "Fix (#570): `kbagent lineage build` crashed with `UnicodeDecodeError` on "
         "Windows when a transformation's `transform.sql` or `code.py` contained "
