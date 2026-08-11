@@ -37,7 +37,7 @@ CHANGELOG: dict[str, list[str]] = {
         'codepage -- decode with `errors="replace"`: table identifiers are '
         "ASCII, so a mangled comment costs nothing and never costs the graph. The "
         "`PYTHONUTF8=1` workaround is no longer needed. Thanks to "
-        "@papousek-radan for the report.",
+        "@MichalProchazkaP3 for the report.",
         "Fix (#570): the same unqualified `Path.read_text()` in "
         "`dev-portal create --data` / `patch --value-file` and "
         "`semantic-layer reference-data set --members-file` now reads UTF-8 too. "
