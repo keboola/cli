@@ -24,6 +24,58 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.80.1": [
+        "Fix (#528): the deferred Windows self-update never ran, so kbagent has not "
+        "auto-updated on Windows since 0.78.0. The helper was spawned with "
+        "`DETACHED_PROCESS`, which gives the child no console at all -- and "
+        "`powershell.exe` is a console application whose host cannot start without "
+        "one, so it exited **0, immediately, with an empty stderr**, having executed "
+        "nothing. A zero exit code is the worst shape this failure can take: the "
+        "spawn looked successful, the marker was written, and the single-flight "
+        "guard then suppressed every retry for the full 24-hour staleness window "
+        'while each launch still printed "Updating in the background". It fails '
+        "safe -- nothing is corrupted, unlike the original #528 -- but the update "
+        "silently never arrives. The helper now uses `CREATE_NO_WINDOW`, which "
+        "creates a console and simply never shows it. Verified end to end on a "
+        "fresh Windows 11 machine: 0.79.0 -> 0.80.0 with exit code 0 and a complete "
+        "install log, where the shipped build wrote no log at all.",
+        "Fix (tests, #528): the regression above sat in the seam between two test "
+        "layers -- the waiter script's text was asserted as a string, and the spawn "
+        "was tested with `subprocess.Popen` mocked, so the one combination that "
+        "ships (this script, these creation flags) was never executed. The Windows "
+        "CI suite ran the script through `subprocess.run`, which supplies the very "
+        "console the real flags withheld, so it could not reproduce the failure. A "
+        "new Windows-only test performs the real detached spawn and asserts the "
+        "helper is still alive afterwards; a cross-platform test pins the flag "
+        "choice so `DETACHED_PROCESS` cannot come back.",
+        "Fix (#427): `kbagent job run --idempotency-key` was completely broken on "
+        "Windows -- every run raised `PermissionError: [WinError 5] Access is "
+        "denied`. `JobIdempotencyStore` took its advisory lock on the state file "
+        "*itself* and then renamed the new copy over it; POSIX is happy to replace "
+        "a file that still has an open handle, Windows refuses. `ConfigStore` "
+        "already had this right with a separate `.lock` sidecar, and the store now "
+        "follows the same pattern -- so the lock, the 0600 temp file and the atomic "
+        "`os.replace` all keep working, on both platforms. `forget()` had the same "
+        "flaw and is fixed with it. Found by running the full suite on a real "
+        "Windows box, where it accounted for 25 failures.",
+        "Fix: `kbagent doctor` no longer warns every Windows user about config "
+        "file permissions they cannot change. The `config_file` check compared "
+        '`stat` mode bits against 0600 and its comment claimed "Unix only" while '
+        "the code ran everywhere -- Windows reports 0o666 for any writable file "
+        "regardless of how the ACL actually reads, so the check reported a "
+        "permanent `warn` with no possible remedy. It now short-circuits on "
+        "Windows and reports the file without grading mode bits, the same "
+        "reasoning `auth/state_store.py` already applied. Access there is governed "
+        "by the profile ACL, not by POSIX bits; no behaviour change on POSIX.",
+        "Note (tests): the full suite has never run on Windows in CI -- the "
+        "windows-latest job runs only the semantic-layer export tests, the "
+        "self-update runner and a wheel smoke test. A real Windows run shows 55 "
+        "failures out of 5404, and the idempotency bug above was a genuine product "
+        "defect hiding among them. `tests/test_job_idempotency_store.py` is now in "
+        "the Windows job; the rest are mostly POSIX-only permission assertions "
+        "(`os.chmod` cannot narrow an ACL) and unguarded `fcntl` imports, which "
+        "need skips before the whole suite can be gated on Windows.",
+    ],
     "0.80.0": [
         "New: `kbagent auth login|status|logout` -- browser-based programmatic authentication as "
         "an alternative to a long-lived static Storage API token. `login` signs in via PKCE "

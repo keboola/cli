@@ -256,6 +256,37 @@ class TestRequestDeferredUpdate:
         assert marker["target_version"] == "0.76.4"
         assert marker["recovery_command"] == REQUEST.recovery_command
 
+    def test_helper_gets_a_console_it_never_shows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`CREATE_NO_WINDOW`, never `DETACHED_PROCESS`.
+
+        `DETACHED_PROCESS` gives the child no console at all, and PowerShell's
+        host cannot start without one -- it exits 0, immediately, having run
+        nothing, which the spawn cannot distinguish from success. This pins the
+        choice on every platform; `TestWaiterScriptOnWindows` proves the
+        behaviour on the only platform that can run the helper.
+        """
+        spawned: list[dict] = []
+
+        def fake_popen(argv: list[str], **kwargs: object) -> object:
+            spawned.append({"argv": argv, "kwargs": kwargs})
+            return object()
+
+        monkeypatch.setattr("keboola_agent_cli.update_runner.subprocess.Popen", fake_popen)
+        assert request_deferred_update(REQUEST) is True
+
+        flags = spawned[0]["kwargs"]["creationflags"]
+        detached = getattr(subprocess, "DETACHED_PROCESS", 0)
+        # Both constants are absent on POSIX, where `creationflags` is 0 and the
+        # helper path is never taken -- so the guard below is only load-bearing
+        # on Windows, and says so rather than pretending to assert nothing.
+        assert not (detached and flags & detached), (
+            "DETACHED_PROCESS leaves PowerShell without a console; it exits 0 doing nothing"
+        )
+        if os.name == "nt":
+            assert flags & subprocess.CREATE_NO_WINDOW
+
     def test_second_request_does_not_spawn_a_second_helper(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -401,6 +432,57 @@ class TestWaiterScriptOnWindows:
         powershell = resolve_powershell()
         assert powershell is not None, "Windows must always provide an in-box PowerShell"
         subprocess.run(build_helper_command(powershell, script), check=True, timeout=180)
+
+    def test_the_real_detached_spawn_actually_starts_the_helper(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The seam the other tests leave open: script *and* spawn, together.
+
+        Everything above either pins the script's text or mocks `Popen`, so the
+        one combination that ships -- this script, launched with these creation
+        flags -- was never executed. It failed in exactly that gap: with
+        `DETACHED_PROCESS` the child got no console, PowerShell's host refused to
+        start, and it exited 0 within a second having run nothing. No exit file,
+        no log, and a marker that then suppressed every retry for 24 hours while
+        each launch still announced an update.
+
+        The spy calls straight through to the real `subprocess.Popen`, so the
+        creation flags under test are the ones the product uses; it only keeps
+        the handle so the helper can be observed and cleaned up.
+        """
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen] = []
+
+        def spy(argv: list[str], **kwargs: object) -> subprocess.Popen:
+            process = real_popen(argv, **kwargs)  # type: ignore[arg-type]
+            spawned.append(process)
+            return process
+
+        monkeypatch.setattr("keboola_agent_cli.update_runner.subprocess.Popen", spy)
+
+        request = DeferredUpdateRequest(
+            from_version="1.0.0",
+            target_version="2.0.0",
+            # Never reached: this process is alive, so the helper stays in its
+            # `Wait-Process` on our own PID for the whole assertion.
+            install_command=(sys.executable, "-c", "pass"),
+            recovery_command=None,
+        )
+        assert request_deferred_update(request) is True
+        assert len(spawned) == 1
+        helper = spawned[0]
+
+        try:
+            # Still waiting on us => it started. A helper that is already gone
+            # ran nothing; the broken flag died in well under a second.
+            with pytest.raises(subprocess.TimeoutExpired):
+                helper.wait(timeout=15)
+            assert not (tmp_path / DEFERRED_UPDATE_EXIT_FILENAME).exists(), (
+                "the helper must not install while a watched process is alive"
+            )
+        finally:
+            helper.kill()
+            helper.wait(timeout=30)
 
     def test_installer_exit_code_is_recorded(self, tmp_path: Path) -> None:
         exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME

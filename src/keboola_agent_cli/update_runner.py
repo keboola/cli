@@ -65,7 +65,18 @@ logger = logging.getLogger(__name__)
 
 # Windows-only process-creation flags. Absent on POSIX, where the detached
 # helper path is never taken; `getattr` keeps the module importable there.
-_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+#
+# `CREATE_NO_WINDOW`, deliberately, and NOT `DETACHED_PROCESS`. The two read as
+# synonyms but differ in the one way that matters here: `DETACHED_PROCESS` gives
+# the child no console *at all*, and `powershell.exe` is a console application
+# whose host cannot start without one -- it exits **0, immediately, silently**,
+# having run nothing. Exit code 0 and an empty stderr is the worst shape such a
+# failure can take: the spawn looks like a success, the marker is written, and
+# every later launch reports "updating in the background" for the full 24h
+# staleness window while no update is ever installed. `CREATE_NO_WINDOW` still
+# creates a console, it just never shows it, which is what "run this hidden in
+# the background" actually requires.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 # Fallback location of the in-box Windows PowerShell, used when PATH lookup
@@ -486,7 +497,7 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
-            creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
+            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
         )
     except OSError:
         logger.debug("Could not spawn the deferred-update helper", exc_info=True)

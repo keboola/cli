@@ -27,10 +27,11 @@ Scope / limits:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -102,10 +103,41 @@ class JobIdempotencyStore:
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
+        # A lock file SEPARATE from the state file, matching ConfigStore. Taking
+        # the lock on the state file itself works on POSIX but is fatal on
+        # Windows: `os.replace()` cannot rename over a file that still has an
+        # open handle, so every write died with `PermissionError [WinError 5]`.
+        self._lock_path = self._path.with_suffix(".lock")
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold an exclusive advisory lock on the sidecar lock file.
+
+        Best-effort, like ``ConfigStore``: where ``fcntl`` is unavailable
+        (Windows) the lock degrades to a no-op and the atomic ``os.replace``
+        alone provides the consistency guarantee.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_fd = os.open(str(self._lock_path), os.O_RDONLY | os.O_CREAT, 0o600)
+        try:
+            _flock(lock_fd, fcntl.LOCK_EX if _HAVE_FCNTL else 0)
+            yield
+        finally:
+            if _HAVE_FCNTL:
+                _flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+    def _write_atomically(self, data: dict[str, Any]) -> None:
+        """Serialise ``data`` to a 0600 temp file and rename it into place."""
+        tmp_path = self._path.with_suffix(".tmp")
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(str(tmp_path), str(self._path))
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
@@ -147,44 +179,23 @@ class JobIdempotencyStore:
             branch_id=branch_id,
             created_at=datetime.now(UTC).isoformat(),
         )
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_fd = os.open(str(self._path), os.O_RDONLY | os.O_CREAT, 0o600)
-        try:
-            _flock(lock_fd, fcntl.LOCK_EX if _HAVE_FCNTL else 0)
+        with self._locked():
             # Read-modify-write *inside* the lock so concurrent records (distinct
             # keys) don't clobber each other.
             data = self._read()
             data["version"] = _STORE_VERSION
             data.setdefault("entries", {})[key] = entry._to_dict()
-            tmp_path = self._path.with_suffix(".tmp")
-            fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2)
-            os.replace(str(tmp_path), str(self._path))
-        finally:
-            if _HAVE_FCNTL:
-                _flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+            self._write_atomically(data)
         return entry
 
     def forget(self, key: str) -> None:
         """Drop the entry for ``key`` (e.g. to force a fresh run next time)."""
         if not self._path.exists():
             return
-        lock_fd = os.open(str(self._path), os.O_RDONLY | os.O_CREAT, 0o600)
-        try:
-            _flock(lock_fd, fcntl.LOCK_EX if _HAVE_FCNTL else 0)
+        with self._locked():
             data = self._read()
             if data.get("entries", {}).pop(key, None) is not None:
-                tmp_path = self._path.with_suffix(".tmp")
-                fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, indent=2)
-                os.replace(str(tmp_path), str(self._path))
-        finally:
-            if _HAVE_FCNTL:
-                _flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+                self._write_atomically(data)
 
 
 def _job_is_failed(job: dict[str, Any]) -> bool:
