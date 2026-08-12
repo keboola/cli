@@ -24,7 +24,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.83.0": [
+    "0.82.1": [
         "Note (#390): there will be NO `kbagent agent migrate-mcp-tasks` command. Migrating "
         "a scheduled `--type mcp_tool` task to `--type cli_command` before v0.85.0 is a "
         "manual step -- or an AI-assisted one, which is the point: the parity map knows "
