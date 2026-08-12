@@ -371,6 +371,17 @@ class LineageGraph:
 # ---------------------------------------------------------------------------
 
 
+def _ambiguity_warning(identifier: str, candidates: list[str]) -> str:
+    """Build the warning shown when an identifier matches several projects."""
+    projects = [fqn.split(":", 1)[0] for fqn in candidates]
+    return (
+        f"'{identifier}' exists in {len(candidates)} projects "
+        f"({', '.join(projects)}); showing '{candidates[0]}' only. "
+        f"Query a specific one with '--upstream/--downstream "
+        f"<project>:{identifier}' or scope with --project."
+    )
+
+
 class DeepLineageService:
     """Business logic for column-level lineage from sync'd data on disk.
 
@@ -473,18 +484,7 @@ class DeepLineageService:
         depth: int = 10,
     ) -> dict[str, Any]:
         """Query upstream dependencies of a node."""
-        fqn = self._find_node(graph, identifier, project)
-        if not fqn:
-            return {
-                "error": f"Node not found: {identifier}",
-                "suggestions": self._suggest(graph, identifier),
-            }
-        return {
-            "node": fqn,
-            "direction": "upstream",
-            "node_info": self._node_info(graph, fqn),
-            "edges": graph.get_upstream(fqn, depth),
-        }
+        return self._query(graph, identifier, project, depth, direction="upstream")
 
     def query_downstream(
         self,
@@ -494,18 +494,48 @@ class DeepLineageService:
         depth: int = 10,
     ) -> dict[str, Any]:
         """Query downstream dependents of a node."""
-        fqn = self._find_node(graph, identifier, project)
-        if not fqn:
+        return self._query(graph, identifier, project, depth, direction="downstream")
+
+    def _query(
+        self,
+        graph: LineageGraph,
+        identifier: str,
+        project: str,
+        depth: int,
+        *,
+        direction: str,
+    ) -> dict[str, Any]:
+        """Resolve ``identifier`` and walk the graph in ``direction``.
+
+        When an unqualified identifier resolves to more than one project (the
+        same ``bucket_id.table_name`` exists in several project namespaces --
+        typically a shared/linked bucket), the first candidate is still used,
+        but the result carries ``ambiguous_matches`` and a human-readable
+        ``warnings`` entry so callers can surface the ambiguity instead of
+        presenting one project's answer as the whole picture.
+        """
+        candidates = self._find_node_candidates(graph, identifier, project)
+        if not candidates:
             return {
                 "error": f"Node not found: {identifier}",
                 "suggestions": self._suggest(graph, identifier),
             }
-        return {
+
+        fqn = candidates[0]
+        result: dict[str, Any] = {
             "node": fqn,
-            "direction": "downstream",
+            "direction": direction,
             "node_info": self._node_info(graph, fqn),
-            "edges": graph.get_downstream(fqn, depth),
+            "edges": (
+                graph.get_upstream(fqn, depth)
+                if direction == "upstream"
+                else graph.get_downstream(fqn, depth)
+            ),
         }
+        if len(candidates) > 1:
+            result["ambiguous_matches"] = candidates
+            result["warnings"] = [_ambiguity_warning(identifier, candidates)]
+        return result
 
     # --- Internal methods ---
 
@@ -1004,30 +1034,39 @@ class DeepLineageService:
         return graph
 
     def _find_node(self, graph: LineageGraph, identifier: str, project: str = "") -> str | None:
-        if ":" in identifier:
-            all_fqns = set(graph.tables) | set(graph.configurations)
-            for e in graph.edges:
-                all_fqns.add(e.source_fqn)
-                all_fqns.add(e.target_fqn)
-            return identifier if identifier in all_fqns else None
+        candidates = self._find_node_candidates(graph, identifier, project)
+        return candidates[0] if candidates else None
 
+    def _find_node_candidates(
+        self, graph: LineageGraph, identifier: str, project: str = ""
+    ) -> list[str]:
+        """Return every FQN ``identifier`` could refer to, best match first.
+
+        A fully-qualified ``project:bucket_id.table_name`` (or an identifier
+        combined with an explicit ``project``) is unambiguous by construction,
+        so at most one candidate comes back. A bare ``bucket_id.table_name``
+        can exist in several project namespaces at once -- a bucket shared
+        from one project and linked into another yields a node per project --
+        in which case every match is returned so the caller can report the
+        ambiguity rather than silently answering for one of them.
+        """
         all_fqns = set(graph.tables) | set(graph.configurations)
         for e in graph.edges:
             all_fqns.add(e.source_fqn)
             all_fqns.add(e.target_fqn)
 
+        if ":" in identifier:
+            return [identifier] if identifier in all_fqns else []
+
         if project:
             fqn = f"{project}:{identifier}"
-            return fqn if fqn in all_fqns else None
+            return [fqn] if fqn in all_fqns else []
 
-        matches = [f for f in all_fqns if f.endswith(f":{identifier}")]
-        if len(matches) == 1:
-            return matches[0]
+        matches = sorted(f for f in all_fqns if f.endswith(f":{identifier}"))
         if matches:
-            return sorted(matches)[0]
+            return matches
 
-        partial = [f for f in all_fqns if f.split(":")[-1].endswith(f".{identifier}")]
-        return sorted(partial)[0] if partial else None
+        return sorted(f for f in all_fqns if f.split(":")[-1].endswith(f".{identifier}"))
 
     # --- Mermaid / HTML rendering ---
 

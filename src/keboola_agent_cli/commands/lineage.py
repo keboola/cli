@@ -340,8 +340,13 @@ def lineage_show(
 
     display_opts = {"show_columns": columns, "filter_column": column}
 
-    if upstream:
-        query_result = service.query_upstream(graph, upstream, project or "", depth)
+    # Both directions render identically; only the service call and the label
+    # differ. Passing both --upstream and --downstream emits both, in order.
+    for direction, identifier in (("upstream", upstream), ("downstream", downstream)):
+        if not identifier:
+            continue
+        query = service.query_upstream if direction == "upstream" else service.query_downstream
+        query_result = query(graph, identifier, project or "", depth)
         if "error" in query_result:
             suggestions = query_result.get("suggestions", [])
             msg = query_result["error"]
@@ -350,36 +355,30 @@ def lineage_show(
             formatter.error(message=msg, error_code=ErrorCode.NODE_NOT_FOUND)
             raise typer.Exit(code=1)
 
-        if formatter.json_mode:
-            if column:
-                query_result = _filter_column_json(query_result, column)
-            formatter.output(query_result)
-        elif format in ("mermaid", "html", "er"):
-            _output_mermaid_or_html(formatter, service, graph, query_result, "upstream", format)
-        else:
-            _format_lineage_tree(formatter, graph, query_result, "upstream", **display_opts)
-
-    if downstream:
-        query_result = service.query_downstream(graph, downstream, project or "", depth)
-        if "error" in query_result:
-            suggestions = query_result.get("suggestions", [])
-            msg = query_result["error"]
-            if suggestions:
-                msg += "\nDid you mean: " + ", ".join(suggestions[:5])
-            formatter.error(message=msg, error_code=ErrorCode.NODE_NOT_FOUND)
-            raise typer.Exit(code=1)
+        _emit_query_warnings(formatter, query_result)
 
         if formatter.json_mode:
             if column:
                 query_result = _filter_column_json(query_result, column)
             formatter.output(query_result)
         elif format in ("mermaid", "html", "er"):
-            _output_mermaid_or_html(formatter, service, graph, query_result, "downstream", format)
+            _output_mermaid_or_html(formatter, service, graph, query_result, direction, format)
         else:
-            _format_lineage_tree(formatter, graph, query_result, "downstream", **display_opts)
+            _format_lineage_tree(formatter, graph, query_result, direction, **display_opts)
 
 
 # -- Output formatting helpers ----------------------------------------------
+
+
+def _emit_query_warnings(formatter, query_result: dict) -> None:
+    """Print non-fatal warnings carried by a lineage query result.
+
+    Currently only the ambiguous-identifier warning (the same table id exists
+    in several projects). ``formatter.warning`` is a no-op in JSON mode --
+    there the warnings ride along in the emitted payload instead.
+    """
+    for warning in query_result.get("warnings", []):
+        formatter.warning(warning)
 
 
 def _output_mermaid_or_html(
