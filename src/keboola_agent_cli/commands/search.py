@@ -58,7 +58,8 @@ def search_command(
         "--search-type",
         help=(
             "Search mode. ``textual`` (default) searches item names via the "
-            "Storage API. ``config-based`` scans full configuration JSON bodies."
+            "Storage API. ``config-based`` scans full configuration JSON bodies. "
+            "Both modes match case-insensitively."
         ),
     ),
     limit: int = typer.Option(
@@ -86,6 +87,8 @@ def search_command(
     In ``textual`` mode (default) the Storage API global-search endpoint is
     called, which matches item names efficiently. In ``config-based`` mode the
     full JSON body of every configuration is scanned for the query string.
+    Both modes match case-insensitively; use ``kbagent config search`` when a
+    case-sensitive body scan is what you want.
 
     Results from all queried projects are merged and printed together.
     One project failing does not stop others.

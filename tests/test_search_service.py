@@ -347,6 +347,71 @@ class TestSearchServiceConfigBased:
         # Uniform JSON shape: config-based results also carry matched_columns.
         assert result["results"][0]["matched_columns"] == []
 
+    def test_config_based_asks_config_service_for_case_insensitive_match(
+        self, tmp_path: Path
+    ) -> None:
+        """The delegation pins ignore_case=True (issue #569)."""
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        service = SearchService(config_store=store)
+
+        with patch("keboola_agent_cli.services.search_service.ConfigService") as MockConfigService:
+            mock_cs = MagicMock()
+            mock_cs.search_configs.return_value = {
+                "matches": [],
+                "errors": [],
+                "stats": {"projects_searched": 1, "configs_searched": 0, "matches_found": 0},
+            }
+            MockConfigService.return_value = mock_cs
+
+            service.search(query="DCFAmount", search_type="config-based")
+
+        assert mock_cs.search_configs.call_args.kwargs["ignore_case"] is True
+
+    def test_config_based_finds_differently_cased_table_reference(self, tmp_path: Path) -> None:
+        """Regression for #569 -- the real matcher, not a mocked ConfigService.
+
+        A DB-sourced table is referenced in ``storage.input.tables[].source``
+        in upper case while users search for the mixed-case row name. Both
+        spellings must return the same match.
+        """
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock_client = MagicMock()
+        mock_client.list_components_with_configs.return_value = [
+            {
+                "id": "keboola.snowflake-transformation",
+                "name": "Snowflake SQL",
+                "type": "transformation",
+                "configurations": [
+                    {
+                        "id": "900",
+                        "name": "Daily aggregation",
+                        "configuration": {
+                            "storage": {
+                                "input": {
+                                    "tables": [
+                                        {
+                                            "source": "in.c-finance.DCFAMOUNT",
+                                            "destination": "dcf.csv",
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "rows": [],
+                    }
+                ],
+            }
+        ]
+        service = SearchService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        for query in ("DCFAmount", "DCFAMOUNT", "dcfamount"):
+            result = service.search(query=query, search_type="config-based")
+            assert result["stats"]["results_found"] == 1, f"missed match for {query!r}"
+            assert result["results"][0]["id"] == "900"
+
     def test_config_based_empty_result(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
         service = SearchService(config_store=store)
