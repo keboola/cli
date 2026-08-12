@@ -9,21 +9,34 @@ than no recipe, and nothing was checking that the docs matched the CLI.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
+from typing import Any
 
-from typer.testing import CliRunner
+import typer.main
 
 from keboola_agent_cli.cli import app
 
 GOTCHAS = Path(__file__).parent.parent / "plugins/kbagent/skills/kbagent/references/gotchas.md"
-runner = CliRunner()
 
 
 def _options_of(*command: str) -> set[str]:
-    result = runner.invoke(app, [*command, "--help"])
-    assert result.exit_code == 0, result.output
-    return set(re.findall(r"--[a-z][a-z0-9-]*", result.output))
+    """Every option name a command declares, read from the command object.
+
+    Deliberately NOT scraped from ``--help``: rendered help is a presentation
+    concern -- Rich wraps and truncates it by terminal width and TTY detection,
+    so an option can be present in the interface and absent from the text. The
+    parameter list is the actual contract. An earlier version of this helper
+    scraped the help, passed locally, and failed on all three CI runners.
+    """
+    node: Any = typer.main.get_command(app)
+    for name in command:
+        # Duck-typed rather than isinstance(click.Group): Typer builds its own
+        # Command/Group subclasses, so a click.Group check is False at runtime.
+        subcommands = getattr(node, "commands", None)
+        assert isinstance(subcommands, dict), f"{name!r} is not under a command group"
+        assert name in subcommands, f"no such command: {' '.join(command)}"
+        node = subcommands[name]
+    return {opt for param in node.params for opt in param.opts if opt.startswith("--")}
 
 
 def test_agent_update_still_cannot_change_the_action() -> None:
