@@ -270,6 +270,33 @@ class TestLoginPassword:
         assert result.exit_code == 0, result.output
         assert svc.login_password.call_args.kwargs["password"] == "s3cr3t"
 
+    def test_password_and_password_stdin_together_is_config_error(self, tmp_path: Path) -> None:
+        """Round-2 review S003: --password-stdin previously silently
+        overrode --password/KBC_LOGIN_PASSWORD with no error, unlike this
+        codebase's established mutually-exclusive-input pattern
+        (_metadata_input.py's --text/--file/--stdin)."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "s3cr3t",
+                "--password-stdin",
+            ],
+            input_text="s3cr3t\n",
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+        svc.login_password.assert_not_called()
+
     def test_missing_password_is_config_error(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

@@ -7,6 +7,7 @@ Provides common patterns used by all CLI commands:
 - Branch resolution for --branch flag
 """
 
+import getpass
 import os
 import secrets
 import sys
@@ -70,6 +71,23 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
         err=True,
     )
     raise typer.Exit(code=2)
+
+
+def read_password_stdin() -> str:
+    """Read a password from stdin.
+
+    TTY -> getpass (hidden, line-based, Enter to confirm).
+    Pipe/redirected -> read to EOF, strip whitespace.
+    Using `sys.stdin.read()` unconditionally would hang interactively
+    until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
+
+    Shared by `auth login-password --password-stdin` and `dev-portal
+    identity add/edit --password-stdin` -- the same input contract, so one
+    helper rather than a private copy per command module.
+    """
+    if sys.stdin.isatty():
+        return getpass.getpass("Password: ").strip()
+    return sys.stdin.read().strip()
 
 
 def get_formatter(ctx: typer.Context) -> OutputFormatter:

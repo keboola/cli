@@ -13,32 +13,11 @@ runner = CliRunner()
 
 
 class TestReadPasswordStdin:
-    """--password-stdin must work in BOTH TTY mode (hidden getpass prompt,
-    Enter to confirm) AND pipe mode (read until EOF). The original version
-    called sys.stdin.read() unconditionally, which hung interactively until
-    the user sent Ctrl-D."""
-
-    def test_tty_uses_getpass(self, monkeypatch):
-        from keboola_agent_cli.commands.dev_portal import _read_password_stdin
-
-        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr("getpass.getpass", lambda prompt="": "pw-typed\n")
-        assert _read_password_stdin() == "pw-typed"
-
-    def test_pipe_reads_until_eof(self, monkeypatch):
-        import io
-        import sys as _sys
-
-        from keboola_agent_cli.commands.dev_portal import _read_password_stdin
-
-        fake_stdin = io.StringIO("pw-piped\n")
-        # Use monkeypatch.setattr (not direct attribute assignment) -- ty rejects
-        # `fake_stdin.isatty = lambda: False` because the slot expects `(self) -> bool`
-        # and the lambda's signature is `() -> Literal[False]`. monkeypatch handles
-        # the duck-typed override cleanly without a ty: ignore.
-        monkeypatch.setattr(fake_stdin, "isatty", lambda: False)
-        monkeypatch.setattr(_sys, "stdin", fake_stdin)
-        assert _read_password_stdin() == "pw-piped"
+    """`--password-stdin` end-to-end through the CLI layer. The TTY/pipe unit
+    behavior of the underlying helper is covered once, generically, in
+    tests/test_helpers.py::TestReadPasswordStdin (the helper moved to
+    commands/_helpers.py -- shared with `auth login-password`, PR #565
+    round 2 -- rather than staying a private per-command copy)."""
 
     def test_identity_add_password_stdin_end_to_end(self, tmp_config_dir):
         """End-to-end CliRunner test: --password-stdin in pipe mode (the

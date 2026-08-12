@@ -3,8 +3,34 @@
 import pytest
 import typer
 
-from keboola_agent_cli.commands._helpers import map_error_to_exit_code
+from keboola_agent_cli.commands._helpers import map_error_to_exit_code, read_password_stdin
 from keboola_agent_cli.errors import KeboolaApiError, map_error_code_to_type
+
+
+class TestReadPasswordStdin:
+    """`--password-stdin` must work in BOTH TTY mode (hidden getpass prompt,
+    Enter to confirm) AND pipe mode (read until EOF) -- the original version
+    called `sys.stdin.read()` unconditionally, which hung interactively
+    until the user sent Ctrl-D. Shared by `auth login-password` and
+    `dev-portal identity add`/`edit` (PR #565 round 2 dedup)."""
+
+    def test_tty_uses_getpass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "pw-typed\n")
+        assert read_password_stdin() == "pw-typed"
+
+    def test_pipe_reads_until_eof(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+        import sys as _sys
+
+        fake_stdin = io.StringIO("pw-piped\n")
+        # Use monkeypatch.setattr (not direct attribute assignment) -- ty rejects
+        # `fake_stdin.isatty = lambda: False` because the slot expects `(self) -> bool`
+        # and the lambda's signature is `() -> Literal[False]`. monkeypatch handles
+        # the duck-typed override cleanly without a ty: ignore.
+        monkeypatch.setattr(fake_stdin, "isatty", lambda: False)
+        monkeypatch.setattr(_sys, "stdin", fake_stdin)
+        assert read_password_stdin() == "pw-piped"
 
 
 class TestMapErrorToExitCode:

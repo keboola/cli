@@ -18,7 +18,6 @@ a dataclass with no token field, so `--json` output is safe by construction.
 
 from __future__ import annotations
 
-import getpass
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, NoReturn
@@ -49,6 +48,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_password_stdin,
 )
 
 auth_app = typer.Typer(
@@ -385,19 +385,6 @@ def _run_post_login_hook(
         )
 
 
-def _read_password_stdin() -> str:
-    """Read a password from stdin.
-
-    TTY -> getpass (hidden, line-based, Enter to confirm).
-    Pipe/redirected -> read to EOF, strip whitespace.
-    Using `sys.stdin.read()` unconditionally would hang interactively
-    until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
-    """
-    if sys.stdin.isatty():
-        return getpass.getpass("Password: ").strip()
-    return sys.stdin.read().strip()
-
-
 @auth_app.command("login-password")
 def auth_login_password(
     ctx: typer.Context,
@@ -462,8 +449,15 @@ def auth_login_password(
     """
     formatter = get_formatter(ctx)
     service: AuthService = get_service(ctx, "auth_service")
+    if password_stdin and password:
+        _handle_errors(
+            formatter,
+            ConfigError(
+                "--password (or KBC_LOGIN_PASSWORD) and --password-stdin are mutually exclusive."
+            ),
+        )
     if password_stdin:
-        password = _read_password_stdin()
+        password = read_password_stdin()
     if not password:
         _handle_errors(
             formatter, ConfigError("Pass --password, --password-stdin, or set KBC_LOGIN_PASSWORD.")
