@@ -36,8 +36,11 @@ CHANGELOG: dict[str, list[str]] = {
         "any generator we could ship. kbagent therefore finds the tasks and leaves the "
         "rewrite to you. The full four-step recipe is in the skill's `gotchas.md`; the short "
         "version is `kbagent --json doctor` for the task ids and their `native_command`, "
-        "`kbagent <cmd> --help` for the flag names, then `kbagent agent update --type "
-        "cli_command --argv ...` and one `kbagent agent run` before trusting the cron.",
+        "`kbagent <cmd> --help` for the flag names, then `kbagent agent create --type "
+        "cli_command --argv ...`, one `kbagent agent run` to verify, and `agent delete` on "
+        "the old task. Note `agent update` cannot change a task's action -- migration is "
+        "create-new + delete-old, so the task ID changes: if another task chains to it via "
+        "`--trigger-task-id`, repoint that first or the chain breaks silently.",
     ],
     "0.82.0": [
         "Fix: kbagent is licensed under **Apache 2.0**, and the packaging metadata now says "
