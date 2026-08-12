@@ -166,6 +166,9 @@ One-line triggers only. Full prose, exact error strings, issue numbers, and
 API quirks live in [`gotchas.md`](../skills/kbagent/references/gotchas.md) --
 read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 
+**Migrating an `mcp_tool` agent task**
+- No migration command exists; you do the argv mapping. Recipe in gotchas.md. (0.83.0+)
+
 **Upgrading kbagent itself**
 - `install_channel` in `kbagent --json version` => native binary; `kbagent
   update` REFUSES by design. Quote `upgrade_command` (choco/winget/brew/apt/dnf);

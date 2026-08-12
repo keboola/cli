@@ -193,14 +193,39 @@ Versioning convention:
   warns. Migrate to `--type cli_command` with the native command BEFORE
   v0.85.0. These tasks are persisted in `<config_dir>/agents.json`, so
   unlike an interactive `tool call` they get no warning at removal time: a
-  scheduled task simply starts failing on its next cron tick. Use the
-  `cli_equivalent` from `kbagent tool list` to rewrite each one.
+  scheduled task simply starts failing on its next cron tick.
+- **There is NO migration command, by decision.** The parity map knows which
+  native command replaces a tool, but not how to map arguments: `mcp_tool`
+  params are the MCP tool's own `input` dict (`componentId`) while the CLI
+  takes flags (`--component-id`), and for several tools the shape differs too.
+  Guessing the argv of a scheduled WRITE task that then runs unattended is the
+  worst place to be wrong, so kbagent detects these tasks and leaves the
+  rewrite to you -- or to an AI agent, which can read `--help` and the task's
+  own input and does not have to guess.
 - **Find the affected tasks (since v0.81.0)**: `kbagent doctor` has an
   `mcp_tool_tasks` check that warns with the task ids, the tool each one
   calls and its native replacement (`details.tasks[]` in `--json`, each with
   `native_command`). `kbagent agent list` marks those rows DEPRECATED and its
   `--json` adds an additive per-task `deprecation` key -- present ONLY on
   affected tasks, so every other consumer sees a byte-identical payload.
+- **Recipe for migrating one task** (this is the whole procedure):
+  1. `kbagent --json doctor` -> `checks[].details.tasks[]` for the affected
+     task ids and the `native_command` each one maps to.
+  2. Read that task's `action.params.input` from `<config_dir>/agents.json`
+     (or `kbagent --json agent show <id>`) -- those are the values to carry over.
+  3. `kbagent <native_command> --help` -> map each input key to its flag. This
+     is the step no tooling does for you; the naming differs per tool.
+  4. `kbagent agent create --name ... --cron ... --type cli_command --argv ...`
+     with the result, verify it once with `kbagent agent run <new-id>`, then
+     `kbagent agent delete <old-id>`.
+- **`agent update` CANNOT change a task's action** -- it patches name, cron,
+  enabled/manual and the trigger only, so `--type` / `--argv` are not options
+  there and exit 2. Migration therefore means create-new + delete-old, which
+  has one trap: **the task id changes**. `Trigger.task_id` chains tasks by id,
+  so if any OTHER task has `--trigger-task-id <old-id>`, repoint it with
+  `kbagent agent update <that-task> --trigger-task-id <new-id>` BEFORE deleting
+  the old one, or the chain breaks silently. Check with
+  `kbagent --json agent list` and grep the `trigger` blocks for the old id.
 
 ## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
 
