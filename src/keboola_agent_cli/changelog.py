@@ -24,6 +24,21 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.83.0": [
+        "Note (#390): there will be NO `kbagent agent migrate-mcp-tasks` command. Migrating "
+        "a scheduled `--type mcp_tool` task to `--type cli_command` before v0.85.0 is a "
+        "manual step -- or an AI-assisted one, which is the point: the parity map knows "
+        "which native command replaces each tool, but not how to map arguments (`mcp_tool` "
+        "params are the MCP tool's own `input` dict, e.g. `componentId`, while the CLI takes "
+        "`--component-id`, and for several tools the shape differs too). Guessing the argv "
+        "of a scheduled WRITE task that then runs unattended is the worst place to be wrong, "
+        "and an agent reading `--help` alongside the task's own input does it better than "
+        "any generator we could ship. kbagent therefore finds the tasks and leaves the "
+        "rewrite to you. The full four-step recipe is in the skill's `gotchas.md`; the short "
+        "version is `kbagent --json doctor` for the task ids and their `native_command`, "
+        "`kbagent <cmd> --help` for the flag names, then `kbagent agent update --type "
+        "cli_command --argv ...` and one `kbagent agent run` before trusting the cron.",
+    ],
     "0.82.0": [
         "Fix: kbagent is licensed under **Apache 2.0**, and the packaging metadata now says "
         "so. #544 added an Apache 2.0 `LICENSE` file, but `pyproject.toml`, the deb/rpm "
