@@ -97,10 +97,14 @@ Use `kbagent <command> --help` for full flag details and examples.
     A 404 from any auth endpoint means browser login is not enabled on that
     stack yet (per-stack feature flag); use a static token instead.
 
-  kbagent auth login-password --email EMAIL --password PASSWORD [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
+  kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdin) [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
     Sign in via a password grant -- no browser, safe to run unattended from
-    a CI secret-backed workflow. --email/--password/--totp-secret also read
-    from KBC_LOGIN_EMAIL/KBC_LOGIN_PASSWORD/KBC_LOGIN_TOTP_SECRET env vars
+    a CI secret-backed workflow. Prefer --password-stdin (or
+    KBC_LOGIN_PASSWORD) over --password: a value on the command line lands
+    in shell history and process listings. --password and --password-stdin
+    are mutually exclusive (ConfigError if both are given). --email/
+    --password/--totp-secret also read from
+    KBC_LOGIN_EMAIL/KBC_LOGIN_PASSWORD/KBC_LOGIN_TOTP_SECRET env vars
     (same convention as KBC_TOKEN), so a workflow sets them once in a
     step's env: block instead of passing flags. --totp-secret is the
     account's base32 TOTP SEED (from its authenticator enrollment), NOT a

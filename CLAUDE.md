@@ -290,13 +290,16 @@ plugins/kbagent/
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
-kbagent auth login-password --email EMAIL --password PASSWORD [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
+kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdin) [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
 kbagent auth status [--stack URL|alias]
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
 kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
 # auth login-password (0.81.0+): the deliberate unattended exception to auth login's "needs a human at
 #   a browser" rule -- email + password (+ TOTP if the account has MFA) grant, no browser, safe to run
-#   from a CI secret-backed workflow step. --email/--password/--totp-secret also read from
+#   from a CI secret-backed workflow step. Prefer --password-stdin (or KBC_LOGIN_PASSWORD) over
+#   --password -- a value on the command line lands in shell history and process listings;
+#   --password/--password-stdin are mutually exclusive (ConfigError if both given).
+#   --email/--password/--totp-secret also read from
 #   KBC_LOGIN_EMAIL/KBC_LOGIN_PASSWORD/KBC_LOGIN_TOTP_SECRET env vars (mirroring KBC_TOKEN's convention),
 #   so a workflow can set them once in a step's env: block. --totp-secret is the base32 TOTP SEED (not
 #   a 6-digit code) -- kbagent computes the current code itself (auth/totp.py, stdlib-only RFC 6238),
