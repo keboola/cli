@@ -27,6 +27,7 @@ gen_pull = _mod.gen_pull
 gen_push = _mod.gen_push
 gen_validate = _mod.gen_validate
 _validate_pipelines = _mod._validate_pipelines
+_validate_workflow_options = _mod._validate_workflow_options
 
 
 def _parse_yaml(generated: str) -> dict:
@@ -117,6 +118,55 @@ class TestValidatePipelines:
 
     def test_accepts_distinct_safe_pipelines(self) -> None:
         _validate_pipelines([_pipeline("SALESFORCE", "salesforce"), _pipeline("GA4", "ga4")])
+
+
+class TestValidateWorkflowOptions:
+    """--schedule / --main-branch are spliced unquoted into the generated YAML."""
+
+    def test_accepts_defaults(self) -> None:
+        _validate_workflow_options(None, "main")
+
+    def test_accepts_realistic_values(self) -> None:
+        _validate_workflow_options("0 6 * * 1", "release/2026-08")
+
+    def test_rejects_quote_in_schedule(self) -> None:
+        with pytest.raises(ValueError, match="5-field cron"):
+            _validate_workflow_options("0 6 * * 1' # ", "main")
+
+    def test_rejects_newline_in_schedule(self) -> None:
+        with pytest.raises(ValueError, match="5-field cron"):
+            _validate_workflow_options("0 6 * *\n1", "main")
+
+    def test_rejects_wrong_field_count_in_schedule(self) -> None:
+        with pytest.raises(ValueError, match="5-field cron"):
+            _validate_workflow_options("0 6 * *", "main")
+
+    def test_rejects_bracket_in_main_branch(self) -> None:
+        with pytest.raises(ValueError, match="unsafe --main-branch"):
+            _validate_workflow_options(None, "main]\n  foo: bar")
+
+    def test_rejects_path_traversal_in_main_branch(self) -> None:
+        with pytest.raises(ValueError, match="unsafe --main-branch"):
+            _validate_workflow_options(None, "../main")
+
+    def test_unsafe_schedule_exits_2_not_traceback(self, tmp_path, capsys) -> None:
+        code = _mod.main(
+            [
+                str(tmp_path),
+                "--name",
+                "SALESFORCE",
+                "--directory",
+                "salesforce",
+                "--source-stack-url",
+                "connection.keboola.com",
+                "--dest-stack-url",
+                "connection.keboola.com",
+                "--schedule",
+                "not a cron",
+            ]
+        )
+        assert code == 2
+        assert "5-field cron" in capsys.readouterr().err
 
 
 class TestConfigParsing:

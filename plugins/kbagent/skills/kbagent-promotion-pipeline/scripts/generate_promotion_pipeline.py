@@ -85,6 +85,10 @@ class Pipeline:
 _SAFE_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 _SAFE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+/?$")
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
+_SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+# Exactly five space-separated cron fields, each restricted to the POSIX
+# charset -- also rejects newlines, which `str.split()` alone would swallow.
+_SAFE_CRON_RE = re.compile(r"^[0-9*/,-]+(?:[ ]+[0-9*/,-]+){4}$")
 
 
 def _validate_pipelines(pipelines: list[Pipeline]) -> None:
@@ -124,6 +128,24 @@ def _validate_pipelines(pipelines: list[Pipeline]) -> None:
                 f"secret-name label {p.label!r} -- rename one"
             )
         labels_seen[p.label] = p.name
+
+
+def _validate_workflow_options(schedule: str | None, main_branch: str) -> None:
+    """Reject ``--schedule`` / ``--main-branch`` values that would corrupt the YAML.
+
+    Same threat model as :func:`_validate_pipelines`, one layer up: both are
+    admin-authored CLI flags, and both are spliced **unquoted** into the
+    generated workflows -- ``- cron: '{schedule}'`` in the pull workflow,
+    ``base: {main_branch}`` in its PR step, and ``branches: [{main_branch}]``
+    in the push trigger. A stray quote, colon, bracket or newline silently
+    produces a workflow file GitHub cannot parse, so fail fast here instead.
+    """
+    if ".." in main_branch or not _SAFE_BRANCH_RE.match(main_branch):
+        raise ValueError(f"unsafe --main-branch {main_branch!r}")
+    if schedule is not None and not _SAFE_CRON_RE.match(schedule):
+        raise ValueError(
+            f"--schedule {schedule!r} is not a 5-field cron expression, e.g. '0 6 * * 1'"
+        )
 
 
 def _pipeline_from_dict(p: dict) -> Pipeline:
@@ -474,6 +496,12 @@ def run(args: argparse.Namespace) -> int:
     repo = Path(args.repo_dir).resolve()
     if not repo.is_dir():
         print(f"error: {repo} is not a directory", file=sys.stderr)
+        return 2
+
+    try:
+        _validate_workflow_options(args.schedule, args.main_branch)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
     pipelines = _load_pipelines(args)
