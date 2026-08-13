@@ -371,14 +371,44 @@ class LineageGraph:
 # ---------------------------------------------------------------------------
 
 
+# Keep a warning readable when a bare table name matches across many buckets.
+_MAX_LISTED_CANDIDATES = 5
+
+
+def _format_candidates(items: list[str]) -> str:
+    """Join ids for display, trimming a long tail rather than printing all of it."""
+    head = items[:_MAX_LISTED_CANDIDATES]
+    tail = f", +{len(items) - len(head)} more" if len(items) > len(head) else ""
+    return ", ".join(head) + tail
+
+
 def _ambiguity_warning(identifier: str, candidates: list[str]) -> str:
-    """Build the warning shown when an identifier matches several projects."""
-    projects = [fqn.split(":", 1)[0] for fqn in candidates]
+    """Build the warning shown when an identifier matches more than one node.
+
+    Two different shapes reach this. The one #568 reports is the same
+    ``bucket_id.table_name`` living in several project namespaces (a bucket
+    shared from one project and linked into another) -- there every candidate
+    differs only by project, and ``<project>:<identifier>`` is a retry that
+    resolves. The other comes from the name-only fallback in
+    ``_find_node_candidates``, which matches a bare table name across buckets:
+    those candidates can share a single project, so counting them as projects
+    would tell the user a table "exists in 2 projects (alpha, alpha)", and
+    ``<project>:<identifier>`` would not resolve because the real node ids
+    carry a bucket. That case gets the full ids instead.
+    """
+    shown = candidates[0]
+    if all(fqn.partition(":")[2] == identifier for fqn in candidates):
+        projects = sorted({fqn.partition(":")[0] for fqn in candidates})
+        return (
+            f"'{identifier}' exists in {len(projects)} projects "
+            f"({_format_candidates(projects)}); showing '{shown}' only. "
+            f"Query a specific one with '--upstream/--downstream "
+            f"<project>:{identifier}' or scope with --project."
+        )
     return (
-        f"'{identifier}' exists in {len(candidates)} projects "
-        f"({', '.join(projects)}); showing '{candidates[0]}' only. "
-        f"Query a specific one with '--upstream/--downstream "
-        f"<project>:{identifier}' or scope with --project."
+        f"'{identifier}' matches {len(candidates)} nodes "
+        f"({_format_candidates(candidates)}); showing '{shown}' only. "
+        f"Query a specific one by its full id, e.g. '--upstream/--downstream {shown}'."
     )
 
 

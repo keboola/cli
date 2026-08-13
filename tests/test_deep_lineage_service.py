@@ -637,6 +637,52 @@ class TestAmbiguousNodeResolution:
         assert "ambiguous_matches" not in result
         assert "warnings" not in result
 
+    def _one_project_two_buckets(self) -> LineageGraph:
+        """A bare table name that the name-only fallback matches twice in ONE project."""
+        graph = LineageGraph()
+        for bucket in ("in.c-a", "in.c-b"):
+            graph.add_edge(
+                Edge(
+                    source_fqn=f"alpha:{bucket}.orders",
+                    target_fqn=f"alpha:config/{bucket}",
+                    source_type="table",
+                    target_type="config",
+                    edge_type="reads",
+                    detection="input_mapping",
+                )
+            )
+        return graph
+
+    def test_name_only_match_does_not_claim_several_projects(self, tmp_path: Path) -> None:
+        """Candidates sharing one project must not be counted as that many projects."""
+        service = self._service(tmp_path)
+
+        result = service.query_downstream(self._one_project_two_buckets(), "orders")
+
+        assert result["ambiguous_matches"] == ["alpha:in.c-a.orders", "alpha:in.c-b.orders"]
+        warning = result["warnings"][0]
+        assert "2 projects" not in warning
+        assert "alpha, alpha" not in warning
+        assert "2 nodes" in warning
+
+    def test_name_only_match_suggests_a_retry_that_resolves(self, tmp_path: Path) -> None:
+        """The remedy the warning offers must name a node that actually exists.
+
+        ``<project>:orders`` does not -- the real ids carry a bucket -- so the
+        warning has to point at the full candidate ids instead.
+        """
+        service = self._service(tmp_path)
+        graph = self._one_project_two_buckets()
+
+        warning = service.query_downstream(graph, "orders")["warnings"][0]
+
+        assert "<project>:orders" not in warning
+        suggested = "alpha:in.c-a.orders"
+        assert suggested in warning
+        retry = service.query_downstream(graph, suggested)
+        assert "error" not in retry
+        assert retry["node"] == suggested
+
     def test_unknown_identifier_still_errors(self, tmp_path: Path) -> None:
         service = self._service(tmp_path)
         result = service.query_downstream(_shared_table_graph(), "in.c-nope.missing")

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 import typer
 
 from ..errors import ErrorCode
+from ..output import OutputFormatter
 from ..services.deep_lineage_service import DeepLineageService, LineageGraph
 from ._helpers import (
     check_cli_permission,
@@ -370,7 +371,7 @@ def lineage_show(
 # -- Output formatting helpers ----------------------------------------------
 
 
-def _emit_query_warnings(formatter, query_result: dict) -> None:
+def _emit_query_warnings(formatter: OutputFormatter, query_result: dict) -> None:
     """Print non-fatal warnings carried by a lineage query result.
 
     Currently only the ambiguous-identifier warning (the same table id exists
