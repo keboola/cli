@@ -2,8 +2,10 @@
 
 Each pipeline needs **two** Storage API token secrets -- one for the source
 project, one for the destination project -- plus one repo-wide PAT for
-opening promotion PRs, plus one `prod` GitHub Environment per pipeline used
-for push approval gating (each pipeline gets its own approval; see below).
+opening promotion PRs, plus a single repo-wide `prod` GitHub Environment
+shared by every pipeline, used for push approval gating (the environment is
+shared, but each pipeline's push job still gets its own separate approval
+prompt -- see below).
 
 ## Per pipeline
 
