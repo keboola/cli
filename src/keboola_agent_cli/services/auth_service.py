@@ -21,7 +21,7 @@ from typing import Any
 from ..auth.auth_client import AuthClient
 from ..auth.device import run_device_flow
 from ..auth.environment import BrowserEnvironment, detect_browser_environment, open_browser
-from ..auth.models import CliTokenResponse, DeviceAuthorization, StackSession
+from ..auth.models import CliTokenResponse, DeviceAuthorization, MfaChallengeResult, StackSession
 from ..auth.pkce import (
     PkceAuthorizationError,
     PkceCallbackServer,
@@ -32,6 +32,7 @@ from ..auth.pkce import (
 from ..auth.sentinel import is_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
+from ..auth.totp import compute_totp_code
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
@@ -270,91 +271,177 @@ class AuthService:
                     "Login flow completed without producing a token pair.",
                     error_code=ErrorCode.API_ERROR,
                 )
-            now = datetime.now(UTC)
-            previous = self._state_store.get_session(stack_url)
-            new_session = StackSession(
-                stack_url=stack_url,
-                session_id=tokens.session_id,
-                user_email=tokens.user.email if tokens.user else "",
-                user_name=tokens.user.name if tokens.user else "",
-                access_token=tokens.access_token,
-                refresh_token=tokens.refresh_token,
-                access_expires_at=now + timedelta(seconds=tokens.expires_in),
-                # Read through the shared model helper, not hardcoded None: no
-                # backend sends a refresh expiry today, but if one starts,
-                # honouring it here (rather than only on the first refresh)
-                # keeps login and rotation consistent. See
-                # `CliTokenResponse.refresh_expiry` for why nothing is guessed
-                # when the field is absent.
-                refresh_expires_at=tokens.refresh_expiry(now=now),
-                created_at=now,
-                # An orphan is a session this CLI failed to revoke server-side,
-                # and the only record that it exists. `put_session` replaces the
-                # whole per-stack row, so a login that did not carry the list
-                # forward would drop every orphan older than the session it is
-                # replacing -- leaving a live session no `auth logout` can ever
-                # reach, while telling the user logout would retry it.
-                orphaned_session_ids=list(previous.orphaned_session_ids) if previous else [],
-            )
-
-            # Durable first, always -- never delete the old credentials before
-            # the new ones are safely on disk (review B-1).
-            self._state_store.put_session(new_session)
-
-            replaced_session_id = ""
-            orphaned_session_id = ""
-            if previous is not None and previous.session_id != new_session.session_id:
-                replaced_session_id = previous.session_id
-                revoke_result = client.revoke(
-                    previous.refresh_token, token_type_hint="refreshToken"
-                )
-                if not revoke_result.confirmed:
-                    orphaned_session_id = previous.session_id
-                    self._state_store.record_orphan(stack_url, previous.session_id)
-                    warnings.append(
-                        f"Could not confirm revocation of the previous session "
-                        f"({previous.session_id}); it may still be active on the "
-                        "server. `kbagent auth logout` will retry it."
-                    )
-
-            introspection = client.introspect(new_session.access_token)
-            accessible_projects = [
-                {"id": project.id, "name": project.name, "role": project.role}
-                for project in introspection.projects
-            ]
-
-            registered_projects: list[RegisteredProject] = []
-            if register_projects:
-                # Build candidates from the introspection this call already
-                # holds -- introspecting a second time (e.g. via
-                # `register_projects`) would be a redundant network round
-                # trip against a session that was only just minted.
-                candidates = self.candidates_from_projects(stack_url, accessible_projects)
-                selections = [ProjectSelection(project_id=c.project_id) for c in candidates]
-                registered_projects = apply_selections(
-                    self._config_store,
-                    stack_url,
-                    {c.project_id: c for c in candidates},
-                    selections,
-                    warnings,
-                )
-
-            return LoginResult(
-                status="ok",
+            return self._finalize_login(
+                client,
+                stack_url,
+                tokens,
                 method=method,
-                stack_url=stack_url,
-                session_id=new_session.session_id,
-                user_email=new_session.user_email,
-                user_name=new_session.user_name,
-                access_expires_at=_iso(new_session.access_expires_at),
-                refresh_expires_at=_iso(new_session.refresh_expires_at),
                 fallback_reason=fallback_reason,
-                replaced_session_id=replaced_session_id,
-                orphaned_session_id=orphaned_session_id,
-                accessible_projects=accessible_projects,
-                registered_projects=registered_projects,
+                register_projects=register_projects,
                 warnings=warnings,
             )
+
+    def login_password(
+        self,
+        *,
+        stack: str | None = None,
+        email: str,
+        password: str,
+        totp_secret: str | None = None,
+        register_projects: bool = False,
+    ) -> LoginResult:
+        """Password-grant login -- the unattended, CI-safe alternative to `login()`.
+
+        Never opens a browser and completes entirely over HTTP, so it is
+        safe to run from a secret-backed CI workflow (unlike `login()`,
+        which requires a human at a browser or device). `totp_secret` (the
+        account's base32 TOTP seed) resolves an MFA challenge for an account
+        with TOTP-based MFA configured; WebAuthn-only accounts cannot use
+        this method -- that ceremony needs a browser, which is exactly what
+        this path exists to avoid.
+
+        The code is computed here, immediately before the MFA request, not
+        by the caller before `login_password` was even invoked: the login
+        round trip through `_do_request`'s retry loop can itself take up to
+        ~90s (3 attempts, 30s read timeout, backoff), and a code computed
+        before it can drift out of the server's TOTP tolerance window by the
+        time it would be submitted. See PR #565 review (C3).
+
+        The rest of the algorithm (session persistence, best-effort revoke
+        of the session it replaces, introspection, optional project
+        registration) is identical to `login()` -- see `_finalize_login`.
+        """
+        stack_url = self._resolve_stack_url(stack)
+        warnings: list[str] = []
+        with self._auth_client_factory(stack_url) as client:
+            result = client.login_password(email, password)
+            if isinstance(result, MfaChallengeResult):
+                if result.mfa_type != "totp":
+                    raise KeboolaApiError(
+                        f"This account requires MFA type {result.mfa_type!r}, which "
+                        "password-grant login cannot resolve without a browser -- use "
+                        "`kbagent auth login` instead.",
+                        error_code=ErrorCode.AUTH_MFA_INVALID,
+                        retryable=False,
+                    )
+                if not totp_secret:
+                    raise ConfigError(
+                        "This account requires a TOTP code to sign in -- pass "
+                        "--totp-secret (kbagent computes the code from it)."
+                    )
+                try:
+                    totp_code = compute_totp_code(totp_secret)
+                except ValueError as exc:
+                    raise ConfigError(f"--totp-secret: {exc}") from exc
+                tokens = client.verify_mfa_totp(result.mfa_token, totp_code)
+            else:
+                tokens = result
+            return self._finalize_login(
+                client,
+                stack_url,
+                tokens,
+                method="password",
+                fallback_reason="",
+                register_projects=register_projects,
+                warnings=warnings,
+            )
+
+    def _finalize_login(
+        self,
+        client: AuthClient,
+        stack_url: str,
+        tokens: CliTokenResponse,
+        *,
+        method: str,
+        fallback_reason: str,
+        register_projects: bool,
+        warnings: list[str],
+    ) -> LoginResult:
+        """Shared tail of every login method: persist, best-effort revoke the
+        session this replaces, introspect, optionally register projects."""
+        now = datetime.now(UTC)
+        previous = self._state_store.get_session(stack_url)
+        new_session = StackSession(
+            stack_url=stack_url,
+            session_id=tokens.session_id,
+            user_email=tokens.user.email if tokens.user else "",
+            user_name=tokens.user.name if tokens.user else "",
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
+            access_expires_at=now + timedelta(seconds=tokens.expires_in),
+            # Read through the shared model helper, not hardcoded None: no
+            # backend sends a refresh expiry today, but if one starts,
+            # honouring it here (rather than only on the first refresh)
+            # keeps login and rotation consistent. See
+            # `CliTokenResponse.refresh_expiry` for why nothing is guessed
+            # when the field is absent.
+            refresh_expires_at=tokens.refresh_expiry(now=now),
+            created_at=now,
+            # An orphan is a session this CLI failed to revoke server-side,
+            # and the only record that it exists. `put_session` replaces the
+            # whole per-stack row, so a login that did not carry the list
+            # forward would drop every orphan older than the session it is
+            # replacing -- leaving a live session no `auth logout` can ever
+            # reach, while telling the user logout would retry it.
+            orphaned_session_ids=list(previous.orphaned_session_ids) if previous else [],
+        )
+
+        # Durable first, always -- never delete the old credentials before
+        # the new ones are safely on disk (review B-1).
+        self._state_store.put_session(new_session)
+
+        replaced_session_id = ""
+        orphaned_session_id = ""
+        if previous is not None and previous.session_id != new_session.session_id:
+            replaced_session_id = previous.session_id
+            revoke_result = client.revoke(previous.refresh_token, token_type_hint="refreshToken")
+            if not revoke_result.confirmed:
+                orphaned_session_id = previous.session_id
+                self._state_store.record_orphan(stack_url, previous.session_id)
+                warnings.append(
+                    f"Could not confirm revocation of the previous session "
+                    f"({previous.session_id}); it may still be active on the "
+                    "server. `kbagent auth logout` will retry it."
+                )
+
+        introspection = client.introspect(new_session.access_token)
+        accessible_projects = [
+            {"id": project.id, "name": project.name, "role": project.role}
+            for project in introspection.projects
+        ]
+
+        registered_projects: list[RegisteredProject] = []
+        if register_projects:
+            # Build candidates from the introspection this call already
+            # holds -- introspecting a second time (e.g. via
+            # `register_projects`) would be a redundant network round
+            # trip against a session that was only just minted.
+            candidates = self.candidates_from_projects(stack_url, accessible_projects)
+            selections = [ProjectSelection(project_id=c.project_id) for c in candidates]
+            registered_projects = apply_selections(
+                self._config_store,
+                stack_url,
+                {c.project_id: c for c in candidates},
+                selections,
+                warnings,
+            )
+
+        return LoginResult(
+            status="ok",
+            method=method,
+            stack_url=stack_url,
+            session_id=new_session.session_id,
+            user_email=new_session.user_email,
+            user_name=new_session.user_name,
+            access_expires_at=_iso(new_session.access_expires_at),
+            refresh_expires_at=_iso(new_session.refresh_expires_at),
+            fallback_reason=fallback_reason,
+            replaced_session_id=replaced_session_id,
+            orphaned_session_id=orphaned_session_id,
+            accessible_projects=accessible_projects,
+            registered_projects=registered_projects,
+            warnings=warnings,
+        )
 
     def _wrap_device_prompt(
         self,

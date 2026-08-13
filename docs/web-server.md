@@ -299,6 +299,20 @@ a session-backed project from the web UI at all:
 For a project you would rather not expose this way, register it with a static
 Storage token (`kbagent project add --token`) — that path has neither property.
 
+### The `auth` command group has no REST router — including `login-password`
+
+`kbagent auth login` / `login-password` / `status` / `logout` /
+`register-projects` have no `server/routers/auth.py` counterpart; this is a
+whole-group skip (CONTRIBUTING.md's 1:1 CLI/REST convention), not a per-command
+gap. It is a deliberate omission for `login-password` specifically: exposing a
+password grant over `serve` would let whoever holds `KBAGENT_SERVE_TOKEN`
+submit arbitrary account credentials through this process, which is a strictly
+worse blast radius than the existing "serve token borrows a session identity"
+tradeoff above — that one requires a session to already exist; this one would
+let a caller mint one. Sign in via the CLI directly (`kbagent auth
+login-password`, or `auth login` for a human), then register the resulting
+session's projects for `serve` to use.
+
 ### Manage tokens are per-request
 
 Operations that need a Keboola Manage API token (`org setup`,

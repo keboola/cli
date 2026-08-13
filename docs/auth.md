@@ -7,15 +7,21 @@ token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 
 > **Read this first: `auth login` needs a human at a browser.**
 >
-> There is **no headless or unattended path**. `auth login` opens a browser
-> window, or prints a code you type into a page on another device. An AI agent
-> must never run it on its own initiative — if asked to "set up kbagent auth",
-> hand the command back to the person and wait for them to finish.
+> There is **no headless or unattended path for `auth login`**. It opens a
+> browser window, or prints a code you type into a page on another device. An
+> AI agent must never run it on its own initiative — if asked to "set up
+> kbagent auth", hand the command back to the person and wait for them to
+> finish.
 >
-> For CI, containers, cron, or any other unattended context, use a **static
-> Storage token**: `kbagent project add --token ...`, or the token-only
-> `KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` + `KBC_STORAGE_API_URL` path.
-> Neither is affected by anything on this page.
+> For CI, containers, cron, or any other unattended context, you have two
+> options: a **static Storage token** (`kbagent project add --token ...`, or
+> the token-only `KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` +
+> `KBC_STORAGE_API_URL` path -- unaffected by anything on this page), or
+> **`kbagent auth login-password`** (since v0.81.0) if you specifically need a
+> full USER-scoped session rather than a single project's token -- see
+> [section 2b](#2b-auth-login-password-the-unattended-exception) below. It is
+> the one deliberate exception to "no unattended path": it needs an account's
+> password (and TOTP seed, if MFA is on) as CI secrets, not a browser.
 
 ## TL;DR
 
@@ -106,6 +112,74 @@ kbagent auth login [--stack URL|ALIAS] [--device-code] [--register-projects]
 - Right after a successful login, kbagent offers the project picker described
   below (TTY, non-`--json`), or prints a one-line hint pointing at
   `auth register-projects`.
+
+### 2b. `auth login-password` -- the unattended exception
+
+```bash
+kbagent auth login-password --email EMAIL --password PASSWORD [--totp-secret SECRET] \
+  [--stack URL|alias] [--register-projects]
+```
+
+The one command in this whole page that IS safe for a CI job or an agent to
+run non-interactively -- because it needs credentials handed to it, not a
+browser. A password grant, straight to the auth service, no loopback
+listener, no user interaction of any kind.
+
+- **`--email` / `--password` / `--totp-secret`** also read from
+  `KBC_LOGIN_EMAIL` / `KBC_LOGIN_PASSWORD` / `KBC_LOGIN_TOTP_SECRET` env vars
+  (the exact convention `KBC_TOKEN` already uses), so a workflow sets them
+  once in a step's `env:` block instead of passing flags:
+  ```yaml
+  - name: Sign in
+    env:
+      KBC_LOGIN_EMAIL: ${{ secrets.KBC_LOGIN_EMAIL }}
+      KBC_LOGIN_PASSWORD: ${{ secrets.KBC_LOGIN_PASSWORD }}
+      KBC_LOGIN_TOTP_SECRET: ${{ secrets.KBC_LOGIN_TOTP_SECRET }}
+    run: kbagent auth login-password --register-projects
+  ```
+- **`--totp-secret` is the account's base32 TOTP *seed*** -- the same string
+  an authenticator app scans from the enrollment QR code, not a live 6-digit
+  code. kbagent computes the current code itself (`auth/totp.py`, plain
+  stdlib RFC 6238 -- no dependency added) at the moment it calls the login
+  endpoint. Nobody types a live code; the seed is the only secret involved.
+- **Only TOTP-based MFA can be resolved this way.** If the account's MFA
+  factor is WebAuthn/passkey instead, there is no shared secret to compute
+  a response from -- a WebAuthn ceremony is a live cryptographic exchange
+  that can only run in a real browser holding the actual passkey/security
+  key, a hard constraint of the protocol, not a missing feature here -- this
+  command fails fast with `AUTH_MFA_INVALID` naming `auth login` as the
+  fallback for that account.
+- The resulting session is stored in `auth.json` and, from here on, shares
+  the **same mechanics** as a browser-login session: same bearer dispatch,
+  same refresh rotation, same `--register-projects` contract, same
+  `project list` `Auth` column (`session`), same
+  [section 4](#4-what-works-on-a-session-project) restrictions. Its
+  **privilege** is not always the same -- see the next point.
+- **For an MFA-enabled account, this session carries a live 3-hour "sudo"
+  window that a browser-login session usually does not.** The password
+  flow completes MFA and creates the session in one server-side step
+  (`createSessionAfterMfa`), which stamps the sudo timestamp unconditionally;
+  PKCE/device instead inherit whatever sudo state the browser session
+  already had, which is typically stale or absent. Sudo gates exactly the
+  account-takeover-shaped operations on the Connection UI/API (PAT
+  create/revoke, TOTP delete, WebAuthn delete/register, recovery-code
+  regeneration, revoke-all-sessions) -- none of which kbagent itself calls,
+  but any script holding this session's tokens effectively can for the next
+  3 hours. Treat the CI secrets backing `login-password` accordingly.
+- **Two CI jobs must not share one MFA-enabled account within the same
+  30-second window.** The server accepts each TOTP code exactly once; a
+  second `login-password` call submitting a code for the same time slice
+  fails outright, and a 429/5xx retry never resubmits a stale code either
+  (see the code-level note in `auth/auth_client.py`). Give concurrent
+  matrix-build legs their own service account, or serialize the login step.
+- **Security posture matters here more than for a single project's token.**
+  A password (+ TOTP seed) is the account's full ambient identity, not a
+  scoped credential -- whoever holds these CI secrets can do anything that
+  account can do, everywhere it has access, not just one project's Storage
+  routes. Use a dedicated, least-privileged service account created
+  specifically for this pipeline; never a real person's own login. Revoking
+  access means changing that account's password (and re-enrolling MFA), not
+  a lightweight per-secret revoke.
 
 ### `auth register-projects`
 
@@ -331,6 +405,7 @@ message text. Full catalogue:
 | `AUTH_STATE_MISMATCH` | The PKCE callback's `state` did not match the one issued | Re-run `auth login`; if it repeats, something is intercepting the callback |
 | `SESSION_EXPIRED` | The refresh token expired or was revoked | `kbagent auth login` again — on the host, if this came from `serve` |
 | `SESSION_NOT_FOUND` | No session is stored for this stack | `kbagent auth login --stack <url-or-alias>` |
+| `AUTH_MFA_INVALID` | `auth login-password` hit an MFA factor it cannot resolve (e.g. WebAuthn-only) | Use `kbagent auth login` for that account instead |
 
 In a multi-project command, a per-project failure appears in the `errors` array
 of the result envelope with its own `error_code`, so one session project cannot

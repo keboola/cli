@@ -89,11 +89,15 @@ a clean slate per task.
 - User explicitly asks for a raw command (`just show me the curl
   equivalent`): subagent would refuse; politely decline and point the
   user at the `kbagent serve` REST API for programmatic integrations.
-- User asks to log in / set up auth (`kbagent auth login`): browser
-  login needs a human at a browser, so no agent -- main context or
-  subagent -- can complete it. Hand the exact command back to the user
-  and wait; for unattended contexts point them at a static Storage
-  token instead.
+- User asks to log in / set up auth via a browser (`kbagent auth
+  login`): browser login needs a human at a browser, so no agent --
+  main context or subagent -- can complete it. Hand the exact command
+  back to the user and wait. For an unattended context, the answer is
+  NOT automatically a static Storage token: if the user has account
+  credentials for this purpose, `kbagent auth login-password`
+  (0.81.0+) is the CI-safe, headless alternative and an agent MAY run
+  it directly; fall back to a static Storage token only when no such
+  credentials exist.
 
 ### When NOT to delegate (Path B, `kbagent-pr-reviewer`)
 

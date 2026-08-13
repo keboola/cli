@@ -214,6 +214,184 @@ class TestLogin:
         assert json.loads(result.output)["error"]["code"] == "AUTH_STATE_MISMATCH"
 
 
+class TestLoginPassword:
+    def test_success_forwards_totp_secret(self, tmp_path: Path) -> None:
+        """The CLI forwards the raw base32 seed as-is -- since C3/C4, the code
+        is computed inside `AuthService.login_password` itself, immediately
+        before the MFA request, not here (see PR #565 review)."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "s3cr3t",
+                "--totp-secret",
+                "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        kwargs = svc.login_password.call_args.kwargs
+        assert kwargs["email"] == "svc@example.com"
+        assert kwargs["password"] == "s3cr3t"
+        assert kwargs["totp_secret"] == "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+    def test_no_totp_secret_passes_none(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "login-password", "--email", "svc@example.com", "--password", "s3cr3t"],
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.login_password.call_args.kwargs["totp_secret"] is None
+
+    def test_password_stdin_reads_piped_password(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            ["auth", "login-password", "--email", "svc@example.com", "--password-stdin"],
+            input_text="s3cr3t\n",
+        )
+        assert result.exit_code == 0, result.output
+        assert svc.login_password.call_args.kwargs["password"] == "s3cr3t"
+
+    def test_password_and_password_stdin_together_is_config_error(self, tmp_path: Path) -> None:
+        """Round-2 review S003: --password-stdin previously silently
+        overrode --password/KBC_LOGIN_PASSWORD with no error, unlike this
+        codebase's established mutually-exclusive-input pattern
+        (_metadata_input.py's --text/--file/--stdin)."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "s3cr3t",
+                "--password-stdin",
+            ],
+            input_text="s3cr3t\n",
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+        svc.login_password.assert_not_called()
+
+    def test_missing_password_is_config_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "login-password", "--email", "svc@example.com"],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+        svc.login_password.assert_not_called()
+
+    def test_env_vars_populate_email_and_password(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        with (
+            patch("keboola_agent_cli.cli.AuthService", return_value=svc),
+            patch.dict(
+                "os.environ",
+                {"KBC_LOGIN_EMAIL": "svc@example.com", "KBC_LOGIN_PASSWORD": "s3cr3t"},
+            ),
+        ):
+            result = runner.invoke(app, ["--config-dir", str(config_dir), "auth", "login-password"])
+        assert result.exit_code == 0, result.output
+        kwargs = svc.login_password.call_args.kwargs
+        assert kwargs["email"] == "svc@example.com"
+        assert kwargs["password"] == "s3cr3t"
+
+    def test_mfa_invalid_error_surfaces(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.side_effect = KeboolaApiError(
+            "webauthn-only account", error_code=ErrorCode.AUTH_MFA_INVALID
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "auth", "login-password", "--email", "e", "--password", "p"],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "AUTH_MFA_INVALID"
+
+    def test_malformed_totp_secret_raises_config_error(self, tmp_path: Path) -> None:
+        """A bad --totp-secret is validated inside `AuthService.login_password`
+        (see `TestLoginPassword.test_malformed_totp_secret_raises_config_error_not_value_error`
+        in test_auth_service.py) -- here the CLI layer's job is only to map
+        the ConfigError the (mocked) service raises to exit code 5, same as
+        `test_missing_password_is_config_error` above."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.side_effect = ConfigError("--totp-secret: not valid base32")
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "e",
+                "--password",
+                "p",
+                "--totp-secret",
+                "not-valid-base32!!",
+            ],
+        )
+        assert result.exit_code != 0
+        assert json.loads(result.stdout)["error"]["code"] == "CONFIG_ERROR"
+
+    def test_password_never_appears_in_output(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login_password.return_value = _login_result(method="password")
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "auth",
+                "login-password",
+                "--email",
+                "svc@example.com",
+                "--password",
+                "SuperSecretPassword123",
+            ],
+        )
+        assert "SuperSecretPassword123" not in result.output
+
+
 class TestPostLoginHook:
     """The optional "register these projects now?" nudge after a plain login."""
 

@@ -1,21 +1,25 @@
-# Programmatic Auth (Browser Login) workflow
+# Programmatic Auth (Browser Login and Unattended Login) workflow
 
 > Audience: a human user of kbagent (or an agent relaying instructions to
 > one) who wants to authenticate via a browser instead of pasting a static
-> Storage API token. Goal: sign in once, understand what got stored where,
-> and know how to check on / tear down the session later.
-> Since v0.80.0. Full command reference: `commands-reference.md` >
-> "Programmatic Auth (Browser Login)". Gotchas: `gotchas.md` > "Programmatic
-> auth (browser login) is human-only; sentinel tokens; v1 scope".
+> Storage API token -- or, since v0.81.0, an agent running unattended with
+> real account credentials for CI. Goal: sign in once, understand what got
+> stored where, and know how to check on / tear down the session later.
+> Since v0.80.0 (browser login), v0.81.0 (unattended `login-password`).
+> Full command reference: `commands-reference.md` > "Programmatic Auth
+> (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
+> login) is human-only; sentinel tokens; v1 scope" and > "`auth
+> login-password` is the CI-safe, headless exception...".
 
-## Read this first: `auth login` needs a human
+## Read this first: `auth login` needs a human -- `auth login-password` does not
 
 `kbagent auth login` opens a real browser window (or, on the device flow,
 prints a short code you type into a page on any device). There is **no**
-headless or unattended path -- an AI agent must never run this command on
-its own initiative. If an agent is asked to "set up kbagent auth" or
-"log me in", the correct behavior is to hand the exact command back to the
-user and wait:
+headless or unattended path for *this specific command* -- an AI agent must
+never run it on its own initiative. If an agent is asked to "set up kbagent
+auth" or "log me in" and no account credentials were supplied for an
+unattended path, the correct behavior is to hand the exact command back to
+the user and wait:
 
 ```
 Please run this yourself in a terminal where a browser can open:
@@ -25,9 +29,12 @@ Please run this yourself in a terminal where a browser can open:
 Then let me know once it's done and I'll continue with `kbagent auth status`.
 ```
 
-For CI, containers, or any other unattended context, keep using a static
-Storage token (`kbagent project add --token ...` or
-`KBAGENT_PROJECT_FROM_ENV`) -- that path is unchanged by this feature.
+For CI, containers, or any other unattended context there are now two
+options (since v0.81.0): if the task has account email + password (+ a TOTP
+seed for MFA), use `kbagent auth login-password` -- see
+"Unattended login" below, an agent MAY run it directly. Otherwise keep using
+a static Storage token (`kbagent project add --token ...` or
+`KBAGENT_PROJECT_FROM_ENV`) -- that path is unchanged by either feature.
 
 ## What `login` actually does
 
@@ -67,6 +74,48 @@ every project you can see. Which project a given `kbagent` command talks to
 is still chosen the normal way (`--project`, `KBAGENT_PROJECT`, the pinned
 default) -- the session just supplies the credential, and the CLI adds
 `X-KBC-ProjectId` per request.
+
+## Unattended login: `auth login-password` (since v0.81.0)
+
+The CI-safe counterpart to `login` above: never opens a browser, completes
+entirely over HTTP, and is safe to run from a secret-backed workflow step --
+or directly by an agent that was given real account credentials for this
+purpose.
+
+```
+kbagent auth login-password --email E (--password-stdin | --password P)
+                             [--totp-secret SEED] [--stack URL|alias]
+                             [--register-projects]
+```
+
+- `--email` / `KBC_LOGIN_EMAIL`, and the password via `--password-stdin`
+  (preferred -- hidden prompt on a TTY, reads to EOF on a pipe),
+  `--password`, or `KBC_LOGIN_PASSWORD` (a CI secret in the step's `env:`
+  block).
+- `--totp-secret` / `KBC_LOGIN_TOTP_SECRET` is the account's **base32 TOTP
+  seed** from its authenticator enrollment -- **not** a live 6-digit code.
+  kbagent computes the current code itself (stdlib RFC 6238) immediately
+  before submitting it, so no human ever types a code into this flow. Only
+  required if the account has TOTP-based MFA configured.
+- An account with **WebAuthn/passkey-only MFA cannot use this command** --
+  that ceremony needs a browser. The CLI raises `AUTH_MFA_INVALID` (exit 3);
+  fall back to `kbagent auth login` for that account.
+- Everything after the token exchange -- session persistence, best-effort
+  revoke of the session it replaces, introspection, `--register-projects` --
+  is identical to `login` above; the result is stored in `auth.json` the
+  same way and follows the same v1 scope restrictions.
+- **Security note.** Storing an account's password (and TOTP seed) as CI
+  secrets is a bigger blast radius than a single scoped Storage token --
+  whoever holds them can do anything that account can do, not just what one
+  project's token allows. Use a dedicated, least-privileged service account,
+  never a real human's own credentials. For an MFA-enabled account the
+  resulting session also carries a live 3-hour sudo window that a
+  browser-login session usually does not (see `docs/auth.md`).
+- Two CI jobs calling `login-password` with the **same** service account's
+  TOTP secret within the same 30-second time slice: the second one fails --
+  the server accepts each TOTP code exactly once. Avoid sharing one
+  MFA-enabled account across concurrent matrix-build legs, or serialize the
+  login step.
 
 ## Registering projects: `auth register-projects`
 
@@ -145,6 +194,11 @@ that alias rather than offered a second, colliding suggestion.
 ```
 # 1. Sign in (opens a browser; falls back to a device code if needed)
 kbagent auth login --register-projects
+
+# 1-CI. The unattended equivalent, given real account credentials
+#       (since v0.81.0) -- no browser, safe from a secret-backed step:
+kbagent auth login-password --email "$CI_EMAIL" --password-stdin \
+  --totp-secret "$CI_TOTP_SEED" --register-projects <<< "$CI_PASSWORD"
 
 # 2. Register (or top up) local aliases for the projects you want.
 #    Interactive picker; --all or --project-id ID for a non-interactive run.
@@ -265,6 +319,18 @@ browser login only completes on the host, so someone has to run
   means the auth service was slow or unreachable -- your login is not dead, so
   do not re-run `auth login`. The refresh is one attempt under a short budget
   by design; just run the original command again.
+- **`login-password` says "Invalid email or password"**: literally that --
+  double-check the credentials, not a kbagent bug. **"Invalid or expired TOTP
+  code"** on the MFA step means the seed or the account's server-side clock
+  drifted, or the code was already used (see the next point).
+- **`login-password` fails intermittently in a CI matrix**: if two jobs
+  share one MFA-enabled service account and log in within the same
+  30-second window, the second submission is rejected -- the server accepts
+  each TOTP time-slice exactly once. Serialize the login step across that
+  account, or give each matrix leg its own account.
+- **`login-password` raises `AUTH_MFA_INVALID`**: the account's MFA is
+  WebAuthn/passkey-only, which this grant cannot resolve without a browser.
+  Fall back to `kbagent auth login` for that account (a human, once).
 
 In the human `project list` / `project status` tables the mode shows as an
 `Auth` column, and in `project info` as an `Auth` row above the Token rows. A
@@ -292,8 +358,9 @@ differently on purpose:
 ## Boundaries (what this surface does NOT own)
 
 - It does not replace static Storage tokens -- both coexist indefinitely.
-  Static tokens remain the only supported path for CI/CD, containers, and
-  any other unattended context.
+  Static tokens remain a supported path for CI/CD, containers, and any other
+  unattended context; `auth login-password` (since v0.81.0) is the other one
+  when the task has account credentials rather than a token.
 - It does not manage Manage-API super-admin credentials (`feature`,
   `org setup`, member administration) -- those keep demanding the existing
   interactive manage-token prompt; a programmatic session is user-scoped and

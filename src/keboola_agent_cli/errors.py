@@ -137,6 +137,9 @@ class ErrorCode(StrEnum):
     SESSION_EXPIRED = "SESSION_EXPIRED"
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
 
+    # Password-grant login (since 0.81.0)
+    AUTH_MFA_INVALID = "AUTH_MFA_INVALID"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -317,6 +320,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.AUTH_STATE_MISMATCH: "authentication",
     ErrorCode.SESSION_EXPIRED: "authentication",
     ErrorCode.SESSION_NOT_FOUND: "authentication",
+    ErrorCode.AUTH_MFA_INVALID: "authentication",
 }
 
 

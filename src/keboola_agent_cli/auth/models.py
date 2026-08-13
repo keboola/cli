@@ -123,6 +123,29 @@ class DeviceAuthorization(BaseModel):
     model_config = _WIRE_MODEL_CONFIG
 
 
+class MfaChallengeResult(BaseModel):
+    """Response to POST /v1/auth/login when the account has MFA configured.
+
+    Returned instead of a token pair -- resolve it via POST /v1/auth/mfa
+    (`AuthClient.verify_mfa_totp` for the TOTP factor; WebAuthn/recovery-code
+    are not wired here, since `login_password` exists specifically for the
+    no-browser CI path and WebAuthn needs one).
+
+    `allowed_methods` always includes ``"recovery_code"``, even for a
+    WebAuthn-only account -- the server does not model a `webauthn` method
+    on this response separately (harmless here under `extra="allow"`; there
+    is simply no `verify_mfa_webauthn` counterpart to call with it).
+    """
+
+    mfa_required: bool = Field(default=True, alias="mfaRequired")
+    mfa_type: str = Field(default="", alias="mfaType")
+    mfa_token: str = Field(default="", alias="mfaToken")
+    expires_in: int = Field(default=0, alias="expiresIn")
+    allowed_methods: list[str] = Field(default_factory=list, alias="allowedMethods")
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
 class AuthProject(BaseModel):
     """One project accessible to the signed-in session, from introspect."""
 

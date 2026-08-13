@@ -14,10 +14,13 @@ Versioning convention:
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` requires a human at a browser (or a device to type a
-  code into) -- there is no headless/unattended path.** Never invoke it from
-  an unattended AI agent task; if a user asks an agent to "log in", the agent
-  must tell the user to run `auth login` themselves in their own terminal.
-  Session tokens are deliberately not readable through the CLI once issued.
+  code into) -- there is no headless/unattended path for THIS command.**
+  Never invoke it from an unattended AI agent task; if a user asks an agent
+  to "log in", the agent must tell the user to run `auth login` themselves in
+  their own terminal. Session tokens are deliberately not readable through
+  the CLI once issued. **`auth login-password` (since v0.81.0, below) is the
+  headless counterpart** -- it did not exist when this rule was written and
+  does not fall under it.
 - **PKCE is the default; the device flow is a fallback, not a mode switch.**
   The CLI tries the browser (PKCE authorization-code) flow first and falls
   back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
@@ -164,13 +167,47 @@ Versioning convention:
 - **Tokens are plaintext in `auth.json` (0600), a sibling of `config.json`.**
   Deliberate RFC 8628 deviation, same posture as the static tokens already in
   `config.json` (see `docs/programmatic-auth-login-plan.md` section 4.2). CI
-  and any headless/unattended runner should keep using a static Storage token
-  -- browser login has no non-interactive path by design.
+  and any headless/unattended runner has two options since v0.81.0: `auth
+  login-password` (below) if account credentials for this purpose exist, or
+  a static Storage token otherwise -- browser login (`auth login` itself)
+  still has no non-interactive path by design.
 - **Feature-flagged per stack.** A 404 from any `auth` endpoint means browser
   login is not enabled on that stack (not a wrong URL or a bug) -- the CLI
   reports it as `AUTH_NOT_SUPPORTED_ON_STACK` and suggests a static token.
 - See `auth-workflow.md` for the end-to-end login -> register -> status ->
   logout walkthrough and PKCE-vs-device troubleshooting.
+
+## `auth login-password` is the CI-safe, headless exception to "browser login is human-only" (since v0.81.0)
+
+- **Password-grant login, no browser, safe for an unattended agent task**:
+  `kbagent auth login-password --email E (--password-stdin | --password P |
+  KBC_LOGIN_PASSWORD) [--totp-secret SEED | KBC_LOGIN_TOTP_SECRET]
+  [--register-projects]`. This is the deliberate carve-out from every "human
+  at a browser" rule above -- an agent MAY run it directly when the task was
+  given real account credentials for this purpose, the same way it may run
+  any other kbagent command with a supplied secret.
+- **`--totp-secret` is the base32 TOTP *seed* (the enrollment secret), never
+  a live 6-digit code.** kbagent computes the current code itself
+  (stdlib-only RFC 6238); no human ever types a code into this flow. An
+  account with WebAuthn/passkey-only MFA cannot be resolved here -- the
+  server rejects it and the CLI raises `AUTH_MFA_INVALID` (new error code,
+  exit 3, see the table below); fall back to telling the user to run
+  `kbagent auth login` themselves.
+- **A wrong password reports a plain "invalid email or password", not the
+  generic session-oriented `INVALID_TOKEN` wording** -- there is no
+  client-level token in this flow, only a submitted credential the server
+  rejected. A 403 (SSO-enforced account, or an admin whose MFA this grant
+  cannot resolve) surfaces the server's own message and names `auth login`
+  as the fallback. A 429 reports when the account's rate-limit window
+  resets rather than a bare `API error 429`.
+- **The session this produces is stored in `auth.json` exactly like a
+  browser-login session** (same `auth_mode: session`, same
+  `--register-projects` contract, same v1 scope restrictions above) with one
+  privilege difference worth knowing: for an MFA-enabled account it carries
+  a live 3-hour sudo window that a browser-login session usually does not
+  (see `docs/auth.md`) -- treat the credentials backing it with the same
+  care as any other long-lived secret, not as a lesser one than a scoped
+  Storage token.
 
 ## MCP passthrough is DEPRECATED; REMOVED in v0.85.0 (since v0.74.0)
 
@@ -1792,7 +1829,7 @@ unknown -- do not try to parse a fallback message.
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
-| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0) |
+| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0), and `AUTH_MFA_INVALID` -- `auth login-password` cannot resolve this account's MFA type (WebAuthn/passkey-only), whose remedy is `kbagent auth login` instead (since v0.81.0) |
 | 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
 | 5 | Configuration error (corrupt config, missing alias) |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |

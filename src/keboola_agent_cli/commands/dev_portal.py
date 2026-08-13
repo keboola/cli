@@ -7,7 +7,6 @@ bypass and no env-var override.
 
 from __future__ import annotations
 
-import getpass
 import sys
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -25,6 +24,7 @@ from ._helpers import (
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
+    read_password_stdin,
     resolve_identity_alias,
 )
 
@@ -73,19 +73,6 @@ def _split_app(app: str) -> tuple[str, str]:
     return vendor, app
 
 
-def _read_password_stdin() -> str:
-    """Read a password from stdin.
-
-    TTY -> getpass (hidden, line-based, Enter to confirm).
-    Pipe/redirected -> read to EOF, strip whitespace.
-    Using `sys.stdin.read()` unconditionally would hang interactively
-    until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
-    """
-    if sys.stdin.isatty():
-        return getpass.getpass("Password: ").strip()
-    return sys.stdin.read().strip()
-
-
 # ----- Identity subcommands -----
 
 
@@ -115,7 +102,7 @@ def identity_add(
 ) -> None:
     formatter = get_formatter(ctx)
     if password_stdin:
-        password = _read_password_stdin()
+        password = read_password_stdin()
     if not password:
         raise typer.BadParameter("Pass --password or --password-stdin.")
     identity = DeveloperPortalIdentity(
@@ -191,7 +178,7 @@ def identity_edit(
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
     if password_stdin:
-        password = _read_password_stdin()
+        password = read_password_stdin()
     try:
         if new_alias:
             svc.rename_identity(alias, new_alias)

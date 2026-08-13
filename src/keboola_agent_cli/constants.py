@@ -224,6 +224,12 @@ ENV_KBC_TOKEN: str = "KBC_TOKEN"
 ENV_KBC_STORAGE_API_URL: str = "KBC_STORAGE_API_URL"
 ENV_KBC_MANAGE_API_TOKEN: str = "KBC_MANAGE_API_TOKEN"
 ENV_KBC_MASTER_TOKEN: str = "KBC_MASTER_TOKEN"
+# `auth login-password` (since 0.81.0) -- the unattended, CI-safe login path.
+# Mirrors KBC_TOKEN's env-injection convention so a workflow can set these
+# once in a step's `env:` block instead of piping secrets through stdin/files.
+ENV_KBC_LOGIN_EMAIL: str = "KBC_LOGIN_EMAIL"
+ENV_KBC_LOGIN_PASSWORD: str = "KBC_LOGIN_PASSWORD"
+ENV_KBC_LOGIN_TOTP_SECRET: str = "KBC_LOGIN_TOTP_SECRET"
 ENV_MCP_TOOL_TIMEOUT: str = "KBAGENT_MCP_TOOL_TIMEOUT"
 ENV_MCP_INIT_TIMEOUT: str = "KBAGENT_MCP_INIT_TIMEOUT"
 ENV_MCP_MAX_SESSIONS: str = "KBAGENT_MCP_MAX_SESSIONS"
@@ -645,6 +651,10 @@ AUTH_STATE_VERSION: int = 1
 SESSION_TOKEN_PREFIX: str = "kbc-session://"
 
 # Server endpoints, relative to the stack base URL.
+# Password-grant login (since 0.81.0) -- the CI-safe, unattended alternative
+# to the browser-only PKCE/device flows. See AuthService.login_password.
+AUTH_LOGIN_PATH: str = "/v1/auth/login"
+AUTH_MFA_PATH: str = "/v1/auth/mfa"
 AUTH_PKCE_AUTHORIZE_PATH: str = "/admin/auth/pkce/authorize"
 AUTH_PKCE_TOKEN_PATH: str = "/v1/auth/pkce/token"
 AUTH_DEVICE_PATH: str = "/v1/auth/device"

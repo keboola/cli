@@ -16,6 +16,17 @@ name: E2E
 # Without those secrets the workflow still succeeds, but emits a warning and
 # skips the suite (see the credentials guard below). See CONTRIBUTING.md
 # "E2E tests in CI" for details.
+#
+# `auth login-password` coverage (test_e2e_auth.py::TestLoginPasswordCommand,
+# PR #565) is gated independently on its own dedicated service account, kept
+# apart from the E2E_API_TOKEN project above:
+#   E2E_URL_US_EAST4      (repository VARIABLE, not a secret -- a plain stack
+#                          hostname, non-sensitive)
+#   E2E_LOGIN_EMAIL / E2E_LOGIN_PASSWORD / E2E_LOGIN_TOTP_SECRET (secrets --
+#                          the last one is the account's base32 TOTP seed,
+#                          not a live code; omit it if the account has no MFA)
+# Missing any of the three required vars just skips that test class, same
+# posture as the E2E_API_TOKEN guard below.
 
 on:
   schedule:
@@ -68,4 +79,8 @@ jobs:
         env:
           E2E_API_TOKEN: ${{ secrets.E2E_API_TOKEN }}
           E2E_URL: ${{ secrets.E2E_URL }}
+          E2E_URL_US_EAST4: ${{ vars.E2E_URL_US_EAST4 }}
+          E2E_LOGIN_EMAIL: ${{ secrets.E2E_LOGIN_EMAIL }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_TOTP_SECRET: ${{ secrets.E2E_LOGIN_TOTP_SECRET }}
         run: make test-e2e

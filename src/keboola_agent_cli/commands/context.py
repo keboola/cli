@@ -60,11 +60,14 @@ Use `kbagent <command> --help` for full flag details and examples.
   authorization on SSH/containers/WSL, or with --device-code) as an
   alternative to a long-lived static Storage API token.
 
-  IMPORTANT FOR AI AGENTS: `auth login` REQUIRES A HUMAN AT A BROWSER.
-  There is no unattended/headless path, and session tokens are deliberately
-  not readable through the CLI -- do NOT attempt this command from an
-  unattended agent task. For headless / CI / automation use, keep using a
-  static Storage token (`project add --token` or `KBAGENT_PROJECT_FROM_ENV`).
+  IMPORTANT FOR AI AGENTS: `auth login` (PKCE / device flow) REQUIRES A
+  HUMAN AT A BROWSER. There is no unattended path for THAT command, and
+  session tokens are deliberately not readable through the CLI -- do NOT
+  attempt `auth login` from an unattended agent task. `auth login-password`
+  (below) is the one deliberate, explicit exception: it is safe to run
+  unattended given the credentials it needs, and is what CI/automation
+  should use to get a full session (as opposed to a single-project static
+  Storage token via `project add --token` / `KBAGENT_PROJECT_FROM_ENV`).
 
   kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
     Opens the Keboola login page in a browser (or falls back to the RFC 8628
@@ -93,6 +96,31 @@ Use `kbagent <command> --help` for full flag details and examples.
     detected) -- once the browser callback succeeds there is no fallback.
     A 404 from any auth endpoint means browser login is not enabled on that
     stack yet (per-stack feature flag); use a static token instead.
+
+  kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdin) [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
+    Sign in via a password grant -- no browser, safe to run unattended from
+    a CI secret-backed workflow. Prefer --password-stdin (or
+    KBC_LOGIN_PASSWORD) over --password: a value on the command line lands
+    in shell history and process listings. --password and --password-stdin
+    are mutually exclusive (ConfigError if both are given). --email/
+    --password/--totp-secret also read from
+    KBC_LOGIN_EMAIL/KBC_LOGIN_PASSWORD/KBC_LOGIN_TOTP_SECRET env vars
+    (same convention as KBC_TOKEN), so a workflow sets them once in a
+    step's env: block instead of passing flags. --totp-secret is the
+    account's base32 TOTP SEED (from its authenticator enrollment), NOT a
+    6-digit code -- kbagent computes the current code itself
+    (auth/totp.py, stdlib RFC 6238) so no human ever types a live code.
+    Only resolves TOTP-based MFA this way; a WebAuthn/passkey-only account
+    gets AUTH_MFA_INVALID and must use `auth login` instead (that ceremony
+    needs a real browser). Stores the resulting session in auth.json
+    exactly like `auth login` does -- same downstream command support,
+    same `project list` "session" auth-mode column, same
+    --register-projects contract. AN AI AGENT MAY run this command when
+    given real credentials for this purpose (unlike `auth login`), but
+    must never invent, guess, or reuse credentials from another context.
+    Storing an account's password (and TOTP seed) as CI secrets is a
+    bigger blast radius than one scoped project token -- use a dedicated,
+    least-privileged service account, never a real human's own login.
 
   kbagent auth status [--stack URL|alias]
     Show the current session's state (live/refreshed/degraded/expired/missing),
