@@ -468,6 +468,7 @@ release checklist below.
 | `plugins/kbagent/skills/kbagent/references/commands-reference.md` | Adding/removing/renaming commands; flag changes | NO |
 | `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior -- always tag with `(since vX.Y.Z)` | NO |
 | `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` | New workflow / topic area introduced | NO |
+| `plugins/kbagent/skills/<sibling-skill>/` (e.g. `kbagent-promotion-pipeline`) | Adding a **sibling skill** -- a self-contained skill directory next to `kbagent/`, used when the topic ships executable `scripts/` + tests or needs its own `description` triggers rather than being one more `references/*.md`. Must ALSO be linked from `kbagent/SKILL.md`'s bottom table, otherwise an agent already inside the `kbagent` skill can never discover it | NO -- `make skill-check` only regenerates `kbagent/SKILL.md` and never looks at sibling skills |
 
 Anything tagged "NO" in the right column is a **silent failure mode**: lint
 passes, tests pass, the AI agent goes off the rails three weeks later. The

@@ -450,3 +450,21 @@ should call instead of hand-rolling the mechanics.
 > skips the *push*. So `--target-dir` exists on disk afterward (the diff it
 > reports is computed from that materialised tree). Use a throwaway path, or
 > delete it after inspecting.
+
+## Promoting between two live projects (dev -> prod) in CI
+
+`sync clone` seeds a *fresh* target once. For an ongoing **promotion loop**
+between two already-live projects -- pull from source, review the
+destination-side diff in a PR, merge to ship -- there is a dedicated sibling
+skill: [kbagent-promotion-pipeline](../../kbagent-promotion-pipeline/SKILL.md).
+It generates the three GitHub Actions workflows (pull / validate / push) around
+the same `sync pull` + `sync push --dry-run` + `sync push` primitives described
+above, using `KBAGENT_PROJECT_FROM_ENV=1` + `--project __env__` so no token is
+ever written to `config.json`.
+
+The one non-obvious mechanic it encodes: the tracked directory's
+`.keboola/manifest.json` stays bound to the **destination** project's config
+ids forever, so the source pull goes through a throwaway scratch directory and
+only its *content* is merged in. Pulling the source straight into the tracked
+directory would overwrite that id mapping and make every later push create
+duplicates in the destination instead of updating.
