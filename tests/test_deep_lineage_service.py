@@ -529,6 +529,169 @@ class TestDeepLineageServiceScan:
 
 
 # ---------------------------------------------------------------------------
+# Ambiguous identifier resolution (issue #568)
+# ---------------------------------------------------------------------------
+
+
+SHARED_TABLE = "in.c-shared.orders"
+
+
+def _shared_table_graph() -> LineageGraph:
+    """Graph where the same table id is a node in two projects.
+
+    Mirrors a bucket shared from ``alpha`` and linked into ``beta``: each
+    project has its own node for ``in.c-shared.orders``, and each has a
+    dependent config the other one does not have.
+    """
+    graph = LineageGraph()
+    for project, config_id in (("alpha", "100"), ("beta", "200")):
+        graph.add_edge(
+            Edge(
+                source_fqn=f"{project}:{SHARED_TABLE}",
+                target_fqn=f"{project}:config/{config_id}",
+                source_type="table",
+                target_type="config",
+                edge_type="reads",
+                detection="input_mapping",
+            )
+        )
+        graph.add_edge(
+            Edge(
+                source_fqn=f"{project}:in.c-raw.source",
+                target_fqn=f"{project}:{SHARED_TABLE}",
+                source_type="table",
+                target_type="table",
+                edge_type="writes",
+                detection="input_mapping",
+            )
+        )
+    return graph
+
+
+class TestAmbiguousNodeResolution:
+    """An unqualified table id present in N projects must warn, not go silent."""
+
+    def _service(self, tmp_path: Path) -> DeepLineageService:
+        (tmp_path / "cfg").mkdir(exist_ok=True)
+        return DeepLineageService(config_store=ConfigStore(config_dir=tmp_path / "cfg"))
+
+    def test_downstream_warns_and_lists_every_candidate(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        result = service.query_downstream(_shared_table_graph(), SHARED_TABLE)
+
+        assert "error" not in result
+        # Still deterministic: the alphabetically first project is used.
+        assert result["node"] == f"alpha:{SHARED_TABLE}"
+        assert result["ambiguous_matches"] == [
+            f"alpha:{SHARED_TABLE}",
+            f"beta:{SHARED_TABLE}",
+        ]
+        assert len(result["warnings"]) == 1
+        warning = result["warnings"][0]
+        assert "2 projects" in warning
+        assert "alpha" in warning and "beta" in warning
+
+    def test_upstream_warns_too(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        result = service.query_upstream(_shared_table_graph(), SHARED_TABLE)
+
+        assert result["direction"] == "upstream"
+        assert result["ambiguous_matches"] == [
+            f"alpha:{SHARED_TABLE}",
+            f"beta:{SHARED_TABLE}",
+        ]
+
+    def test_explicit_fqn_is_not_ambiguous(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        result = service.query_downstream(_shared_table_graph(), f"beta:{SHARED_TABLE}")
+
+        assert result["node"] == f"beta:{SHARED_TABLE}"
+        assert "ambiguous_matches" not in result
+        assert "warnings" not in result
+        assert result["edges"][0]["target"] == "beta:config/200"
+
+    def test_project_scope_disambiguates(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        result = service.query_downstream(_shared_table_graph(), SHARED_TABLE, project="beta")
+
+        assert result["node"] == f"beta:{SHARED_TABLE}"
+        assert "warnings" not in result
+
+    def test_unique_identifier_stays_quiet(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        graph = LineageGraph()
+        graph.add_edge(
+            Edge(
+                source_fqn="alpha:in.c-solo.events",
+                target_fqn="alpha:config/1",
+                source_type="table",
+                target_type="config",
+                edge_type="reads",
+                detection="input_mapping",
+            )
+        )
+
+        result = service.query_downstream(graph, "in.c-solo.events")
+
+        assert result["node"] == "alpha:in.c-solo.events"
+        assert "ambiguous_matches" not in result
+        assert "warnings" not in result
+
+    def _one_project_two_buckets(self) -> LineageGraph:
+        """A bare table name that the name-only fallback matches twice in ONE project."""
+        graph = LineageGraph()
+        for bucket in ("in.c-a", "in.c-b"):
+            graph.add_edge(
+                Edge(
+                    source_fqn=f"alpha:{bucket}.orders",
+                    target_fqn=f"alpha:config/{bucket}",
+                    source_type="table",
+                    target_type="config",
+                    edge_type="reads",
+                    detection="input_mapping",
+                )
+            )
+        return graph
+
+    def test_name_only_match_does_not_claim_several_projects(self, tmp_path: Path) -> None:
+        """Candidates sharing one project must not be counted as that many projects."""
+        service = self._service(tmp_path)
+
+        result = service.query_downstream(self._one_project_two_buckets(), "orders")
+
+        assert result["ambiguous_matches"] == ["alpha:in.c-a.orders", "alpha:in.c-b.orders"]
+        warning = result["warnings"][0]
+        assert "2 projects" not in warning
+        assert "alpha, alpha" not in warning
+        assert "2 nodes" in warning
+
+    def test_name_only_match_suggests_a_retry_that_resolves(self, tmp_path: Path) -> None:
+        """The remedy the warning offers must name a node that actually exists.
+
+        ``<project>:orders`` does not -- the real ids carry a bucket -- so the
+        warning has to point at the full candidate ids instead.
+        """
+        service = self._service(tmp_path)
+        graph = self._one_project_two_buckets()
+
+        warning = service.query_downstream(graph, "orders")["warnings"][0]
+
+        assert "<project>:orders" not in warning
+        suggested = "alpha:in.c-a.orders"
+        assert suggested in warning
+        retry = service.query_downstream(graph, suggested)
+        assert "error" not in retry
+        assert retry["node"] == suggested
+
+    def test_unknown_identifier_still_errors(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        result = service.query_downstream(_shared_table_graph(), "in.c-nope.missing")
+
+        assert "error" in result
+        assert "warnings" not in result
+
+
+# ---------------------------------------------------------------------------
 # CLI tests via CliRunner
 # ---------------------------------------------------------------------------
 
@@ -607,6 +770,61 @@ class TestLineageDeepCli:
             ],
         )
         assert result.exit_code == 1
+
+    def _ambiguous_cache(self, tmp_path: Path) -> Path:
+        cache_path = tmp_path / "shared-lineage.json"
+        cache_path.write_text(json.dumps(_shared_table_graph().to_dict()))
+        return cache_path
+
+    def test_ambiguous_query_warns_on_stderr(self, tmp_path: Path) -> None:
+        """Human mode: the ambiguity is a stderr warning, stdout stays the tree."""
+        from keboola_agent_cli.cli import app
+
+        runner_local = __import__("typer.testing", fromlist=["CliRunner"]).CliRunner()
+        result = runner_local.invoke(
+            app,
+            [
+                "lineage",
+                "show",
+                "--load",
+                str(self._ambiguous_cache(tmp_path)),
+                "--downstream",
+                SHARED_TABLE,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        stderr = " ".join(result.stderr.split())
+        assert "Warning:" in stderr
+        assert "exists in 2 projects" in stderr
+        assert "alpha" in stderr and "beta" in stderr
+
+    def test_ambiguous_query_json_carries_candidates(self, tmp_path: Path) -> None:
+        """JSON mode: warnings ride along in the payload, stdout stays parseable."""
+        from keboola_agent_cli.cli import app
+
+        runner_local = __import__("typer.testing", fromlist=["CliRunner"]).CliRunner()
+        result = runner_local.invoke(
+            app,
+            [
+                "--json",
+                "lineage",
+                "show",
+                "--load",
+                str(self._ambiguous_cache(tmp_path)),
+                "--downstream",
+                SHARED_TABLE,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["node"] == f"alpha:{SHARED_TABLE}"
+        assert data["ambiguous_matches"] == [
+            f"alpha:{SHARED_TABLE}",
+            f"beta:{SHARED_TABLE}",
+        ]
+        assert data["warnings"]
 
 
 # ---------------------------------------------------------------------------

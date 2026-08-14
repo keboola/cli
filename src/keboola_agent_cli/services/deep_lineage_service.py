@@ -371,6 +371,47 @@ class LineageGraph:
 # ---------------------------------------------------------------------------
 
 
+# Keep a warning readable when a bare table name matches across many buckets.
+_MAX_LISTED_CANDIDATES = 5
+
+
+def _format_candidates(items: list[str]) -> str:
+    """Join ids for display, trimming a long tail rather than printing all of it."""
+    head = items[:_MAX_LISTED_CANDIDATES]
+    tail = f", +{len(items) - len(head)} more" if len(items) > len(head) else ""
+    return ", ".join(head) + tail
+
+
+def _ambiguity_warning(identifier: str, candidates: list[str]) -> str:
+    """Build the warning shown when an identifier matches more than one node.
+
+    Two different shapes reach this. The one #568 reports is the same
+    ``bucket_id.table_name`` living in several project namespaces (a bucket
+    shared from one project and linked into another) -- there every candidate
+    differs only by project, and ``<project>:<identifier>`` is a retry that
+    resolves. The other comes from the name-only fallback in
+    ``_find_node_candidates``, which matches a bare table name across buckets:
+    those candidates can share a single project, so counting them as projects
+    would tell the user a table "exists in 2 projects (alpha, alpha)", and
+    ``<project>:<identifier>`` would not resolve because the real node ids
+    carry a bucket. That case gets the full ids instead.
+    """
+    shown = candidates[0]
+    if all(fqn.partition(":")[2] == identifier for fqn in candidates):
+        projects = sorted({fqn.partition(":")[0] for fqn in candidates})
+        return (
+            f"'{identifier}' exists in {len(projects)} projects "
+            f"({_format_candidates(projects)}); showing '{shown}' only. "
+            f"Query a specific one with '--upstream/--downstream "
+            f"<project>:{identifier}' or scope with --project."
+        )
+    return (
+        f"'{identifier}' matches {len(candidates)} nodes "
+        f"({_format_candidates(candidates)}); showing '{shown}' only. "
+        f"Query a specific one by its full id, e.g. '--upstream/--downstream {shown}'."
+    )
+
+
 class DeepLineageService:
     """Business logic for column-level lineage from sync'd data on disk.
 
@@ -473,18 +514,7 @@ class DeepLineageService:
         depth: int = 10,
     ) -> dict[str, Any]:
         """Query upstream dependencies of a node."""
-        fqn = self._find_node(graph, identifier, project)
-        if not fqn:
-            return {
-                "error": f"Node not found: {identifier}",
-                "suggestions": self._suggest(graph, identifier),
-            }
-        return {
-            "node": fqn,
-            "direction": "upstream",
-            "node_info": self._node_info(graph, fqn),
-            "edges": graph.get_upstream(fqn, depth),
-        }
+        return self._query(graph, identifier, project, depth, direction="upstream")
 
     def query_downstream(
         self,
@@ -494,18 +524,48 @@ class DeepLineageService:
         depth: int = 10,
     ) -> dict[str, Any]:
         """Query downstream dependents of a node."""
-        fqn = self._find_node(graph, identifier, project)
-        if not fqn:
+        return self._query(graph, identifier, project, depth, direction="downstream")
+
+    def _query(
+        self,
+        graph: LineageGraph,
+        identifier: str,
+        project: str,
+        depth: int,
+        *,
+        direction: str,
+    ) -> dict[str, Any]:
+        """Resolve ``identifier`` and walk the graph in ``direction``.
+
+        When an unqualified identifier resolves to more than one project (the
+        same ``bucket_id.table_name`` exists in several project namespaces --
+        typically a shared/linked bucket), the first candidate is still used,
+        but the result carries ``ambiguous_matches`` and a human-readable
+        ``warnings`` entry so callers can surface the ambiguity instead of
+        presenting one project's answer as the whole picture.
+        """
+        candidates = self._find_node_candidates(graph, identifier, project)
+        if not candidates:
             return {
                 "error": f"Node not found: {identifier}",
                 "suggestions": self._suggest(graph, identifier),
             }
-        return {
+
+        fqn = candidates[0]
+        result: dict[str, Any] = {
             "node": fqn,
-            "direction": "downstream",
+            "direction": direction,
             "node_info": self._node_info(graph, fqn),
-            "edges": graph.get_downstream(fqn, depth),
+            "edges": (
+                graph.get_upstream(fqn, depth)
+                if direction == "upstream"
+                else graph.get_downstream(fqn, depth)
+            ),
         }
+        if len(candidates) > 1:
+            result["ambiguous_matches"] = candidates
+            result["warnings"] = [_ambiguity_warning(identifier, candidates)]
+        return result
 
     # --- Internal methods ---
 
@@ -1004,30 +1064,39 @@ class DeepLineageService:
         return graph
 
     def _find_node(self, graph: LineageGraph, identifier: str, project: str = "") -> str | None:
-        if ":" in identifier:
-            all_fqns = set(graph.tables) | set(graph.configurations)
-            for e in graph.edges:
-                all_fqns.add(e.source_fqn)
-                all_fqns.add(e.target_fqn)
-            return identifier if identifier in all_fqns else None
+        candidates = self._find_node_candidates(graph, identifier, project)
+        return candidates[0] if candidates else None
 
+    def _find_node_candidates(
+        self, graph: LineageGraph, identifier: str, project: str = ""
+    ) -> list[str]:
+        """Return every FQN ``identifier`` could refer to, best match first.
+
+        A fully-qualified ``project:bucket_id.table_name`` (or an identifier
+        combined with an explicit ``project``) is unambiguous by construction,
+        so at most one candidate comes back. A bare ``bucket_id.table_name``
+        can exist in several project namespaces at once -- a bucket shared
+        from one project and linked into another yields a node per project --
+        in which case every match is returned so the caller can report the
+        ambiguity rather than silently answering for one of them.
+        """
         all_fqns = set(graph.tables) | set(graph.configurations)
         for e in graph.edges:
             all_fqns.add(e.source_fqn)
             all_fqns.add(e.target_fqn)
 
+        if ":" in identifier:
+            return [identifier] if identifier in all_fqns else []
+
         if project:
             fqn = f"{project}:{identifier}"
-            return fqn if fqn in all_fqns else None
+            return [fqn] if fqn in all_fqns else []
 
-        matches = [f for f in all_fqns if f.endswith(f":{identifier}")]
-        if len(matches) == 1:
-            return matches[0]
+        matches = sorted(f for f in all_fqns if f.endswith(f":{identifier}"))
         if matches:
-            return sorted(matches)[0]
+            return matches
 
-        partial = [f for f in all_fqns if f.split(":")[-1].endswith(f".{identifier}")]
-        return sorted(partial)[0] if partial else None
+        return sorted(f for f in all_fqns if f.split(":")[-1].endswith(f".{identifier}"))
 
     # --- Mermaid / HTML rendering ---
 
