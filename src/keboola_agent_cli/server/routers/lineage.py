@@ -221,6 +221,6 @@ def mermaid(
         code = DeepLineageService.render_er_diagram(edges, graph, node, show_columns=show_cols)
     else:
         code = DeepLineageService.render_mermaid(
-            edges, graph, direction, node, show_columns=show_cols
+            edges, graph, direction, node, show_columns=show_cols, warnings=result.get("warnings")
         )
     return PlainTextResponse(code)

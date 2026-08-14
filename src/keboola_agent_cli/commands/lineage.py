@@ -401,7 +401,9 @@ def _output_mermaid_or_html(
         typer.echo(er_code)
         return
 
-    mermaid_code = DeepLineageService.render_mermaid(edges, graph, direction, node_fqn)
+    mermaid_code = DeepLineageService.render_mermaid(
+        edges, graph, direction, node_fqn, warnings=query_result.get("warnings")
+    )
 
     if output_format == "mermaid":
         typer.echo(mermaid_code)
@@ -1368,6 +1370,7 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
                 direction,
                 node,
                 show_columns=show_cols,
+                warnings=result.get("warnings"),
             )
         self._serve(mermaid_code, "text/plain")
 

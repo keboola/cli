@@ -683,6 +683,46 @@ class TestAmbiguousNodeResolution:
         assert "error" not in retry
         assert retry["node"] == suggested
 
+    def test_mermaid_carries_the_warning_into_the_diagram(self, tmp_path: Path) -> None:
+        """A diagram has no metadata channel, so the note has to be a node (#584)."""
+        service = self._service(tmp_path)
+        graph = _shared_table_graph()
+        result = service.query_downstream(graph, SHARED_TABLE)
+
+        code = DeepLineageService.render_mermaid(
+            result["edges"],
+            graph,
+            "downstream",
+            result["node"],
+            warnings=result.get("warnings"),
+        )
+
+        assert "kbagentNote0" in code
+        assert "2 projects" in code
+        # Standalone: the note must not become part of the dependency graph.
+        assert "kbagentNote0 --" not in code and "--> kbagentNote0" not in code
+
+    def test_mermaid_without_warnings_gains_no_note(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        graph = _shared_table_graph()
+        result = service.query_downstream(graph, f"beta:{SHARED_TABLE}")
+
+        code = DeepLineageService.render_mermaid(
+            result["edges"], graph, "downstream", result["node"], warnings=result.get("warnings")
+        )
+
+        assert "kbagentNote" not in code
+
+    def test_mermaid_warning_is_escaped(self) -> None:
+        """Warnings reach the diagram as text; sec-05 escaping must apply to them too."""
+        code = DeepLineageService.render_mermaid(
+            [], LineageGraph(), "downstream", "alpha:in.c-a.t", warnings=['<script>"x"</script>']
+        )
+
+        assert "<script>" not in code
+        assert "&lt;script&gt;" in code
+        assert "&quot;x&quot;" in code
+
     def test_unknown_identifier_still_errors(self, tmp_path: Path) -> None:
         service = self._service(tmp_path)
         result = service.query_downstream(_shared_table_graph(), "in.c-nope.missing")

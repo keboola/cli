@@ -1063,10 +1063,6 @@ class DeepLineageService:
             )
         return graph
 
-    def _find_node(self, graph: LineageGraph, identifier: str, project: str = "") -> str | None:
-        candidates = self._find_node_candidates(graph, identifier, project)
-        return candidates[0] if candidates else None
-
     def _find_node_candidates(
         self, graph: LineageGraph, identifier: str, project: str = ""
     ) -> list[str]:
@@ -1120,6 +1116,7 @@ class DeepLineageService:
         direction: str,
         node_fqn: str,
         show_columns: bool = False,
+        warnings: list[str] | None = None,
     ) -> str:
         """Render lineage edges as a mermaid flowchart.
 
@@ -1129,6 +1126,12 @@ class DeepLineageService:
             direction: "upstream" or "downstream".
             node_fqn: The FQN of the queried node.
             show_columns: If True, include column names in table labels.
+            warnings: Non-fatal notes to render into the diagram itself,
+                typically the ambiguity warning from an unqualified id (#568).
+                A diagram carries no metadata channel the way the JSON shapes
+                do, so a caller that has warnings and drops them leaves the
+                viewer with one project's answer looking like the whole
+                picture -- which is the bug, not a cosmetic omission.
 
         Returns:
             Mermaid flowchart source code.
@@ -1138,6 +1141,13 @@ class DeepLineageService:
 
         graph_dir = "RL" if direction == "upstream" else "LR"
         lines: list[str] = [f"graph {graph_dir}"]
+
+        # Standalone nodes -- deliberately unconnected, so they read as a note
+        # on the diagram rather than as part of the dependency graph.
+        for index, warning in enumerate(warnings or []):
+            warning_id = f"kbagentNote{index}"
+            lines.append(f'  {warning_id}["⚠ {escape(warning)}"]')
+            lines.append(f"  style {warning_id} fill:#fff3cd,stroke:#856404,color:#856404")
 
         # Determine the root node's project for cross-project detection
         root_project = node_fqn.split(":")[0] if ":" in node_fqn else ""
