@@ -1160,6 +1160,37 @@ events and emits a final `done` SSE frame mirroring the same record.
   plus `project_alias`, `branch_id`, `validation_status`, and
   `validation_errors` (always present, even if empty). Shape-symmetric with
   `config detail` single-config mode and `config row-create`.
+- **Validation reads the `parameters` section, not the whole body (since
+  v0.84.1).** A component's `configurationSchema` describes the CONTENTS of
+  `parameters`, so error paths are reported as `parameters.<field>`. Sibling
+  keys (`storage`, `runtime`, `authorization`) are not covered by the schema
+  and never fail validation. **Before v0.84.1 the whole configuration object
+  was validated against that schema**, which inverted the result: a correct
+  body (`{"parameters": {"db": ...}}`) was rejected with the misleading
+  `<root>: 'db' is a required property`, while a body missing the
+  `parameters` wrapper validated clean. If you are on <= 0.84.0 and hit that
+  `<root>:` error on a body you know is correct, the config is fine and the
+  validator is wrong -- upgrade rather than reaching for `--no-validate`,
+  which switches off the checking that still works.
+- **A body with no `parameters` key is validated whole** -- that is the
+  keboola.flow shape (`phases` / `tasks` sit at the configuration root).
+  Consequence: a parameters-level body posted by mistake as the whole
+  configuration still validates `ok`, because it is indistinguishable from a
+  flow-style config. Always POST the full object.
+## Cloning a config by hand: copy the WHOLE object, not just `parameters`
+
+- A configuration's root has siblings of `parameters` that carry real
+  behavior: `runtime` (e.g. `runtime.parallelism`), `storage` (input/output
+  mapping), and `authorization` (OAuth). `config examples` shows only a
+  `parameters` shape, so reconstructing a config from `config detail` output
+  by copying `configuration["parameters"]` alone **silently drops them**.
+- The failure is silent and slow, not loud: a dropped `runtime.parallelism`
+  makes Keboola fall back to `parallelism: 1`, so a 65-row writer runs
+  strictly sequentially instead of 20-at-a-time. Nothing errors -- you only
+  see it in per-row job start/end timestamps (issue #587).
+- There is **no `config clone` command**. To duplicate a config, take the
+  whole `configuration` object from `config detail` and pass it verbatim to
+  `config new --push --configuration-file`, changing only what must differ.
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
 - Every `kbagent --json data-app <subcommand>` envelope emits the

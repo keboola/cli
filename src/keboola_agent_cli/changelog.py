@@ -24,6 +24,40 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.84.1": [
+        "Fix: `kbagent config new --push` schema validation now validates the body's "
+        "`parameters` section instead of the whole configuration object (closes #587). A "
+        "component's `configurationSchema` describes the CONTENTS of `parameters` -- a "
+        'writer schema says `required: ["db"]` while the configuration it describes is '
+        '`{"parameters": {"db": ...}, "runtime": {...}}`. Validating the whole object was '
+        "off by one level, which inverted every outcome: a CORRECT configuration was "
+        "rejected with the misleading `<root>: 'db' is a required property`, while a "
+        "MALFORMED one missing the `parameters` wrapper validated clean. Both were "
+        "confirmed live against the AI Service before and after the fix. The practical "
+        "damage was second-order: the reporter reached for `--no-validate` to get past the "
+        "bogus error, and with validation off also lost the check that would have caught a "
+        "dropped `runtime.parallelism` -- a 65-row Snowflake writer then ran sequentially "
+        "instead of 20-at-a-time (140 min vs the expected 60-90), silently, with nothing "
+        "in any tool output pointing at it. Error paths are now reported as "
+        "`parameters.<field>` so they name the section to fix, and sibling keys "
+        "(`storage`, `runtime`, `authorization`), which the schema does not describe, no "
+        "longer fail validation. Unwrapping affects validation ONLY -- the POSTed body "
+        "still carries every sibling key, verified by its own regression test. A body with "
+        "no `parameters` key at all is still validated whole, which is the keboola.flow "
+        "shape (`phases` / `tasks` ARE the configuration root); the known limit of that "
+        "fallback is that a parameters-level body posted by mistake as the whole "
+        "configuration is indistinguishable from a flow config and still validates `ok`. "
+        "Validation runs only on `create_config`; `config update` and `config row-create` "
+        "do not validate against a schema and are unaffected.",
+        "Tests: the mock schema in `tests/test_config_create_service.py` was itself the "
+        "reason this shipped -- it wrapped everything in a `parameters` property, a shape "
+        "no real component ever returns, so the off-by-one-level validation matched it and "
+        "CI stayed green. It is now the real parameters-level shape, and six regression "
+        "tests cover the contract: sibling keys do not fail validation, the POSTed body "
+        "keeps its siblings, error paths are prefixed `parameters.`, empty `parameters` "
+        "still fails a schema with required fields, and the no-`parameters` flow-style "
+        "fallback both passes valid bodies and still reports real errors.",
+    ],
     "0.84.0": [
         "New: `kbagent auth login-password --email EMAIL (--password PASSWORD | "
         "--password-stdin) [--totp-secret SECRET]` -- the deliberate unattended exception "

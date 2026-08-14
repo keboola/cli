@@ -1776,6 +1776,14 @@ class ConfigService(BaseService):
     ) -> tuple[str, list[str]]:
         """Validate a configuration body against the component's JSON schema.
 
+        The schema describes the contents of the body's ``parameters`` key, so
+        that section is what gets validated; sibling keys (``storage``,
+        ``runtime``, ``authorization``) are not covered by it and are left
+        alone. A body with no ``parameters`` key is validated as a whole
+        (keboola.flow-style configurations). Reported error paths are prefixed
+        with ``parameters.`` so they point at the section the caller must fix.
+        Unwrapping affects validation only -- the POSTed body is never altered.
+
         Returns:
             ``("ok", [])`` when the body matches the schema.
             ``("failed", [errors])`` when validation reports issues.
@@ -1805,11 +1813,30 @@ class ConfigService(BaseService):
         if not schema:
             return ("skipped", [])
 
+        # A component's ``configurationSchema`` describes the CONTENTS of the
+        # ``parameters`` key -- NOT the whole configuration object (issue #587).
+        # A writer schema says ``required: ["db"]`` while the configuration it
+        # describes is ``{"parameters": {"db": ...}, "runtime": {...}}``, so the
+        # body has to be unwrapped before it is validated. Validating the whole
+        # object inverted every outcome: a correct configuration was rejected
+        # ("<root>: 'db' is a required property") while a body missing the
+        # ``parameters`` wrapper validated clean.
+        #
+        # Configurations that carry no ``parameters`` key at all are validated
+        # whole: for keboola.flow, ``phases`` / ``tasks`` ARE the configuration
+        # root and the schema describes that root, so there is nothing to
+        # unwrap. This also keeps any future parameters-less component working
+        # exactly as it does today.
+        unwrapped = "parameters" in body
+        target = body["parameters"] if unwrapped else body
+
         try:
             validator = jsonschema.Draft7Validator(schema)
             errors: list[str] = []
-            for err in validator.iter_errors(body):
-                path = ".".join(str(p) for p in err.absolute_path) or "<root>"
+            for err in validator.iter_errors(target):
+                segments = ["parameters"] if unwrapped else []
+                segments.extend(str(p) for p in err.absolute_path)
+                path = ".".join(segments) or "<root>"
                 errors.append(f"{path}: {err.message}")
         except jsonschema.SchemaError:
             # Component schema itself is malformed -- don't block the create.
