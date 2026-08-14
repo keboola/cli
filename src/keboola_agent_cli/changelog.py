@@ -47,6 +47,13 @@ CHANGELOG: dict[str, list[str]] = {
         "shape (`phases` / `tasks` ARE the configuration root); the known limit of that "
         "fallback is that a parameters-level body posted by mistake as the whole "
         "configuration is indistinguishable from a flow config and still validates `ok`. "
+        "A schema that itself declares a top-level `parameters` property is also validated "
+        "whole, since such a schema self-evidently describes the entire configuration "
+        "object -- deciding on the body alone would have REGRESSED such a component, which "
+        "worked before this fix precisely because every body used to be validated whole. "
+        "The mirror case (a parameters-level schema whose own fields include one named "
+        "`parameters`) is misvalidated today as well, so preferring the schema signal never "
+        "trades a working case for a broken one. "
         "Validation runs only on `create_config`; `config update` and `config row-create` "
         "do not validate against a schema and are unaffected.",
         "Tests: the mock schema in `tests/test_config_create_service.py` was itself the "

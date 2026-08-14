@@ -1822,12 +1822,22 @@ class ConfigService(BaseService):
         # ("<root>: 'db' is a required property") while a body missing the
         # ``parameters`` wrapper validated clean.
         #
-        # Configurations that carry no ``parameters`` key at all are validated
-        # whole: for keboola.flow, ``phases`` / ``tasks`` ARE the configuration
-        # root and the schema describes that root, so there is nothing to
-        # unwrap. This also keeps any future parameters-less component working
-        # exactly as it does today.
-        unwrapped = "parameters" in body
+        # Two shapes are validated WHOLE instead, and both are decided before
+        # unwrapping:
+        #
+        # 1. The body carries no ``parameters`` key. For keboola.flow,
+        #    ``phases`` / ``tasks`` ARE the configuration root and the schema
+        #    describes that root, so there is nothing to unwrap.
+        # 2. The schema itself declares a top-level ``parameters`` property,
+        #    which means it describes the whole configuration object. Deciding
+        #    on the body alone would regress such a component: every body used
+        #    to be validated whole, so it worked before this fix. Whereas the
+        #    mirror case -- a parameters-level schema whose fields happen to
+        #    include one named ``parameters`` -- is misvalidated today too, so
+        #    preferring the schema signal here never trades a working case for
+        #    a broken one.
+        schema_is_whole_body = "parameters" in (schema.get("properties") or {})
+        unwrapped = "parameters" in body and not schema_is_whole_body
         target = body["parameters"] if unwrapped else body
 
         try:

@@ -58,6 +58,22 @@ FLOW_SCHEMA = {
     "required": ["phases", "tasks"],
 }
 
+# A schema that declares a top-level ``parameters`` property describes the
+# WHOLE configuration object, so it must NOT be unwrapped. Before the #587 fix
+# every body was validated whole, so such a component worked; keying the unwrap
+# on the body alone would have regressed it.
+WHOLE_BODY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "parameters": {
+            "type": "object",
+            "properties": {"table": {"type": "string"}},
+            "required": ["table"],
+        }
+    },
+    "required": ["parameters"],
+}
+
 
 def _make_service(
     tmp_config_dir: Path,
@@ -490,6 +506,46 @@ class TestParametersLevelSchemaValidation:
 
         storage.create_config.assert_called_once()
         assert result["validation_status"] == "ok"
+
+    def test_schema_declaring_a_parameters_property_is_validated_whole(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A schema with a top-level ``parameters`` property describes the whole
+        configuration object, so unwrapping would validate the wrong level.
+
+        Keying the unwrap on the body alone would have regressed such a
+        component: before #587 every body was validated whole, so it worked.
+        The parameters-level read must not be applied to a schema that is
+        self-evidently whole-body.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=WHOLE_BODY_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=VALID_BODY,
+        )
+
+        storage.create_config.assert_called_once()
+        assert result["validation_status"] == "ok", result
+
+    def test_whole_body_schema_still_reports_errors_at_root(self, tmp_config_dir: Path) -> None:
+        """Whole-body schemas keep whole-body error paths -- no `parameters.`
+        prefix is invented for a level that was never unwrapped.
+        """
+        service, _, _ = _make_service(tmp_config_dir, schema=WHOLE_BODY_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=INVALID_BODY,
+            dry_run=True,
+        )
+
+        assert result["validation_status"] == "failed"
+        assert result["validation_errors"] == ["parameters: 'table' is a required property"]
 
     def test_config_without_parameters_key_still_reports_its_errors(
         self, tmp_config_dir: Path
