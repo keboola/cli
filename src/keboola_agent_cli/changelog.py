@@ -25,10 +25,11 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.84.0": [
-        "New: `kbagent auth login-password --email EMAIL (--password PASSWORD | "
-        "--password-stdin) [--totp-secret SECRET]` -- the deliberate unattended exception "
-        'to `auth login`\'s "needs a human at a browser" rule. A password grant (no '
-        "browser), safe to run from a CI secret-backed workflow step. `--password-stdin` "
+        "New: `kbagent auth login-password` signs in unattended with an email and password "
+        "(plus TOTP), no browser needed. Full form: `--email EMAIL (--password PASSWORD | "
+        "--password-stdin) [--totp-secret SECRET]` -- the deliberate exception "
+        'to `auth login`\'s "needs a human at a browser" rule, safe to run from a CI '
+        "secret-backed workflow step. `--password-stdin` "
         "(hidden prompt on a TTY, reads to EOF on a pipe) is the recommended way to supply "
         "the password -- `--password` and `--password-stdin` are mutually exclusive. "
         "`--email`/`--password`/`--totp-secret` also read from "
@@ -40,9 +41,10 @@ CHANGELOG: dict[str, list[str]] = {
         "`auth login` instead. Stores the resulting session in `auth.json` exactly like "
         "`auth login` does -- same downstream command support, same "
         "`--register-projects` contract.",
-        "New: a `kbagent-promotion-pipeline` skill that generates a from-scratch GitHub "
-        "Actions setup promoting configurations from a SOURCE project (dev) to a "
-        "DESTINATION project (prod), with a human-reviewed PR gate in between. `sync` "
+        "New: a `kbagent-promotion-pipeline` skill that scaffolds a PR-gated dev -> prod "
+        "promotion pipeline in GitHub Actions. It generates the setup from scratch, "
+        "promoting configurations from a SOURCE project to a DESTINATION project with a "
+        "human-reviewed PR gate in between. `sync` "
         "targets one registered alias per invocation -- it has no 'this git branch is bound "
         "to that project' magic -- so the skill builds the promotion loop out of that "
         "primitive: a pull workflow syncs the source project into a scratch directory and "
