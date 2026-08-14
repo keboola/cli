@@ -1177,7 +1177,8 @@ events and emits a final `done` SSE frame mirroring the same record.
   Consequence: a parameters-level body posted by mistake as the whole
   configuration still validates `ok`, because it is indistinguishable from a
   flow-style config. Always POST the full object.
-## Cloning a config by hand: copy the WHOLE object, not just `parameters`
+
+## Cloning a config by hand: copy the WHOLE object, not just `parameters` (documented since v0.84.1, issue #587)
 
 - A configuration's root has siblings of `parameters` that carry real
   behavior: `runtime` (e.g. `runtime.parallelism`), `storage` (input/output
