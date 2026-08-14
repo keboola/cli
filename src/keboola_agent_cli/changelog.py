@@ -57,7 +57,7 @@ CHANGELOG: dict[str, list[str]] = {
         "Validation runs only on `create_config`; `config update` and `config row-create` "
         "do not validate against a schema and are unaffected.",
         "Tests: the mock schema in `tests/test_config_create_service.py` was itself the "
-        "reason this shipped -- it wrapped everything in a `parameters` property, a shape "
+        "reason this shipped. It wrapped everything in a `parameters` property, a shape "
         "no real component ever returns, so the off-by-one-level validation matched it and "
         "CI stayed green. It is now the real parameters-level shape, and six regression "
         "tests cover the contract: sibling keys do not fail validation, the POSTed body "
