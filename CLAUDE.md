@@ -396,6 +396,9 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
 #   In textual mode, table results matched via a column name carry matched_columns (JSON) / a
 #   "Matched columns" table column.
+# BOTH modes match case-insensitively (config-based was case-sensitive until #569, which made
+#   "is this referenced anywhere" miss a table spelled DCFAmount in one config and DCFAMOUNT in
+#   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
 kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
 kbagent job detail --project NAME --job-id ID

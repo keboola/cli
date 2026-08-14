@@ -2688,7 +2688,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 ## `search` is a top-level command, not `config search` (since v0.30.0)
 
 `kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
-- `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape.
+- `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape. It matches **case-insensitively** (since v0.84.0) while `config search --query` stays case-sensitive unless `-i` is passed -- the same logical table is often mixed-case in a row name and upper-case in `storage.input.tables[].source`, so a case-sensitive body scan answers "is this referenced anywhere?" with a false no.
 - Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
 
 ## `config row-create` / `row-update` / `row-delete` lifecycle (since v0.30.0)

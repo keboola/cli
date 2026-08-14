@@ -481,6 +481,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     ('report' != 'monthly_report'; use '.*report.*'). Textual only (error with --search-type config-based);
     regex does NOT match columns, so matched_columns stays empty under --regex. In textual mode, tables
     matched via a column name carry matched_columns (JSON) / a "Matched columns" column.
+    BOTH modes match case-insensitively; use `kbagent config search --query` for a case-sensitive
+    body scan (it has its own --ignore-case).
 
 ### Job History
 

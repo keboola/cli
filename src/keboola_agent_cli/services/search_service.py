@@ -82,7 +82,8 @@ class SearchService(BaseService):
                         ``None`` or empty means search all types.
             search_type: ``"textual"`` (default) uses the fast global-search
                          endpoint (name-based). ``"config-based"`` scans full
-                         config JSON bodies via ConfigService.
+                         config JSON bodies via ConfigService. Both modes match
+                         case-insensitively.
             limit: Maximum number of results per project (textual only).
             regex: When True (textual only), the query is run as a
                    case-insensitive whole-term regular expression over entity
@@ -249,6 +250,14 @@ class SearchService(BaseService):
         Translates user-facing ``item_types`` to ConfigService's
         ``component_type`` filter where possible, then reformats the result
         to the unified search output shape.
+
+        Matching is case-insensitive, mirroring the textual mode of the same
+        command (issue #569). Keboola configs routinely spell one logical table
+        several ways -- a mixed-case row name against an upper-case physical
+        table id in ``storage.input.tables[].source`` -- so a case-sensitive
+        body scan answers "is this referenced anywhere?" with a false no.
+        ``kbagent config search`` remains the case-sensitive-by-default surface
+        for callers that need exact matching (it has its own ``--ignore-case``).
         """
         # Map item_types to a component_type filter for ConfigService.
         component_type = _item_types_to_component_type(item_types)
@@ -262,6 +271,7 @@ class SearchService(BaseService):
             query=query,
             aliases=aliases,
             component_type=component_type,
+            ignore_case=True,
         )
 
         # Re-shape matches into the unified results format.
