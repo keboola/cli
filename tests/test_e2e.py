@@ -540,6 +540,9 @@ class TestFullE2E:
         _step("19b", "config new --push", "one-shot remote create (0.33.0+)")
         self._test_config_new_push()
 
+        _step("19c", "config new --push validation", "real schema vs real body (#587)")
+        self._test_config_new_push_schema_validation()
+
         # ==============================================================
         # PHASE 5: Component commands
         # ==============================================================
@@ -2184,6 +2187,97 @@ class TestFullE2E:
                 "--config-id",
                 new_config_id,
             )
+
+    def _test_config_new_push_schema_validation(self) -> None:
+        """Test ``config new --push`` schema validation against a REAL schema (issue #587).
+
+        ``_test_config_new_push`` only covers the empty-shell path, where
+        validation auto-skips -- so nothing there exercises a real component
+        schema against a real body. That is the exact gap issue #587 fell
+        through: a component's ``configurationSchema`` describes the CONTENTS
+        of ``parameters``, the validator compared it against the WHOLE
+        configuration object, and the unit-test mock schema was written in the
+        same wrong shape, so CI stayed green while a correct configuration was
+        rejected and a malformed one accepted.
+
+        Every step is ``--dry-run``: no configuration is created.
+
+        Tolerant by design -- not every stack serves a schema for every
+        component. The load-bearing assertion is one-directional and holds
+        either way: **a valid configuration must never come back "failed"**.
+        The negative case only runs when the stack actually returned a schema.
+        """
+        # A well-formed writer body: parameters + a runtime sibling, which the
+        # parameters schema does not describe and must therefore not trip on.
+        valid_body = json.dumps(
+            {
+                "parameters": {
+                    "db": {
+                        "host": "mysql.example.com",
+                        "port": 3306,
+                        "database": "e2e",
+                        "user": "e2e",
+                        "#password": "e2e",
+                    }
+                },
+                "runtime": {"parallelism": "20"},
+            }
+        )
+
+        valid = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-db-mysql",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID} validation (dry)",
+            "--push",
+            "--no-files",
+            "--configuration",
+            valid_body,
+            "--dry-run",
+        )["data"]
+
+        assert valid["validation_status"] in ("ok", "skipped"), (
+            f"A valid configuration must never fail validation, got: {valid}"
+        )
+        # Unwrapping is for validation only -- the planned POST keeps every
+        # sibling key. Dropping `runtime` is the silent data loss of #587.
+        assert set(valid["configuration"]) == {"parameters", "runtime"}, valid
+        assert valid["configuration"]["runtime"] == {"parallelism": "20"}, valid
+
+        if valid["validation_status"] == "skipped":
+            print(
+                f"  {_DIM}   (stack served no schema for keboola.ex-db-mysql; "
+                f"negative case skipped){_RESET}"
+            )
+            return
+
+        # The stack DID serve a schema, so a body with junk parameters must be
+        # rejected -- proving the unwrap did not turn validation into a no-op.
+        invalid = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-db-mysql",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID} validation-bad (dry)",
+            "--push",
+            "--no-files",
+            "--configuration",
+            json.dumps({"parameters": {"nonsense": 1}}),
+            "--dry-run",
+        )["data"]
+
+        assert invalid["validation_status"] == "failed", invalid
+        assert invalid["validation_errors"], invalid
+        # Paths name the section to fix. Before #587 this read "<root>: ...",
+        # which pointed the reader at the wrong level of their own config.
+        assert all(e.startswith("parameters") for e in invalid["validation_errors"]), invalid
 
     def _test_component_commands(self) -> None:
         """List components and get detail for one.

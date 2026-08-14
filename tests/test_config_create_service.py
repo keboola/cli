@@ -32,9 +32,37 @@ SAMPLE_CREATED = {
     "created": "2026-05-11T10:00:00+00:00",
 }
 
-# A trivial JSON schema that requires a top-level "parameters" object with
-# a required "table" string field. Used to drive the validation branch.
+# A trivial JSON schema in the shape the AI Service actually returns: a
+# component's ``configurationSchema`` describes the CONTENTS of the
+# ``parameters`` key, NOT the whole configuration object (issue #587). A real
+# writer schema says ``required: ["db"]`` while ``db`` lives at
+# ``configuration.parameters.db`` -- so the body must be unwrapped before it is
+# validated. This fixture previously wrapped everything in a ``parameters``
+# property, a shape no component ever ships, which is why the off-by-one-level
+# validation bug stayed green in CI.
 TABLE_SCHEMA = {
+    "type": "object",
+    "properties": {"table": {"type": "string"}},
+    "required": ["table"],
+}
+
+VALID_BODY = {"parameters": {"table": "orders"}}
+INVALID_BODY = {"parameters": {"limit": 100}}  # missing required "table"
+
+# A keboola.flow-style schema + body: conditional flows carry no ``parameters``
+# key at all -- ``phases`` / ``tasks`` sit at the configuration root and the
+# schema describes that root (see resources/flow/conditional-flow-schema.json).
+FLOW_SCHEMA = {
+    "type": "object",
+    "properties": {"phases": {"type": "array"}, "tasks": {"type": "array"}},
+    "required": ["phases", "tasks"],
+}
+
+# A schema that declares a top-level ``parameters`` property describes the
+# WHOLE configuration object, so it must NOT be unwrapped. Before the #587 fix
+# every body was validated whole, so such a component worked; keying the unwrap
+# on the body alone would have regressed it.
+WHOLE_BODY_SCHEMA = {
     "type": "object",
     "properties": {
         "parameters": {
@@ -45,9 +73,6 @@ TABLE_SCHEMA = {
     },
     "required": ["parameters"],
 }
-
-VALID_BODY = {"parameters": {"table": "orders"}}
-INVALID_BODY = {"parameters": {"limit": 100}}  # missing required "table"
 
 
 def _make_service(
@@ -368,3 +393,171 @@ class TestCreateConfigSchemaValidation:
         )
 
         ai.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Parameters-level schema validation (issue #587)
+# ---------------------------------------------------------------------------
+
+
+class TestParametersLevelSchemaValidation:
+    """A component's ``configurationSchema`` describes the contents of the
+    ``parameters`` key, so the body must be unwrapped before validating.
+
+    Validating the whole configuration object against it inverted the outcome:
+    a CORRECT Keboola configuration (``{"parameters": {"db": ...}}``) was
+    rejected with ``<root>: 'db' is a required property``, while a MALFORMED
+    one (``{"db": ...}``, missing the wrapper) validated clean. Reporters hit
+    this on ``config new --push``, worked around it with ``--no-validate``, and
+    thereby lost the one check that would have caught an unrelated mistake.
+    """
+
+    def test_sibling_keys_next_to_parameters_do_not_fail_validation(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """runtime / storage / authorization are siblings of parameters and are
+        not described by the parameters schema -- their presence must not fail.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration={
+                "parameters": {"table": "orders"},
+                "runtime": {"parallelism": "20"},
+                "storage": {"input": {"tables": []}},
+            },
+        )
+
+        storage.create_config.assert_called_once()
+        assert result["validation_status"] == "ok"
+        assert result["validation_errors"] == []
+
+    def test_whole_body_is_posted_even_though_only_parameters_is_validated(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Unwrapping happens for validation ONLY -- the POSTed configuration
+        keeps every sibling key, otherwise the fix would drop the very data
+        (``runtime.parallelism``) whose loss prompted issue #587.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+        body = {"parameters": {"table": "orders"}, "runtime": {"parallelism": "20"}}
+
+        service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=body,
+        )
+
+        posted = storage.create_config.call_args.kwargs["configuration"]
+        assert posted == body
+
+    def test_validation_error_path_points_inside_parameters(self, tmp_config_dir: Path) -> None:
+        """The reported path must name the parameters section the user has to
+        fix, not ``<root>`` -- the misleading path was the reporter's whole
+        symptom in issue #587.
+        """
+        service, _, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=INVALID_BODY,
+            dry_run=True,
+        )
+
+        assert result["validation_status"] == "failed"
+        assert result["validation_errors"] == ["parameters: 'table' is a required property"]
+
+    def test_empty_parameters_still_fails_a_schema_that_requires_fields(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Unwrapping must not turn validation into a no-op: a body whose
+        ``parameters`` is empty still has to fail a schema with required fields.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+
+        with pytest.raises(ConfigError, match="failed schema validation"):
+            service.create_config(
+                alias="prod",
+                component_id="keboola.ex-db-snowflake",
+                name="My Config",
+                configuration={"parameters": {}},
+            )
+        storage.create_config.assert_not_called()
+
+    def test_config_without_parameters_key_is_validated_whole(self, tmp_config_dir: Path) -> None:
+        """keboola.flow-style configs have no ``parameters`` key -- phases and
+        tasks ARE the configuration root, so the whole body is the thing the
+        schema describes and must still be validated.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=FLOW_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.flow",
+            name="My Flow",
+            configuration={"phases": [], "tasks": []},
+        )
+
+        storage.create_config.assert_called_once()
+        assert result["validation_status"] == "ok"
+
+    def test_schema_declaring_a_parameters_property_is_validated_whole(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A schema with a top-level ``parameters`` property describes the whole
+        configuration object, so unwrapping would validate the wrong level.
+
+        Keying the unwrap on the body alone would have regressed such a
+        component: before #587 every body was validated whole, so it worked.
+        The parameters-level read must not be applied to a schema that is
+        self-evidently whole-body.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=WHOLE_BODY_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=VALID_BODY,
+        )
+
+        storage.create_config.assert_called_once()
+        assert result["validation_status"] == "ok", result
+
+    def test_whole_body_schema_still_reports_errors_at_root(self, tmp_config_dir: Path) -> None:
+        """Whole-body schemas keep whole-body error paths -- no `parameters.`
+        prefix is invented for a level that was never unwrapped.
+        """
+        service, _, _ = _make_service(tmp_config_dir, schema=WHOLE_BODY_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration=INVALID_BODY,
+            dry_run=True,
+        )
+
+        assert result["validation_status"] == "failed"
+        assert result["validation_errors"] == ["parameters: 'table' is a required property"]
+
+    def test_config_without_parameters_key_still_reports_its_errors(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The no-parameters fallback validates for real -- it is not a bypass."""
+        service, storage, _ = _make_service(tmp_config_dir, schema=FLOW_SCHEMA)
+
+        with pytest.raises(ConfigError, match="failed schema validation"):
+            service.create_config(
+                alias="prod",
+                component_id="keboola.flow",
+                name="My Flow",
+                configuration={"phases": []},  # 'tasks' missing
+            )
+        storage.create_config.assert_not_called()
