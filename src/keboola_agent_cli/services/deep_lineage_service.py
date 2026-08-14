@@ -393,8 +393,15 @@ def _ambiguity_warning(identifier: str, candidates: list[str]) -> str:
     ``_find_node_candidates``, which matches a bare table name across buckets:
     those candidates can share a single project, so counting them as projects
     would tell the user a table "exists in 2 projects (alpha, alpha)", and
-    ``<project>:<identifier>`` would not resolve because the real node ids
+    ``PROJECT:<identifier>`` would not resolve because the real node ids
     carry a bucket. That case gets the full ids instead.
+
+    The placeholder is spelled ``PROJECT``, not ``<project>``: this text also
+    reaches the mermaid diagrams, where it is rendered into SVG. Mermaid turns
+    the escaped entity back into a literal ``<project>``, which the browser
+    then swallows as an unknown tag -- the remedy silently loses the very part
+    that makes it actionable. Escaping is correct and holds; the loss happens
+    one layer further on, so keep angle brackets out of warning text (#584).
     """
     shown = candidates[0]
     if all(fqn.partition(":")[2] == identifier for fqn in candidates):
@@ -403,7 +410,7 @@ def _ambiguity_warning(identifier: str, candidates: list[str]) -> str:
             f"'{identifier}' exists in {len(projects)} projects "
             f"({_format_candidates(projects)}); showing '{shown}' only. "
             f"Query a specific one with '--upstream/--downstream "
-            f"<project>:{identifier}' or scope with --project."
+            f"PROJECT:{identifier}' or scope with --project."
         )
     return (
         f"'{identifier}' matches {len(candidates)} nodes "
@@ -1212,13 +1219,30 @@ class DeepLineageService:
         graph: LineageGraph,
         node_fqn: str,
         show_columns: bool = False,
+        warnings: list[str] | None = None,
     ) -> str:
         """Render lineage as a mermaid ER diagram.
 
         Without show_columns: entities with name/row count + relationships.
         With show_columns: full column list with PK markers and AI mappings.
+
+        ``warnings`` carries non-fatal notes -- the ambiguity warning of #568,
+        typically. ``erDiagram`` has no free-standing annotation the way a
+        flowchart does, and the HTTP surfaces return this as plain text with
+        no metadata channel, so the notes ride as one relationship-less entity.
+        Dropping them would leave an ER viewer with one project's answer
+        looking like the whole picture, which is the bug itself (#584).
         """
         lines: list[str] = ["erDiagram"]
+
+        if warnings:
+            lines.append('    "⚠ note" {')
+            for index, warning in enumerate(warnings, start=1):
+                # html.escape(quote=True) also neutralises the double quotes
+                # that would otherwise terminate the attribute comment.
+                attribute = "warning" if len(warnings) == 1 else f"warning_{index}"
+                lines.append(f'        string {attribute} "{html.escape(warning, quote=True)}"')
+            lines.append("    }")
 
         # Collect all table FQNs and their column mappings
         table_fqns: set[str] = set()

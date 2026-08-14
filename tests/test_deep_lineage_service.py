@@ -676,7 +676,7 @@ class TestAmbiguousNodeResolution:
 
         warning = service.query_downstream(graph, "orders")["warnings"][0]
 
-        assert "<project>:orders" not in warning
+        assert "PROJECT:orders" not in warning
         suggested = "alpha:in.c-a.orders"
         assert suggested in warning
         retry = service.query_downstream(graph, suggested)
@@ -722,6 +722,66 @@ class TestAmbiguousNodeResolution:
         assert "<script>" not in code
         assert "&lt;script&gt;" in code
         assert "&quot;x&quot;" in code
+
+    def test_warning_text_carries_no_angle_brackets(self, tmp_path: Path) -> None:
+        """Angle brackets survive escaping but not the browser (#584).
+
+        The warning also reaches the mermaid diagrams. Mermaid renders the
+        escaped entity back to a literal ``<project>`` in SVG text, where the
+        browser drops it as an unknown tag -- so the remedy loses the part
+        that makes it usable, while looking correct in a terminal and in every
+        string assertion. Keep the placeholder bracket-free.
+        """
+        service = self._service(tmp_path)
+
+        cross_project = service.query_downstream(_shared_table_graph(), SHARED_TABLE)
+        same_project = service.query_downstream(self._one_project_two_buckets(), "orders")
+
+        for result in (cross_project, same_project):
+            warning = result["warnings"][0]
+            assert "<" not in warning and ">" not in warning, warning
+
+    def test_er_diagram_carries_the_warning_too(self, tmp_path: Path) -> None:
+        """The ER view is a separate renderer and was dropping it (#584)."""
+        service = self._service(tmp_path)
+        graph = _shared_table_graph()
+        result = service.query_downstream(graph, SHARED_TABLE)
+
+        code = DeepLineageService.render_er_diagram(
+            result["edges"], graph, result["node"], warnings=result.get("warnings")
+        )
+
+        assert '"⚠ note" {' in code
+        assert "2 projects" in code
+
+    def test_er_diagram_without_warnings_gains_no_note(self, tmp_path: Path) -> None:
+        service = self._service(tmp_path)
+        graph = _shared_table_graph()
+        result = service.query_downstream(graph, f"beta:{SHARED_TABLE}")
+
+        code = DeepLineageService.render_er_diagram(
+            result["edges"], graph, result["node"], warnings=result.get("warnings")
+        )
+
+        assert "⚠ note" not in code
+
+    def test_er_diagram_warning_cannot_break_out_of_its_comment(self) -> None:
+        """A raw double quote would terminate the attribute comment (sec-05)."""
+        code = DeepLineageService.render_er_diagram(
+            [], LineageGraph(), "alpha:in.c-a.t", warnings=['say "hi" <script>alert(1)</script>']
+        )
+
+        assert '"hi"' not in code
+        assert "&quot;hi&quot;" in code
+        assert "<script>" not in code
+
+    def test_er_diagram_numbers_multiple_warnings(self) -> None:
+        code = DeepLineageService.render_er_diagram(
+            [], LineageGraph(), "alpha:in.c-a.t", warnings=["first", "second"]
+        )
+
+        assert "string warning_1 " in code
+        assert "string warning_2 " in code
 
     def test_unknown_identifier_still_errors(self, tmp_path: Path) -> None:
         service = self._service(tmp_path)

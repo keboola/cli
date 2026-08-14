@@ -397,7 +397,9 @@ def _output_mermaid_or_html(
     edges = query_result.get("edges", [])
 
     if output_format == "er":
-        er_code = DeepLineageService.render_er_diagram(edges, graph, node_fqn)
+        er_code = DeepLineageService.render_er_diagram(
+            edges, graph, node_fqn, warnings=query_result.get("warnings")
+        )
         typer.echo(er_code)
         return
 
@@ -1362,6 +1364,7 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
                 self.graph,
                 node,
                 show_columns=show_cols,
+                warnings=result.get("warnings"),
             )
         else:
             mermaid_code = DeepLineageService.render_mermaid(
