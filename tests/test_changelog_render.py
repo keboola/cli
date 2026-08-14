@@ -19,7 +19,7 @@ import json
 from rich.console import Console
 from typer.testing import CliRunner
 
-from keboola_agent_cli.changelog import format_whats_new, headline
+from keboola_agent_cli.changelog import CHANGELOG, format_whats_new, headline
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands.changelog import (
     _PREFIX_RE,
@@ -168,3 +168,39 @@ class TestChangelogCliIntegration:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]
         assert list(data.keys()) == ["entries"]
+
+
+class TestLiveChangelogHeadlines:
+    """The real ``CHANGELOG``, unlike the renderer tests above.
+
+    Those drive synthetic entries on purpose, so they stay green as release
+    notes change. This one is deliberately the opposite: it checks the
+    authoring contract the module docstring states -- every note must lead with
+    a self-contained first sentence, because that sentence is what
+    ``kbagent changelog`` and the post-update "What's new" banner show.
+
+    A first sentence over the cap is not merely shortened; the cut lands
+    wherever the character budget runs out, which is typically mid-clause and
+    before the point of the change. Two 0.84.0 notes shipped to main that way
+    -- "... from a SOURCE project (dev) to a …" -- and nothing failed, because
+    every other check treats a note as an opaque string.
+
+    Scope is the newest version only -- the one being written right now, whose
+    notes are still editable. Roughly 40% of the historical entries are cut the
+    same way; rewriting already-published release notes to satisfy a test is
+    not worth it, so this guards the entries an author can still fix.
+    """
+
+    def test_newest_release_notes_are_not_truncated(self) -> None:
+        version = next(iter(CHANGELOG))
+        truncated = [
+            headline(note) for note in CHANGELOG[version] if headline(note).rstrip().endswith("…")
+        ]
+
+        assert not truncated, (
+            f"These v{version} notes' first sentence exceeds "
+            f"{CHANGELOG_HEADLINE_MAX_CHARS} chars, so `kbagent changelog` and the "
+            '"What\'s new" banner show it cut off mid-clause. Lead with a short, '
+            "self-contained sentence and move the detail into later sentences:\n  "
+            + "\n  ".join(truncated)
+        )
