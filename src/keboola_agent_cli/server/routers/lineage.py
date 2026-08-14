@@ -218,9 +218,11 @@ def mermaid(
     edges = result.get("edges", [])
     show_cols = columns == "true"
     if view == "er":
-        code = DeepLineageService.render_er_diagram(edges, graph, node, show_columns=show_cols)
+        code = DeepLineageService.render_er_diagram(
+            edges, graph, node, show_columns=show_cols, warnings=result.get("warnings")
+        )
     else:
         code = DeepLineageService.render_mermaid(
-            edges, graph, direction, node, show_columns=show_cols
+            edges, graph, direction, node, show_columns=show_cols, warnings=result.get("warnings")
         )
     return PlainTextResponse(code)
