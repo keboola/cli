@@ -2281,6 +2281,7 @@ class TestFullE2E:
         # Paths name the section to fix. Before #587 this read "<root>: ...",
         # which pointed the reader at the wrong level of their own config.
         assert all(e.startswith("parameters") for e in invalid["validation_errors"]), invalid
+
     def _test_config_clone(self) -> None:
         """Test ``config clone`` -- whole-configuration duplicate (0.85.0+, #587).
 

@@ -25,10 +25,11 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.85.0": [
-        "New: `kbagent config clone --project P --component-id C --config-id ID --name N "
-        "[--target-project P2] [--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--dry-run]` "
-        "duplicates a configuration WHOLE (closes #587). Until now there was no way to copy "
-        "one, so people rebuilt the body from `config detail` output -- typically copying "
+        "New: `kbagent config clone` duplicates a configuration WHOLE (closes #587). "
+        "`--project P --component-id C --config-id ID --name N [--target-project P2] "
+        "[--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--dry-run]`. Until now there was "
+        "no way to copy a configuration, so people rebuilt the body from `config detail` "
+        "output -- typically copying "
         '`configuration["parameters"]` and nothing else. A configuration\'s root also carries '
         "`storage`, `runtime` and `authorization`, and dropping one is silent: the reporter "
         "lost `runtime.parallelism`, Keboola fell back to `parallelism: 1`, and a 65-row "
