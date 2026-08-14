@@ -2167,6 +2167,113 @@ class TestConfigRowMethods:
             assert excinfo.value.status_code == 404
 
 
+class TestCreateConfigCopy:
+    """Server-side configuration copy (issue #587).
+
+    ``POST .../configs/{id}/versions/{version}/create`` duplicates a
+    configuration into a NEW independent configuration and returns its id. It
+    is the only way to duplicate a config without rebuilding the body by hand
+    -- which is what drops sibling keys like ``runtime.parallelism``.
+    """
+
+    TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+
+    @staticmethod
+    def _parse_form_body(request: httpx.Request) -> dict[str, str]:
+        """Parse form-encoded request body to a flat str->str dict."""
+        parsed = parse_qs(request.content.decode("utf-8"), keep_blank_values=True)
+        return {k: v[0] for k, v in parsed.items()}
+
+    def test_create_config_copy_no_branch(self, httpx_mock) -> None:
+        """POST to the versions/{v}/create endpoint; name/description are form fields."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/components/"
+                "keboola.wr-db-snowflake/configs/src-1/versions/7/create"
+            ),
+            method="POST",
+            json={"id": "364494012"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            result = client.create_config_copy(
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                version=7,
+                name="Clone of writer",
+                description="copied for the new tables",
+            )
+
+        assert result["id"] == "364494012"
+        body = self._parse_form_body(httpx_mock.get_requests()[0])
+        assert body["name"] == "Clone of writer"
+        assert body["description"] == "copied for the new tables"
+
+    def test_create_config_copy_with_branch(self, httpx_mock) -> None:
+        """branch_id routes the POST through the branch-scoped prefix."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/branch/200/components/"
+                "keboola.wr-db-snowflake/configs/src-1/versions/7/create"
+            ),
+            method="POST",
+            json={"id": "new-1"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config_copy(
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                version=7,
+                name="Clone",
+                branch_id=200,
+            )
+
+    def test_create_config_copy_omits_empty_description(self, httpx_mock) -> None:
+        """An empty description is not sent, so the copy inherits the source's."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/components/"
+                "keboola.ex-http/configs/src-1/versions/2/create"
+            ),
+            method="POST",
+            json={"id": "new-2"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config_copy(
+                component_id="keboola.ex-http",
+                config_id="src-1",
+                version=2,
+                name="Clone",
+            )
+
+        assert "description" not in self._parse_form_body(httpx_mock.get_requests()[0])
+
+    def test_create_config_copy_component_id_is_url_quoted(self, httpx_mock) -> None:
+        """A component id containing a slash must not break out of the path."""
+        httpx_mock.add_response(
+            url=(
+                "https://connection.keboola.com/v2/storage/components/"
+                "vendor%2Fcomp/configs/src-1/versions/1/create"
+            ),
+            method="POST",
+            json={"id": "new-3"},
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=self.TOKEN) as client:
+            client.create_config_copy(
+                component_id="vendor/comp",
+                config_id="src-1",
+                version=1,
+                name="Clone",
+            )
+
+
 class TestConfigIsDisabledField:
     """isDisabled form-field contract on create_config / update_config (issue #467).
 

@@ -399,6 +399,20 @@ kbagent config state-set --project NAME --component-id ID --config-id ID [--row-
 #   currentVersion, changeDescription, created, creatorToken, isDeleted, isDisabled) -- use
 #   state-set / --name / --description / row-update --is-disabled instead, or --configuration
 #   for a genuine configuration.<prefix> key.
+kbagent config clone --project P --component-id ID --config-id ID --name NAME [--target-project P2] [--description D] [--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--branch ID] [--target-branch ID] [--dry-run] [--allow-plaintext-on-encrypt-failure]
+# clone (0.85.0+, #587): duplicates a configuration WHOLE. Hand-rebuilding a body from `config
+#   detail` drops siblings of `parameters` (`runtime`, `storage`, `authorization`) silently -- a
+#   lost `runtime.parallelism` makes Keboola fall back to parallelism 1 (a 65-row writer then ran
+#   sequentially, 140 min instead of ~60-90, with nothing reported).
+#   SAME project (default): server-side copy (`POST .../configs/{id}/versions/{v}/create`) --
+#   rows AND `KBC::` values come along (verified live). `--set` edits are applied as a follow-up
+#   update on the copy, so an override can never be why a key went missing.
+#   CROSS project (`--target-project`): reassembled client-side, rows recreated one by one.
+#   Encrypted values CANNOT travel (ciphertext is project-scoped), so the clone is REFUSED,
+#   listing every path, until each is re-supplied via `--secret PATH=VALUE`; those are encrypted
+#   in the TARGET project on write. `--dry-run` reports the paths instead of refusing -- that is
+#   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
+#   (`sync clone` is the command that remaps).
 
 kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES

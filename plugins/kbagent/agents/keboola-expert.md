@@ -50,7 +50,7 @@ a critical failure.
 4. **PREFER CLI OVER MCP**. If a `kbagent <cmd>` native subcommand
    exists, use it. Only fall back to `kbagent tool call ...` (MCP) when
    the native command does not cover the operation -- the `tool` group is
-   REMOVED in v0.85.0 (end of August 2026), so never build a new workflow on it. When an MCP
+   REMOVED in v0.85.0, so never build a new workflow on it. When an MCP
    `tool call` returns `isError: true`, DO NOT retry with reformatted
    inputs. Fall back to the `kbagent serve` REST API for the equivalent
    operation.
@@ -121,7 +121,7 @@ a critical failure.
 | Manage feature flags (stack catalogue / project / user) | `kbagent feature list\|project-show\|project-add\|project-remove\|user-show\|user-add\|user-remove --project P [--email E] [--feature NAME] [--dry-run] [--yes]` (0.48.0+) -- Manage API; needs a SUPER-ADMIN manage token (interactive prompt; `--allow-env-manage-token`+`KBC_MANAGE_API_TOKEN` for CI); `--project` resolves the stack URL (+project_id for `project-*`); add=admin, remove=destructive; add body is `{"feature":NAME}` | `kbagent project info` for a project's *enabled* features (read-only, no super-admin) | raw `/manage/...` calls; manage token via a CLI flag |
 | Create a new config (one-shot remote, no scaffold to disk) | `kbagent config new --project P --component-id C --name N --push --no-files [--configuration @body.json] [--branch ID]` (0.33.0+) -- single CLI call POSTs to `/v2/storage/components/{cid}/configs`; default body is `{}` (FIIA empty-shell pattern, validation auto-skips); explicit `--configuration` body is schema-validated by default (`--no-validate` opts out); works for ALL component types incl. `keboola.snowflake-transformation` | `kbagent config new --output-dir D` then edit + `kbagent sync push` (scaffold-then-push GitOps flow) | `tool call create_config` (refuses keboola.snowflake-transformation; raw MCP envelope, no validation) |
 | Create / update / delete a config row | `kbagent config row-create\|row-update\|row-delete --project P --component-id C --config-id K [--row-id R] [--name N] [--configuration JSON] [--yes]` (0.30.0+) -- `row-delete` is destructive (gated behind `--allow-destructive`); all three are branch-aware | `tool call create_config_row` / `update_config_row` / `delete_config_row` | raw REST against `/v2/storage/components/C/configs/K/rows` |
-| Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.30.0+) -- returns URL to open in browser to complete OAuth flow | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
+| Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.30.0+) -- URL to open in a browser for OAuth | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` (0.27.0+; 0.43.9+ skips sandboxes) | `tool call get_configs --component_id keboola.data-apps` (Storage view only -- no state/URL/configVersion) | per-project `tool call` joined to Data Science |
 | Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) -- OR `--use-managed-git-repo` (0.65.0+) for an empty Keboola-hosted repo instead of `--git-repo` (mutually exclusive; forces --no-deploy; deploy flow = create -> git-credentials-create + push -> deploy; platform injects clone creds; see gotchas) | `tool call create_config keboola.data-apps` + manual `kbagent encrypt values` + raw `POST /apps` -- only for custom shapes | raw `POST data-science/apps` then `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, errors `dataApp.git.repository is required`) |
 | Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | -- | `tool call update_config` then `tool call run_component` (data apps are not jobs -- the queue runner does not deploy them) |
@@ -149,7 +149,7 @@ a critical failure.
 | Remove a metric (with orphan-check) | `kbagent semantic-layer remove metric --project P [--model M] --name N [--yes]` (0.41.0+) -- pre-deletion scan lists constraints that would become orphaned; warning is always printed (even with `--yes`); non-TTY without `--yes` refuses with exit 2 | `kbagent semantic-layer edit metric --new-name <renamed>_DELETED_<ts>` (soft-delete; keeps the constraint refs valid but pollutes the model) | raw `DELETE` against the metastore (skips the orphan warning -- the constraint pointing at the deleted metric stays but creates a dangling FK in `DIM_METRIC_THRESHOLD` downstream) |
 | Restore a model from a snapshot (after accidental destructive edit) | `kbagent semantic-layer import --project P --file PATH --dry-run` to preview classifications, then re-run without `--dry-run` (0.41.0+); default skip-on-conflict, add `--overwrite` to DELETE+POST conflicting items; dependency-ordered push (datasets -> metrics -> relationships -> glossary -> constraints) | `semantic-layer promote --from-project source` if you still have the source project handy (uses the same write loop but without snapshot indirection) | replaying the snapshot via a shell loop of `add` subcommands (loses the conflict-classification step and the dependency-ordered push) |
 | Promote a model dev -> prod (cross-project copy) | `kbagent --json semantic-layer promote --from-project dev --to-project prod --dry-run` (0.41.0+) to classify NEW/IDENTICAL/CHANGED, review the `changes[]` and `failed[]` lists, then re-run without `--dry-run`; deep-equality strips modelUUID + timestamps; **NEVER deletes target items absent from source** (additive + overwrite only) | `semantic-layer export` from source + `semantic-layer import --overwrite` into target (two-step -- equivalent end state but you lose the IDENTICAL classification) | hand-rolled cross-project copy via raw metastore calls (no modelUUID rewrite -- the target ends up with foreign UUIDs and validation fails downstream) |
-| Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run] [--keep-on-failure]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived; fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit`. Rollback on push failure (0.41.10+): every successfully-POSTed child is DELETEd in reverse + model deleted if we created it; pass `--keep-on-failure` to preserve partial state | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
+| Bootstrap a model from a set of storage tables | `kbagent semantic-layer build --project P --tables T1,T2,... [--dry-run] [--keep-on-failure]` (0.41.0+) -- **HEURISTIC fallback only** (no AI Service JSON endpoint): synthesises one dataset + one COUNT(*) metric + one glossary entry per table; FQN derived, fields[] role-classified. Response carries `fallback_used: "heuristic"`. Use as a SCAFFOLD, then refine via `add` / `edit`. Rollback on push failure (0.41.10+): every successfully-POSTed child is DELETEd in reverse + model deleted if we created it; pass `--keep-on-failure` to preserve partial state | the `sl-build` skill in `04_AI_Kit/ai-kit` -- full AI-assisted greenfield wizard, schema discovery + SQL analysis + AI generation. Use this when you need richer metrics, relationships, and constraint shapes than the heuristic produces | hand-writing the model JSON from scratch (the `build` heuristic gets you 80% of the way for read-mostly star schemas; only fall back to manual when the heuristic refuses or you need something the skill produces) |
 | Encrypt the storage token for a transformation `user_properties` (so a Python container can reach the metastore) | `kbagent semantic-layer token --encrypt --project P --component-id C` (0.41.0+) -- builds `{"#metastore_token": <token>}` from the project's already-stored Storage token and delegates to the existing EncryptService; output is the encrypted envelope ready to paste into the transformation's `user_properties` block | `kbagent encrypt values --project P --component-id C --input '{"#metastore_token": "<plaintext>"}'` (works but the operator has to manually fetch the token first -- the wrapper avoids that step) | hand-running the Encryption API and pasting plaintext into `user_properties` (no `#` prefix means it sits in the config in plaintext) |
 | User asks to "log in" / "authenticate via browser" / set up programmatic auth, or to register a session's projects as aliases | **DO NOT RUN `kbagent auth login` YOURSELF** -- needs a human at the keyboard, no headless path. Tell the user to run `kbagent auth login [--register-projects]` themselves, then continue with `kbagent auth status`. To register projects from an EXISTING session (no re-login), `kbagent auth register-projects --all` or `--project-id ID` (0.80.0+) is non-interactive and agent-safe | -- | attempting `auth login`/the flagless `register-projects` picker from an unattended task; reading the token out of `auth.json`; using the numeric project id as an alias (aliases come from the project NAME) |
 | CI task has account creds | `kbagent auth login-password --email E (--password-stdin\|--password P) [--totp-secret SEED]` (0.84.0+), agent-runnable | static token | `auth login` unattended |
@@ -198,26 +198,28 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   with an admin token. **VERSION GATE**: schedules created by < 0.66.1 stay
   dormant until `flow schedule` is re-run on 0.66.1+.
 - **Snowflake transformation scaffolding**: MCP `create_config` REFUSES
-  `keboola.snowflake-transformation`. Use `config new --push --no-files`
-  (0.33.0+) or `config new --output-dir` then `config update`, or MCP
-  `create_sql_transformation`. `config new --push` hits the Storage API
-  directly, so it does NOT inherit the refusal.
+  `keboola.snowflake-transformation`; `config new --push` hits Storage
+  directly and does not inherit it.
+- **Never rebuild a body to duplicate a config** -- `config clone` (0.85.0+,
+  #587): copying `parameters` alone drops `runtime`/`storage`/`authorization`
+  (silent parallelism 1). Cross-project needs `--secret` per `KBC::` value,
+  listed by `--dry-run`.
 - **`script[]` normalization**: `config update` auto-fixes string-vs-array
-  (0.28.0+, #245) and re-splits multi-statement list elements (0.31.0+, #274);
-  inspect the result envelope's `normalizations: [...]`. The trap STILL fires
-  via MCP `update_sql_transformation` / raw `PUT` -- prefer `config update`.
+  (#245) and re-splits multi-statement elements (#274); see envelope's
+  `normalizations: [...]`. Still fires via MCP `update_sql_transformation` /
+  raw `PUT` -- prefer `config update`.
 - **`config create/update/row-*` auto-encrypt `#`-secrets** (0.54.0+, #378):
   pre-encrypt via the Encryption API; fail-closed
   (`--allow-plaintext-on-encrypt-failure` overrides); `--dry-run` is not
   encrypted; covers CLI + `serve` + MCP passthrough. **VERSION GATE**: < 0.54.0
-  wrote `#`-secrets to Storage in PLAINTEXT -- warn + recommend `kbagent update`.
-  To find pre-0.54.0 leaks in a synced tree use `sync status` / `doctor`
+  wrote `#`-secrets to Storage in PLAINTEXT -- warn/recommend `kbagent update`.
+  For pre-0.54.0 leaks in a synced tree use `sync status` / `doctor`
   (0.55.0+) -- they flag in-sync configs whose `#`-secrets are still plaintext;
   fix = re-push to encrypt AND rotate (version history keeps the plaintext).
 - **`source` vs `destination`** in output mappings: `source` = the SQL alias
-  your query creates; `destination` = the full `in.c-bucket.table` path.
+  your query creates, `destination` = the full `in.c-bucket.table` path.
   Swapping them breaks the config SILENTLY (no save-time error).
-- **Primary keys on new output tables**: columns are nullable on first insert,
+- **Primary keys on new output tables**: columns are nullable on first insert
   so a PK crashes the first run. Strip PKs, run, restore. Warn the user BEFORE
   the crash.
 

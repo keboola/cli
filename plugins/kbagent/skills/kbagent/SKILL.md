@@ -128,6 +128,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --state STATE` |
+| Duplicate a configuration, whole -- including runtime, storage and authorization | `kbagent config clone --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |

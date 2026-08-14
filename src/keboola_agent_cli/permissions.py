@@ -74,6 +74,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.rename": "write",
     "config.delete": "destructive",
     "config.new": "write",
+    # Creates a new configuration; never modifies or deletes the source.
+    "config.clone": "write",
     "config.variables-set": "write",
     "config.variables-get": "read",
     "config.variables-clear": "destructive",

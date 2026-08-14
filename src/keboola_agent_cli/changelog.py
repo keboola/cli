@@ -24,6 +24,35 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.85.0": [
+        "New: `kbagent config clone --project P --component-id C --config-id ID --name N "
+        "[--target-project P2] [--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--dry-run]` "
+        "duplicates a configuration WHOLE (closes #587). Until now there was no way to copy "
+        "one, so people rebuilt the body from `config detail` output -- typically copying "
+        '`configuration["parameters"]` and nothing else. A configuration\'s root also carries '
+        "`storage`, `runtime` and `authorization`, and dropping one is silent: the reporter "
+        "lost `runtime.parallelism`, Keboola fell back to `parallelism: 1`, and a 65-row "
+        "Snowflake writer ran strictly sequentially -- 140 minutes instead of the expected "
+        "60-90, caught only by hand-comparing per-row job timestamps afterwards. WITHIN a "
+        "project the Storage API copies server-side (`POST .../configs/{id}/versions/{v}/"
+        "create`) so nothing is rebuilt; verified live that rows travel with the copy (a "
+        "2-row source produced a 2-row clone) along with `runtime` and `KBC::` values, which "
+        "stay decryptable because the project is unchanged. `--set` edits are applied "
+        "afterwards as a normal update on the new config, so an override can never be why a "
+        "key went missing. ACROSS projects the configuration is reassembled client-side and "
+        "rows are recreated one by one, because a Keboola ciphertext is scoped to the project "
+        "it was encrypted in: copying it verbatim would yield a configuration that looks "
+        "complete and fails at runtime, in a project nobody is watching. So any `KBC::` value "
+        "-- in the parent body or in a row, reported as `rows[N].path` -- makes the clone fail "
+        "fast (exit 5) listing every affected path, until each is re-supplied via `--secret "
+        "PATH=VALUE`; those are then encrypted in the TARGET project. `--dry-run` reports the "
+        "same paths in `missing_secrets` instead of refusing, which is how a caller discovers "
+        "what to gather. Storage input/output mappings are copied VERBATIM -- bucket and table "
+        "IDs are never remapped (`sync clone` is the command that does that), and cross-project "
+        "output says so. New `KeboolaClient.create_config_copy`; the flow itself lives in the "
+        "new `services/_config_clone.py` because `config_service.py` is already over its "
+        "`make loc-check` budget.",
+    ],
     "0.84.2": [
         "New (#594): `kbagent billing credits [--project ALIAS ...]` reads the Pay-As-You-Go "
         "credit balance, fanned out across every registered project in parallel. Wraps `GET "

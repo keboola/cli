@@ -1178,20 +1178,35 @@ events and emits a final `done` SSE frame mirroring the same record.
   configuration still validates `ok`, because it is indistinguishable from a
   flow-style config. Always POST the full object.
 
-## Cloning a config by hand: copy the WHOLE object, not just `parameters` (documented since v0.84.1, issue #587)
+## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.85.0)
 
-- A configuration's root has siblings of `parameters` that carry real
-  behavior: `runtime` (e.g. `runtime.parallelism`), `storage` (input/output
-  mapping), and `authorization` (OAuth). `config examples` shows only a
-  `parameters` shape, so reconstructing a config from `config detail` output
-  by copying `configuration["parameters"]` alone **silently drops them**.
-- The failure is silent and slow, not loud: a dropped `runtime.parallelism`
-  makes Keboola fall back to `parallelism: 1`, so a 65-row writer runs
-  strictly sequentially instead of 20-at-a-time. Nothing errors -- you only
-  see it in per-row job start/end timestamps (issue #587).
-- There is **no `config clone` command**. To duplicate a config, take the
-  whole `configuration` object from `config detail` and pass it verbatim to
-  `config new --push --configuration-file`, changing only what must differ.
+- **Use it instead of rebuilding a body.** Reading `config detail` and
+  POSTing back `configuration["parameters"]` drops the siblings
+  (`runtime`, `storage`, `authorization`) silently. That is issue #587: a
+  dropped `runtime.parallelism` made Keboola fall back to `parallelism: 1`
+  and a 65-row writer ran sequentially, 140 min instead of ~60-90.
+- **Same project (default): server-side copy.** Goes through
+  `POST .../configs/{id}/versions/{version}/create` at the source's current
+  version. Verified live: **rows come along** (a 2-row source produced a
+  2-row clone) and so do `KBC::` encrypted values, which stay decryptable
+  because the project is unchanged.
+- **`--set PATH=VALUE` is applied AFTER the copy**, as a normal update on the
+  new config. So an override can never be the reason a key went missing --
+  the copy is complete first, then edited.
+- **Cross-project (`--target-project`) REFUSES on encrypted values.** A
+  Keboola ciphertext is scoped to the project it was encrypted in; no other
+  project can decrypt it. The clone exits 5 and lists every `KBC::` path
+  (parent config AND rows, reported as `rows[N].path`) until each is
+  re-supplied via `--secret PATH=VALUE`. Those are encrypted in the **target**
+  project on write. Run `--dry-run` first: it reports the paths in
+  `missing_secrets` instead of refusing, which is how you learn what to gather.
+- **Cross-project copies storage mappings VERBATIM.** Bucket and table IDs are
+  not remapped, so an `in.c-main.orders` input still says `in.c-main.orders`
+  in the target. Check those buckets exist there; `sync clone` is the command
+  that actually remaps.
+- `--secret` and `--set` split on the FIRST `=` only, so values may contain
+  `=` (base64 padding, connection strings).
+
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
 - Every `kbagent --json data-app <subcommand>` envelope emits the

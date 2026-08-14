@@ -439,6 +439,52 @@ class _ConfigsMixin(_CoreClient):
         )
         return resp.json()
 
+    def create_config_copy(
+        self,
+        component_id: str,
+        config_id: str,
+        version: int,
+        name: str,
+        description: str = "",
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Copy an existing configuration into a NEW independent configuration.
+
+        POST /v2/storage/[branch/{id}/]components/{comp_id}/configs/{config_id}
+             /versions/{version}/create
+
+        This is the server-side duplicate. It copies the configuration exactly
+        as stored -- every top-level key (``parameters``, ``storage``,
+        ``runtime``, ``authorization``) travels with it, which is precisely
+        what hand-rebuilding a body from ``config detail`` fails to do (issue
+        #587: a dropped ``runtime.parallelism`` silently serialized a 65-row
+        writer). Encrypted (``KBC::``) values stay valid because the copy
+        lands in the same project.
+
+        Args:
+            component_id: Component identifier.
+            config_id: Source configuration ID.
+            version: Source configuration version to copy from.
+            name: Name for the new configuration.
+            description: Optional description. When empty the field is omitted
+                and the copy inherits the source's description.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Dict carrying the new configuration's ``id``.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        data: dict[str, Any] = {"name": name}
+        if description:
+            data["description"] = description
+        resp = self._request(
+            "POST",
+            f"{prefix}/components/{quote(component_id, safe='')}/configs/"
+            f"{quote(config_id, safe='')}/versions/{version}/create",
+            data=data,
+        )
+        return resp.json()
+
     def update_config(
         self,
         component_id: str,

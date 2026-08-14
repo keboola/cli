@@ -220,6 +220,48 @@ def encrypt_secrets_in_config(
     return configuration
 
 
+def collect_encrypted_paths(obj: Any, path_prefix: str, result: list[str]) -> None:
+    """Recursively collect the dotted paths of ``KBC::``-encrypted values.
+
+    The mirror of :func:`collect_secrets`: that one finds values still in
+    plaintext (so they can be encrypted), this one finds values already
+    encrypted (so a caller can discover what cannot be moved).
+
+    Paths are plain dotted config paths (``parameters.db.#password``) rather
+    than the Encryption API's ``#``-prefixed flattened form, because these are
+    shown to a human and fed back through ``--secret PATH=VALUE``. Values are
+    never returned -- only where they live.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            path = f"{path_prefix}{key}"
+            if is_already_encrypted(value):
+                result.append(path)
+            elif isinstance(value, (dict, list)):
+                collect_encrypted_paths(value, f"{path}.", result)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if _is_secret_name_value_pair(item) and is_already_encrypted(item["value"]):
+                result.append(f"{path_prefix}[{i}].{item['name']}")
+            else:
+                collect_encrypted_paths(item, f"{path_prefix}[{i}].", result)
+
+
+def find_encrypted_secret_paths(configuration: Any) -> list[str]:
+    """Return the dotted paths of every ``KBC::``-encrypted value.
+
+    A Keboola ciphertext is bound to the project (and often the component) it
+    was encrypted for -- no other project can decrypt it. Copying one across
+    projects therefore produces a configuration that looks complete and fails
+    at runtime. ``config clone`` uses this to refuse a cross-project clone
+    until each path is re-supplied in plaintext, which it then encrypts in the
+    TARGET project.
+    """
+    paths: list[str] = []
+    collect_encrypted_paths(configuration, "", paths)
+    return sorted(paths)
+
+
 def find_plaintext_secret_keys(configuration: dict[str, Any]) -> list[str]:
     """Return the flattened paths of *unencrypted* ``#``-prefixed secrets.
 
