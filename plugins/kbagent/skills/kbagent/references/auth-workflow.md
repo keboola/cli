@@ -2,10 +2,10 @@
 
 > Audience: a human user of kbagent (or an agent relaying instructions to
 > one) who wants to authenticate via a browser instead of pasting a static
-> Storage API token -- or, since v0.81.0, an agent running unattended with
+> Storage API token -- or, since v0.84.0, an agent running unattended with
 > real account credentials for CI. Goal: sign in once, understand what got
 > stored where, and know how to check on / tear down the session later.
-> Since v0.80.0 (browser login), v0.81.0 (unattended `login-password`).
+> Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`).
 > Full command reference: `commands-reference.md` > "Programmatic Auth
 > (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
 > login) is human-only; sentinel tokens; v1 scope" and > "`auth
@@ -30,7 +30,7 @@ Then let me know once it's done and I'll continue with `kbagent auth status`.
 ```
 
 For CI, containers, or any other unattended context there are now two
-options (since v0.81.0): if the task has account email + password (+ a TOTP
+options (since v0.84.0): if the task has account email + password (+ a TOTP
 seed for MFA), use `kbagent auth login-password` -- see
 "Unattended login" below, an agent MAY run it directly. Otherwise keep using
 a static Storage token (`kbagent project add --token ...` or
@@ -75,7 +75,7 @@ is still chosen the normal way (`--project`, `KBAGENT_PROJECT`, the pinned
 default) -- the session just supplies the credential, and the CLI adds
 `X-KBC-ProjectId` per request.
 
-## Unattended login: `auth login-password` (since v0.81.0)
+## Unattended login: `auth login-password` (since v0.84.0)
 
 The CI-safe counterpart to `login` above: never opens a browser, completes
 entirely over HTTP, and is safe to run from a secret-backed workflow step --
@@ -196,7 +196,7 @@ that alias rather than offered a second, colliding suggestion.
 kbagent auth login --register-projects
 
 # 1-CI. The unattended equivalent, given real account credentials
-#       (since v0.81.0) -- no browser, safe from a secret-backed step:
+#       (since v0.84.0) -- no browser, safe from a secret-backed step:
 kbagent auth login-password --email "$CI_EMAIL" --password-stdin \
   --totp-secret "$CI_TOTP_SEED" --register-projects <<< "$CI_PASSWORD"
 
@@ -359,7 +359,7 @@ differently on purpose:
 
 - It does not replace static Storage tokens -- both coexist indefinitely.
   Static tokens remain a supported path for CI/CD, containers, and any other
-  unattended context; `auth login-password` (since v0.81.0) is the other one
+  unattended context; `auth login-password` (since v0.84.0) is the other one
   when the task has account credentials rather than a token.
 - It does not manage Manage-API super-admin credentials (`feature`,
   `org setup`, member administration) -- those keep demanding the existing

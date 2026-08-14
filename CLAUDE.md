@@ -294,7 +294,7 @@ kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdi
 kbagent auth status [--stack URL|alias]
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
 kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
-# auth login-password (0.81.0+): the deliberate unattended exception to auth login's "needs a human at
+# auth login-password (0.84.0+): the deliberate unattended exception to auth login's "needs a human at
 #   a browser" rule -- email + password (+ TOTP if the account has MFA) grant, no browser, safe to run
 #   from a CI secret-backed workflow step. Prefer --password-stdin (or KBC_LOGIN_PASSWORD) over
 #   --password -- a value on the command line lands in shell history and process listings;

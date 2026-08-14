@@ -95,7 +95,7 @@ a clean slate per task.
   back to the user and wait. For an unattended context, the answer is
   NOT automatically a static Storage token: if the user has account
   credentials for this purpose, `kbagent auth login-password`
-  (0.81.0+) is the CI-safe, headless alternative and an agent MAY run
+  (0.84.0+) is the CI-safe, headless alternative and an agent MAY run
   it directly; fall back to a static Storage token only when no such
   credentials exist.
 

@@ -18,7 +18,7 @@ Versioning convention:
   Never invoke it from an unattended AI agent task; if a user asks an agent
   to "log in", the agent must tell the user to run `auth login` themselves in
   their own terminal. Session tokens are deliberately not readable through
-  the CLI once issued. **`auth login-password` (since v0.81.0, below) is the
+  the CLI once issued. **`auth login-password` (since v0.84.0, below) is the
   headless counterpart** -- it did not exist when this rule was written and
   does not fall under it.
 - **PKCE is the default; the device flow is a fallback, not a mode switch.**
@@ -167,7 +167,7 @@ Versioning convention:
 - **Tokens are plaintext in `auth.json` (0600), a sibling of `config.json`.**
   Deliberate RFC 8628 deviation, same posture as the static tokens already in
   `config.json` (see `docs/programmatic-auth-login-plan.md` section 4.2). CI
-  and any headless/unattended runner has two options since v0.81.0: `auth
+  and any headless/unattended runner has two options since v0.84.0: `auth
   login-password` (below) if account credentials for this purpose exist, or
   a static Storage token otherwise -- browser login (`auth login` itself)
   still has no non-interactive path by design.
@@ -177,7 +177,7 @@ Versioning convention:
 - See `auth-workflow.md` for the end-to-end login -> register -> status ->
   logout walkthrough and PKCE-vs-device troubleshooting.
 
-## `auth login-password` is the CI-safe, headless exception to "browser login is human-only" (since v0.81.0)
+## `auth login-password` is the CI-safe, headless exception to "browser login is human-only" (since v0.84.0)
 
 - **Password-grant login, no browser, safe for an unattended agent task**:
   `kbagent auth login-password --email E (--password-stdin | --password P |
@@ -1829,7 +1829,7 @@ unknown -- do not try to parse a fallback message.
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error (invalid arguments) |
-| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0), and `AUTH_MFA_INVALID` -- `auth login-password` cannot resolve this account's MFA type (WebAuthn/passkey-only), whose remedy is `kbagent auth login` instead (since v0.81.0) |
+| 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0), and `AUTH_MFA_INVALID` -- `auth login-password` cannot resolve this account's MFA type (WebAuthn/passkey-only), whose remedy is `kbagent auth login` instead (since v0.84.0) |
 | 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
 | 5 | Configuration error (corrupt config, missing alias) |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
