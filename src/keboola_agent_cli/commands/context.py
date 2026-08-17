@@ -833,7 +833,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
     subprocesses inherit the manage token via env.
 
-### Billing / PAYG Credits (since v0.85.0)
+### Billing / PAYG Credits (since v0.84.2)
 
   kbagent billing credits [--project ALIAS ...]
     Read-only PAYG (pay-as-you-go) credit balance. Fans out across all

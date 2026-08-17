@@ -3565,7 +3565,7 @@ machine's locale, and tolerates files that are not valid UTF-8.
   UTF-8 without a fallback, so a genuinely mis-encoded input file fails loudly
   and identically everywhere rather than being silently mis-parsed.
 
-## `billing credits`: credits vs. minutes, array not object, feature-gated before it ever hits the network (since v0.85.0)
+## `billing credits`: credits vs. minutes, array not object, feature-gated before it ever hits the network (since v0.84.2)
 
 `billing credits [--project ALIAS ...]` is a read-only PAYG (pay-as-you-go)
 balance check (`GET /credits` on `billing.{stack}`, plain Storage token).

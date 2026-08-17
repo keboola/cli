@@ -3,7 +3,7 @@
 > Audience: a developer or a kbagent agent asked about Keboola PAYG (pay-as-
 > you-go) usage, balance, or invoices. Goal: know exactly what `kbagent
 > billing` can and cannot answer *before* burning a loop hunting for a
-> command that does not exist. (since v0.85.0; issue
+> command that does not exist. (since v0.84.2; issue
 > https://github.com/keboola/cli/issues/594)
 
 ## The shape of the gap (read this first)

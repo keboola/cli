@@ -468,7 +468,7 @@ kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 
 kbagent billing credits [--project ALIAS ...]
-# billing credits (0.85.0+, issue #594 secondary ask): read-only PAYG credit balance, fanned out
+# billing credits (0.84.2+, issue #594 secondary ask): read-only PAYG credit balance, fanned out
 #   across all registered projects in parallel by default (--project repeatable narrows). A project
 #   without the `pay-as-you-go` owner.features flag never touches the billing host (NXDOMAIN on some
 #   non-PAYG stacks) -- it gets a per-project error_code PAYG_NOT_AVAILABLE instead; per-project

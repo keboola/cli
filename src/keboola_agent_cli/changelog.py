@@ -24,7 +24,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.85.0": [
+    "0.84.2": [
         "New (#594): `kbagent billing credits [--project ALIAS ...]` reads the Pay-As-You-Go "
         "credit balance, fanned out across every registered project in parallel. Wraps `GET "
         "/credits` on the `billing.{stack}` host, which accepts a plain per-project Storage "
