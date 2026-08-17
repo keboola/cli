@@ -13,6 +13,7 @@ Covers:
   `files.0` dotted-integer form keeps working.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -502,3 +503,113 @@ class TestConfigSetGuardCliExitCode:
 
         assert result.exit_code == 0, result.output
         client.update_config_row.assert_called_once()
+
+
+class TestConfigSetBracketSyntaxCli:
+    """Bracket syntax must fail like any other usage error, not crash.
+
+    Regression for the PR #598 review finding: ``set_nested_value`` rejects
+    ``files[0]`` with a bare ``ValueError``, which no command catches. Because
+    that path is only reached AFTER the configuration is fetched, the failure
+    surfaced mid-request as an unhandled traceback -- exit 1 with EMPTY stdout
+    under ``--json``. A PR whose whole point is turning a silent failure into a
+    loud one must not introduce a new unstructured one, so the bracket check
+    now lives in ``validate_set_paths`` alongside the sibling-prefix guard:
+    same place, same exit code, same pre-network boundary.
+    """
+
+    @staticmethod
+    def _invoke(tmp_config_dir: Path, args: list[str]) -> Result:
+        return runner.invoke(app, ["--json", "--config-dir", str(tmp_config_dir), *args])
+
+    @staticmethod
+    def _patch_service(mp: pytest.MonkeyPatch, service: ConfigService) -> None:
+        mp.setattr(
+            "keboola_agent_cli.commands.config.get_service",
+            lambda ctx, name: service,
+        )
+
+    def test_bracket_path_exits_2_with_structured_json(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            self._patch_service(mp, service)
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "config",
+                    "update",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--set",
+                    "files[0]=z",
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == ErrorCode.INVALID_ARGUMENT.value
+        assert "files.0" in payload["error"]["message"]
+        # Rejected before the network, exactly like the sibling-prefix guard.
+        client.get_config_detail.assert_not_called()
+        client.update_config.assert_not_called()
+
+    def test_bracket_path_dry_run_also_exits_2(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            self._patch_service(mp, service)
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "config",
+                    "update",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--set",
+                    "files[0]=z",
+                    "--dry-run",
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        client.get_config_detail.assert_not_called()
+
+    def test_bracket_path_rejected_on_row_update_too(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            self._patch_service(mp, service)
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "config",
+                    "row-update",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--row-id",
+                    "row-1",
+                    "--set",
+                    "files[0]=z",
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        client.get_config_row.assert_not_called()
+
+    def test_dotted_integer_form_still_works(self, tmp_config_dir: Path) -> None:
+        """The supported `files.0` form must stay usable over an existing list."""
+        validate_set_paths([("parameters.files.0", "z")])  # no raise

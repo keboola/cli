@@ -17,8 +17,6 @@ from typing import Any
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import (
-    CONFIG_SET_GUARD_HINTS,
-    CONFIG_SET_GUARDED_PREFIXES,
     CONFIG_STATE_MAX_BYTES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -27,6 +25,7 @@ from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
+from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
 from .workspace_service import find_storage_workspace_for_sandbox_config
@@ -90,64 +89,6 @@ def _default_change_description(command: str, *, has_metadata: bool, has_content
     if has_content:
         parts.append("configuration")
     return f"Updated {' + '.join(parts)} via kbagent {command}"
-
-
-def validate_set_paths(set_paths: list[tuple[str, Any]] | None) -> None:
-    """Reject ``--set`` paths whose first segment is an API-level sibling of
-    ``configuration`` (issue #593 Part A).
-
-    ``config update --set`` and ``config row-update --set`` are documented
-    as editing ``configuration.*`` only. ``_resolve_configuration`` /
-    ``_resolve_row_configuration`` used to apply every ``--set`` path
-    unconditionally onto ``current_detail.get("configuration", {})`` --
-    but keys like ``state`` or ``name`` are SIBLINGS of ``configuration``
-    in the Storage API config-detail response, not children of it. So
-    e.g. ``--set 'state.x=y'`` silently created ``configuration.state.x``
-    instead of touching the real ``state`` field: exit 0, a bumped
-    version, a plausible-looking ``--dry-run`` diff, and the runtime
-    state left untouched.
-
-    Call this BEFORE any network call so the rejection also covers
-    ``--dry-run`` -- a usage mistake should never be allowed to look like
-    a successful preview. ``_resolve_configuration`` and
-    ``_resolve_row_configuration`` both call this as their first line.
-
-    This is a plain, side-effect-free validation function (no CLI/typer
-    dependency, per the service layer's framework-free contract) so the
-    command layer can call it directly too, ahead of ``service.update_config``
-    / ``service.update_config_row``, and map the raised error to a usage
-    exit code before anything (including a client) is constructed.
-
-    Args:
-        set_paths: The parsed ``(path, value)`` pairs from one or more
-            ``--set PATH=VALUE`` flags, or ``None``/empty if none given.
-
-    Raises:
-        KeboolaApiError: ``error_code=ErrorCode.INVALID_ARGUMENT`` naming
-            the offending path, its first segment, and the real tool/flag
-            to use instead -- callers should map this to a usage-error
-            exit code (see ``commands/config.py``'s existing ``--set
-            PATH=VALUE`` format check for the pattern to mirror).
-    """
-    if not set_paths:
-        return
-    for path, _value in set_paths:
-        first_segment = path.split(".", 1)[0]
-        if first_segment not in CONFIG_SET_GUARDED_PREFIXES:
-            continue
-        hint = CONFIG_SET_GUARD_HINTS.get(first_segment, "not settable via --set")
-        raise KeboolaApiError(
-            status_code=400,
-            error_code=ErrorCode.INVALID_ARGUMENT,
-            message=(
-                f"--set '{path}' targets '{first_segment}', which is a "
-                f"top-level API field, not part of 'configuration'. --set "
-                f"only edits configuration.* -- use {hint} instead. If the "
-                f"component genuinely has a 'configuration.{first_segment}' "
-                f"key, pass the full body via --configuration JSON|@file|- "
-                f"instead."
-            ),
-        )
 
 
 def _find_matches_in_json(

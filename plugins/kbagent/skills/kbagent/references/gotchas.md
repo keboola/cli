@@ -3632,9 +3632,13 @@ even shaped like a real state document.
 - **A plain `--set 'parameters.x=y'` is unaffected** -- only paths whose
   *first* segment collides with a sibling field are rejected; the guard does
   not touch anything under `configuration`.
-- **`files[0]` bracket syntax is now also rejected** with a message pointing
-  at the `files.0` form (which already worked, and still does, over an
-  existing list). It no longer silently creates a literal `"files[0]"` key.
+- **`files[0]` bracket syntax is now also rejected**, by the same guard, with
+  the same exit 2, before any network call -- with a message pointing at the
+  `files.0` form (which already worked, and still does, over an existing
+  list). It no longer silently creates a literal `"files[0]"` key. Note the
+  example path at the top of this entry contains BOTH mistakes at once: a
+  `state` first segment and a `files[0]` segment. Either one alone is now
+  enough to be rejected.
 - If you hit the new exit-2 error on a script written before v0.84.2 and the
   intent really was to edit runtime state, switch to `kbagent config
   state-set --state ...` (see [config-state-workflow](config-state-workflow.md))
