@@ -125,6 +125,7 @@ MCP_SERVER_HEALTH_TIMEOUT: float = 2.0
 STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
+MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
 # --- Queue Job Polling ---
 # Piecewise curve matching FIIA's existing Queue API polling contract
