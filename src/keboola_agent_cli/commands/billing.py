@@ -2,7 +2,7 @@
 
 Thin CLI layer over :class:`BillingService`. One subcommand:
 
-- ``billing credits`` -- current credit balance (consumed/remaining/purchased)
+- ``billing credits`` -- current credit balance (consumed/remaining/total)
   across one or more projects, sourced from ``GET /credits`` on the
   ``billing.<stack-suffix>`` host.
 
@@ -42,7 +42,7 @@ def _format_credits_table(formatter: Any, credits: list[dict[str, Any]]) -> None
         "Project",
         "Remaining",
         "Consumed",
-        "Purchased",
+        "Total",
         "Remaining (min)",
         show_header=True,
         header_style="bold cyan",
@@ -52,7 +52,7 @@ def _format_credits_table(formatter: Any, credits: list[dict[str, Any]]) -> None
             escape(row.get("project_alias", "")),
             f"{row.get('remaining', 0.0):.2f}",
             f"{row.get('consumed', 0.0):.2f}",
-            f"{row.get('purchased', 0.0):.2f}",
+            f"{row.get('total', 0.0):.2f}",
             f"{row.get('remaining_minutes', 0.0):.0f}",
         )
     formatter.console.print(tbl)
@@ -77,8 +77,9 @@ def billing_credits(
 ) -> None:
     """Show the current PAYG credit balance for one or more projects.
 
-    Balance only -- consumed, remaining, and purchased (derived as
-    consumed + remaining) credits, plus the same figures expressed in
+    Balance only -- consumed, remaining, and total (a client-side
+    `consumed + remaining`, NOT a purchase figure: credit purchases are
+    exactly what this command cannot see), plus the balance expressed in
     minutes (the Keboola UI's unit: minutes = credits * 60). A project
     without the `pay-as-you-go` feature flag surfaces as a per-project
     warning (`PAYG_NOT_AVAILABLE`), not a hard failure -- one non-PAYG

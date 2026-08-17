@@ -31,7 +31,7 @@ kbagent --json billing credits --project prod --project staging
       "project_id": 9621,
       "consumed": 12.5,
       "remaining": 25.5,
-      "purchased": 38.0,
+      "total": 38.0,
       "consumed_minutes": 750.0,
       "remaining_minutes": 1530.0,
       "component_jobs_consumed": 11.75,
@@ -45,7 +45,7 @@ kbagent --json billing credits --project prod --project staging
       "project_id": null,
       "consumed": 0.0,
       "remaining": 0.0,
-      "purchased": 0.0,
+      "total": 0.0,
       "consumed_minutes": 0.0,
       "remaining_minutes": 0.0,
       "component_jobs_consumed": 0.0,
@@ -62,7 +62,14 @@ kbagent --json billing credits --project prod --project staging
   `billing.{stack}` host, which -- unlike the invoice endpoints below --
   **does** accept the CLI's normal per-project `X-StorageApi-Token`. No
   manage token, no extra login step.
-- `purchased` is a client-side convenience: `consumed + remaining`.
+- `total` is a client-side convenience: `consumed + remaining`. It is NOT
+  named `purchased`, and must not be reported as an amount purchased. It
+  equals the purchased amount only if every credit ever added is either
+  still available or already consumed, so it silently mis-reports against
+  expired, revoked, or promo credits -- and credit purchases are precisely
+  what this command cannot see (see the gap section below). If a user asks
+  "how much have we bought", the honest answer is that the CLI cannot tell
+  them, not this number.
 - Per-project failures land in `errors`, never abort the run -- always check
   both arrays, not just `credits`.
 

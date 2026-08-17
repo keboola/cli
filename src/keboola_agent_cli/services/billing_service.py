@@ -41,8 +41,17 @@ def _build_credit_row(
     """Project a parsed ``ProjectCredits`` payload into the CLI-facing row.
 
     Derives minutes from credits (never the reverse -- the API's native unit
-    is credits) and ``purchased`` as ``consumed + remaining``, since the
-    billing endpoint reports the current balance, not the lifetime total.
+    is credits) and ``total`` as ``consumed + remaining``.
+
+    ``total`` is deliberately NOT called ``purchased``. It is a client-side
+    sum over the CURRENT balance, so it equals the amount purchased only if
+    every credit ever added is either still available or already consumed --
+    it would silently mis-report against expired, revoked, or promo credits.
+    Naming it ``purchased`` would be actively misleading here, because credit
+    PURCHASES are the one thing this command cannot see: those records live
+    behind ``/pay-as-you-go/billing/*``, which no project token can reach
+    (issue #594). Anyone reconciling against Stripe invoices must not treat
+    this figure as a purchase total.
     """
     stats = credits_.stats
     component_jobs_consumed = (
@@ -62,7 +71,7 @@ def _build_credit_row(
         "project_id": project.project_id,
         "consumed": credits_.consumed,
         "remaining": credits_.remaining,
-        "purchased": credits_.consumed + credits_.remaining,
+        "total": credits_.consumed + credits_.remaining,
         "consumed_minutes": credits_.consumed * MINUTES_PER_CREDIT,
         "remaining_minutes": credits_.remaining * MINUTES_PER_CREDIT,
         "component_jobs_consumed": component_jobs_consumed,
@@ -90,7 +99,7 @@ class BillingService(BaseService):
             ``{"credits": [row, ...], "errors": [entry, ...]}``, both sorted
             by ``project_alias`` for deterministic output. Each row has
             ``project_alias``, ``project_id``, ``consumed``, ``remaining``,
-            ``purchased``, ``consumed_minutes``, ``remaining_minutes``,
+            ``total``, ``consumed_minutes``, ``remaining_minutes``,
             ``component_jobs_consumed``, ``workspace_jobs``.
         """
         projects = self.resolve_projects(aliases)

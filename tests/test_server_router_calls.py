@@ -1248,7 +1248,7 @@ def test_billing_credits_returns_service_envelope_unchanged(tmp_path: Path) -> N
                 "project_id": 123,
                 "consumed": 100.5,
                 "remaining": 25.5,
-                "purchased": 126.0,
+                "total": 126.0,
                 "consumed_minutes": 6030.0,
                 "remaining_minutes": 1530.0,
                 "component_jobs_consumed": 95.25,

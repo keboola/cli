@@ -29,7 +29,7 @@ CHANGELOG: dict[str, list[str]] = {
         "credit balance, fanned out across every registered project in parallel. Wraps `GET "
         "/credits` on the `billing.{stack}` host, which accepts a plain per-project Storage "
         "token -- the endpoint was reachable all along and simply had no command over it. Rows "
-        "carry the API's native unit (credits: `consumed` / `remaining` / derived `purchased`) "
+        "carry the API's native unit (credits: `consumed` / `remaining` / derived `total`) "
         "AND derived minutes, because the Keboola UI displays minutes = credits x 60; the "
         "conversion only ever runs in that direction, so a unit bug cannot invert into a wrong "
         "credit figure. The per-workspace breakdown is parsed tolerantly: the live API returns "

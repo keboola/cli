@@ -55,7 +55,7 @@ def _credit_row(alias: str = "prod") -> dict[str, Any]:
         "project_id": 1234,
         "consumed": 100.5,
         "remaining": 25.5,
-        "purchased": 126.0,
+        "total": 126.0,
         "consumed_minutes": 6030.0,
         "remaining_minutes": 1530.0,
         "component_jobs_consumed": 95.25,
@@ -85,7 +85,7 @@ class TestBillingCreditsCli:
         assert "prod" in result.output
         assert "25.50" in result.output  # remaining
         assert "100.50" in result.output  # consumed
-        assert "126.00" in result.output  # purchased
+        assert "126.00" in result.output  # total
         assert "1530" in result.output  # remaining minutes
 
     def test_project_flag_repeatable_forwarded_as_aliases(self, tmp_path: Path) -> None:

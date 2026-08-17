@@ -98,7 +98,7 @@ class TestGetCreditsHappyPath:
         assert row["project_id"] == 123
         assert row["consumed"] == 100.5
         assert row["remaining"] == 25.5
-        assert row["purchased"] == 126.0  # 100.5 + 25.5
+        assert row["total"] == 126.0  # 100.5 + 25.5
         assert row["consumed_minutes"] == 100.5 * 60
         assert row["remaining_minutes"] == 25.5 * 60
         assert row["component_jobs_consumed"] == 95.25
@@ -343,7 +343,7 @@ class TestMissingStats:
         row = result["credits"][0]
         assert row["consumed"] == 10.0
         assert row["remaining"] == 5.0
-        assert row["purchased"] == 15.0
+        assert row["total"] == 15.0
         assert row["component_jobs_consumed"] == 0.0
         assert row["workspace_jobs"] == []
 
@@ -359,6 +359,6 @@ class TestMissingStats:
         row = result["credits"][0]
         assert row["consumed"] == 0.0
         assert row["remaining"] == 0.0
-        assert row["purchased"] == 0.0
+        assert row["total"] == 0.0
         assert row["component_jobs_consumed"] == 0.0
         assert row["workspace_jobs"] == []

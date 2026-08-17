@@ -5400,14 +5400,14 @@ class TestE2EBillingCredits:
                 "project_id",
                 "consumed",
                 "remaining",
-                "purchased",
+                "total",
                 "consumed_minutes",
                 "remaining_minutes",
                 "component_jobs_consumed",
                 "workspace_jobs",
             ):
                 assert key in row, f"missing key {key!r} in PAYG credit row: {row}"
-            assert row["purchased"] == row["consumed"] + row["remaining"]
+            assert row["total"] == row["consumed"] + row["remaining"]
             assert row["remaining_minutes"] == row["remaining"] * 60
         else:
             # Graceful-degradation path: the project must be reported as
