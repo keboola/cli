@@ -3,7 +3,7 @@
 This module holds four pieces (see docs/merge-requests-layer3-rfc.md, D10):
 
 - ``StorageRequester``: the FUTURE transport interface -- public method names,
-  defined today. The client-split RFC (docs/client-split-rfc.md, PR #595)
+  defined today. The client-split RFC (draft PR #595; not in this tree yet)
   builds the real transport under this seam later; until then the adapter
   below satisfies it.
 - ``_ClientRequester``: temporary Adapter delegating to ``_CoreClient``'s
@@ -32,6 +32,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from ..constants import MERGE_JOB_MAX_WAIT, STORAGE_JOB_MAX_WAIT
+from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
 
 _BASE = "/v2/storage/merge-request"
@@ -48,12 +50,14 @@ class StorageRequester(Protocol):
 
     Keep this minimal: grow it only when a method needs another transport
     capability; every method added is a promise the future transport must
-    keep (see docs/client-split-rfc.md).
+    keep (see the client-split RFC, draft PR #595).
     """
 
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response: ...
 
-    def wait_for_storage_job(self, job: dict[str, Any]) -> dict[str, Any]: ...
+    def wait_for_storage_job(
+        self, job: dict[str, Any], max_wait: float = STORAGE_JOB_MAX_WAIT
+    ) -> dict[str, Any]: ...
 
 
 class _ClientRequester:
@@ -68,8 +72,36 @@ class _ClientRequester:
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         return self._client._request(method, path, **kwargs)
 
-    def wait_for_storage_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        return self._client._wait_for_storage_job(job)
+    def wait_for_storage_job(
+        self, job: dict[str, Any], max_wait: float = STORAGE_JOB_MAX_WAIT
+    ) -> dict[str, Any]:
+        return self._client._wait_for_storage_job(job, max_wait=max_wait)
+
+
+def _optional_mr_fields(
+    description: str | None,
+    reviewer_ids: _IntList | None,
+    auto_merge_strategy: str | None,
+    auto_merge_at: str | None,
+    external_id: str | None,
+) -> dict[str, Any]:
+    """Build the optional-field part of a create/update body.
+
+    Shared so the two bodies cannot drift: only provided (non-None) fields
+    are included, under their wire (camelCase) names.
+    """
+    body: dict[str, Any] = {}
+    if description is not None:
+        body["description"] = description
+    if reviewer_ids is not None:
+        body["reviewerIds"] = reviewer_ids
+    if auto_merge_strategy is not None:
+        body["autoMergeStrategy"] = auto_merge_strategy
+    if auto_merge_at is not None:
+        body["autoMergeAt"] = auto_merge_at
+    if external_id is not None:
+        body["externalId"] = external_id
+    return body
 
 
 class MergeRequests:
@@ -160,16 +192,11 @@ class MergeRequests:
             "branchIntoId": branch_into_id,
             "title": title,
         }
-        if description is not None:
-            body["description"] = description
-        if reviewer_ids is not None:
-            body["reviewerIds"] = reviewer_ids
-        if auto_merge_strategy is not None:
-            body["autoMergeStrategy"] = auto_merge_strategy
-        if auto_merge_at is not None:
-            body["autoMergeAt"] = auto_merge_at
-        if external_id is not None:
-            body["externalId"] = external_id
+        body.update(
+            _optional_mr_fields(
+                description, reviewer_ids, auto_merge_strategy, auto_merge_at, external_id
+            )
+        )
         return self._requester.request("POST", _BASE, json=body).json()
 
     def update(
@@ -187,21 +214,18 @@ class MergeRequests:
         PUT /v2/storage/merge-request/{id}
 
         Only provided (non-None) fields are sent, as JSON (module docstring).
-        See ``create`` for the fields' meaning.
+        See ``create`` for the fields' meaning. ``None`` means "leave
+        unchanged" -- and that is also all the API can express: server-side,
+        an explicit JSON null and an absent key are indistinguishable
+        (``?? null`` mapping + ``!== null`` update guards), so no field can
+        be cleared to null through this endpoint. Calling with no fields set
+        PUTs ``{}``, which the backend treats as a no-op returning the MR.
         """
-        body: dict[str, Any] = {}
+        body = _optional_mr_fields(
+            description, reviewer_ids, auto_merge_strategy, auto_merge_at, external_id
+        )
         if title is not None:
             body["title"] = title
-        if description is not None:
-            body["description"] = description
-        if reviewer_ids is not None:
-            body["reviewerIds"] = reviewer_ids
-        if auto_merge_strategy is not None:
-            body["autoMergeStrategy"] = auto_merge_strategy
-        if auto_merge_at is not None:
-            body["autoMergeAt"] = auto_merge_at
-        if external_id is not None:
-            body["externalId"] = external_id
         return self._requester.request("PUT", f"{_BASE}/{merge_request_id}", json=body).json()
 
     def request_review(self, merge_request_id: int) -> dict[str, Any]:
@@ -243,9 +267,15 @@ class MergeRequests:
         PUT /v2/storage/merge-request/{id}/merge answers 202 with a Storage
         job; like every Storage-job method in ``client/`` this polls it to a
         terminal state and returns the completed job dict, whose ``results``
-        carry the MR including its change log. A failed merge (the MR rolls
-        back to ``approved``) raises ``STORAGE_JOB_FAILED`` instead of
-        masquerading as success; the MR state stays pollable via ``get()``.
+        carry the MR including its change log. The wait budget is
+        ``MERGE_JOB_MAX_WAIT`` (following the ``IMPORT_JOB_MAX_WAIT`` /
+        ``EXPORT_JOB_MAX_WAIT`` precedent) -- merging a many-config branch
+        can legitimately outlive the default 60 s storage-job budget. A
+        failed merge (the MR rolls back to ``approved``) raises
+        ``STORAGE_JOB_FAILED`` instead of masquerading as success -- also
+        when the 202 body itself already carries a terminal error, which the
+        shared poller would return as-is; the MR state stays pollable via
+        ``get()``.
 
         Caveat: a successful merge always also deletes the source branch,
         but that runs as a second job enqueued by the first, with no job
@@ -259,7 +289,18 @@ class MergeRequests:
         conflict does not); mapping them is Layer 2's concern.
         """
         response = self._requester.request("PUT", f"{_BASE}/{merge_request_id}/merge")
-        return self._requester.wait_for_storage_job(response.json())
+        job = self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
+        if job.get("status") == "error":
+            # _wait_for_storage_job raises on a polled error but returns an
+            # ALREADY-terminal initial body as-is; without this guard a fast
+            # synchronous failure would come back as a normal return value.
+            raise KeboolaApiError(
+                message=job.get("error", {}).get("message", "Merge job failed"),
+                status_code=500,
+                error_code=ErrorCode.STORAGE_JOB_FAILED,
+                retryable=False,
+            )
+        return job
 
 
 class _MergeRequestsMixin(_CoreClient):

@@ -652,6 +652,31 @@ class _ConfigsMixin(_CoreClient):
         )
         return resp.json()
 
+    def _rebase_request(
+        self,
+        component_id: str,
+        configuration_id: str,
+        branch_id: int,
+        version: int,
+        diff: dict[str, Any],
+    ) -> dict[str, Any]:
+        """POST the rebase envelope; shared by the keep and delete rebases.
+
+        The only place that knows the wire shape: ``version`` at the top
+        level, the resolved content (or ``{}`` for a delete) inside ``diff``.
+        Body MUST be JSON with real types (``json=``, no ``json.dumps``, no
+        ``"1"``/``"0"`` booleans), unlike this file's form-encoded idiom --
+        the backend validates ``version`` as a real integer and form-encoded
+        values stay strings and fail validation.
+        """
+        resp = self._request(
+            "POST",
+            f"/v2/storage/branch/{branch_id}/components/"
+            f"{quote(component_id, safe='')}/configs/{quote(configuration_id, safe='')}/rebase",
+            json={"version": version, "diff": diff},
+        )
+        return resp.json()
+
     def rebase_config(
         self,
         component_id: str,
@@ -668,12 +693,8 @@ class _ConfigsMixin(_CoreClient):
         """Rebase a dev-branch configuration onto a newer default-branch version.
 
         POST /v2/storage/branch/{branch_id}/components/{c}/configs/{cfg}/rebase
-        (200 + the rebased configuration -- synchronous, no job).
-
-        Unlike this file's form-encoded idiom, the body MUST be JSON with
-        real types (``json=``, no ``json.dumps``, no ``"1"``/``"0"``
-        booleans): the backend validates ``version`` as a real integer and
-        form-encoded values stay strings and fail validation.
+        (200 + the rebased configuration -- synchronous, no job). Body is
+        JSON, not this file's form idiom (see ``_rebase_request``).
 
         The resolved content travels in a ``diff`` envelope mirroring the
         shape ``get_config_diff`` returns each side in, so a resolved diff
@@ -702,8 +723,11 @@ class _ConfigsMixin(_CoreClient):
                 missing/null ``id`` means a new row, duplicates are rejected,
                 array order becomes sort order.
             configuration: Resolved configuration body (backend default: {}).
-            description: Resolved description (string or null).
-            change_description: Change log message (string or null).
+            description: Resolved description. ``None`` omits the key --
+                which loses nothing: server-side an explicit JSON null and
+                an absent key are indistinguishable (``isset`` mapping).
+            change_description: Change log message; when ``None``/omitted
+                the backend uses a default rebase message.
             is_disabled: When None, omitted (backend defaults to False);
                 False is sent explicitly -- tri-state for consistency with
                 ``update_config`` (RFC, D1).
@@ -720,13 +744,7 @@ class _ConfigsMixin(_CoreClient):
             diff["changeDescription"] = change_description
         if is_disabled is not None:
             diff["isDisabled"] = is_disabled
-        resp = self._request(
-            "POST",
-            f"/v2/storage/branch/{branch_id}/components/"
-            f"{quote(component_id, safe='')}/configs/{quote(configuration_id, safe='')}/rebase",
-            json={"version": version, "diff": diff},
-        )
-        return resp.json()
+        return self._rebase_request(component_id, configuration_id, branch_id, version, diff)
 
     def rebase_config_delete(
         self,
@@ -741,9 +759,9 @@ class _ConfigsMixin(_CoreClient):
 
         Sends exactly ``{"version": N, "diff": {}}`` -- the empty ``diff``
         envelope is how the backend distinguishes a delete resolution from a
-        keep (``rebase_config``). Body is JSON with a real integer
-        ``version``, like ``rebase_config``; ``branch_id`` is required with
-        no production fallback (see ``get_config_diff``).
+        keep (``rebase_config``). Body is JSON (see ``_rebase_request``);
+        ``branch_id`` is required with no production fallback (see
+        ``get_config_diff``).
 
         Args:
             component_id: Component ID.
@@ -752,13 +770,7 @@ class _ConfigsMixin(_CoreClient):
             version: The DEFAULT-BRANCH version being re-anchored onto (from
                 the diff's ``theirs.version``) -- see ``rebase_config``.
         """
-        resp = self._request(
-            "POST",
-            f"/v2/storage/branch/{branch_id}/components/"
-            f"{quote(component_id, safe='')}/configs/{quote(configuration_id, safe='')}/rebase",
-            json={"version": version, "diff": {}},
-        )
-        return resp.json()
+        return self._rebase_request(component_id, configuration_id, branch_id, version, diff={})
 
     def delete_config(
         self, component_id: str, config_id: str, branch_id: int | None = None

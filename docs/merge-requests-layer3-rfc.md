@@ -155,9 +155,13 @@ MR including its change log (`MergeDevBranchJob` returns
 imported a Layer 1 Queue-API idiom (`job run --wait`) into a layer whose idiom is the opposite,
 and fire-and-forget would make a failed merge (rollback to `approved`) indistinguishable from
 success at the call site — the worst default for scripts. Should a real non-waiting need ever
-appear, the MR state is pollable via `merge_requests.get()`; and if E2E shows merges exceeding
-60 s, the fix is a `MERGE_JOB_MAX_WAIT` constant following the `IMPORT_JOB_MAX_WAIT` /
-`EXPORT_JOB_MAX_WAIT` precedent, not a flag.
+appear, the MR state is pollable via `merge_requests.get()`. The wait budget is
+`MERGE_JOB_MAX_WAIT` (600 s, following the `IMPORT_JOB_MAX_WAIT` / `EXPORT_JOB_MAX_WAIT`
+precedent, not a flag) — shipped in Part 1 rather than waiting for E2E evidence, because
+merging a many-config branch plausibly outlives the default 60 s storage-job budget and a
+mid-merge `STORAGE_JOB_TIMEOUT` (with `retryable=True`) is actively misleading; this also
+fixed the `StorageRequester` Protocol shape (`wait_for_storage_job(job, max_wait=...)`) before
+the Protocol acquired external consumers.
 
 One caveat the docstring must state: a successful merge always also deletes the source branch,
 but that runs as a **second job enqueued by the first, with no job handle returned** — so the

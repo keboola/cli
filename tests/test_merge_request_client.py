@@ -149,6 +149,29 @@ class TestCreateAndUpdateBodies:
         body = _sent_json(request)
         assert body == {"title": "New title", "reviewerIds": [7]}
 
+    def test_update_sends_every_optional_field(self, client, httpx_mock) -> None:
+        """All optionals reach the wire under their camelCase names (no create/update drift)."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42", json=SAMPLE_MR)
+
+        client.merge_requests.update(
+            42,
+            title="T",
+            description="D",
+            reviewer_ids=[7, 9],
+            auto_merge_strategy="scheduled",
+            auto_merge_at="2026-09-01T06:00:00+00:00",
+            external_id="DMD-1701",
+        )
+
+        assert _sent_json(httpx_mock.get_requests()[0]) == {
+            "title": "T",
+            "description": "D",
+            "reviewerIds": [7, 9],
+            "autoMergeStrategy": "scheduled",
+            "autoMergeAt": "2026-09-01T06:00:00+00:00",
+            "externalId": "DMD-1701",
+        }
+
 
 class TestStateTransitions:
     """request-review / approve / request-changes."""
@@ -236,6 +259,25 @@ class TestMerge:
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
         assert "merge conflict" in str(exc_info.value)
 
+    def test_merge_raises_when_202_body_is_already_terminal_error(self, client, httpx_mock) -> None:
+        """A 202 body that already carries status=error raises, not returns.
+
+        The shared _wait_for_storage_job early-returns an already-terminal
+        initial body without raising; merge() must not let a fast synchronous
+        failure masquerade as a successful return value.
+        """
+        httpx_mock.add_response(
+            url=f"{MR_BASE}/42/merge",
+            json={"id": 555, "status": "error", "error": {"message": "fast fail"}},
+            status_code=202,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.merge_requests.merge(42)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "fast fail" in str(exc_info.value)
+
 
 class TestConfigDiff:
     """get_config_diff -- branch-prefixed, branch_id required (RFC, D5)."""
@@ -320,14 +362,9 @@ class TestRebaseEnvelope:
 
         client.rebase_config_delete("keboola.ex-http", "cfg-1", branch_id=123, version=7)
 
-        request = httpx_mock.get_requests()[0]
-        assert request.content == b'{"version": 7, "diff": {}}' or _sent_json(request) == {
-            "version": 7,
-            "diff": {},
-        }
-        # Pin the empty-object serialisation explicitly: null / "" / [] would
-        # all be a malformed-diff 400 (or a silent behaviour change) server-side.
-        assert b'"diff": {}' in request.content or b'"diff":{}' in request.content
+        # Dict equality distinguishes {} from null / "" / [] -- any of those
+        # would be a malformed-diff 400 (or a delete misread as keep) server-side.
+        assert _sent_json(httpx_mock.get_requests()[0]) == {"version": 7, "diff": {}}
 
 
 class TestRequesterSeam:
@@ -342,7 +379,9 @@ class TestRequesterSeam:
                 calls.append((method, path))
                 return httpx.Response(200, json=[SAMPLE_MR], request=httpx.Request(method, path))
 
-            def wait_for_storage_job(self, job: dict[str, Any]) -> dict[str, Any]:
+            def wait_for_storage_job(
+                self, job: dict[str, Any], max_wait: float = 60.0
+            ) -> dict[str, Any]:
                 return job
 
         namespace = MergeRequests(StubRequester())
