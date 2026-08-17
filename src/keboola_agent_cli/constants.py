@@ -463,6 +463,17 @@ OTLP_SINK_COLUMNS: tuple[dict[str, str], ...] = (
 # See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
 STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 
+# --- Merge Requests (Branches 2.0) ---
+# Feature flag gating the non-SOX merge-request flow. Layer 3
+# (client/merge_requests.py) does no feature check itself -- a missing
+# feature is a 403 identical to a role denial -- so Part 2's service calls
+# has_feature() with this constant before writes and words the error. It
+# also doubles as the SOX fence: server-side, `protected-default-branch`
+# passes the same gate, so checking for this flag specifically keeps SOX
+# projects out of a flow whose approvals semantics kbagent does not cover.
+# See docs/merge-requests-layer3-rfc.md (D9).
+FEATURE_BRANCHES_MERGE_REQUESTS: str = "branches-merge-requests"
+
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``
 # endpoint used by ``kbagent search`` (textual mode). Projects without this
