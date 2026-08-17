@@ -324,6 +324,12 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.SESSION_EXPIRED: "authentication",
     ErrorCode.SESSION_NOT_FOUND: "authentication",
     ErrorCode.AUTH_MFA_INVALID: "authentication",
+    # Not reachable from today's only emitter: `BillingService` puts
+    # PAYG_NOT_AVAILABLE in its per-project `errors` list, which renders via
+    # `formatter.warning()` and never passes through `formatter.error()`.
+    # Classified anyway so the first single-project billing command to raise
+    # it inherits the right category instead of silently taking the "api"
+    # default -- a missing project feature is a configuration problem.
     ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
 }
 

@@ -164,8 +164,8 @@ class _CoreClient(BaseHttpClient):
             method, path, client=client, base_url=self._sync_actions_base_url, **kwargs
         )
 
-    def _billing_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Billing API request with retry.
+    def _billing_get(self, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a read-only Billing API request with retry.
 
         The billing service is a sibling host derived from the stack URL
         (``billing.{stack-suffix}``); the sub-client inherits the main
@@ -173,10 +173,19 @@ class _CoreClient(BaseHttpClient):
         stacks without Pay-As-You-Go the host may not resolve at all (DNS
         failure) -- callers should feature-gate with ``has_feature()`` before
         reaching this method rather than relying on the resulting error.
+
+        Deliberately NOT shaped like its ``_queue_request`` /
+        ``_sync_actions_request`` siblings, which take an arbitrary ``method``:
+        the billing service exposes ``POST /credits``, which charges real money
+        by triggering an automatic top-up. Hardcoding the verb here means a
+        future caller cannot construct that request through this dispatcher at
+        all -- a guarantee in the signature, which no source-scanning test can
+        match. If a write to the billing service is ever wanted, it needs its
+        own method, its own review, and its own confirmation flow.
         """
         client = self._get_or_create_sub_client("_billing_client", self._billing_base_url)
         return self._do_request(
-            method, path, client=client, base_url=self._billing_base_url, **kwargs
+            "GET", path, client=client, base_url=self._billing_base_url, **kwargs
         )
 
     def _wait_for_storage_job(

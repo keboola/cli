@@ -78,11 +78,15 @@ consumed_minutes  = consumed  * 60
 remaining_minutes = remaining * 60
 ```
 
-Money is a separate axis again: PAYG credits are purchased at a fixed rate
-per stack/contract (observed in issue #594: **$8.40 ex. VAT per credit**). A
-purchase of 8 credits is what the Keboola UI shows as **"480 minutes
-($67.20)"** — the CLI has no price field; if a user needs the dollar amount,
-that comes from their contract/invoice, not from `billing credits`.
+Money is a separate axis again, and this is where it is easy to mislead a
+user. The credits-to-minutes factor above is invariant; **the price per credit
+is not**. It is contract- and stack-specific, the API never returns it, and the
+CLI has no price field. Issue #594 records **$8.40 ex. VAT per credit** on one
+contract — that is a single historical observation, NOT a platform constant.
+Never quote it to a user as their rate, and never derive a dollar figure from
+it. It appears here only to make the UI's arithmetic legible: on that contract,
+8 credits rendered as "480 minutes ($67.20)". If a user needs the money number,
+it comes from their contract or invoice, not from `billing credits`.
 
 ## The PAYG gate
 

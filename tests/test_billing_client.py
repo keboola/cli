@@ -23,6 +23,7 @@ import inspect
 import pytest
 
 from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.client._core import _CoreClient
 from keboola_agent_cli.client.billing import _BillingMixin
 from keboola_agent_cli.models import (
     CreditStats,
@@ -222,6 +223,24 @@ class TestNoTopUpHelper:
 
         for request in httpx_mock.get_requests():
             assert request.method != "POST"
+
+    def test_billing_dispatcher_takes_no_http_method(self) -> None:
+        """The signature itself, not just this module's source, forbids a POST.
+
+        The source-scan above only covers `client/billing.py`. A future caller
+        elsewhere could reach the dispatcher directly, so the dispatcher takes
+        no `method` argument at all -- unlike its `_queue_request` /
+        `_sync_actions_request` siblings. Pinned here because reintroducing a
+        `method` parameter would silently reopen the real-money path.
+        """
+        assert not hasattr(_CoreClient, "_billing_request"), (
+            "_billing_request is back: a caller can now pass method='POST' to the "
+            "billing host, which triggers a real-money automatic top-up."
+        )
+        params = list(inspect.signature(_CoreClient._billing_get).parameters)
+        assert params == ["self", "path", "kwargs"], (
+            f"_billing_get must stay (self, path, **kwargs) with the verb hardcoded; got {params}"
+        )
 
 
 if __name__ == "__main__":

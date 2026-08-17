@@ -25,5 +25,5 @@ class _BillingMixin(_CoreClient):
         the service layer). Read-only: this is the only method this mixin
         exposes, by design -- see the module docstring.
         """
-        response = self._billing_request("GET", "/credits")
+        response = self._billing_get("/credits")
         return response.json()
