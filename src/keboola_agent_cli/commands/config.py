@@ -19,6 +19,7 @@ from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
+from ..services.config_service import validate_set_paths
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -597,6 +598,33 @@ def _parse_set_value(raw: str) -> object:
         return raw
 
 
+def _handle_config_service_error(formatter: Any, exc: ConfigError | KeboolaApiError) -> None:
+    """Shared ``ConfigError``/``KeboolaApiError`` -> exit-code mapping.
+
+    Nearly every command in this group ends its try/except with this exact
+    dispatch; factored out so each call site is 2 lines instead of ~10 (also
+    used by ``commands/config_state.py``, issue #593).
+    """
+    if isinstance(exc, ConfigError):
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+    raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+
+def _guard_set_paths(formatter: Any, parsed_sets: list[tuple[str, object]] | None) -> None:
+    """Enforce the ``--set`` sibling-path guard, exiting 2 on violation.
+
+    ``validate_set_paths`` is a no-op for ``None``/empty, so callers can
+    invoke this unconditionally (issue #593 Part A).
+    """
+    try:
+        validate_set_paths(parsed_sets)
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code)
+        raise typer.Exit(code=2) from None
+
+
 @config_app.command("update", rich_help_panel="Lifecycle")
 def config_update(
     ctx: typer.Context,
@@ -748,6 +776,8 @@ def config_update(
             path, _, raw_value = item.partition("=")
             parsed_sets.append((path.strip(), _parse_set_value(raw_value.strip())))
 
+    _guard_set_paths(formatter, parsed_sets)
+
     # --set implies merge
     effective_merge = merge or bool(parsed_sets)
 
@@ -766,16 +796,8 @@ def config_update(
             branch_id=branch,
             allow_plaintext_fallback=allow_plaintext,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     # --- Output ---------------------------------------------------------------
     normalizations = result.get("normalizations") or []
@@ -942,16 +964,8 @@ def config_set_default_bucket(
             dry_run=dry_run,
             branch_id=branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if result.get("dry_run"):
         changes = result.get("changes", [])
@@ -1057,16 +1071,8 @@ def config_rename(
             branch_id=branch,
             directory=effective_directory,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -1126,16 +1132,8 @@ def config_delete(
             config_id=config_id,
             branch_id=branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -1566,12 +1564,8 @@ def config_metadata_list(
             config_id=config_id,
             branch_id=effective_branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -1613,12 +1607,8 @@ def config_get_metadata(
             key=key,
             branch_id=effective_branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
     formatter.output(result, lambda c, d: c.print(d["value"]))
 
 
@@ -1648,12 +1638,8 @@ def config_set_metadata(
             value=value,
             branch_id=effective_branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
     formatter.output(
         result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
     )
@@ -1693,12 +1679,8 @@ def config_delete_metadata(
             metadata_id=metadata_id,
             branch_id=effective_branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
     formatter.output(
         result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
     )
@@ -1732,12 +1714,8 @@ def config_set_folder(
             folder_name=name,
             branch_id=effective_branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
     formatter.output(
         result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
     )
@@ -2195,16 +2173,8 @@ def config_row_create(
             branch_id=branch,
             allow_plaintext_fallback=allow_plaintext,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -2377,6 +2347,8 @@ def config_row_update(
             path, _, raw_value = item.partition("=")
             parsed_sets.append((path.strip(), _parse_set_value(raw_value.strip())))
 
+    _guard_set_paths(formatter, parsed_sets)
+
     effective_merge = merge or bool(parsed_sets)
 
     try:
@@ -2396,16 +2368,8 @@ def config_row_update(
             branch_id=branch,
             allow_plaintext_fallback=allow_plaintext,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if result.get("dry_run"):
         changes = result.get("changes", [])
@@ -2480,16 +2444,8 @@ def config_row_delete(
             row_id=row_id,
             branch_id=branch,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -2558,16 +2514,8 @@ def config_oauth_url(
             config_id=config_id,
             redirect_url=redirect_url,
         )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_config_service_error(formatter, exc)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -2578,3 +2526,9 @@ def config_oauth_url(
         )
         formatter.console.print(f"  [link]{result['url']}[/link]")
         formatter.console.print("\n[dim]Open this URL in a browser and grant access.[/dim]")
+
+
+# `config state-get` / `config state-set` live in config_state.py (file-size-budget
+# split, see that module's docstring) but register on THIS module's `config_app`.
+# Import for the side effect only -- nothing here references the module by name.
+from . import config_state as _config_state  # noqa: E402,F401

@@ -65,6 +65,13 @@ class MetadataSet(BaseModel):
     value: str
 
 
+class ConfigStateUpdate(BaseModel):
+    state: dict[str, Any]
+    row_id: str | None = None
+    branch_id: int | None = None
+    dry_run: bool = False
+
+
 @router.get("", summary="List component configurations")
 def list_configs(
     project: str | None = Query(None, description="Project alias (None = all)"),
@@ -449,6 +456,54 @@ def oauth_url(
         component_id=component_id,
         config_id=config_id,
         redirect_url=redirect_url,
+    )
+
+
+@router.get(
+    "/{project}/{component_id}/{config_id}/state",
+    summary="Get configuration (or row) state",
+)
+def state_get(
+    project: str,
+    component_id: str,
+    config_id: str,
+    row_id: str | None = None,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Read a configuration's (or row's) runtime state. Mirrors `kbagent config state-get`."""
+    return registry.config.get_config_state(
+        alias=project,
+        component_id=component_id,
+        config_id=config_id,
+        row_id=row_id,
+        branch_id=branch_id,
+    )
+
+
+@router.put(
+    "/{project}/{component_id}/{config_id}/state",
+    summary="Set configuration (or row) state",
+)
+def state_set(
+    project: str,
+    component_id: str,
+    config_id: str,
+    body: ConfigStateUpdate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Set a configuration's (or row's) runtime state. Mirrors `kbagent config state-set`.
+
+    Confirmation is a CLI-only concern -- this route never prompts.
+    """
+    return registry.config.set_config_state(
+        alias=project,
+        component_id=component_id,
+        config_id=config_id,
+        state=body.state,
+        row_id=body.row_id,
+        branch_id=body.branch_id,
+        dry_run=body.dry_run,
     )
 
 

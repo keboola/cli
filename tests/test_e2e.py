@@ -12905,3 +12905,372 @@ class TestE2EAuthRegisterProjects:
         assert "--all" in message or "--project-id" in message, (
             f"error should point at the non-interactive flags: {body['error']['message']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# config state-get / config state-set (issue #593)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EConfigState:
+    """End-to-end tests for `config state-get` / `config state-set` (issue #593).
+
+    Creates a throwaway ``ex-generic-v2`` config (needs no external
+    credentials, creates/deletes cleanly -- same choice as
+    ``TestE2EMcpParityCommands``), exercises the full state round-trip
+    (fresh-empty -> dry-run -> real write -> read-back -> no-op -> row
+    variant -> missing-row error), and the Part A ``--set`` sibling-path
+    guard, then deletes the config.
+
+    NOTE on the row-state-set assertions below: the two state endpoints
+    answer with DIFFERENT shapes. The root ``PUT .../state`` returns the
+    full configuration detail (which carries a ``rows[]`` array), while
+    ``PUT .../rows/{row}/state`` returns the bare updated row object with
+    no ``rows`` key at all. An early build of #593 ran the same
+    ``_extract_state(result, row_id, ...)`` lookup over both, so every row
+    write reported a false ``NOT_FOUND`` even though the PUT returned 200
+    and the state had landed. That was found by running this suite against
+    a live project -- mock-based tests could not catch it, because the
+    mocks returned the shape the author assumed rather than the shape the
+    API sends. If ``test_row_state_roundtrip`` ever fails on
+    ``changed``/``state`` for the write step specifically, suspect that
+    post-write extraction again before assuming the test is wrong.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-state"[:60]
+        self.component_id = "ex-generic-v2"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created_config_ids: list[str] = []
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for cfg_id in self._created_config_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(component_id=self.component_id, config_id=cfg_id)
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def _create_config(self, name_suffix: str) -> str:
+        cfg = self.client.create_config(
+            component_id=self.component_id,
+            name=f"{RUN_ID}-state-{name_suffix}",
+            configuration={},
+            description="E2E throwaway -- issue #593 config state-get/state-set",
+        )
+        config_id = str(cfg["id"])
+        self._created_config_ids.append(config_id)
+        return config_id
+
+    def test_root_state_roundtrip(self) -> None:
+        """Fresh empty -> dry-run (no write) -> real write -> read-back -> no-op."""
+        config_id = self._create_config("root")
+
+        _step(1, "state-get on a fresh config -- expect {}")
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+        )["data"]
+        assert data["state"] == {}
+
+        _step(2, "state-set --dry-run -- diff only, no write")
+        data = self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--state",
+            '{"lastImportId": "12345"}',
+            "--dry-run",
+        )["data"]
+        assert data["dry_run"] is True
+        assert "changes" in data
+
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+        )["data"]
+        assert data["state"] == {}, "a --dry-run state-set must not write anything"
+
+        _step(3, 'state-set --state \'{"lastImportId": "12345"}\' --yes -- real write')
+        data = self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--state",
+            '{"lastImportId": "12345"}',
+            "--yes",
+        )["data"]
+        assert data["changed"] is True
+        assert data["state"] == {"lastImportId": "12345"}
+
+        _step(4, "state-get -- matches what was written")
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+        )["data"]
+        assert data["state"] == {"lastImportId": "12345"}
+
+        _step(5, "state-set with the SAME state again -- no-op (changed: False)")
+        data = self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--state",
+            '{"lastImportId": "12345"}',
+            "--yes",
+        )["data"]
+        assert data["changed"] is False
+
+    def test_row_state_roundtrip(self) -> None:
+        """Row state is independent of root state; write/read-back a row's state.
+
+        See the class docstring on why the row PUT's response shape differs
+        from the root one -- that asymmetry caused a false NOT_FOUND on every
+        row write until it was fixed in #593.
+        """
+        config_id = self._create_config("row")
+
+        row = self.client.create_config_row(
+            component_id=self.component_id,
+            config_id=config_id,
+            name=f"{RUN_ID}-state-row",
+            configuration={},
+        )
+        row_id = str(row["id"])
+
+        _step(1, "seed root state so independence is checkable")
+        self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--state",
+            '{"lastImportId": "12345"}',
+            "--yes",
+        )
+
+        _step(2, "state-set --row-id -- real write on the row")
+        data = self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--row-id",
+            row_id,
+            "--state",
+            '{"rowCursor": "abc"}',
+            "--yes",
+        )["data"]
+        assert data["changed"] is True
+        assert data["state"] == {"rowCursor": "abc"}
+
+        _step(3, "state-get --row-id -- matches what was written")
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--row-id",
+            row_id,
+        )["data"]
+        assert data["state"] == {"rowCursor": "abc"}
+
+        _step(4, "root state is unaffected by the row write")
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+        )["data"]
+        assert data["state"] == {"lastImportId": "12345"}
+
+        _step(5, "row state is unaffected by a subsequent root write")
+        self._run_ok(
+            "config",
+            "state-set",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--state",
+            '{"lastImportId": "99999"}',
+            "--yes",
+        )
+        data = self._run_ok(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--row-id",
+            row_id,
+        )["data"]
+        assert data["state"] == {"rowCursor": "abc"}
+
+    def test_state_get_missing_row_fails_clearly(self) -> None:
+        """state-get --row-id <nonexistent> must fail with a clear error, not return {}."""
+        config_id = self._create_config("missing-row")
+
+        _step(1, "state-get --row-id <nonexistent> -- clear error, not an empty dict")
+        result = self._run(
+            "config",
+            "state-get",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--row-id",
+            "does-not-exist-593",
+        )
+        assert result.exit_code != 0
+        body = json.loads(result.output)
+        assert body["status"] == "error"
+        assert "does-not-exist-593" in body["error"]["message"]
+
+    def test_set_guard_rejects_state_prefix_exit_2(self) -> None:
+        """`config update --set 'state.foo=1'` must be a hard usage error (exit 2).
+
+        Part A of issue #593: `--set` only edits `configuration.*`; a path
+        whose first segment is a top-level API sibling like `state` must be
+        rejected before any network call, and the error must point the
+        caller at `config state-set`. A plain `--set 'parameters.foo=1'`
+        must keep working (regression check).
+        """
+        config_id = self._create_config("guard")
+
+        _step(1, "guarded --set 'state.foo=1' -- exit 2, message names config state-set")
+        result = self._run(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--set",
+            "state.foo=1",
+        )
+        assert result.exit_code == 2, f"expected exit 2, got {result.exit_code}: {result.output}"
+        body = json.loads(result.output)
+        assert body["status"] == "error"
+        assert "config state-set" in body["error"]["message"]
+
+        _step(2, "guard also fires under --dry-run (usage error must never look like a preview)")
+        result = self._run(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--set",
+            "state.foo=1",
+            "--dry-run",
+        )
+        assert result.exit_code == 2, f"--dry-run must not bypass the guard: {result.output}"
+
+        _step(3, "regression -- a normal --set 'parameters.foo=1' still works")
+        data = self._run_ok(
+            "config",
+            "update",
+            "--project",
+            self.alias,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--set",
+            "parameters.foo=1",
+        )["data"]
+        assert data["configuration"]["parameters"]["foo"] == 1

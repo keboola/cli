@@ -645,6 +645,51 @@ DIFF_MAX_DEPTH: int = 3  # max nesting depth for deep_diff detail output
 DIFF_MAX_LINES: int = 20  # max number of diff detail lines per config change
 ENCRYPTED_PLACEHOLDER: str = "<ENCRYPTED>"  # placeholder for encrypted values during comparison
 
+# --- config update / config row-update --set sibling-path guard (issue #593 Part A) ---
+# `--set PATH=VALUE` is documented as editing `configuration.*` only. These
+# are the OTHER top-level keys of the Storage API config-detail response
+# (`config update`) and config-row response (`config row-update`) -- writing
+# through `--set <key>...=<value>` where <key> is one of these used to
+# silently land inside `configuration.<key>` instead of touching the real
+# field (e.g. `--set 'state.x=y'` created `configuration.state.x`, leaving
+# the actual runtime `state` untouched). See `ConfigService.validate_set_paths`.
+CONFIG_SET_GUARDED_PREFIXES: frozenset[str] = frozenset(
+    {
+        "state",
+        "rows",
+        "name",
+        "description",
+        "id",
+        "version",
+        "currentVersion",
+        "changeDescription",
+        "created",
+        "creatorToken",
+        "isDeleted",
+        "isDisabled",
+    }
+)
+
+# Per-prefix guidance for the sibling-path guard error message: which real
+# tool/flag to use instead of `--set <prefix>...`. A prefix absent from this
+# map falls back to a generic "not settable via --set" message.
+CONFIG_SET_GUARD_HINTS: dict[str, str] = {
+    "state": "`kbagent config state-set`",
+    "name": "the `--name` option",
+    "description": "the `--description` option",
+    "isDisabled": (
+        "`config row-update --is-disabled/--is-enabled` (for a row) -- the "
+        "config-level isDisabled flag is not settable at all via --set"
+    ),
+}
+
+# --- Config State (PUT .../state, issue #593) ---
+# Storage API caps the serialized `state` request body at 4 MB. Enforced by
+# the service layer (ConfigService.set_config_state) before the round-trip --
+# the client layer (update_config_state / update_config_row_state) sends the
+# body as-is and relies on the caller to have already validated it.
+CONFIG_STATE_MAX_BYTES: int = 4 * 1024 * 1024
+
 # --- Programmatic Auth (browser login: PKCE + device authorization) ---
 # Keboola Connection issues a "programmatic session": a short-lived access token
 # (kbc_at_*) plus a rotating refresh token (kbc_rt_*), used as

@@ -471,6 +471,23 @@ Use `kbagent <command> --help` for full flag details and examples.
     Return the OAuth authorization URL for a component that uses OAuth authentication.
     Open the URL in a browser to complete the OAuth flow.
 
+  kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
+    Read a configuration's runtime state (the same dict --with-state attaches
+    to config detail). Without --row-id returns the root config's state; with
+    --row-id returns that row's state. For row-based components the root
+    state is unused -- read/write the row state instead.
+
+  kbagent config state-set --project NAME --component-id ID --config-id ID [--row-id ID] --state JSON|@file|- [--branch ID] [--dry-run] [--yes]
+    Write a configuration's runtime state via the dedicated PUT .../state
+    endpoint (branch-scoped). --state must be a JSON object under 4 MB.
+    --row-id targets a row's state instead of the root. --dry-run previews
+    the current-vs-new diff without writing; no-op (changed=false) when the
+    new state equals the current one. Guarded write: prompts for
+    confirmation unless --yes or --json. Use this to seed/reset/backfill
+    state (e.g. seeding a dev branch's lastImportId before testing
+    changed_since: adaptive) -- `config update --set 'state...'` does NOT
+    reach this endpoint (see gotchas).
+
 ### Cross-Project Search
 
   kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]

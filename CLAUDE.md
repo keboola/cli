@@ -389,6 +389,16 @@ kbagent config row-create --project NAME --component-id ID --config-id ID --name
 kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--change-description TEXT] [--is-disabled | --is-enabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
 kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
+kbagent config state-set --project NAME --component-id ID --config-id ID [--row-id ID] --state JSON|@file|- [--branch ID] [--dry-run] [--yes]
+# state-get/state-set (0.84.2+, #593): read/write a config's runtime state via the dedicated
+#   PUT .../state endpoint -- closes the gap where `config update --set 'state...'` looked
+#   successful but silently wrote to configuration.state.* instead (runtime state untouched).
+#   Since 0.84.2, `config update --set` / `config row-update --set` REJECT (exit 2) any path
+#   whose first segment is a top-level API field (state, rows, name, description, id, version,
+#   currentVersion, changeDescription, created, creatorToken, isDeleted, isDisabled) -- use
+#   state-set / --name / --description / row-update --is-disabled instead, or --configuration
+#   for a genuine configuration.<prefix> key.
 
 kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES

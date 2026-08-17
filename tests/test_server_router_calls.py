@@ -1807,3 +1807,145 @@ def test_table_from_snapshot_passes_kwargs(tmp_path: Path) -> None:
         branch_id=None,
         dry_run=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# configs.py  GET/PUT /{p}/{c}/{cfg}/state
+# Service: config.get_config_state / config.set_config_state (issue #593)
+# ---------------------------------------------------------------------------
+
+
+def test_config_state_get_passes_kwargs(tmp_path: Path) -> None:
+    """GET /configs/{p}/{c}/{cfg}/state -> config.get_config_state (no row_id/branch_id)."""
+    config_svc = MagicMock()
+    config_svc.get_config_state.return_value = {
+        "project_alias": PROJECT,
+        "component_id": COMPONENT,
+        "config_id": CONFIG_ID,
+        "row_id": None,
+        "branch_id": None,
+        "state": {"lastId": 123},
+    }
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/state",
+            headers=AUTH,
+        )
+
+    assert res.status_code == 200, res.text
+    config_svc.get_config_state.assert_called_once_with(
+        alias=PROJECT,
+        component_id=COMPONENT,
+        config_id=CONFIG_ID,
+        row_id=None,
+        branch_id=None,
+    )
+
+
+def test_config_state_get_forwards_row_id_and_branch_id(tmp_path: Path) -> None:
+    """GET .../state?row_id=&branch_id= forwards both query params to the service."""
+    config_svc = MagicMock()
+    config_svc.get_config_state.return_value = {
+        "project_alias": PROJECT,
+        "component_id": COMPONENT,
+        "config_id": CONFIG_ID,
+        "row_id": ROW_ID,
+        "branch_id": 456,
+        "state": {},
+    }
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/state",
+            headers=AUTH,
+            params={"row_id": ROW_ID, "branch_id": 456},
+        )
+
+    assert res.status_code == 200, res.text
+    config_svc.get_config_state.assert_called_once_with(
+        alias=PROJECT,
+        component_id=COMPONENT,
+        config_id=CONFIG_ID,
+        row_id=ROW_ID,
+        branch_id=456,
+    )
+
+
+def test_config_state_set_passes_kwargs(tmp_path: Path) -> None:
+    """PUT /configs/{p}/{c}/{cfg}/state -> config.set_config_state with body fields."""
+    config_svc = MagicMock()
+    config_svc.set_config_state.return_value = {
+        "project_alias": PROJECT,
+        "component_id": COMPONENT,
+        "config_id": CONFIG_ID,
+        "row_id": None,
+        "branch_id": None,
+        "state": {"lastId": 999},
+        "changed": True,
+    }
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/state",
+            headers=AUTH,
+            json={"state": {"lastId": 999}},
+        )
+
+    assert res.status_code == 200, res.text
+    config_svc.set_config_state.assert_called_once_with(
+        alias=PROJECT,
+        component_id=COMPONENT,
+        config_id=CONFIG_ID,
+        state={"lastId": 999},
+        row_id=None,
+        branch_id=None,
+        dry_run=False,
+    )
+
+
+def test_config_state_set_forwards_row_id_branch_id_and_dry_run(tmp_path: Path) -> None:
+    """PUT .../state with row_id/branch_id/dry_run in the body forwards all of them."""
+    config_svc = MagicMock()
+    config_svc.set_config_state.return_value = {
+        "project_alias": PROJECT,
+        "component_id": COMPONENT,
+        "config_id": CONFIG_ID,
+        "row_id": ROW_ID,
+        "branch_id": 456,
+        "dry_run": True,
+        "changes": {},
+        "old_state": {},
+        "new_state": {"lastId": 1},
+    }
+    registry = _mock_registry(config=config_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/state",
+            headers=AUTH,
+            json={
+                "state": {"lastId": 1},
+                "row_id": ROW_ID,
+                "branch_id": 456,
+                "dry_run": True,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    config_svc.set_config_state.assert_called_once_with(
+        alias=PROJECT,
+        component_id=COMPONENT,
+        config_id=CONFIG_ID,
+        state={"lastId": 1},
+        row_id=ROW_ID,
+        branch_id=456,
+        dry_run=True,
+    )

@@ -126,6 +126,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update an existing configuration row | `kbagent config row-update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Delete a configuration row | `kbagent config row-delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Read the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --state STATE` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |
@@ -409,6 +411,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
 | **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
 | **Config metadata** (list/get/set/delete arbitrary key-value metadata on a configuration) | [config-metadata-workflow](references/config-metadata-workflow.md) |
+| **Config runtime state** (`state-get`/`state-set`; root vs row; seeding a dev branch before testing `changed_since: adaptive`) | [config-state-workflow](references/config-state-workflow.md) |
 | **Storage descriptions** (describe bucket / table / column, batch from YAML) | [storage-describe-workflow](references/storage-describe-workflow.md) |
 | **Deep column-level lineage** (`lineage build --ai`, column graph, ER + HTML output) | [lineage-deep-workflow](references/lineage-deep-workflow.md) |
 | **Session permissions firewall** (`--deny-writes` / `--deny-destructive`, persisted policies, `permissions check`) | [permissions-workflow](references/permissions-workflow.md) |

@@ -52,8 +52,26 @@ def set_nested_value(obj: dict[str, Any], path: str, value: Any) -> dict[str, An
     Returns a deep-copied dict with the value set — *obj* is not mutated.
 
     Supports integer segments for list indexing on **existing** lists
-    (new intermediate containers are always dicts).
+    (new intermediate containers are always dicts) using dot-separated
+    integers, e.g. ``"files.0.name"`` -- NOT bracket syntax like
+    ``"files[0].name"``. Bracket syntax raises ``ValueError`` instead of
+    being silently accepted: without this check, a path like ``"files[0]"``
+    (no ``.`` in it) would pass straight through as a single segment and
+    create a literal ``"files[0]"`` dict key instead of indexing into the
+    list -- the exact silent-corruption bug this guard closes (issue #593).
+
+    Raises:
+        ValueError: If *path* contains ``[`` or ``]`` (bracket syntax).
+        KeyError: If a segment cannot be traversed/set on the current
+            container (e.g. an int segment against a dict, or a dict
+            segment against a list).
     """
+    if "[" in path or "]" in path:
+        raise ValueError(
+            f"Invalid path {path!r}: bracket syntax like 'files[0]' is not "
+            "supported. Use dot-separated integer segments instead, e.g. "
+            "'files.0'."
+        )
     result = copy.deepcopy(obj)
     segments = path.split(".")
     current: Any = result
