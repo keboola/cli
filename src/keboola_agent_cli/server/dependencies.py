@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 
 from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
+from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
 from ..services.component_service import ComponentService
 from ..services.config_service import ConfigService
@@ -128,6 +129,7 @@ class ServiceRegistry:
     token: TokenService = field(init=False)
     docs: DocsService = field(init=False)
     transformation: TransformationService = field(init=False)
+    billing: BillingService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -170,6 +172,7 @@ class ServiceRegistry:
         self.token = TokenService(config_store=cs)
         self.docs = DocsService(config_store=cs)
         self.transformation = TransformationService(config_store=cs)
+        self.billing = BillingService(config_store=cs)
 
 
 def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:

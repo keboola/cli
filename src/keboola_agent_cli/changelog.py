@@ -24,6 +24,34 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.85.0": [
+        "New (#594): `kbagent billing credits [--project ALIAS ...]` reads the Pay-As-You-Go "
+        "credit balance, fanned out across every registered project in parallel. Wraps `GET "
+        "/credits` on the `billing.{stack}` host, which accepts a plain per-project Storage "
+        "token -- the endpoint was reachable all along and simply had no command over it. Rows "
+        "carry the API's native unit (credits: `consumed` / `remaining` / derived `purchased`) "
+        "AND derived minutes, because the Keboola UI displays minutes = credits x 60; the "
+        "conversion only ever runs in that direction, so a unit bug cannot invert into a wrong "
+        "credit figure. The per-workspace breakdown is parsed tolerantly: the live API returns "
+        "`stats.workspaceJobs` as an ARRAY, not the object its public docs show. A project "
+        "without the `pay-as-you-go` flag in `owner.features` is gated out BEFORE any billing "
+        "request and reported as the new `PAYG_NOT_AVAILABLE` error code -- deliberately not a "
+        "mapped 4xx, because on non-PAYG stacks the service index advertises a `billing.` host "
+        "that does not resolve at all, so an ungated call would surface a DNS failure instead "
+        "of the real reason. Per-project failures degrade individually and never abort the "
+        "run. Mirrored on `kbagent serve` as `GET /billing/credits`. Read-only by design: the "
+        "billing service's `POST /credits` triggers a real automatic top-up (real money) and "
+        "is wrapped by nothing in kbagent.",
+        "Note (#594): credit PURCHASE history and the Stripe invoice IDs Keboola already "
+        "stores per project remain unreachable from the CLI. That data lives on "
+        "`connection.{stack}` under `/pay-as-you-go/billing/*`, which ignores "
+        "`X-StorageApi-Token` entirely (a Storage-token request returns the byte-identical "
+        "302-to-login as an unauthenticated one) and rejects it as a bearer with 401 -- so no "
+        "CLI, script, or scheduled agent can reach it, and anyone funding several PAYG "
+        'projects on one billing identity still cannot answer "which project does this '
+        'Stripe invoice belong to" without matching on (date, amount). Issue #594 tracks the '
+        "ask; `billing credits` is the half that was already implementable.",
+    ],
     "0.84.1": [
         "Fix: `kbagent config new --push` schema validation now validates the body's "
         "`parameters` section instead of the whole configuration object (closes #587). A "

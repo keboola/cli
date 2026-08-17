@@ -5322,6 +5322,103 @@ class TestE2EToolCommands:
 
 
 # ---------------------------------------------------------------------------
+# Billing / PAYG credit balance (issue #594)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EBillingCredits:
+    """End-to-end test for `kbagent billing credits`.
+
+    The E2E project(s) used in CI are NOT pay-as-you-go enabled, so the
+    honest contract to assert here is graceful degradation, not a populated
+    balance: `--json` must return a well-formed `{"credits": [...],
+    "errors": [...]}` envelope, exit 0, and the non-PAYG project must show
+    up as a `PAYG_NOT_AVAILABLE` entry in `errors` rather than crashing or
+    surfacing an opaque billing-host connection failure. The success-path
+    row shape is only asserted when a PAYG project is actually present in
+    the envelope, so this test stays meaningful (and starts covering the
+    happy path) the day a PAYG project is added to the E2E fixtures --
+    without needing to be rewritten then.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-billing"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_billing_credits_returns_well_formed_envelope(self) -> None:
+        """--json always returns {"credits": [...], "errors": [...]}, exit 0.
+
+        A non-PAYG project degrades to a PAYG_NOT_AVAILABLE error entry
+        instead of failing the command -- billing is a read, and one
+        project lacking the feature must never abort the whole run.
+        """
+        result = self._run("billing", "credits", "--project", self.alias)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert "credits" in data
+        assert "errors" in data
+        assert isinstance(data["credits"], list)
+        assert isinstance(data["errors"], list)
+
+        # This project is expected to be non-PAYG in the E2E fixtures. If it
+        # is, it must show up as an actionable error, not a crash or a bare
+        # connection failure against a possibly-NXDOMAIN billing host.
+        non_payg_errors = [e for e in data["errors"] if e.get("project_alias") == self.alias]
+        payg_rows = [c for c in data["credits"] if c.get("project_alias") == self.alias]
+
+        if payg_rows:
+            # A PAYG project showed up -- assert the full success-path row shape.
+            row = payg_rows[0]
+            for key in (
+                "project_alias",
+                "project_id",
+                "consumed",
+                "remaining",
+                "purchased",
+                "consumed_minutes",
+                "remaining_minutes",
+                "component_jobs_consumed",
+                "workspace_jobs",
+            ):
+                assert key in row, f"missing key {key!r} in PAYG credit row: {row}"
+            assert row["purchased"] == row["consumed"] + row["remaining"]
+            assert row["remaining_minutes"] == row["remaining"] * 60
+        else:
+            # Graceful-degradation path: the project must be reported as
+            # non-PAYG, never silently dropped from both lists.
+            assert non_payg_errors, (
+                f"project {self.alias!r} missing from both credits and errors: {data}"
+            )
+            assert non_payg_errors[0]["error_code"] == "PAYG_NOT_AVAILABLE"
+
+
+# ---------------------------------------------------------------------------
 # Job run variable values resolution
 # ---------------------------------------------------------------------------
 

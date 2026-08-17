@@ -140,6 +140,9 @@ class ErrorCode(StrEnum):
     # Password-grant login (since 0.81.0)
     AUTH_MFA_INVALID = "AUTH_MFA_INVALID"
 
+    # Billing / Pay-As-You-Go (since #594)
+    PAYG_NOT_AVAILABLE = "PAYG_NOT_AVAILABLE"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -321,6 +324,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.SESSION_EXPIRED: "authentication",
     ErrorCode.SESSION_NOT_FOUND: "authentication",
     ErrorCode.AUTH_MFA_INVALID: "authentication",
+    ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
 }
 
 

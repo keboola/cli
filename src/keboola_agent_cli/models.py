@@ -466,3 +466,62 @@ class BulkInviteResult(BaseModel):
     failed: int
     rows: list[MemberInviteRow] = Field(default_factory=list)
     dry_run: bool = Field(default=False)
+
+
+class WorkspaceJobCredits(BaseModel):
+    """One workspace-type breakdown row from `GET /credits` on the billing service.
+
+    Deliberately tolerant (`extra="allow"`, every field optional/defaulted):
+    the publicly documented shape of `stats.workspaceJobs` is an OBJECT, but
+    the live API (verified against north-europe.azure) returns an ARRAY of
+    these rows instead. A strict model built against the docs would raise on
+    every real payload, so nothing here is required.
+    """
+
+    workspace_type: str | None = Field(default=None, alias="workspaceType")
+    warehouse_size: str | None = Field(default=None, alias="warehouseSize")
+    consumed: float = Field(default=0.0)
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
+class ComponentJobCredits(BaseModel):
+    """`stats.componentJobs` breakdown from `GET /credits` -- extras pass through."""
+
+    consumed: float = Field(default=0.0)
+
+    model_config = {"extra": "allow"}
+
+
+class CreditStats(BaseModel):
+    """`stats` block from `GET /credits`.
+
+    See `WorkspaceJobCredits` for why `workspace_jobs` must stay a tolerant
+    list default rather than a required field: the API's real shape does not
+    match its own public docs, and `stats` itself, or `workspaceJobs` within
+    it, can be absent entirely on a project with no workspace usage yet.
+    """
+
+    component_jobs: ComponentJobCredits | None = Field(default=None, alias="componentJobs")
+    workspace_jobs: list[WorkspaceJobCredits] = Field(default_factory=list, alias="workspaceJobs")
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
+class ProjectCredits(BaseModel):
+    """`GET /credits` response from the billing service (`billing.<stack>` host).
+
+    `stats` defaults to `None` because the top-level `consumed`/`remaining`
+    balance is meaningful on its own -- a caller that only needs the balance
+    should not be forced through a populated breakdown. Combined with the
+    tolerance built into `CreditStats`/`WorkspaceJobCredits`, this model
+    parses the verbatim live payload as well as a minimal
+    `{"consumed": ..., "remaining": ...}` response with no `stats` key at all,
+    without ever raising on either.
+    """
+
+    consumed: float = Field(default=0.0)
+    remaining: float = Field(default=0.0)
+    stats: CreditStats | None = Field(default=None)
+
+    model_config = {"extra": "allow"}

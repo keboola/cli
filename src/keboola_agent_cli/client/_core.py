@@ -45,6 +45,7 @@ class _CoreClient(BaseHttpClient):
         self._query_client: httpx.Client | None = None
         self._encrypt_client: httpx.Client | None = None
         self._sync_actions_client: httpx.Client | None = None
+        self._billing_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -71,6 +72,10 @@ class _CoreClient(BaseHttpClient):
     def _sync_actions_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "sync-actions")
 
+    @property
+    def _billing_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "billing")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -82,6 +87,8 @@ class _CoreClient(BaseHttpClient):
             self._encrypt_client.close()
         if self._sync_actions_client is not None:
             self._sync_actions_client.close()
+        if self._billing_client is not None:
+            self._billing_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
@@ -155,6 +162,21 @@ class _CoreClient(BaseHttpClient):
         client = self._get_or_create_sub_client("_sync_actions_client", self._sync_actions_base_url)
         return self._do_request(
             method, path, client=client, base_url=self._sync_actions_base_url, **kwargs
+        )
+
+    def _billing_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a Billing API request with retry.
+
+        The billing service is a sibling host derived from the stack URL
+        (``billing.{stack-suffix}``); the sub-client inherits the main
+        client's headers, so the ``X-StorageApi-Token`` auth carries over. On
+        stacks without Pay-As-You-Go the host may not resolve at all (DNS
+        failure) -- callers should feature-gate with ``has_feature()`` before
+        reaching this method rather than relying on the resulting error.
+        """
+        client = self._get_or_create_sub_client("_billing_client", self._billing_base_url)
+        return self._do_request(
+            method, path, client=client, base_url=self._billing_base_url, **kwargs
         )
 
     def _wait_for_storage_job(

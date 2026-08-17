@@ -467,6 +467,16 @@ kbagent sharing edges [--project NAME]
 kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 
+kbagent billing credits [--project ALIAS ...]
+# billing credits (0.85.0+, issue #594 secondary ask): read-only PAYG credit balance, fanned out
+#   across all registered projects in parallel by default (--project repeatable narrows). A project
+#   without the `pay-as-you-go` owner.features flag never touches the billing host (NXDOMAIN on some
+#   non-PAYG stacks) -- it gets a per-project error_code PAYG_NOT_AVAILABLE instead; per-project
+#   failures degrade individually, the run never aborts. Rows report the API's native unit (credits)
+#   AND derived minutes (1 credit = 60 min, matching the Keboola UI). Purchase history / Stripe
+#   invoice IDs are NOT available here -- that data lives on connection.{stack}
+#   /pay-as-you-go/billing/*, which does not accept a Storage token (issue #594 primary ask, open).
+
 # feature: requires a super-admin Manage API token (inline hidden prompt; never persisted; --allow-env-manage-token for CI). --project resolves the stack URL (+ project_id for project ops) from config.
 kbagent feature list --project ALIAS
 kbagent feature project-show --project ALIAS

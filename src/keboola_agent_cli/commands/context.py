@@ -833,6 +833,25 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
     subprocesses inherit the manage token via env.
 
+### Billing / PAYG Credits (since v0.85.0)
+
+  kbagent billing credits [--project ALIAS ...]
+    Read-only PAYG (pay-as-you-go) credit balance. Fans out across all
+    registered projects in parallel by default; --project (repeatable)
+    narrows to specific aliases. Per-project failures degrade individually
+    and never abort the run -- check the "errors" array in --json output.
+    A project without the `pay-as-you-go` owner.features flag never touches
+    the billing host (it can be NXDOMAIN on non-PAYG stacks) -- it gets a
+    per-project error entry with error_code PAYG_NOT_AVAILABLE instead of a
+    generic network error.
+    Units: the API speaks credits; rows also carry derived minutes
+    (1 credit = 60 minutes, matching what the Keboola UI displays) -- never
+    hand-convert, use the minutes fields already in the row.
+    This command gives the CURRENT BALANCE only. Purchase history / Stripe
+    invoice IDs are NOT available -- that data lives on connection.{{stack}}
+    /pay-as-you-go/billing/*, which does not accept a Storage token
+    (issue #594, still open). Do not imply invoices are retrievable.
+
 ### Feature Flags (since v0.48.0)
 
   Requires a SUPER-ADMIN Manage API token (same kind as `org setup`). Same
