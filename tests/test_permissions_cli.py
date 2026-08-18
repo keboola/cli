@@ -130,7 +130,7 @@ class TestPermissionsShow:
         assert data["active"] is False
 
     def test_show_with_policy(self, tmp_path: Path) -> None:
-        policy = PermissionPolicy(mode="allow", deny=["cli:write", "tool:write"])
+        policy = PermissionPolicy(mode="allow", deny=["cli:write", "cli:destructive"])
         store = _make_store(tmp_path, policy)
         with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
             MockStore.return_value = store
@@ -140,7 +140,7 @@ class TestPermissionsShow:
         assert data["active"] is True
         assert data["mode"] == "allow"
         assert "cli:write" in data["deny"]
-        assert "tool:write" in data["deny"]
+        assert "cli:destructive" in data["deny"]
 
     def test_show_reports_session_flags_without_persisted_policy(self, tmp_path: Path) -> None:
         """--deny-writes with no persisted policy must still report 'active'."""
@@ -220,15 +220,12 @@ class TestPermissionsSet:
                     "deny",
                     "--allow",
                     "cli:read",
-                    "--allow",
-                    "tool:read",
                 ],
             )
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
         assert data["mode"] == "deny"
         assert "cli:read" in data["allow"]
-        assert "tool:read" in data["allow"]
 
         # Verify persisted
         config = store.load()
@@ -256,13 +253,13 @@ class TestPermissionsSet:
                     "--deny",
                     "cli:write",
                     "--deny",
-                    "tool:write",
+                    "cli:destructive",
                 ],
             )
         assert result.exit_code == 0
         config = store.load()
         assert config.permissions is not None
-        assert config.permissions.deny == ["cli:write", "tool:write"]
+        assert config.permissions.deny == ["cli:write", "cli:destructive"]
 
     def test_set_rejected_without_confirmation(self, tmp_path: Path) -> None:
         """set should fail when confirmation is not provided (non-interactive)."""
@@ -532,7 +529,6 @@ class TestInitReadOnly:
         config_data = json.loads(local_config_path.read_text())
         assert config_data["permissions"]["mode"] == "allow"
         assert "cli:write" in config_data["permissions"]["deny"]
-        assert "tool:write" in config_data["permissions"]["deny"]
 
         # Verify config.json is owner-read-only (0400). POSIX only: Windows
         # reports 0o666 for anything writable regardless of its ACL, so these
@@ -621,44 +617,3 @@ class TestInitReadOnly:
         assert "prod" in config_data["projects"]
         assert config_data["permissions"]["mode"] == "allow"
         assert "cli:write" in config_data["permissions"]["deny"]
-
-
-class TestMcpToolPermission:
-    """Tests for MCP tool permission enforcement in McpService."""
-
-    def test_blocked_tool_raises(self, tmp_path: Path) -> None:
-        """McpService._check_tool_permission should raise PermissionDeniedError."""
-        from keboola_agent_cli.errors import PermissionDeniedError
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        policy = PermissionPolicy(mode="allow", deny=["tool:write"])
-        store = _make_store(tmp_path, policy)
-        service = McpService(config_store=store)
-
-        import pytest
-
-        with pytest.raises(PermissionDeniedError):
-            service._check_tool_permission("create_config")
-
-    def test_allowed_tool_passes(self, tmp_path: Path) -> None:
-        """Read tools should pass when only writes are blocked."""
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        policy = PermissionPolicy(mode="allow", deny=["tool:write"])
-        store = _make_store(tmp_path, policy)
-        service = McpService(config_store=store)
-
-        # Should not raise
-        service._check_tool_permission("get_configs")
-        service._check_tool_permission("list_buckets")
-
-    def test_no_policy_allows_all_tools(self, tmp_path: Path) -> None:
-        """Without policy, all tools should be allowed."""
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        store = _make_store(tmp_path)
-        service = McpService(config_store=store)
-
-        # Should not raise
-        service._check_tool_permission("create_config")
-        service._check_tool_permission("delete_bucket")

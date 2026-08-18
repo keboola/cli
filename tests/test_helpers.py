@@ -137,7 +137,6 @@ class TestMapErrorCodeToType:
         treatment `UNKNOWN_ERROR` / `INTERNAL_ERROR` / `KAI_ERROR` already get.
         Pinned so adding a member does not imply the map must grow with it."""
         assert map_error_code_to_type("UNEXPECTED_ERROR") == "api"
-        assert map_error_code_to_type("MCP_ERROR") == "api"
         assert map_error_code_to_type("UNKNOWN_ERROR") == "api"
 
 
@@ -499,8 +498,7 @@ class TestApplyFirewallFlags:
         result = apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
         assert result is not None
         assert result.mode == "allow"
-        assert "cli:write" in result.deny
-        assert "tool:write" in result.deny
+        assert result.deny == ["cli:write"]
 
     def test_deny_destructive_synthesizes_fresh_policy(self) -> None:
         from keboola_agent_cli.cli import apply_firewall_flags
@@ -508,7 +506,6 @@ class TestApplyFirewallFlags:
         result = apply_firewall_flags(None, deny_writes=False, deny_destructive=True)
         assert result is not None
         assert "cli:destructive" in result.deny
-        assert "tool:destructive" in result.deny
         assert "cli:write" not in result.deny
 
     def test_flags_merge_with_persisted_deny_no_duplicates(self) -> None:
@@ -518,9 +515,8 @@ class TestApplyFirewallFlags:
         persisted = PermissionPolicy(mode="allow", allow=[], deny=["branch.delete", "cli:write"])
         result = apply_firewall_flags(persisted, deny_writes=True, deny_destructive=False)
         assert result is not None
-        # Existing cli:write preserved (no dup); tool:write appended; custom entry kept.
+        # Existing cli:write preserved (no dup); custom entry kept.
         assert result.deny.count("cli:write") == 1
-        assert "tool:write" in result.deny
         assert "branch.delete" in result.deny
         # Mode preserved.
         assert result.mode == persisted.mode
@@ -541,10 +537,8 @@ class TestApplyFirewallFlags:
 
         result = apply_firewall_flags(None, deny_writes=True, deny_destructive=True)
         assert result is not None
-        # Both prefixes present.
-        assert {"cli:write", "tool:write", "cli:destructive", "tool:destructive"} <= set(
-            result.deny
-        )
+        # Both categories present.
+        assert {"cli:write", "cli:destructive"} <= set(result.deny)
 
     def test_flags_do_not_mutate_persisted(self) -> None:
         from keboola_agent_cli.cli import apply_firewall_flags

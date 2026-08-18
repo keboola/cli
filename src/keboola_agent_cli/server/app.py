@@ -48,7 +48,6 @@ from .routers import (
     jobs,
     kai,
     lineage,
-    mcp,
     members,
     org,
     projects,
@@ -297,14 +296,6 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     },
     # ---- AI & Tools ----
     {
-        "name": "mcp",
-        "description": (
-            "**AI & Tools.** "
-            "List and call MCP tools across one or all projects. "
-            "Mirrors `kbagent tool list|call`."
-        ),
-    },
-    {
         "name": "kai",
         "description": (
             "**AI & Tools.** "
@@ -382,7 +373,7 @@ its command tree:
 - **Data** -- storage, search, sharing
 - **Execution** -- jobs, flows, schedules, data-apps, workspaces
 - **Development** -- branches, lineage, semantic-layer
-- **AI & Tools** -- mcp, kai, documentation, ai-chat, agents
+- **AI & Tools** -- kai, documentation, ai-chat, agents
 - **System** -- health
 
 Most endpoints accept a `project` alias either in the body or as a
@@ -697,7 +688,6 @@ def create_app(
     app.include_router(sharing.router)
     app.include_router(data_apps.router)
     app.include_router(dev_portal.router)
-    app.include_router(mcp.router)
     app.include_router(kai.router)
     app.include_router(ai_chat.router)
     app.include_router(encrypt.router)

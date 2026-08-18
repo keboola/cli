@@ -28,7 +28,6 @@ from keboola_agent_cli.services.base import (
     BaseService,
     project_error_entry,
 )
-from keboola_agent_cli.services.mcp_service import MCP_ERROR_CODE
 
 
 class _TestService(BaseService):
@@ -438,16 +437,16 @@ class TestProjectErrorEntry:
         assert entry["message"] == "pool exhausted"
 
     def test_explicit_fallback_code_is_honoured(self) -> None:
-        entry = project_error_entry("prod", RuntimeError("stdio closed"), fallback_code="MCP_ERROR")
+        entry = project_error_entry("prod", RuntimeError("stdio closed"), fallback_code="API_ERROR")
 
-        assert entry["error_code"] == "MCP_ERROR"
+        assert entry["error_code"] == "API_ERROR"
 
     def test_explicit_message_overrides_the_exception_text(self) -> None:
-        exc = SessionAuthUnsupportedError("The MCP server subprocess")
-        entry = project_error_entry("session", exc, message="Failed to list tools: nope")
+        exc = SessionAuthUnsupportedError("The Keboola AI Service")
+        entry = project_error_entry("session", exc, message="Failed to list schemas: nope")
 
         assert entry["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert entry["message"] == "Failed to list tools: nope"
+        assert entry["message"] == "Failed to list schemas: nope"
 
     def test_uncoded_message_is_truncated(self) -> None:
         """An unknown exception may embed response buffers, so its text is capped."""
@@ -466,7 +465,7 @@ class TestProjectErrorEntry:
 
     def test_error_code_serialises_as_a_plain_string(self) -> None:
         """The wire format must stay a JSON string, not an enum repr."""
-        exc = SessionAuthUnsupportedError("The MCP server subprocess")
+        exc = SessionAuthUnsupportedError("The Keboola AI Service")
         payload = json.loads(json.dumps([project_error_entry("session", exc)]))
 
         assert payload[0]["error_code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
@@ -480,14 +479,14 @@ class TestProjectErrorEntry:
 
         assert payload[0]["error_code"] == "UNEXPECTED_ERROR"
 
-    def test_mcp_fallback_code_serialises_unchanged(self) -> None:
-        assert MCP_ERROR_CODE is ErrorCode.MCP_ERROR
+    def test_enum_fallback_code_serialises_unchanged(self) -> None:
+        """An explicit `ErrorCode` member fallback reaches the wire as a plain string."""
         entry = project_error_entry(
-            "prod", RuntimeError("stdio closed"), fallback_code=MCP_ERROR_CODE
+            "prod", RuntimeError("connection reset"), fallback_code=ErrorCode.API_ERROR
         )
         payload = json.loads(json.dumps([entry]))
 
-        assert payload[0]["error_code"] == "MCP_ERROR"
+        assert payload[0]["error_code"] == "API_ERROR"
 
 
 class TestRunParallelPreservesErrorCodes:

@@ -103,7 +103,7 @@ def init_command(
                 "'project add', so you would be locked out. Correct workflow: "
                 "1) 'kbagent init' (without --read-only), "
                 "2) 'kbagent project add ...', "
-                "3) 'kbagent permissions set --mode allow --deny cli:write --deny tool:write' to lock. "
+                "3) 'kbagent permissions set --mode allow --deny cli:write' to lock. "
                 "Alternatively, use --from-global to seed projects from the global config."
             ),
             error_code=ErrorCode.CONFIG_ERROR,
@@ -113,7 +113,7 @@ def init_command(
     if read_only:
         config.permissions = PermissionPolicy(
             mode="allow",
-            deny=["cli:write", "tool:write"],
+            deny=["cli:write"],
         )
 
     local_store = ConfigStore(config_dir=local_dir, source="local")

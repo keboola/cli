@@ -35,7 +35,6 @@ SESSION_UNSUPPORTED_FEATURES: tuple[str, ...] = (
     "kbagent semantic-layer (Metastore Service)",
     "kbagent data-app (Data Science Service)",
     "kbagent stream (Data Streams Service)",
-    "kbagent tool (MCP server subprocess)",
     "kbagent sharing, unless a master token is set in the environment",
     "AI Service paths: kbagent docs query, config examples, config new, "
     "component detail/search, flow new/update/validate",

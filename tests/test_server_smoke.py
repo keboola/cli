@@ -42,7 +42,6 @@ EXPECTED_ROUTER_PREFIXES = {
     "/lineage/edges",
     "/sharing",
     "/data-apps",
-    "/mcp/tools",
     "/kai/ping",
     "/encrypt/values",
     "/search",
@@ -104,6 +103,15 @@ def test_openapi_lists_all_routers(client: TestClient) -> None:
     paths = set(spec["paths"].keys())
     missing = EXPECTED_ROUTER_PREFIXES - paths
     assert not missing, f"OpenAPI is missing expected paths: {sorted(missing)}"
+
+
+def test_mcp_routes_are_gone(client: TestClient) -> None:
+    """The `/mcp/*` passthrough was removed in v0.85.0 (epic #390 phase 3)."""
+    spec = client.get("/openapi.json").json()
+    assert not [p for p in spec["paths"] if p.startswith("/mcp")]
+
+    res = client.get("/mcp/tools", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 404
 
 
 def test_every_router_tag_has_openapi_metadata(client: TestClient) -> None:
@@ -439,7 +447,7 @@ def test_sentinel_unsupported_path_keeps_its_error_code(tmp_path: Path) -> None:
     """
     from keboola_agent_cli.errors import SessionAuthUnsupportedError
 
-    exc = SessionAuthUnsupportedError("The MCP server subprocess")
+    exc = SessionAuthUnsupportedError("The Keboola AI Service")
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
         res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
 

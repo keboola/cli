@@ -12,7 +12,6 @@ Exercises the FULL CLI surface against a real (empty) Keboola project:
   - Encrypt (values)
   - Permissions (list / show / check)
   - Sync workflow (init / pull / status / diff / push --dry-run)
-  - Tool commands (list / call) -- requires keboola-mcp-server
   - Lineage, sharing, doctor, context, version, changelog, init
 
 All resources are prefixed with 'e2e-{run_id}' and cleaned up even on failure.
@@ -287,28 +286,6 @@ def _create_test_file(path: Path, content: str = "hello e2e") -> Path:
     file_path = path / f"{RUN_ID}_file.txt"
     file_path.write_text(content)
     return file_path
-
-
-def _check_mcp_module() -> bool:
-    """Check if keboola-mcp-server is available as a Python module."""
-    try:
-        result = subprocess.run(
-            ["python", "-m", "keboola_mcp_server", "--help"],
-            capture_output=True,
-            timeout=10,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-# MCP server availability
-HAS_MCP_SERVER = shutil.which("keboola_mcp_server") is not None or _check_mcp_module()
-
-skip_without_mcp = pytest.mark.skipif(
-    not HAS_MCP_SERVER,
-    reason="Tool tests require keboola-mcp-server",
-)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -5386,66 +5363,6 @@ class TestE2ESyncWorkflow:
                         print(
                             f"  [cleanup] Failed to delete keboola.variables/{auto_vars_id}: {exc}"
                         )
-
-
-# ---------------------------------------------------------------------------
-# Tool command tests (requires MCP server)
-# ---------------------------------------------------------------------------
-
-
-@skip_without_credentials
-@skip_without_mcp
-@pytest.mark.e2e
-class TestE2EToolCommands:
-    """Test MCP tool list and call commands."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self, tmp_path: Path) -> None:
-        """Register a project for tool tests."""
-        self.token = os.environ[ENV_TOKEN]
-        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
-        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
-        self.alias = f"{RUN_ID}-tool"
-        self.config_dir = tmp_path / "config"
-        self.config_dir.mkdir()
-
-        result = _invoke(
-            self.config_dir,
-            [
-                "--json",
-                "project",
-                "add",
-                "--project",
-                self.alias,
-                "--url",
-                self.url,
-                "--token",
-                self.token,
-            ],
-        )
-        assert result.exit_code == 0, f"project add failed: {result.output}"
-
-    def _run(self, *args: str) -> Any:
-        return _invoke(self.config_dir, ["--json", *args])
-
-    def _run_ok(self, *args: str) -> dict[str, Any]:
-        return _json_ok(self._run(*args))
-
-    def test_tool_list(self) -> None:
-        """tool list should return a list of available MCP tools."""
-        result = self._run("tool", "list", "--project", self.alias)
-        assert result.exit_code == 0
-
-    def test_tool_call_get_buckets(self) -> None:
-        """tool call get_buckets should return bucket data."""
-        result = self._run(
-            "tool",
-            "call",
-            "get_buckets",
-            "--project",
-            self.alias,
-        )
-        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,6 @@ Runs checks for:
 2. Config file valid JSON and parseable
 3. Token verification for each project (API call with response time)
 4. CLI version
-5. MCP server availability
 
 Extracted from commands/doctor.py to respect the 3-layer architecture.
 """
@@ -21,10 +20,8 @@ from .. import __version__
 from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
-from ..mcp_parity import native_equivalent
 from ..models import AppConfig
 from .base import ClientFactory, make_client_factory
-from .mcp_service import McpService, ensure_mcp_installed
 
 # Cap on how many offending items a single check names inline; the rest are
 # summarised as "+N more" and the full list travels in `details` for --json.
@@ -32,30 +29,19 @@ _MAX_LISTED_TASKS = 5
 AGENTS_FILENAME = "agents.json"
 
 
-def _native_command_for(tool: str | None) -> str | None:
-    """Native CLI replacement for an MCP tool name, if the parity map knows one."""
-    if not tool:
-        return None
-    entry = native_equivalent(tool)
-    return f"kbagent {entry.command}" if entry is not None else None
-
-
 class DoctorService:
     """Business logic for health checks.
 
-    Accepts ConfigStore, client_factory, and McpService via DI
-    for easy testing with mocks.
+    Accepts ConfigStore and client_factory via DI for easy testing with mocks.
     """
 
     def __init__(
         self,
         config_store: ConfigStore,
         client_factory: ClientFactory | None = None,
-        mcp_service: McpService | None = None,
     ) -> None:
         self._config_store = config_store
         self._client_factory = client_factory or make_client_factory(config_store)
-        self._mcp_service = mcp_service or McpService(config_store)
 
     def run_checks(self) -> dict[str, Any]:
         """Run all health checks and return structured results.
@@ -85,22 +71,19 @@ class DoctorService:
         version_check = self._check_version()
         all_checks.append(version_check)
 
-        # Check 5: MCP server availability
-        mcp_check = self._mcp_service.check_server_available()
-        all_checks.append(mcp_check)
-
-        # Check 6: Conversation ID
+        # Check 5: Conversation ID
         conversation_check = self._check_conversation_id()
         all_checks.append(conversation_check)
 
-        # Check 7: Claude Code plugin installation
+        # Check 6: Claude Code plugin installation
         plugin_check = self._check_claude_plugin()
         all_checks.append(plugin_check)
 
-        # Check 8: Plaintext #-secrets in synced configs (issue #378)
+        # Check 7: Plaintext #-secrets in synced configs (issue #378)
         sync_secret_check = self._check_sync_secrets()
         all_checks.append(sync_secret_check)
 
+        # Check 8: scheduled tasks still using the removed mcp_tool action
         mcp_tool_task_check = self._check_mcp_tool_tasks()
         all_checks.append(mcp_tool_task_check)
 
@@ -124,7 +107,7 @@ class DoctorService:
         }
 
     def _check_sync_secrets(self) -> dict[str, Any]:
-        """Check 8: flag plaintext ``#``-secrets in synced configs (issue #378).
+        """Check 7: flag plaintext ``#``-secrets in synced configs (issue #378).
 
         Only meaningful inside a sync working tree (a directory containing
         ``.keboola/manifest.json``); skipped otherwise. Read-only -- filesystem
@@ -176,7 +159,7 @@ class DoctorService:
         }
 
     def _check_mcp_tool_tasks(self) -> dict[str, Any]:
-        """Check 9: flag scheduled tasks that still use the REMOVED MCP passthrough.
+        """Check 8: flag scheduled tasks that still use the REMOVED MCP passthrough.
 
         ``agent --type mcp_tool`` was removed in the version named by
         :data:`REMOVED_IN_VERSION` (epic #390 phase 3). Such a task still
@@ -184,7 +167,7 @@ class DoctorService:
         but it no longer runs: every firing is persisted as an errored run.
         Because it runs unattended, nobody is present to see that; this check is
         the standing reminder in the one command people run when something feels
-        off. Read-only: filesystem only, no API call, no MCP spawn.
+        off. Read-only: filesystem only, no API call.
         """
         # Local import: keeps the server package off the doctor cold-start path.
         from ..server.agents_store import REMOVED_IN_VERSION, AgentStore
@@ -279,7 +262,6 @@ class DoctorService:
                         "tool": t.action.params.get("tool"),
                         "cron": None if t.manual else t.cron,
                         "enabled": t.enabled,
-                        "native_command": _native_command_for(t.action.params.get("tool")),
                     }
                     for t in affected
                 ],
@@ -474,7 +456,7 @@ class DoctorService:
 
     @staticmethod
     def _check_conversation_id() -> dict[str, Any]:
-        """Check 6: Conversation ID env var is set.
+        """Check 5: Conversation ID env var is set.
 
         Returns:
             Check result dict with warn if not set, pass if set.
@@ -499,7 +481,7 @@ class DoctorService:
 
     @staticmethod
     def _check_claude_plugin() -> dict[str, Any]:
-        """Check 7: Claude Code plugin installation.
+        """Check 6: Claude Code plugin installation.
 
         Detects whether the kbagent Claude Code plugin (this repo's plugin
         marketplace entry) is installed under ``~/.claude/plugins/cache/``.
@@ -572,15 +554,3 @@ class DoctorService:
             "plugin_path": str(latest),
             "plugin_version": plugin_version,
         }
-
-    @staticmethod
-    def warmup() -> dict[str, Any]:
-        """Ensure MCP server is installed as a fast local binary.
-
-        If only uvx fallback is available, installs via `uv tool install`
-        to create a permanent binary with faster startup (~1s vs ~4.5s).
-
-        Returns:
-            Dict with installation result info.
-        """
-        return ensure_mcp_installed()

@@ -199,9 +199,9 @@ class PermissionPolicy(BaseModel):
     - mode='deny' (default-deny): everything denied unless in allow list
 
     Patterns support exact names, globs, and categories:
-    - Exact: 'branch.delete', 'tool:create_config'
-    - Glob: 'sync.*', 'tool:create_*'
-    - Category: 'cli:write', 'cli:read', 'tool:write', 'tool:read'
+    - Exact: 'branch.delete', 'config.update'
+    - Glob: 'sync.*', 'config.row-*'
+    - Category: 'cli:read', 'cli:write', 'cli:destructive', 'cli:admin'
     """
 
     mode: str = Field(

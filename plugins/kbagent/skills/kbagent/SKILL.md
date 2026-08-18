@@ -239,8 +239,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Garbage-collect orphaned workspaces | `kbagent workspace gc` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| List available MCP tools from the keboola-mcp-server | `kbagent tool list` |
-| Call an MCP tool on keboola-mcp-server | `kbagent tool call <TOOL-NAME>` |
 | Initialize a sync working directory for a Keboola project | `kbagent sync init --project PROJECT` |
 | Download configurations from a Keboola project to local files | `kbagent sync pull` |
 | Show which local configurations have been modified, added, or deleted | `kbagent sync status` |

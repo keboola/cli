@@ -10,7 +10,6 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.doctor_service import DoctorService
-from keboola_agent_cli.services.mcp_service import McpService
 
 
 def _make_mock_client(
@@ -36,25 +35,13 @@ def _make_failing_client(error: KeboolaApiError) -> MagicMock:
     return mock_client
 
 
-def _make_mcp_service_mock(status: str = "pass") -> MagicMock:
-    """Create a mock McpService returning a check_server_available result."""
-    mock_mcp = MagicMock(spec=McpService)
-    mock_mcp.check_server_available.return_value = {
-        "check": "mcp_server",
-        "name": "MCP server",
-        "status": status,
-        "message": "MCP server available" if status == "pass" else "MCP server not found",
-    }
-    return mock_mcp
-
-
 class TestDoctorServiceCheckConfigFile:
     """Tests for DoctorService._check_config_file() - config file existence and permissions."""
 
     def test_config_file_not_found(self, tmp_config_dir: Path) -> None:
         """When config file does not exist, returns 'warn' status."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_config_file()
 
@@ -74,7 +61,7 @@ class TestDoctorServiceCheckConfigFile:
                 project_id=1234,
             ),
         )
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_config_file()
 
@@ -106,7 +93,7 @@ class TestDoctorServiceCheckConfigFile:
         # Change permissions to 0644
         store.config_path.chmod(0o644)
 
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_config_file()
 
@@ -122,7 +109,7 @@ class TestDoctorServiceCheckConfigSource:
     def test_reports_global_source(self, tmp_config_dir: Path) -> None:
         """Reports global config source."""
         store = ConfigStore(config_dir=tmp_config_dir, source="global")
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_config_source()
 
@@ -133,7 +120,7 @@ class TestDoctorServiceCheckConfigSource:
     def test_reports_local_source(self, tmp_config_dir: Path) -> None:
         """Reports local config source."""
         store = ConfigStore(config_dir=tmp_config_dir, source="local")
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_config_source()
 
@@ -144,7 +131,7 @@ class TestDoctorServiceCheckConfigSource:
     def test_config_source_in_run_checks(self, tmp_config_dir: Path) -> None:
         """run_checks includes config_source as first check."""
         store = ConfigStore(config_dir=tmp_config_dir, source="local")
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service.run_checks()
 
@@ -157,7 +144,7 @@ class TestDoctorServiceCheckConfigValid:
     def test_no_config_file_returns_skip(self, tmp_config_dir: Path) -> None:
         """When config file does not exist, returns 'skip' status."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result, config = service._check_config_valid()
 
@@ -178,7 +165,7 @@ class TestDoctorServiceCheckConfigValid:
             ),
         )
 
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result, config = service._check_config_valid()
 
@@ -195,7 +182,7 @@ class TestDoctorServiceCheckConfigValid:
         config_path.write_text("not valid json {{{", encoding="utf-8")
         config_path.chmod(0o600)
 
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result, config = service._check_config_valid()
 
@@ -212,7 +199,7 @@ class TestDoctorServiceCheckConfigValid:
         config_path.write_text('{"projects": "not-a-dict"}', encoding="utf-8")
         config_path.chmod(0o600)
 
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result, config = service._check_config_valid()
 
@@ -228,7 +215,7 @@ class TestDoctorServiceCheckConnectivity:
     def test_no_config_returns_skip(self, tmp_config_dir: Path) -> None:
         """When config is None, returns skip for connectivity."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         results = service._check_connectivity(None)
 
@@ -254,7 +241,6 @@ class TestDoctorServiceCheckConnectivity:
         service = DoctorService(
             config_store=store,
             client_factory=lambda url, token: mock_client,
-            mcp_service=_make_mcp_service_mock(),
         )
 
         results = service._check_connectivity(config)
@@ -290,7 +276,6 @@ class TestDoctorServiceCheckConnectivity:
         service = DoctorService(
             config_store=store,
             client_factory=lambda url, token: fail_client,
-            mcp_service=_make_mcp_service_mock(),
         )
 
         results = service._check_connectivity(config)
@@ -340,7 +325,6 @@ class TestDoctorServiceCheckConnectivity:
         service = DoctorService(
             config_store=store,
             client_factory=factory,
-            mcp_service=_make_mcp_service_mock(),
         )
 
         results = service._check_connectivity(config)
@@ -357,7 +341,7 @@ class TestDoctorServiceCheckVersion:
     def test_version_check_passes(self, tmp_config_dir: Path) -> None:
         """Version check always returns 'pass' with version string."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_version()
 
@@ -373,7 +357,7 @@ class TestDoctorServiceCheckConversationId:
         """Warns when KBAGENT_CONVERSATION_ID is not set."""
         monkeypatch.delenv("KBAGENT_CONVERSATION_ID", raising=False)
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_conversation_id()
 
@@ -385,7 +369,7 @@ class TestDoctorServiceCheckConversationId:
         """Passes when KBAGENT_CONVERSATION_ID is set."""
         monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "test-conv-123")
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service._check_conversation_id()
 
@@ -400,13 +384,13 @@ class TestDoctorServiceRunChecks:
     def test_run_checks_returns_all_checks_and_summary(self, tmp_config_dir: Path) -> None:
         """run_checks returns a complete structure with checks and summary."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service.run_checks()
 
         assert "checks" in result
         assert "summary" in result
-        assert len(result["checks"]) >= 5  # source, file, valid, connectivity, version, mcp
+        assert len(result["checks"]) >= 4  # source, file, valid, connectivity, version
         assert "total" in result["summary"]
         assert "passed" in result["summary"]
         assert "failed" in result["summary"]
@@ -417,7 +401,7 @@ class TestDoctorServiceRunChecks:
     def test_run_checks_no_config_is_healthy(self, tmp_config_dir: Path) -> None:
         """With no config file, run_checks is still healthy (no failures)."""
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
 
         result = service.run_checks()
 
@@ -447,7 +431,6 @@ class TestDoctorServiceRunChecks:
         service = DoctorService(
             config_store=store,
             client_factory=lambda url, token: fail_client,
-            mcp_service=_make_mcp_service_mock(),
         )
 
         result = service.run_checks()
@@ -455,17 +438,21 @@ class TestDoctorServiceRunChecks:
         assert result["summary"]["healthy"] is False
         assert result["summary"]["failed"] >= 1
 
-    def test_run_checks_includes_mcp_check(self, tmp_config_dir: Path) -> None:
-        """run_checks includes the MCP server availability check."""
+    def test_run_checks_has_no_mcp_server_check(self, tmp_config_dir: Path) -> None:
+        """The MCP server availability probe was removed in v0.85.0.
+
+        The `mcp_tool_tasks` tombstone check stays -- it reports agent tasks
+        that still use the removed action, and has nothing to do with probing
+        for a server binary.
+        """
         store = ConfigStore(config_dir=tmp_config_dir)
-        mock_mcp = _make_mcp_service_mock(status="warn")
-        service = DoctorService(config_store=store, mcp_service=mock_mcp)
+        service = DoctorService(config_store=store)
 
         result = service.run_checks()
 
-        mcp_checks = [c for c in result["checks"] if c["check"] == "mcp_server"]
-        assert len(mcp_checks) == 1
-        assert mcp_checks[0]["status"] == "warn"
+        names = {c["check"] for c in result["checks"]}
+        assert "mcp_server" not in names
+        assert "mcp_tool_tasks" in names
 
 
 class TestDoctorServiceCheckClaudePlugin:
@@ -592,7 +579,7 @@ class TestDoctorServiceCheckClaudePlugin:
         monkeypatch.setattr(Path, "home", lambda: fake_home)
 
         store = ConfigStore(config_dir=tmp_config_dir)
-        service = DoctorService(config_store=store, mcp_service=_make_mcp_service_mock())
+        service = DoctorService(config_store=store)
         result = service.run_checks()
 
         plugin_checks = [c for c in result["checks"] if c["check"] == "claude_plugin"]

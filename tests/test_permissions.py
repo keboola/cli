@@ -1,4 +1,4 @@
-"""Tests for the permission engine (OPERATION_REGISTRY, PermissionEngine, classify_mcp_tool)."""
+"""Tests for the permission engine (OPERATION_REGISTRY, PermissionEngine)."""
 
 from typing import ClassVar
 
@@ -10,67 +10,7 @@ from keboola_agent_cli.permissions import (
     FLAG_ESCALATIONS,
     OPERATION_REGISTRY,
     PermissionEngine,
-    classify_mcp_tool,
 )
-
-
-class TestClassifyMcpTool:
-    """Tests for classify_mcp_tool()."""
-
-    def test_read_tools(self) -> None:
-        assert classify_mcp_tool("get_buckets") == "read"
-        assert classify_mcp_tool("list_configs") == "read"
-        assert classify_mcp_tool("search") == "read"
-        assert classify_mcp_tool("find_tables") == "read"
-        assert classify_mcp_tool("docs_query") == "read"
-
-    def test_write_tools(self) -> None:
-        assert classify_mcp_tool("create_config") == "write"
-        assert classify_mcp_tool("update_config") == "write"
-        assert classify_mcp_tool("add_tag") == "write"
-        assert classify_mcp_tool("set_metadata") == "write"
-
-    def test_mutating_tools_previously_misclassified_as_read(self) -> None:
-        """Issue #478: run_*/modify_*/deploy_* used to fall through to 'read'."""
-        assert classify_mcp_tool("run_job") == "write"
-        assert classify_mcp_tool("run_sync_action") == "write"
-        assert classify_mcp_tool("modify_flow") == "write"
-        assert classify_mcp_tool("modify_streamlit_data_app") == "write"
-        assert classify_mcp_tool("deploy_data_app") == "write"
-
-    def test_destructive_tools(self) -> None:
-        assert classify_mcp_tool("delete_config") == "destructive"
-        assert classify_mcp_tool("remove_tag") == "destructive"
-        assert classify_mcp_tool("truncate_table") == "destructive"
-        assert classify_mcp_tool("drop_bucket") == "destructive"
-        assert classify_mcp_tool("purge_files") == "destructive"
-
-    def test_unknown_tools_fail_closed_to_destructive(self) -> None:
-        """Issue #478: a tool matching no known prefix must NOT pass as a read.
-
-        'destructive' is the strictest category: both --deny-writes and
-        --deny-destructive policies block it.
-        """
-        assert classify_mcp_tool("frobnicate_project") == "destructive"
-        assert classify_mcp_tool("describe_table") == "destructive"
-        assert classify_mcp_tool("") == "destructive"
-
-    def test_current_catalog_read_tools(self) -> None:
-        """Every read tool in today's keboola-mcp-server catalog stays 'read'."""
-        for name in (
-            "get_project_info",
-            "get_configs",
-            "get_flows",
-            "get_data_apps",
-            "get_semantic_context",
-            "search",
-            "search_semantic_context",
-            "find_component_id",
-            "docs_query",
-            "query_data",
-            "validate_semantic_query",
-        ):
-            assert classify_mcp_tool(name) == "read", name
 
 
 class TestOperationRegistry:
@@ -85,7 +25,6 @@ class TestOperationRegistry:
         assert OPERATION_REGISTRY["config.list"] == "read"
         assert OPERATION_REGISTRY["job.detail"] == "read"
         assert OPERATION_REGISTRY["project.list"] == "read"
-        assert OPERATION_REGISTRY["tool.list"] == "read"
 
     def test_known_write_operations(self) -> None:
         assert OPERATION_REGISTRY["branch.create"] == "write"
@@ -109,7 +48,6 @@ class TestPermissionEngineNoPolicy:
     def test_no_policy_allows_everything(self) -> None:
         engine = PermissionEngine(None)
         assert engine.is_allowed("branch.delete") is True
-        assert engine.is_allowed("tool:create_config") is True
         assert engine.is_allowed("anything.at.all") is True
 
     def test_no_policy_active_is_false(self) -> None:
@@ -128,7 +66,6 @@ class TestPermissionEngineAllowMode:
         policy = PermissionPolicy(mode="allow", deny=[])
         engine = PermissionEngine(policy)
         assert engine.is_allowed("branch.delete") is True
-        assert engine.is_allowed("tool:create_config") is True
 
     def test_exact_deny(self) -> None:
         policy = PermissionPolicy(mode="allow", deny=["branch.delete"])
@@ -158,21 +95,18 @@ class TestPermissionEngineAllowMode:
         assert engine.is_allowed("config.list") is True
         assert engine.is_allowed("job.detail") is True
 
-    def test_category_tool_write_deny(self) -> None:
-        policy = PermissionPolicy(mode="allow", deny=["tool:write"])
-        engine = PermissionEngine(policy)
-        assert engine.is_allowed("tool:create_config") is False
-        assert engine.is_allowed("tool:delete_bucket") is False
-        assert engine.is_allowed("tool:get_configs") is True
-        assert engine.is_allowed("tool:list_buckets") is True
+    def test_persisted_tool_patterns_are_inert(self) -> None:
+        """A pre-0.85 policy carrying tool:* patterns loads and never matches.
 
-    def test_tool_glob_deny(self) -> None:
-        policy = PermissionPolicy(mode="allow", deny=["tool:create_*"])
+        The `tool` command group and the MCP tool classifier are gone, so no
+        operation string starts with `tool:` any more. The stale patterns fall
+        through to the plain fnmatch branch, match nothing, and crash nothing.
+        """
+        policy = PermissionPolicy(mode="allow", deny=["tool:write", "tool:create_*"])
         engine = PermissionEngine(policy)
-        assert engine.is_allowed("tool:create_config") is False
-        assert engine.is_allowed("tool:create_bucket") is False
-        assert engine.is_allowed("tool:delete_config") is True
-        assert engine.is_allowed("tool:get_configs") is True
+        assert engine.is_allowed("config.update") is True
+        assert engine.is_allowed("job.run") is True
+        assert engine.is_allowed("config.list") is True
 
     def test_deny_with_allow_override(self) -> None:
         """Allow list can override deny for specific operations."""
@@ -189,19 +123,15 @@ class TestPermissionEngineAllowMode:
         assert engine.is_allowed("config.update") is False
 
     def test_vojta_use_case(self) -> None:
-        """Vojta's use case: block all write tools, allow everything else."""
-        policy = PermissionPolicy(mode="allow", deny=["cli:write", "tool:write"])
+        """Vojta's use case: block all writes, allow everything else."""
+        policy = PermissionPolicy(mode="allow", deny=["cli:write"])
         engine = PermissionEngine(policy)
         # Reads allowed
         assert engine.is_allowed("config.list") is True
-        assert engine.is_allowed("tool:get_configs") is True
-        assert engine.is_allowed("tool.list") is True
         assert engine.is_allowed("project.list") is True
         # Writes blocked
         assert engine.is_allowed("branch.create") is False
-        assert engine.is_allowed("tool:create_config") is False
         assert engine.is_allowed("workspace.delete") is False
-        assert engine.is_allowed("tool:delete_bucket") is False
 
 
 class TestPermissionEngineDenyMode:
@@ -211,7 +141,7 @@ class TestPermissionEngineDenyMode:
         policy = PermissionPolicy(mode="deny", allow=[])
         engine = PermissionEngine(policy)
         assert engine.is_allowed("config.list") is False
-        assert engine.is_allowed("tool:get_configs") is False
+        assert engine.is_allowed("branch.create") is False
 
     def test_exact_allow(self) -> None:
         policy = PermissionPolicy(mode="deny", allow=["config.list", "project.list"])
@@ -227,13 +157,6 @@ class TestPermissionEngineDenyMode:
         assert engine.is_allowed("job.detail") is True
         assert engine.is_allowed("branch.create") is False
         assert engine.is_allowed("branch.delete") is False
-
-    def test_category_tool_read_allow(self) -> None:
-        policy = PermissionPolicy(mode="deny", allow=["tool:read"])
-        engine = PermissionEngine(policy)
-        assert engine.is_allowed("tool:get_configs") is True
-        assert engine.is_allowed("tool:list_buckets") is True
-        assert engine.is_allowed("tool:create_config") is False
 
     def test_deny_overrides_allow(self) -> None:
         """In deny mode, explicit deny still wins over allow."""
@@ -251,12 +174,11 @@ class TestPermissionEngineDenyMode:
 
     def test_read_only_mode(self) -> None:
         """Full read-only: allow only reads."""
-        policy = PermissionPolicy(mode="deny", allow=["cli:read", "tool:read"])
+        policy = PermissionPolicy(mode="deny", allow=["cli:read"])
         engine = PermissionEngine(policy)
         assert engine.is_allowed("config.list") is True
-        assert engine.is_allowed("tool:get_configs") is True
+        assert engine.is_allowed("job.detail") is True
         assert engine.is_allowed("branch.create") is False
-        assert engine.is_allowed("tool:create_config") is False
 
 
 class TestPermissionEngineMetaCommands:
@@ -301,11 +223,10 @@ class TestPermissionEngineListOperations:
     def test_returns_all_operations(self) -> None:
         engine = PermissionEngine(None)
         ops = engine.list_operations()
-        # Every registry command, every flag escalation, and 3 MCP categories.
+        # Every registry command and every flag escalation -- nothing else.
         cli_ops = [op for op in ops if op["type"] == "cli"]
-        mcp_ops = [op for op in ops if op["type"] == "mcp"]
         assert len(cli_ops) == len(OPERATION_REGISTRY) + len(FLAG_ESCALATIONS)
-        assert len(mcp_ops) == 3
+        assert len(ops) == len(cli_ops)
 
     def test_status_reflects_policy(self) -> None:
         policy = PermissionPolicy(mode="allow", deny=["branch.delete"])

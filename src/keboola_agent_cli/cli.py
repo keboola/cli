@@ -39,7 +39,6 @@ from .commands.storage import storage_app
 from .commands.stream import stream_app
 from .commands.sync import sync_app
 from .commands.token import token_app
-from .commands.tool import tool_app
 from .commands.transformation import transformation_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
@@ -67,7 +66,6 @@ from .services.http_forwarder_service import HttpForwarderService
 from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
-from .services.mcp_service import McpService
 from .services.member_service import MemberService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
@@ -145,7 +143,6 @@ app.add_typer(schedule_app, name="schedule", rich_help_panel=_FLOWS)
 _DEV = "Development"
 app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
 app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
-app.add_typer(tool_app, name="tool", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
@@ -178,18 +175,17 @@ def apply_firewall_flags(
 
     extra_deny: list[str] = []
     if deny_writes:
-        # cli:write pattern intentionally spans write+destructive+admin
-        # (permissions._matches_pattern lines 175-178). tool:write spans
-        # tool write+destructive. Wide net: --deny-writes blocks anything
-        # that mutates state.
-        extra_deny.extend(["cli:write", "tool:write"])
+        # The cli:write pattern intentionally spans write+destructive+admin
+        # (see permissions._matches_pattern). Wide net: --deny-writes blocks
+        # anything that mutates state.
+        extra_deny.append("cli:write")
     if deny_destructive:
         # cli:destructive narrowly matches only ops categorized 'destructive'
         # (data destruction). Admin and pure-write are left allowed by design:
         # the two flags exist precisely so callers can opt into the narrower
         # block without forfeiting writes (e.g. allow create-bucket, block
         # delete-bucket).
-        extra_deny.extend(["cli:destructive", "tool:destructive"])
+        extra_deny.append("cli:destructive")
 
     if persisted is None:
         return PermissionPolicy(mode="allow", allow=[], deny=extra_deny)
@@ -333,7 +329,6 @@ def main(
     org_service = OrgService(config_store=config_store)
     member_service = MemberService(config_store=config_store)
     feature_service = FeatureService(config_store=config_store)
-    mcp_service = McpService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
@@ -353,7 +348,7 @@ def main(
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     docs_service = DocsService(config_store=config_store)
-    doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
+    doctor_service = DoctorService(config_store=config_store)
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
     agent_service = AgentService(config_store=config_store)
@@ -393,7 +388,6 @@ def main(
     ctx.obj["org_service"] = org_service
     ctx.obj["member_service"] = member_service
     ctx.obj["feature_service"] = feature_service
-    ctx.obj["mcp_service"] = mcp_service
     ctx.obj["branch_service"] = branch_service
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service

@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.server.agent_runner import run_task_once
@@ -109,12 +108,8 @@ def _raw_task(task_id: str, action_type: str, **params: Any) -> dict[str, Any]:
 
 
 def _doctor(config_dir: Path) -> DoctorService:
-    """DoctorService over a real ConfigStore; the MCP probe is mocked out.
-
-    ``_check_mcp_tool_tasks`` never touches the MCP service, but ``run_checks``
-    does -- and a real ``McpService`` would go looking for a server subprocess.
-    """
-    return DoctorService(config_store=ConfigStore(config_dir=config_dir), mcp_service=MagicMock())
+    """DoctorService over a real ConfigStore."""
+    return DoctorService(config_store=ConfigStore(config_dir=config_dir))
 
 
 class TestDoctorTombstone:
@@ -138,18 +133,15 @@ class TestDoctorTombstone:
         assert result["status"] == "pass"
         assert "removed 'mcp_tool' action" in result["message"]
 
-    def test_details_carry_the_native_command_per_task(self, tmp_path) -> None:
+    def test_details_identify_each_affected_task(self, tmp_path) -> None:
+        """The --json payload must name the task and the tool it used, so the
+        reader can look the replacement up in docs/mcp-migration.md -- the
+        in-code parity map went away with the passthrough itself."""
         _write_agents(tmp_path, [_raw_task("t1", "mcp_tool", tool="create_config")])
         entry = _doctor(tmp_path)._check_mcp_tool_tasks()["details"]["tasks"][0]
         assert entry["id"] == "t1"
         assert entry["tool"] == "create_config"
-        assert entry["native_command"] == "kbagent config new"
-
-    def test_unknown_tool_degrades_to_no_native_command(self, tmp_path) -> None:
-        """A tool absent from the parity map must not invent a replacement."""
-        _write_agents(tmp_path, [_raw_task("t1", "mcp_tool", tool="no_such_tool")])
-        entry = _doctor(tmp_path)._check_mcp_tool_tasks()["details"]["tasks"][0]
-        assert entry["native_command"] is None
+        assert "native_command" not in entry
 
     def test_long_lists_are_truncated_but_complete_in_details(self, tmp_path) -> None:
         _write_agents(

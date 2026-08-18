@@ -229,13 +229,13 @@ def permissions_set(
 
     Examples:
       # Block all write operations (Vojta's use case):
-      kbagent permissions set --mode allow --deny "cli:write" --deny "tool:write"
+      kbagent permissions set --mode allow --deny "cli:write"
 
       # Allow only read operations:
-      kbagent permissions set --mode deny --allow "cli:read" --allow "tool:read"
+      kbagent permissions set --mode deny --allow "cli:read"
 
       # Block specific operations:
-      kbagent permissions set --mode allow --deny "branch.delete" --deny "tool:delete_*"
+      kbagent permissions set --mode allow --deny "branch.delete" --deny "storage.delete-*"
     """
     formatter = get_formatter(ctx)
 
@@ -313,7 +313,7 @@ def permissions_reset(
 def permissions_check(
     ctx: typer.Context,
     operation: str = typer.Argument(
-        help="Operation to check, e.g. 'branch.delete', 'tool:create_config'",
+        help="Operation to check, e.g. 'branch.delete', 'config.update'",
     ),
 ) -> None:
     """Check if a specific operation is allowed.

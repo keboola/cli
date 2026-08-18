@@ -139,8 +139,6 @@ FEATURE_ALIASES = {
     "semantic-layer token --encrypt": "Metastore Service",
     "The Data Science Service (data apps)": "Data Science Service",
     "The Data Streams Service": "Data Streams Service",
-    "The MCP server subprocess": "MCP server subprocess",
-    "The MCP HTTP transport": "MCP server subprocess",
     "The importable SDK Client": "importable SDK",
     "kbagent kai": "kbagent kai",
     "kbagent sharing (master-token path)": "kbagent sharing",

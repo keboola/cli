@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -91,7 +90,7 @@ class TestRemedyText:
     """
 
     def test_default_remedy_leads_with_project_edit(self) -> None:
-        exc = SessionAuthUnsupportedError("The MCP server subprocess")
+        exc = SessionAuthUnsupportedError("The Keboola AI Service")
 
         assert "project edit --project <alias> --token <token>" in exc.message
         # `project add` is still mentioned, but scoped to the case it works for.
@@ -178,25 +177,6 @@ class TestMakeClientFactory:
 # ----------------------------------------------------------------------------
 # Guarded consumers -- each raises SessionAuthUnsupportedError on a sentinel
 # ----------------------------------------------------------------------------
-
-
-class TestMcpServiceGuards:
-    @patch("keboola_agent_cli.services.mcp_service.shutil.which")
-    def test_build_server_params_raises(self, mock_which: MagicMock) -> None:
-        from keboola_agent_cli.services.mcp_service import _build_server_params
-
-        mock_which.side_effect = lambda cmd: "/usr/local/bin/uvx" if cmd == "uvx" else None
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            _build_server_params(_sentinel_project())
-        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert exc_info.value.feature == "The MCP server subprocess"
-
-    def test_build_http_headers_raises(self) -> None:
-        from keboola_agent_cli.services.mcp_service import _build_http_headers
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            _build_http_headers(_sentinel_project())
-        assert exc_info.value.feature == "The MCP HTTP transport"
 
 
 class TestSemanticLayerGuards:
@@ -404,109 +384,6 @@ class TestListDataAppsMixedProjects:
             "session": ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
             "static": "UNEXPECTED_ERROR",
         }
-
-
-class TestListToolsMixedProjects:
-    @staticmethod
-    def _patch_stdio_transport(
-        monkeypatch: pytest.MonkeyPatch, *, fail_static: bool = False
-    ) -> None:
-        """Stand in for the MCP subprocess while keeping the real guard.
-
-        ``_build_server_params`` is called for real, so the sentinel project
-        still fails through ``require_static_token``; only the stdio session
-        below it is replaced.
-        """
-        from keboola_agent_cli.services import mcp_service as mcp_module
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        async def fake_connect_and_list_tools(
-            project: ProjectConfig, branch_id: str | None = None
-        ) -> list[dict[str, object]]:
-            mcp_module._build_server_params(project, branch_id=branch_id)
-            if fail_static:
-                raise RuntimeError("stdio session closed")
-            return [{"name": "get_buckets", "description": "", "inputSchema": {}}]
-
-        def fake_which(cmd: str) -> str | None:
-            return "/usr/local/bin/uvx" if cmd == "uvx" else None
-
-        monkeypatch.setattr(mcp_module, "_connect_and_list_tools", fake_connect_and_list_tools)
-        monkeypatch.setattr(mcp_module.shutil, "which", fake_which)
-        monkeypatch.setattr(McpService, "_get_server_url", lambda self: None)
-
-    def test_session_project_errors_with_auth_code_static_project_lists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        self._patch_stdio_transport(monkeypatch)
-        service = McpService(config_store=_mixed_config_store(tmp_path))
-
-        result = service.list_tools(aliases=["session", "static"])
-
-        assert [t["name"] for t in result["tools"]] == ["get_buckets"]
-        assert len(result["errors"]) == 1
-        error = result["errors"][0]
-        assert error["project_alias"] == "session"
-        assert error["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert "Failed to list tools" in error["message"]
-
-    def test_real_mcp_failure_still_reports_mcp_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        self._patch_stdio_transport(monkeypatch, fail_static=True)
-        service = McpService(config_store=_mixed_config_store(tmp_path))
-
-        result = service.list_tools(aliases=["session", "static"])
-
-        assert result["tools"] == []
-        by_alias = {e["project_alias"]: e["error_code"] for e in result["errors"]}
-        assert by_alias == {
-            "session": ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
-            "static": "MCP_ERROR",
-        }
-
-
-class TestGatherResultsMixedProjects:
-    """The parallel read-tool path (`_call_read_tool` -> `_gather_results`)."""
-
-    @staticmethod
-    def _gather(outcomes: dict[str, Any]) -> dict[str, Any]:
-        from keboola_agent_cli.services.mcp_service import McpService
-
-        async def _run() -> dict[str, Any]:
-            async def _produce(outcome: Any) -> dict[str, Any]:
-                if isinstance(outcome, BaseException):
-                    raise outcome
-                return outcome
-
-            tasks = {
-                alias: asyncio.create_task(_produce(outcome)) for alias, outcome in outcomes.items()
-            }
-            return await McpService._gather_results(tasks)
-
-        return asyncio.run(_run())
-
-    def test_session_project_error_keeps_auth_code(self) -> None:
-        result = self._gather(
-            {
-                "session": SessionAuthUnsupportedError("The MCP server subprocess"),
-                "static": {"data": "rows"},
-            }
-        )
-
-        assert result["results"] == [{"data": "rows", "project_alias": "static"}]
-        assert result["errors"][0]["project_alias"] == "session"
-        assert result["errors"][0]["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-
-    def test_transport_failure_still_reports_mcp_error(self) -> None:
-        result = self._gather({"static": RuntimeError("stdio session closed")})
-
-        assert result["errors"][0]["error_code"] == "MCP_ERROR"
-        assert result["errors"][0]["message"] == "stdio session closed"
 
 
 # ----------------------------------------------------------------------------

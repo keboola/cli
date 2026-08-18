@@ -68,7 +68,7 @@ interface AgentTask {
   enabled: boolean;
   action: { type: ActionType; params: Record<string, unknown> };
   // Additive, only present on tasks whose action flavour was removed
-  // (server/routers/agents.py injects it via annotate_mcp_tool_deprecation).
+  // (server/routers/agents.py injects it via annotate_removed_action).
   deprecation?: string | null;
   trigger: Trigger | null;
   created_at: string;

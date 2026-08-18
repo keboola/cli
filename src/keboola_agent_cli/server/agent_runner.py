@@ -85,8 +85,9 @@ def _build_subprocess_env(
     it reaches Keboola via ``kbagent http`` (KBAGENT_SERVE_*) or by forking
     ``kbagent`` against the serve's on-disk config (KBAGENT_CONFIG_DIR) -- and
     handing a prompt-injectable child the highest-value credentials is the leak
-    fixed here (GHSA-wm54-r2hh-cxm9). Mirrors the MCP-child isolation in
-    ``mcp_transport._build_minimal_env`` and the manage-token default-deny. The
+    fixed here (GHSA-wm54-r2hh-cxm9). Same principle as the manage-token
+    default-deny: a child process gets a minimal, explicitly allowed env and
+    never inherits admin credentials just because the parent holds them. The
     per-project storage token (``KBC_TOKEN``) is intentionally retained so the
     child can still run headless ``--project __env__`` reads; cli_command
     children keep every token -- they are ``kbagent`` itself and need them.
