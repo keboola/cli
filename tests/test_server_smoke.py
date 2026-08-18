@@ -457,3 +457,47 @@ def test_post_agents_rejects_mcp_tool(client: TestClient) -> None:
     )
     assert resp.status_code == 422, resp.text
     assert "REMOVED" in resp.text
+
+
+def test_patch_agents_rejects_mcp_tool(client: TestClient) -> None:
+    """Re-pointing a live task onto the removed type is refused too."""
+    created = client.post(
+        "/agents",
+        json={"name": "live", "action": {"type": "cli_command", "params": {"argv": ["version"]}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+
+    resp = client.patch(
+        f"/agents/{task_id}",
+        json={"action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
+    # the persisted task keeps its live action
+    after = client.get(f"/agents/{task_id}", headers={"Authorization": "Bearer test-token"})
+    assert after.json()["action"]["type"] == "cli_command"
+
+
+def test_agents_test_route_rejects_mcp_tool(client: TestClient) -> None:
+    """The ad-hoc preview route refuses before dispatching anything."""
+    resp = client.post(
+        "/agents/test",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
+
+
+def test_agents_test_stream_route_rejects_mcp_tool(client: TestClient) -> None:
+    """422 arrives as a normal JSON error, not as an SSE `done` frame."""
+    resp = client.post(
+        "/agents/test/stream",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
