@@ -62,6 +62,45 @@ def _no_wheel_asset_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(version_service.httpx, "head", _head)
 
 
+@pytest.fixture(autouse=True)
+def _redirect_global_state_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep auto-update bookkeeping out of the developer's real config directory.
+
+    Both writers below resolve through ``platformdirs.user_config_dir``, so
+    neither honours ``--config-dir``: they always address the machine's own
+    files. That is correct for the shipped CLI -- the version cache and a
+    pending update are per-machine, not per-project -- and exactly why the
+    test suite has to redirect them rather than the production code.
+
+    ``auto_update._get_cache_path`` backs ``version_cache.json``. Any test
+    reaching the real ``_write_cache`` -- ``TestMaybeAutoUpdate`` has two that
+    mock ``_read_cache`` but not the write -- stamps the canonical fake latest
+    version ``1.0.0`` into it. The CLI then believes for a full
+    ``AUTO_UPDATE_CHECK_INTERVAL`` (1 hour) that a release tag which does not
+    exist is available, prints an update banner on every command, and fails
+    the reinstall: running ``make test`` broke auto-update for whoever ran it.
+
+    ``update_runner.state_dir`` backs the deferred-update marker / exit / log
+    files. No test reaches it today (the deferral tests mock
+    ``request_deferred_update``, and ``should_defer()`` is False off Windows),
+    but it is the same latent bug: on Windows ``should_defer()`` defaults to
+    True, and ``report_finished_deferred_update`` -- which runs ahead of every
+    skip gate -- consumes and unlinks a genuine pending report while reading
+    it, so a developer's own update outcome would vanish into a test run.
+
+    Redirecting the module attributes (not the top-level import in
+    ``test_auto_update.py``, which ``TestGetCachePath`` still exercises
+    against the real resolver) covers tests written later that forget to mock
+    the writer. ``test_suite_never_resolves_to_the_real_user_cache`` fails if
+    this fixture is removed.
+    """
+    from keboola_agent_cli import auto_update, update_runner
+
+    cache_file = tmp_path / "version_cache.json"
+    monkeypatch.setattr(auto_update, "_get_cache_path", lambda: cache_file)
+    monkeypatch.setattr(update_runner, "state_dir", lambda: tmp_path)
+
+
 @pytest.fixture
 def tmp_config_dir(tmp_path: Path) -> Path:
     """Provide a temporary directory for configuration files."""
