@@ -48,6 +48,19 @@ class ConfigCreate(BaseModel):
     branch_id: int | None = None
 
 
+class ConfigClone(BaseModel):
+    name: str
+    target_project: str | None = None
+    description: str | None = None
+    # Dotted paths, exactly as the CLI's --set / --secret take them.
+    set_overrides: dict[str, str] | None = None
+    secret_overrides: dict[str, str] | None = None
+    branch_id: int | None = None
+    target_branch_id: int | None = None
+    dry_run: bool = False
+    allow_plaintext_fallback: bool = False
+
+
 class SetDefaultBucket(BaseModel):
     bucket: str | None = None
     clear: bool = False
@@ -218,6 +231,36 @@ def config_create(
         description=body.description or "",
         configuration=body.configuration,
         branch_id=body.branch_id,
+    )
+
+
+@router.post("/{project}/{component_id}/{config_id}/clone", summary="Clone a configuration")
+def config_clone(
+    project: str,
+    component_id: str,
+    config_id: str,
+    body: ConfigClone,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Duplicate a configuration whole. Mirrors `kbagent config clone`.
+
+    A cross-project clone raises ConfigError (HTTP 4xx via the shared handler)
+    listing every encrypted path that must be re-supplied in
+    `secret_overrides` -- call with `dry_run: true` first to collect them.
+    """
+    return registry.config.clone_config(
+        alias=project,
+        component_id=component_id,
+        config_id=config_id,
+        name=body.name,
+        description=body.description or "",
+        target_alias=body.target_project,
+        set_overrides=body.set_overrides,
+        secret_overrides=body.secret_overrides,
+        branch_id=body.branch_id,
+        target_branch_id=body.target_branch_id,
+        dry_run=body.dry_run,
+        allow_plaintext_fallback=body.allow_plaintext_fallback,
     )
 
 

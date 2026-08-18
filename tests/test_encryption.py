@@ -12,11 +12,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.json_utils import set_nested_value
 from keboola_agent_cli.services._encryption import (
     apply_encrypted,
     apply_encrypted_to_local,
     collect_secrets,
     encrypt_secrets_in_config,
+    find_encrypted_secret_paths,
+    find_unencryptable_secret_paths,
 )
 
 
@@ -251,3 +254,47 @@ class TestEncryptSecretsInConfigNameValueShape:
         )
 
         client.encrypt_values.assert_not_called()
+
+
+class TestFindEncryptedSecretPaths:
+    """Paths are shown to a human and fed back through ``--secret PATH=VALUE``,
+    so they must be in a form the substitution step actually accepts.
+    """
+
+    def test_dict_paths_are_dotted(self) -> None:
+        config = {"parameters": {"db": {"#password": "KBC::ProjectSecure::abc"}}}
+
+        assert find_encrypted_secret_paths(config) == ["parameters.db.#password"]
+
+    def test_list_element_paths_use_a_plain_index_segment(self) -> None:
+        """`keboola.variables` hoists secrets into a list of {name, value}.
+
+        The reported path has to round-trip through ``set_nested_value``: a
+        bracketed ``[0]`` segment raises ValueError there, so the operator is
+        told to supply a path that then crashes the command.
+        """
+        config = {"parameters": {"values": [{"name": "#token", "value": "KBC::ProjectSecure::x"}]}}
+
+        paths = find_encrypted_secret_paths(config)
+
+        assert paths == ["parameters.values.0.value"]
+        # The contract that matters: the path can actually be applied.
+        patched = set_nested_value(config, paths[0], "fresh")
+        assert patched["parameters"]["values"][0]["value"] == "fresh"
+
+    def test_plain_key_ciphertext_is_reported_separately(self) -> None:
+        """Ciphertext under a non-``#`` key cannot be re-encrypted.
+
+        ``collect_secrets`` only picks up ``#``-prefixed keys, so a plaintext
+        substituted at such a path would be written to Storage as-is. These
+        paths are returned apart so the caller can refuse rather than leak.
+        """
+        config = {
+            "parameters": {
+                "#password": "KBC::ProjectSecure::a",
+                "token": "KBC::ProjectSecure::b",
+            }
+        }
+
+        assert find_encrypted_secret_paths(config) == ["parameters.#password"]
+        assert find_unencryptable_secret_paths(config) == ["parameters.token"]

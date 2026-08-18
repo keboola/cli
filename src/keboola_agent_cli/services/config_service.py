@@ -25,6 +25,7 @@ from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
+from ._config_clone import clone_config_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
@@ -1981,6 +1982,12 @@ class ConfigService(BaseService):
             find_plaintext_secret_keys(encrypted_config) if encrypted_config else []
         )
         return result
+
+    # Bound from ._config_clone: the flow, and the client/project wiring it
+    # needs, live there because this module is at its HARD size ceiling.
+    # Assigned rather than delegated so the 12-parameter signature is not
+    # spelled out twice.
+    clone_config = clone_config_method
 
     def _validate_config_body(
         self,

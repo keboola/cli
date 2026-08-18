@@ -543,6 +543,9 @@ class TestFullE2E:
         _step("19c", "config new --push validation", "real schema vs real body (#587)")
         self._test_config_new_push_schema_validation()
 
+        _step("19d", "config clone", "whole-config duplicate incl. rows (#587)")
+        self._test_config_clone()
+
         # ==============================================================
         # PHASE 5: Component commands
         # ==============================================================
@@ -2278,6 +2281,130 @@ class TestFullE2E:
         # Paths name the section to fix. Before #587 this read "<root>: ...",
         # which pointed the reader at the wrong level of their own config.
         assert all(e.startswith("parameters") for e in invalid["validation_errors"]), invalid
+
+    def _test_config_clone(self) -> None:
+        """Test ``config clone`` -- whole-configuration duplicate (0.84.2+, #587).
+
+        The point of the command is that NOTHING is left behind, so the
+        assertions are about completeness, not about the happy path: the
+        source is given a `runtime` sibling and two rows, and the clone must
+        come back with both. `runtime.parallelism` is exactly what went
+        missing in #587, and rows are what makes hand-rebuilding hopeless at
+        65 of them.
+
+        Everything is created and deleted inside this test.
+        """
+        clone_name = f"{RUN_ID} clone-source"
+        source = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--name",
+            clone_name,
+            "--push",
+            "--no-files",
+        )["data"]
+        source_id = str(source["id"])
+        self._created_config_ids.append(("keboola.ex-http", source_id))
+
+        clone_id: str | None = None
+        try:
+            # Give the source a sibling key and rows -- the things that get lost.
+            self._run_ok(
+                "config",
+                "update",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                source_id,
+                "--set",
+                "runtime.parallelism=20",
+            )
+            for row_name in ("alpha", "beta"):
+                self._run_ok(
+                    "config",
+                    "row-create",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    source_id,
+                    "--name",
+                    f"row-{row_name}",
+                    "--configuration",
+                    json.dumps({"parameters": {"table": row_name}}),
+                )
+
+            # Dry-run first: reports the plan, writes nothing.
+            planned = self._run_ok(
+                "config",
+                "clone",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                source_id,
+                "--name",
+                f"{RUN_ID} clone-dry",
+                "--dry-run",
+            )["data"]
+            assert planned["dry_run"] is True, planned
+            assert planned["mode"] == "same-project", planned
+            assert planned["row_count"] == 2, planned
+
+            cloned = self._run_ok(
+                "config",
+                "clone",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                source_id,
+                "--name",
+                f"{RUN_ID} clone-target",
+            )["data"]
+            clone_id = str(cloned["id"])
+            self._created_config_ids.append(("keboola.ex-http", clone_id))
+            assert clone_id != source_id, cloned
+            assert cloned["mode"] == "same-project", cloned
+
+            detail = self._run_ok(
+                "config",
+                "detail",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                clone_id,
+            )["data"]
+            configuration = detail.get("configuration") or {}
+            # The sibling key that #587 is about survived the copy.
+            assert configuration.get("runtime") == {"parallelism": 20}, configuration
+            # And so did the rows -- no client-side row copying involved.
+            rows = detail.get("rows") or []
+            assert len(rows) == 2, rows
+            assert sorted(r["name"] for r in rows) == ["row-alpha", "row-beta"], rows
+        finally:
+            for config_id in filter(None, (clone_id, source_id)):
+                self._run_ok(
+                    "config",
+                    "delete",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.ex-http",
+                    "--config-id",
+                    config_id,
+                )
 
     def _test_component_commands(self) -> None:
         """List components and get detail for one.

@@ -515,7 +515,7 @@ class TestConfigOauthUrlCli:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "keboola_agent_cli.commands.config.get_service",
+                "keboola_agent_cli.commands._config_oauth.get_service",
                 lambda ctx, name: service,
             )
             result = _invoke(
@@ -561,7 +561,7 @@ class TestConfigOauthUrlCli:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "keboola_agent_cli.commands.config.get_service",
+                "keboola_agent_cli.commands._config_oauth.get_service",
                 lambda ctx, name: service,
             )
             result = _invoke(
@@ -620,7 +620,7 @@ class TestConfigOauthUrlCli:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "keboola_agent_cli.commands.config.get_service",
+                "keboola_agent_cli.commands._config_oauth.get_service",
                 lambda ctx, name: service,
             )
             result = _invoke(
@@ -758,7 +758,7 @@ class TestOauthUrlMasterTokenGate:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "keboola_agent_cli.commands.config.get_service",
+                "keboola_agent_cli.commands._config_oauth.get_service",
                 lambda ctx, name: service,
             )
             result = _invoke(

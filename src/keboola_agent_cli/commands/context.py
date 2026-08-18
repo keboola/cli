@@ -419,6 +419,21 @@ Use `kbagent <command> --help` for full flag details and examples.
     (empty shell, validation auto-skipped). Works for ALL component types including
     keboola.snowflake-transformation (unlike tool call create_config which refuses it).
 
+  kbagent config clone --project P --component-id ID --config-id ID --name NAME
+                       [--target-project P2] [--description D] [--set PATH=VALUE ...]
+                       [--secret PATH=VALUE ...] [--branch ID] [--target-branch ID]
+                       [--dry-run] [--allow-plaintext-on-encrypt-failure]
+    (since 0.84.2) Duplicate a configuration WHOLE. Use this instead of reading config detail
+    and rebuilding a body by hand -- that drops siblings of parameters (runtime, storage,
+    authorization) silently, and a lost runtime.parallelism means Keboola falls back to
+    parallelism 1 (issue #587).
+    Same project (default): server-side copy; rows and KBC:: encrypted values come along.
+    Cross project (--target-project): reassembled client-side. Encrypted values CANNOT travel
+    (ciphertext is project-scoped), so the clone is REFUSED until each path is re-supplied via
+    --secret PATH=VALUE; they are encrypted in the TARGET project on write. Run --dry-run first
+    to list exactly which paths need one. Storage bucket/table IDs are copied verbatim, NOT
+    remapped -- use sync clone for that.
+
   kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 

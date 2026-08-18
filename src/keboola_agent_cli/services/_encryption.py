@@ -220,6 +220,85 @@ def encrypt_secrets_in_config(
     return configuration
 
 
+def collect_encrypted_paths(
+    obj: Any,
+    path_prefix: str,
+    result: list[str],
+    unencryptable: list[str] | None = None,
+) -> None:
+    """Recursively collect the dotted paths of ``KBC::``-encrypted values.
+
+    The mirror of :func:`collect_secrets`: that one finds values still in
+    plaintext (so they can be encrypted), this one finds values already
+    encrypted (so a caller can discover what cannot be moved).
+
+    Paths are plain dotted config paths (``parameters.db.#password``), in the
+    exact form :func:`~keboola_agent_cli.json_utils.set_nested_value` accepts --
+    including a bare integer segment for a list index
+    (``parameters.values.0.value``). They are shown to a human and fed back
+    through ``--secret PATH=VALUE``, so a path that cannot be applied is worse
+    than useless: it instructs the operator to run a command that then fails.
+    Values are never returned -- only where they live.
+
+    When ``unencryptable`` is supplied, ciphertext found under a key that is
+    NOT ``#``-prefixed is collected there instead. :func:`collect_secrets`
+    only picks up ``#`` keys, so a plaintext substituted at such a path would
+    never be re-encrypted and would reach Storage in the clear.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            path = f"{path_prefix}{key}"
+            if is_already_encrypted(value):
+                if unencryptable is not None and not is_secret_key(key):
+                    unencryptable.append(path)
+                else:
+                    result.append(path)
+            elif isinstance(value, (dict, list)):
+                collect_encrypted_paths(value, f"{path}.", result, unencryptable)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if _is_secret_name_value_pair(item) and is_already_encrypted(item["value"]):
+                # Point at the ``value`` field itself: that is what gets
+                # replaced, and `name`/`value` pairs keep the secret marker in
+                # ``name``, so the path must not end in the ``#name``.
+                result.append(f"{path_prefix}{i}.value")
+            else:
+                collect_encrypted_paths(item, f"{path_prefix}{i}.", result, unencryptable)
+
+
+def find_encrypted_secret_paths(configuration: Any) -> list[str]:
+    """Return the paths of every ``KBC::``-encrypted value that CAN be re-supplied.
+
+    A Keboola ciphertext is bound to the project (and often the component) it
+    was encrypted for -- no other project can decrypt it. Copying one across
+    projects therefore produces a configuration that looks complete and fails
+    at runtime. ``config clone`` uses this to refuse a cross-project clone
+    until each path is re-supplied in plaintext, which it then encrypts in the
+    TARGET project.
+
+    Ciphertext under a non-``#`` key is excluded here and reported by
+    :func:`find_unencryptable_secret_paths` instead.
+    """
+    paths: list[str] = []
+    collect_encrypted_paths(configuration, "", paths, [])
+    return sorted(paths)
+
+
+def find_unencryptable_secret_paths(configuration: Any) -> list[str]:
+    """Return paths holding ciphertext that this CLI cannot re-encrypt.
+
+    The Encryption API contract in this codebase keys off ``#``-prefixed
+    names (:func:`collect_secrets`), so a ciphertext stored under a plain key
+    has no supported round-trip: accepting a ``--secret`` for it would write
+    the replacement to Storage in plaintext. Callers should refuse instead,
+    and point at ``kbagent encrypt values`` + ``--set`` for the deliberate
+    manual path.
+    """
+    unencryptable: list[str] = []
+    collect_encrypted_paths(configuration, "", [], unencryptable)
+    return sorted(unencryptable)
+
+
 def find_plaintext_secret_keys(configuration: dict[str, Any]) -> list[str]:
     """Return the flattened paths of *unencrypted* ``#``-prefixed secrets.
 
