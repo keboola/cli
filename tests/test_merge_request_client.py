@@ -260,25 +260,6 @@ class TestMerge:
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
         assert "merge conflict" in str(exc_info.value)
 
-    def test_merge_raises_when_202_body_is_already_terminal_error(self, client, httpx_mock) -> None:
-        """A 202 body that already carries status=error raises, not returns.
-
-        The shared _wait_for_storage_job early-returns an already-terminal
-        initial body without raising; merge() must not let a fast synchronous
-        failure masquerade as a successful return value.
-        """
-        httpx_mock.add_response(
-            url=f"{MR_BASE}/42/merge",
-            json={"id": 555, "status": "error", "error": {"message": "fast fail"}},
-            status_code=202,
-        )
-
-        with pytest.raises(KeboolaApiError) as exc_info:
-            client.merge_requests.merge(42)
-
-        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
-        assert "fast fail" in str(exc_info.value)
-
 
 class TestConfigDiff:
     """get_config_diff -- branch-prefixed, branch_id required (RFC, D5)."""

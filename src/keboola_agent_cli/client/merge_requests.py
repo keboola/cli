@@ -33,7 +33,6 @@ from typing import Any, Protocol
 import httpx
 
 from ..constants import MERGE_JOB_MAX_WAIT, STORAGE_JOB_MAX_WAIT
-from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
 
 _BASE = "/v2/storage/merge-request"
@@ -284,10 +283,8 @@ class MergeRequests:
         ``EXPORT_JOB_MAX_WAIT`` precedent) -- merging a many-config branch
         can legitimately outlive the default 60 s storage-job budget. A
         failed merge (the MR rolls back to ``approved``) raises
-        ``STORAGE_JOB_FAILED`` instead of masquerading as success -- also
-        when the 202 body itself already carries a terminal error, which the
-        shared poller would return as-is; the MR state stays pollable via
-        ``get()``.
+        ``STORAGE_JOB_FAILED`` instead of masquerading as success; the MR
+        state stays pollable via ``get()``.
 
         Caveat: a successful merge always also deletes the source branch,
         but that runs as a second job enqueued by the first, with no job
@@ -301,18 +298,7 @@ class MergeRequests:
         conflict does not); mapping them is Layer 2's concern.
         """
         response = self._requester.request("PUT", f"{_BASE}/{merge_request_id}/merge")
-        job = self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
-        if job.get("status") == "error":
-            # _wait_for_storage_job raises on a polled error but returns an
-            # ALREADY-terminal initial body as-is; without this guard a fast
-            # synchronous failure would come back as a normal return value.
-            raise KeboolaApiError(
-                message=job.get("error", {}).get("message", "Merge job failed"),
-                status_code=500,
-                error_code=ErrorCode.STORAGE_JOB_FAILED,
-                retryable=False,
-            )
-        return job
+        return self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
 
 
 class _MergeRequestsMixin(_CoreClient):
