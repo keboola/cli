@@ -2283,7 +2283,7 @@ class TestFullE2E:
         assert all(e.startswith("parameters") for e in invalid["validation_errors"]), invalid
 
     def _test_config_clone(self) -> None:
-        """Test ``config clone`` -- whole-configuration duplicate (0.85.0+, #587).
+        """Test ``config clone`` -- whole-configuration duplicate (0.84.2+, #587).
 
         The point of the command is that NOTHING is left behind, so the
         assertions are about completeness, not about the happy path: the

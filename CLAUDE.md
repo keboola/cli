@@ -400,7 +400,7 @@ kbagent config state-set --project NAME --component-id ID --config-id ID [--row-
 #   state-set / --name / --description / row-update --is-disabled instead, or --configuration
 #   for a genuine configuration.<prefix> key.
 kbagent config clone --project P --component-id ID --config-id ID --name NAME [--target-project P2] [--description D] [--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--branch ID] [--target-branch ID] [--dry-run] [--allow-plaintext-on-encrypt-failure]
-# clone (0.85.0+, #587): duplicates a configuration WHOLE. Hand-rebuilding a body from `config
+# clone (0.84.2+, #587): duplicates a configuration WHOLE. Hand-rebuilding a body from `config
 #   detail` drops siblings of `parameters` (`runtime`, `storage`, `authorization`) silently -- a
 #   lost `runtime.parallelism` makes Keboola fall back to parallelism 1 (a 65-row writer then ran
 #   sequentially, 140 min instead of ~60-90, with nothing reported).

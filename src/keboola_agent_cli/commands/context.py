@@ -423,7 +423,7 @@ Use `kbagent <command> --help` for full flag details and examples.
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]
                        [--secret PATH=VALUE ...] [--branch ID] [--target-branch ID]
                        [--dry-run] [--allow-plaintext-on-encrypt-failure]
-    (since 0.85.0) Duplicate a configuration WHOLE. Use this instead of reading config detail
+    (since 0.84.2) Duplicate a configuration WHOLE. Use this instead of reading config detail
     and rebuilding a body by hand -- that drops siblings of parameters (runtime, storage,
     authorization) silently, and a lost runtime.parallelism means Keboola falls back to
     parallelism 1 (issue #587).

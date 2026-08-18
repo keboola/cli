@@ -1178,7 +1178,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   configuration still validates `ok`, because it is indistinguishable from a
   flow-style config. Always POST the full object.
 
-## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.85.0)
+## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.84.2)
 
 - **Use it instead of rebuilding a body.** Reading `config detail` and
   POSTing back `configuration["parameters"]` drops the siblings

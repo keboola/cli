@@ -24,7 +24,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.85.0": [
+    "0.84.2": [
         "New: `kbagent config clone` duplicates a configuration WHOLE (closes #587). "
         "`--project P --component-id C --config-id ID --name N [--target-project P2] "
         "[--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--dry-run]`. Until now there was "
@@ -79,8 +79,6 @@ CHANGELOG: dict[str, list[str]] = {
         "from `--branch` (the server-side copy cannot honour it) rather than silently writing "
         "to the wrong branch, and a row failing mid-copy now reports the created "
         "configuration id and how many rows landed so the partial clone can be cleaned up.",
-    ],
-    "0.84.2": [
         "New (#594): `kbagent billing credits [--project ALIAS ...]` reads the Pay-As-You-Go "
         "credit balance, fanned out across every registered project in parallel. Wraps `GET "
         "/credits` on the `billing.{stack}` host, which accepts a plain per-project Storage "

@@ -447,3 +447,99 @@ def clone_config(
     created["encrypted_paths"] = all_encrypted
     created.setdefault("copied_rows", [])
     return created
+
+
+# --- ConfigService binding -------------------------------------------------
+#
+# Bound onto ConfigService as ``clone_config``. It lives here rather than on
+# the service because ``config_service.py`` sits at its HARD file-size
+# ceiling, and CONTRIBUTING.md is explicit that such a file is split before
+# more functionality is merged into it. ``self`` is a ConfigService.
+def clone_config_method(
+    self,
+    alias: str,
+    component_id: str,
+    config_id: str,
+    name: str,
+    description: str = "",
+    target_alias: str | None = None,
+    set_overrides: dict[str, str] | None = None,
+    secret_overrides: dict[str, str] | None = None,
+    branch_id: int | None = None,
+    target_branch_id: int | None = None,
+    dry_run: bool = False,
+    allow_plaintext_fallback: bool = False,
+) -> dict[str, Any]:
+    """Duplicate a configuration (``kbagent config clone``, issue #587).
+
+    Thin delegation to :mod:`._config_clone`, which holds the flow itself.
+
+    Args:
+        alias: Source project alias.
+        component_id: Component ID of the configuration being cloned.
+        config_id: Source configuration ID.
+        name: Name for the new configuration.
+        description: Optional description; empty inherits the source's.
+        target_alias: Target project alias. Defaults to the source, which
+            selects the server-side copy path.
+        set_overrides: ``{dotted.path: value}`` edits applied to the clone.
+        secret_overrides: ``{dotted.path: plaintext}`` replacements for
+            encrypted values, required for a cross-project clone.
+        branch_id: Source dev branch; falls back to the project's active one.
+        target_branch_id: Target dev branch; falls back to the target
+            project's active one.
+        dry_run: Report the plan (including any missing secrets) without
+            writing anything.
+        allow_plaintext_fallback: Permit a plaintext write if the
+            Encryption API fails. DANGEROUS.
+
+    Returns:
+        The created configuration annotated with ``mode``,
+        ``source_project`` / ``target_project``, ``source_version``,
+        ``encrypted_paths`` and ``copied_rows``; or the planned envelope
+        when ``dry_run``.
+
+    Raises:
+        ConfigError: If either alias is unknown, or a cross-project clone
+            is missing plaintext for an encrypted value.
+        KeboolaApiError: If any API call fails.
+    """
+    aliases = [alias] if target_alias is None else [alias, target_alias]
+    projects = self.resolve_projects(aliases)
+    source_project = projects[alias]
+    target_project = projects[target_alias] if target_alias else source_project
+
+    source_client = self._client_factory(source_project.stack_url, source_project.token)
+    # Must use the SAME same/cross decision as the clone flow itself:
+    # reusing the source client for what the flow treats as a
+    # cross-project write would create the configuration in the source
+    # project while reporting the target.
+    target_client = (
+        source_client
+        if is_same_project(source_project, target_project)
+        else self._client_factory(target_project.stack_url, target_project.token)
+    )
+    try:
+        return clone_config(
+            source_client=source_client,
+            source_project=source_project,
+            source_alias=alias,
+            target_client=target_client,
+            target_project=target_project,
+            target_alias=target_alias or alias,
+            component_id=component_id,
+            config_id=config_id,
+            name=name,
+            description=description,
+            set_overrides=set_overrides,
+            secret_overrides=secret_overrides,
+            branch_id=branch_id or source_project.active_branch_id,
+            target_branch_id=target_branch_id or target_project.active_branch_id,
+            dry_run=dry_run,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+            encrypt_fn=self._encrypt_secrets_before_write,
+        )
+    finally:
+        source_client.close()
+        if target_client is not source_client:
+            target_client.close()

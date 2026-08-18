@@ -200,7 +200,7 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
 - **Snowflake transformation scaffolding**: MCP `create_config` REFUSES
   `keboola.snowflake-transformation`; `config new --push` hits Storage
   directly and does not inherit it.
-- **Never rebuild a body to duplicate a config** -- `config clone` (0.85.0+,
+- **Never rebuild a body to duplicate a config** -- `config clone` (0.84.2+,
   #587): copying `parameters` alone drops `runtime`/`storage`/`authorization`
   (silent parallelism 1). Cross-project needs `--secret` per `KBC::` value,
   listed by `--dry-run`.
