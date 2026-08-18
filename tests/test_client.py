@@ -3,7 +3,7 @@
 import contextlib
 import json
 import logging
-from typing import SupportsIndex
+from typing import Any, SupportsIndex
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote
 
@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from keboola_agent_cli.client import KeboolaClient
-from keboola_agent_cli.constants import MAX_RETRIES
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.constants import MAX_RETRIES, STORAGE_JOB_POLL_INTERVAL
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 
 def _noop_sleep(seconds: SupportsIndex | float, /) -> None:
@@ -2473,6 +2473,26 @@ _TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 _BASE = "https://connection.keboola.com"
 
 
+def _mk_client() -> KeboolaClient:
+    """Client on the shared _BASE/_TOKEN pair, for the poller test classes."""
+    return KeboolaClient(stack_url=_BASE, token=_TOKEN)
+
+
+class _Omit:
+    """Sentinel: leave the key out entirely, as distinct from setting it to None.
+
+    Spelling "absent" as ``None`` would collapse the two shapes, and ``None`` is
+    the more interesting of them -- ``{"error": None}`` is one of the two bodies
+    that made the pre-0.84.3 extraction raise AttributeError.
+    """
+
+    def __repr__(self) -> str:
+        return "<omitted>"
+
+
+_OMIT = _Omit()
+
+
 class TestPrepareFileUpload:
     """Tests for KeboolaClient.prepare_file_upload()."""
 
@@ -3339,11 +3359,156 @@ class TestUnwrapBigQueryError:
         assert unwrap("") == ""
 
 
+class TestWaitForStorageJob:
+    """Tests for _wait_for_storage_job -- terminal states, fast paths, deadline.
+
+    The shared Storage-job poller is reached by 19 call sites across ``client/``
+    (storage tables 16x, dev branches 2x, workspaces 1x) but had no tests of its
+    own; its contracts are pinned here so they cannot drift apart again.
+    """
+
+    def test_already_successful_body_returns_without_polling(self, httpx_mock) -> None:
+        """A terminal-success initial body is returned as-is, with no HTTP call."""
+        with _mk_client() as client:
+            job = client._wait_for_storage_job({"id": 1, "status": "success", "results": {"x": 1}})
+
+        assert job["results"] == {"x": 1}
+        # Asserted explicitly rather than left to pytest_httpx's teardown: an
+        # unmatched request surfaces as httpx.TimeoutException, which
+        # _do_request catches and retries with real sleeps -- a regression
+        # would take seconds and report a confusing KeboolaApiError.
+        assert httpx_mock.get_requests() == []
+
+    def test_already_failed_body_raises(self, httpx_mock) -> None:
+        """A terminal-error initial body raises STORAGE_JOB_FAILED, never returns.
+
+        The initial body is the POST/PUT/DELETE response the caller hands in. A
+        Storage API fast fail (terminal straight away, never ``waiting``) must
+        not reach the caller as a normal return value -- every call site either
+        returns the job or ``job.get("results", {})``, so a silently returned
+        error job becomes an empty success.
+        """
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "error", "error": {"message": "boom"}})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "boom" in str(exc_info.value)
+        assert httpx_mock.get_requests() == []
+
+    def test_timeout_raises_storage_job_timeout(self, httpx_mock, monkeypatch) -> None:
+        """max_wait=0 with a non-terminal body raises immediately -- no sleep, no HTTP.
+
+        The empty ``sleeps`` list is the load-bearing assertion: it pins that the
+        deadline is checked BEFORE the sleep, so an exhausted budget never costs
+        a poll interval. Asserting only the error code would not -- moving the
+        check after the sleep still breaks before fetching, so the test would
+        pass a second slower instead of failing (measured).
+        """
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", sleeps.append)
+
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "waiting"}, max_wait=0)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert sleeps == []
+        assert httpx_mock.get_requests() == []
+
+    def test_budget_below_one_interval_still_polls_once(self, httpx_mock, monkeypatch) -> None:
+        """A budget shorter than the poll interval buys exactly one poll.
+
+        The other half of "poll counts are unchanged": the deadline is checked
+        before the sleep but not against the sleep's length, so a 0.5 s budget
+        overshoots by up to one full interval and polls once. Pinned so the
+        overshoot cannot be silently traded away.
+        """
+        sleeps: list[float] = []
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", sleeps.append)
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/1",
+            method="GET",
+            json={"id": 1, "status": "success", "results": {"ok": True}},
+        )
+
+        with _mk_client() as client:
+            job = client._wait_for_storage_job({"id": 1, "status": "waiting"}, max_wait=0.5)
+
+        assert job["results"] == {"ok": True}
+        assert sleeps == [STORAGE_JOB_POLL_INTERVAL]
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_polled_error_raises(self, httpx_mock, monkeypatch) -> None:
+        """A non-terminal initial body is polled; a polled error raises."""
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/1",
+            method="GET",
+            json={"id": 1, "status": "error", "error": {"message": "polled boom"}},
+        )
+
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "waiting"})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "polled boom" in str(exc_info.value)
+
+    def test_string_error_field_still_raises_with_its_text(self, httpx_mock) -> None:
+        """An `error` that is a plain string is used as the message, not dereferenced.
+
+        The field is not reliably a dict: the Metastore once answered with an int
+        (see BaseHttpClient._raise_api_error), the Queue poller isinstance-guards
+        its own `result`, and _extract_query_job_error handles both shapes.
+        Assuming a dict here would raise AttributeError -- a traceback instead of
+        a clean STORAGE_JOB_FAILED exit -- and the terminal check now sees the
+        caller's initial body too, so the shape can arrive from one more
+        direction than before.
+        """
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "error", "error": "plain text boom"})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "plain text boom" in str(exc_info.value)
+
+    def test_unusable_error_field_falls_back_to_generic_message(self, httpx_mock) -> None:
+        """A missing / null / non-string / message-less `error` yields the generic text."""
+        for error_field in ({}, {"message": ""}, 422, None, ["boom"], _OMIT):
+            job: dict[str, Any] = {"id": 1, "status": "error"}
+            if error_field is not _OMIT:
+                job["error"] = error_field
+            with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+                client._wait_for_storage_job(job)
+
+            assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED, error_field
+            assert "Storage job failed" in str(exc_info.value), error_field
+
+    def test_polled_success_returns_the_polled_body(self, httpx_mock, monkeypatch) -> None:
+        """A non-terminal initial body is polled until success; results come back.
+
+        The normal happy path. It was covered only incidentally before (via
+        `storage truncate-table`, whose fixture returns a terminal body and so
+        never reaches the loop at all).
+        """
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/1",
+            method="GET",
+            json={"id": 1, "status": "processing"},
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/1",
+            method="GET",
+            json={"id": 1, "status": "success", "results": {"rows": 7}},
+        )
+
+        with _mk_client() as client:
+            job = client._wait_for_storage_job({"id": 1, "status": "waiting"})
+
+        assert job["results"] == {"rows": 7}
+        assert len(httpx_mock.get_requests()) == 2
+
+
 class TestWaitForQueueJob:
     """Tests for wait_for_queue_job -- strategy dispatch, deadline, failure."""
-
-    def _mk_client(self):
-        return KeboolaClient(stack_url=_BASE, token=_TOKEN)
 
     def test_wait_success_on_first_poll(self, httpx_mock, monkeypatch) -> None:
         """Finished job returns on the first poll; no sleep needed."""
@@ -3355,7 +3520,7 @@ class TestWaitForQueueJob:
         sleeps: list[float] = []
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
 
-        with self._mk_client() as client:
+        with _mk_client() as client:
             job = client.wait_for_queue_job("job-1", max_wait=60.0)
 
         assert job["status"] == "success"
@@ -3377,7 +3542,7 @@ class TestWaitForQueueJob:
         sleeps: list[float] = []
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
 
-        with self._mk_client() as client:
+        with _mk_client() as client:
             client.wait_for_queue_job("job-2", max_wait=600.0, poll_strategy="exponential")
 
         # Two polls -> two sleeps; both at the 2s phase of the curve.
@@ -3400,7 +3565,7 @@ class TestWaitForQueueJob:
         sleeps: list[float] = []
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
 
-        with self._mk_client() as client:
+        with _mk_client() as client:
             client.wait_for_queue_job("job-3", max_wait=600.0, poll_strategy="fixed")
 
         assert sleeps == [STORAGE_JOB_POLL_INTERVAL]
@@ -3408,7 +3573,7 @@ class TestWaitForQueueJob:
     def test_wait_rejects_unknown_strategy(self) -> None:
         """Invalid strategy raises ValueError before any network call."""
         with (
-            self._mk_client() as client,
+            _mk_client() as client,
             pytest.raises(ValueError, match="Invalid poll_strategy"),
         ):
             client.wait_for_queue_job("job-4", poll_strategy="linear")
@@ -3427,7 +3592,7 @@ class TestWaitForQueueJob:
         )
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: None)
 
-        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
             client.wait_for_queue_job("bad-1", max_wait=60.0)
 
         assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
@@ -3456,7 +3621,7 @@ class TestWaitForQueueJob:
         monkeypatch.setattr("keboola_agent_cli.client.time.monotonic", fake_monotonic)
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: None)
 
-        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
             client.wait_for_queue_job("slow-1", max_wait=5.0)
 
         assert exc_info.value.error_code == "QUEUE_JOB_TIMEOUT"
@@ -3491,7 +3656,7 @@ class TestWaitForQueueJob:
         sleeps: list[float] = []
         monkeypatch.setattr("keboola_agent_cli.client.time.sleep", lambda s: sleeps.append(s))
 
-        with self._mk_client() as client, pytest.raises(KeboolaApiError):
+        with _mk_client() as client, pytest.raises(KeboolaApiError):
             client.wait_for_queue_job("deadline-1", max_wait=100.0)
 
         assert sleeps == [1.0]  # trimmed from 2.0 to 1.0
