@@ -43,7 +43,11 @@ CHANGELOG: dict[str, list[str]] = {
         "raises instead of returning. Scripts that treated an empty result as success will "
         "now see the error they should always have seen. Also adds the poller's first tests "
         "(`TestWaitForStorageJob`): it had none of its own, and neither the fast-fail path "
-        "nor the timeout path was covered anywhere.",
+        "nor the timeout path was covered anywhere. Hardened the failure message extraction "
+        "at the same time: a job whose `error` field is a plain string (or an int, as the "
+        "Metastore once returned) used to raise `AttributeError` -- a traceback instead of a "
+        "clean `STORAGE_JOB_FAILED` exit -- and a string error's text is now used as the "
+        "message instead of being discarded.",
     ],
     "0.84.2": [
         "New: `kbagent config clone` duplicates a configuration WHOLE (closes #587). "

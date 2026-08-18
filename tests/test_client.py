@@ -3,7 +3,7 @@
 import contextlib
 import json
 import logging
-from typing import SupportsIndex
+from typing import Any, SupportsIndex
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote
 
@@ -3436,6 +3436,35 @@ class TestWaitForStorageJob:
 
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
         assert "polled boom" in str(exc_info.value)
+
+    def test_string_error_field_still_raises_with_its_text(self, httpx_mock) -> None:
+        """An `error` that is a plain string is used as the message, not dereferenced.
+
+        The field is not reliably a dict: the Metastore once answered with an int
+        (see BaseHttpClient._raise_api_error), the Queue poller isinstance-guards
+        its own `result`, and _extract_query_job_error handles both shapes.
+        Assuming a dict here would raise AttributeError -- a traceback instead of
+        a clean STORAGE_JOB_FAILED exit -- and the terminal check now sees the
+        caller's initial body too, so the shape can arrive from one more
+        direction than before.
+        """
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "error", "error": "plain text boom"})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "plain text boom" in str(exc_info.value)
+
+    def test_unusable_error_field_falls_back_to_generic_message(self, httpx_mock) -> None:
+        """A missing / non-string / message-less `error` yields the generic text."""
+        for error_field in ({}, {"message": ""}, 422, None, ["boom"]):
+            job: dict[str, Any] = {"id": 1, "status": "error"}
+            if error_field is not None:
+                job["error"] = error_field
+            with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+                client._wait_for_storage_job(job)
+
+            assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED, error_field
+            assert "Storage job failed" in str(exc_info.value), error_field
 
     def test_polled_success_returns_the_polled_body(self, httpx_mock, monkeypatch) -> None:
         """A non-terminal initial body is polled until success; results come back.
