@@ -3714,3 +3714,51 @@ mapping in favor of `changed_since: adaptive`, which tracks a
   assumption: here the empty state is the expensive, surprising path, and a
   seeded checkpoint is the conservative one. Do not assume "no state = safe
   default" when adaptive is involved.
+
+## `notification list`: the Notifications tab is a different mechanism from an in-flow notification task (since v0.84.2)
+
+`kbagent notification list` closes the one flow-notification surface no CLI
+could reach (#600). Everything below is behavior an agent gets wrong by
+default.
+
+- **Two unrelated mechanisms share the word "notification".** The Flow
+  Builder **Notifications tab** (bell icon: Success / Error /
+  Processing-delay cards) lives in the Notification Service, NOT in the
+  flow's `configuration` JSON -- `flow detail` and `config detail` cannot
+  see it, and never could. The in-flow **notification task** (a phase task
+  with `type: "notification"` and `recipients: [{channel, address}]`) lives
+  inside the configuration and IS visible through `flow detail`. Auditing
+  "who gets paged when this flow breaks" requires BOTH; reporting either one
+  alone silently under-reports.
+- **Event names are kebab-case.** `job-failed`, `job-succeeded`,
+  `job-succeeded-with-warning`, `job-processing-long`, plus the
+  `phase-job-*` variants. Not `jobFailed`. The service types `event` as a
+  free-form string rather than an enum, so kbagent does not restrict it --
+  an unknown value produces the API's own 400 rather than a client-side
+  rejection, and a newly shipped event type works immediately.
+- **The filter fields are dotted, not camelCase.** A subscription is bound
+  to a flow through `filters: [{field: "job.component.id", ...},
+  {field: "job.configuration.id", ...}]` -- not `component` /
+  `configurationId`. `--component-id` and `--config-id` match against those
+  client-side (only `--event` is served API-side).
+- **A subscription with no config filter is the catch-all, not a broken
+  row.** It fires for every job in the project and is reported as
+  `scope: "project-wide"` with an empty `config_id`. This is usually the
+  most important row in an audit -- do not filter it out as noise.
+- **A row whose `config_name` is empty but `config_id` is set points at a
+  deleted configuration.** That is a finding (a subscription paging someone
+  about a flow that no longer exists), never an error to retry.
+- **The endpoint is NOT branch-scoped.** It answers with every branch's
+  subscriptions at once; a dev-branch one carries a `branch.id` filter,
+  a production one carries none. `--branch` filters client-side and, unlike
+  every other branch-aware command, is **never** inferred from the
+  project's active branch -- inheriting it would hide exactly the
+  production recipients the audit is checking. A `--branch` value is
+  meaningful in one project only, so it requires exactly one `--project`
+  (exit 2 otherwise).
+- **Read-only by construction.** The service also exposes create/delete for
+  subscriptions -- changing who gets paged when production breaks -- and
+  kbagent deliberately exposes neither. Do not suggest kbagent can add or
+  remove a recipient; that is still a UI (or direct API) operation.
+- **Plain Storage token, no elevated scope.** The read path needs no
+  `canManageTokens` and no manage token.

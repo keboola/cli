@@ -346,6 +346,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "schedule.list": "read",
     "schedule.detail": "read",
     "schedule.find": "read",
+    "notification.list": "read",
     # PAYG credit balance (issue #594) -- read-only, GET /credits only.
     "billing.credits": "read",
     # Top-level commands

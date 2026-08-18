@@ -26,6 +26,7 @@ from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
 from .commands.lineage import lineage_app
+from .commands.notification import notification_app
 from .commands.org import org_app
 from .commands.permissions import permissions_app
 from .commands.project import project_app
@@ -69,6 +70,7 @@ from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.mcp_service import McpService
 from .services.member_service import MemberService
+from .services.notification_service import NotificationService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
 from .services.repo_validate_service import RepoValidateService
@@ -140,6 +142,7 @@ app.add_typer(transformation_app, name="transformation", rich_help_panel=_BROWSE
 _FLOWS = "Flows"
 app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
 app.add_typer(schedule_app, name="schedule", rich_help_panel=_FLOWS)
+app.add_typer(notification_app, name="notification", rich_help_panel=_FLOWS)
 
 # -- Development --
 _DEV = "Development"
@@ -346,6 +349,7 @@ def main(
     encrypt_service = EncryptService(config_store=config_store)
     flow_service = FlowService(config_store=config_store)
     schedule_service = ScheduleService(config_store=config_store)
+    notification_service = NotificationService(config_store=config_store)
     workspace_service = WorkspaceService(config_store=config_store)
     data_app_service = DataAppService(config_store=config_store)
     data_app_git_service = DataAppGitService(config_store=config_store)
@@ -406,6 +410,7 @@ def main(
     ctx.obj["encrypt_service"] = encrypt_service
     ctx.obj["flow_service"] = flow_service
     ctx.obj["schedule_service"] = schedule_service
+    ctx.obj["notification_service"] = notification_service
     ctx.obj["workspace_service"] = workspace_service
     ctx.obj["data_app_service"] = data_app_service
     ctx.obj["data_app_git_service"] = data_app_git_service

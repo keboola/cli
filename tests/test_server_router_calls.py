@@ -1949,3 +1949,92 @@ def test_config_state_set_forwards_row_id_branch_id_and_dry_run(tmp_path: Path) 
         branch_id=456,
         dry_run=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# notifications.py  GET /notifications
+# Service: notification.list_subscriptions(...)  (mirrors `kbagent notification list`)
+# ---------------------------------------------------------------------------
+
+
+def test_notifications_list_defaults_to_every_project(tmp_path: Path) -> None:
+    """GET /notifications with no query params fans out over all projects."""
+    notification_svc = MagicMock()
+    notification_svc.list_subscriptions.return_value = {"subscriptions": [], "errors": []}
+    registry = _mock_registry(notification=notification_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/notifications", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    notification_svc.list_subscriptions.assert_called_once_with(
+        aliases=None,
+        event=None,
+        component_id=None,
+        config_id=None,
+        branch_id=None,
+    )
+
+
+def test_notifications_list_forwards_every_filter(tmp_path: Path) -> None:
+    """Each query param maps onto the service kwarg of the same meaning."""
+    notification_svc = MagicMock()
+    notification_svc.list_subscriptions.return_value = {"subscriptions": [], "errors": []}
+    registry = _mock_registry(notification=notification_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/notifications",
+            headers=AUTH,
+            params={
+                "project": ["a", "b"],
+                "event": "job-failed",
+                "component_id": "keboola.flow",
+                "config_id": "9001",
+                "branch": 1234,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.list_subscriptions.assert_called_once_with(
+        aliases=["a", "b"],
+        event="job-failed",
+        component_id="keboola.flow",
+        config_id="9001",
+        branch_id=1234,
+    )
+
+
+def test_notifications_list_returns_service_envelope_unchanged(tmp_path: Path) -> None:
+    """The router must return the service's envelope verbatim."""
+    notification_svc = MagicMock()
+    envelope = {
+        "subscriptions": [
+            {
+                "project_alias": "prod",
+                "subscription_id": "101",
+                "event": "job-failed",
+                "scope": "config",
+                "component_id": "keboola.flow",
+                "config_id": "9001",
+                "config_name": "Daily ingest",
+                "branch_id": "",
+                "channel": "email",
+                "address": "ops@example.com",
+                "expires_at": "",
+                "filters": [],
+            }
+        ],
+        "errors": [],
+    }
+    notification_svc.list_subscriptions.return_value = envelope
+    registry = _mock_registry(notification=notification_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/notifications", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert res.json() == envelope

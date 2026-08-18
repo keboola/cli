@@ -761,6 +761,22 @@ kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
 kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
 kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
 
+kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID] [--branch ID]
+# notification (0.84.2+, #600): read-only fleet audit of Flow Notification subscriptions -- the
+#   Flow Builder Notifications tab (bell icon: Success / Error / Processing-delay cards). Backed by
+#   the Notification Service (`GET /project-subscriptions` on `notification.{stack}`, plain Storage
+#   token, no elevated scope). NOT in the flow's `configuration`, so `flow detail` / `config detail`
+#   cannot show these -- the in-flow `type: "notification"` TASK is a different mechanism and IS
+#   visible there. Event names are KEBAB-case (`job-failed`, `job-succeeded`,
+#   `job-succeeded-with-warning`, `job-processing-long`, + `phase-job-*`); `--event` goes to the API,
+#   `--component-id`/`--config-id`/`--branch` match client-side on the subscription's own filter
+#   fields (`job.component.id` / `job.configuration.id` / `branch.id`). The endpoint is NOT
+#   branch-scoped: without `--branch` dev-branch subscriptions come back alongside production, and
+#   `--branch` is NEVER inferred from the project's active branch (that would hide the production
+#   recipients an audit exists to check). A subscription with no config filter is the catch-all
+#   (scope `project-wide`); one pointing at a deleted config keeps its id with an empty
+#   `config_name` -- a finding, not an error. Create/delete are deliberately NOT exposed.
+
 kbagent context
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.

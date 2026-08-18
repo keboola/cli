@@ -46,6 +46,7 @@ class _CoreClient(BaseHttpClient):
         self._encrypt_client: httpx.Client | None = None
         self._sync_actions_client: httpx.Client | None = None
         self._billing_client: httpx.Client | None = None
+        self._notification_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -76,6 +77,10 @@ class _CoreClient(BaseHttpClient):
     def _billing_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "billing")
 
+    @property
+    def _notification_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "notification")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -89,6 +94,8 @@ class _CoreClient(BaseHttpClient):
             self._sync_actions_client.close()
         if self._billing_client is not None:
             self._billing_client.close()
+        if self._notification_client is not None:
+            self._notification_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
@@ -186,6 +193,29 @@ class _CoreClient(BaseHttpClient):
         client = self._get_or_create_sub_client("_billing_client", self._billing_base_url)
         return self._do_request(
             "GET", path, client=client, base_url=self._billing_base_url, **kwargs
+        )
+
+    def _notification_get(self, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute a read-only Notification API request with retry.
+
+        The notification service is a sibling host derived from the stack URL
+        (``notification.{stack-suffix}``); the sub-client inherits the main
+        client's headers, so the ``X-StorageApi-Token`` auth carries over, and
+        the bearer hook rides along for session-mode projects (the service
+        accepts a ``kbc_at_*`` bearer paired with ``X-KBC-ProjectId``, which
+        ``BearerAuth`` already stamps).
+
+        GET-only for the same reason as ``_billing_get``: this service also
+        exposes ``POST`` / ``DELETE /project-subscriptions``, which add and
+        remove who gets paged when production breaks. kbagent's notification
+        surface is read-only by design (issue #600 scopes the write path out),
+        and hardcoding the verb means a future caller cannot reach the write
+        path through this dispatcher at all -- a guarantee in the signature
+        rather than a convention a reviewer has to catch.
+        """
+        client = self._get_or_create_sub_client("_notification_client", self._notification_base_url)
+        return self._do_request(
+            "GET", path, client=client, base_url=self._notification_base_url, **kwargs
         )
 
     def _wait_for_storage_job(

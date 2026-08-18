@@ -220,6 +220,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |
+| List Flow Notification subscriptions (the Notifications tab) across projects | `kbagent notification list` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |

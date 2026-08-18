@@ -17,6 +17,7 @@ from .billing import _BillingMixin
 from .branches import _BranchesMixin
 from .configs import _ConfigsMixin
 from .misc import _MiscMixin
+from .notifications import _NotificationMixin
 from .query import _QueryMixin
 from .queue import _QueueMixin
 from .storage_files import _StorageFilesMixin
@@ -37,6 +38,7 @@ class KeboolaClient(
     _QueryMixin,
     _WorkspacesMixin,
     _BillingMixin,
+    _NotificationMixin,
     _MiscMixin,
     _CoreClient,
 ):

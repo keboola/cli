@@ -991,6 +991,31 @@ remain branch-aware because modifying a dev branch is the expected intent.
     cells as positive match signals. Queue API is not branch-aware:
     --branch + --not-run-since still compares against production jobs.
 
+### Flow Notifications (Notifications tab -- since v0.84.2)
+
+  kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID] [--branch ID]
+    Fleet-wide audit of Flow Notification subscriptions -- the Flow Builder
+    Notifications tab (bell icon: Success / Error / Processing-delay cards).
+    These live in the notification service (GET /project-subscriptions on
+    notification.{{stack}}, plain Storage token), NOT in the flow's configuration,
+    so flow detail / config detail CANNOT show them. The in-flow
+    type: "notification" TASK is a different mechanism and IS visible via
+    flow detail -- do not conflate the two.
+    Rows: project_alias, subscription_id, event, scope, component_id, config_id,
+    config_name, branch_id, channel (email|webhook), address, expires_at, filters.
+    Event names are KEBAB-case: job-failed, job-succeeded,
+    job-succeeded-with-warning, job-processing-long (+ phase-job-* variants).
+    --event is sent to the API; --component-id/--config-id/--branch match
+    client-side against the subscription's own filter fields
+    (job.component.id / job.configuration.id / branch.id).
+    NOT branch-scoped: without --branch you get dev-branch subscriptions
+    alongside production, and --branch is NEVER inferred from the project's
+    active branch (that would hide production recipients from an audit).
+    A subscription with no config filter is the catch-all -- scope
+    "project-wide", empty config_id. One pointing at a deleted config keeps
+    its config_id with an empty config_name (a finding, not an error).
+    Read-only: create/delete subscriptions are deliberately not exposed.
+
 ### Development Branches
 
   kbagent branch list [--project NAME]

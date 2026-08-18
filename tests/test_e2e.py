@@ -13401,3 +13401,83 @@ class TestE2EConfigState:
             "parameters.foo=1",
         )["data"]
         assert data["configuration"]["parameters"]["foo"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Flow Notification subscriptions (issue #600)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2ENotificationList:
+    """End-to-end test for `kbagent notification list`.
+
+    The E2E project carries no notification subscriptions of its own, so the
+    honest contract to assert here is the envelope and the wiring, not a
+    populated list: `--json` must return a well-formed
+    `{"subscriptions": [...], "errors": [...]}`, exit 0, and reach the
+    derived `notification.{stack}` host with the project's plain Storage
+    token (no elevated scope needed for the read path).
+
+    Row-shape assertions run only when the project actually has
+    subscriptions, so the test starts covering the populated path the day a
+    fixture flow gains a Notifications-tab recipient -- without a rewrite.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-notification"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_notification_list_returns_well_formed_envelope(self) -> None:
+        result = self._run("notification", "list", "--project", self.alias)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert isinstance(data["subscriptions"], list)
+        assert isinstance(data["errors"], list)
+
+        for row in data["subscriptions"]:
+            assert row["project_alias"] == self.alias
+            assert row["subscription_id"]
+            assert row["event"]
+            # A subscription is either filtered to one config or fires
+            # project-wide; there is no third state.
+            assert row["scope"] in ("config", "project-wide")
+            assert (row["scope"] == "config") == bool(row["config_id"])
+            assert row["channel"] in ("email", "webhook")
+
+    def test_event_filter_narrows_without_error(self) -> None:
+        """`--event` is forwarded to the API; an empty result is still exit 0."""
+        result = self._run("notification", "list", "--project", self.alias, "--event", "job-failed")
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert all(row["event"] == "job-failed" for row in data["subscriptions"])
+
+    def test_branch_requires_a_single_project(self) -> None:
+        """A branch id is meaningless across projects -- usage error, exit 2."""
+        result = self._run("notification", "list", "--branch", "1234")
+        assert result.exit_code == 2, result.output

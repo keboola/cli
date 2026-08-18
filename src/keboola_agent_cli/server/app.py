@@ -50,6 +50,7 @@ from .routers import (
     lineage,
     mcp,
     members,
+    notifications,
     org,
     projects,
     schedules,
@@ -237,6 +238,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "**Execution.** "
             "Cron-style schedules attached to flows / configurations. "
             "Mirrors `kbagent schedule list|detail|find`."
+        ),
+    },
+    {
+        "name": "notifications",
+        "description": (
+            "**Execution.** "
+            "Flow Notification subscriptions -- the Notifications-tab "
+            "recipients paged when a job fails, succeeds, or runs long "
+            "(read-only; a different mechanism from an in-flow notification "
+            "task, which `flow detail` already shows). "
+            "Mirrors `kbagent notification list`."
         ),
     },
     {
@@ -693,6 +705,7 @@ def create_app(
     app.include_router(workspaces.router)
     app.include_router(flows.router)
     app.include_router(schedules.router)
+    app.include_router(notifications.router)
     app.include_router(lineage.router)
     app.include_router(sharing.router)
     app.include_router(data_apps.router)
