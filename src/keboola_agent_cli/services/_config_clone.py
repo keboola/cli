@@ -33,12 +33,13 @@ then encrypts in the TARGET project.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Protocol
 
-from ..errors import ConfigError
+from ..errors import ConfigError, KeboolaApiError
 from ..json_utils import set_nested_value
 from ..models import ProjectConfig
-from ._encryption import find_encrypted_secret_paths
+from ._encryption import find_encrypted_secret_paths, find_unencryptable_secret_paths
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,33 @@ def _apply_overrides(configuration: dict[str, Any], overrides: dict[str, str]) -
     return result
 
 
+_ROW_PATH = re.compile(r"^rows\[(\d+)\]\.(.+)$")
+
+
+def split_row_secret_overrides(
+    secrets: dict[str, str],
+) -> tuple[dict[str, str], dict[int, dict[str, str]]]:
+    """Split ``--secret`` paths into parent-body ones and per-row ones.
+
+    Row ciphertext is *detected* and reported as ``rows[N].<path>`` so the
+    operator knows which row to fix, which means a re-supplied value arrives
+    under that same prefix. It has to be routed back to that row: applying it
+    to the parent body would leave the row carrying the source project's
+    undecryptable ciphertext while the command reported success.
+
+    Returns ``(parent_overrides, {row_index: {path: value}})``.
+    """
+    parent: dict[str, str] = {}
+    per_row: dict[int, dict[str, str]] = {}
+    for path, value in secrets.items():
+        match = _ROW_PATH.match(path)
+        if match:
+            per_row.setdefault(int(match.group(1)), {})[match.group(2)] = value
+        else:
+            parent[path] = value
+    return parent, per_row
+
+
 def _apply_secret_overrides(
     configuration: dict[str, Any], secrets: dict[str, str]
 ) -> dict[str, Any]:
@@ -113,6 +141,9 @@ def _clone_same_project(
     description: str,
     set_overrides: dict[str, str],
     branch_id: int | None,
+    project: ProjectConfig,
+    encrypt_fn: _EncryptFn,
+    allow_plaintext_fallback: bool,
 ) -> dict[str, Any]:
     """Duplicate within one project using the server-side copy endpoint.
 
@@ -120,6 +151,13 @@ def _clone_same_project(
     holds -- sibling keys, rows, ciphertexts -- lands in the copy untouched.
     ``--set`` edits are applied afterwards as a normal update on the new
     configuration, so an override can never be the reason a key goes missing.
+
+    The patched body still goes through the encrypt-before-write step: a
+    ``--set 'parameters.db.#password=...'`` is expected traffic here (this is
+    how you repoint a copy at another database), and every other config write
+    path in this CLI pre-encrypts ``#``-prefixed values (issue #378). Skipping
+    it would put the credential in Storage -- and in version history -- in the
+    clear.
     """
     created = client.create_config_copy(
         component_id=component_id,
@@ -137,10 +175,17 @@ def _clone_same_project(
         # actually contains.
         clone_detail = client.get_config_detail(component_id, new_id, branch_id=branch_id)
         patched = _apply_overrides(clone_detail.get("configuration") or {}, set_overrides)
+        encrypted = encrypt_fn(
+            client,
+            project,
+            component_id,
+            patched,
+            allow_plaintext_fallback=allow_plaintext_fallback,
+        )
         client.update_config(
             component_id=component_id,
             config_id=new_id,
-            configuration=patched,
+            configuration=encrypted if encrypted is not None else patched,
             change_description=f"config clone: applied {len(set_overrides)} override(s)",
             branch_id=branch_id,
         )
@@ -160,13 +205,16 @@ def _clone_cross_project(
     target_branch_id: int | None,
     encrypt_fn: _EncryptFn,
     allow_plaintext_fallback: bool,
+    row_secret_overrides: dict[int, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the configuration in the target project, then copy its rows.
 
     Rows are created one by one because there is no bulk endpoint. Each row
-    body is encrypted in the target project too -- a row can carry its own
-    ``#``-secrets, and skipping them would write plaintext.
+    body gets its own re-supplied secrets substituted and is then encrypted in
+    the target project -- a row can carry its own ``#``-secrets, and skipping
+    either step would leave the row unusable or write plaintext.
     """
+    row_secret_overrides = row_secret_overrides or {}
     encrypted_body = encrypt_fn(
         target_client,
         target_project,
@@ -184,23 +232,45 @@ def _clone_cross_project(
     new_id = str(created["id"])
 
     copied_rows: list[dict[str, str]] = []
-    for row in source_rows:
+    for index, row in enumerate(source_rows):
+        source_row_body: dict[str, Any] = row.get("configuration") or {}
+        if index in row_secret_overrides:
+            source_row_body = _apply_secret_overrides(source_row_body, row_secret_overrides[index])
         row_body = encrypt_fn(
             target_client,
             target_project,
             component_id,
-            row.get("configuration") or {},
+            source_row_body,
             allow_plaintext_fallback=allow_plaintext_fallback,
         )
-        created_row = target_client.create_config_row(
-            component_id=component_id,
-            config_id=new_id,
-            name=row.get("name") or "",
-            configuration=row_body if row_body is not None else {},
-            description=row.get("description") or "",
-            is_disabled=bool(row.get("isDisabled")),
-            branch_id=target_branch_id,
-        )
+        try:
+            created_row = target_client.create_config_row(
+                component_id=component_id,
+                config_id=new_id,
+                name=row.get("name") or "",
+                configuration=row_body if row_body is not None else {},
+                description=row.get("description") or "",
+                is_disabled=bool(row.get("isDisabled")),
+                branch_id=target_branch_id,
+            )
+        except KeboolaApiError as exc:
+            # There is no bulk row endpoint and no rollback, so a mid-way
+            # failure leaves a half-populated configuration in the target
+            # project. Name it and say how far we got -- the caller cannot
+            # retry or clean up something it cannot identify.
+            raise KeboolaApiError(
+                message=(
+                    f"{exc.message}\n"
+                    f"PARTIAL CLONE: configuration '{new_id}' was created in the target "
+                    f"project with {len(copied_rows)} of {len(source_rows)} row(s) copied "
+                    f"before row '{row.get('name') or row.get('id')}' failed. Delete it "
+                    f"with `kbagent config delete --component-id {component_id} "
+                    f"--config-id {new_id}` and re-run, or add the missing rows by hand."
+                ),
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+            ) from exc
         copied_rows.append({"source_row_id": str(row.get("id")), "id": str(created_row["id"])})
 
     created["copied_rows"] = copied_rows
@@ -244,6 +314,22 @@ def clone_config(
     source_rows: list[dict[str, Any]] = source.get("rows") or []
     cross_project = not is_same_project(source_project, target_project)
 
+    # The server-side copy writes into the branch it reads from, so it cannot
+    # honour a different target branch. Refuse rather than write to the wrong
+    # branch silently -- the caller asked for something this path cannot do.
+    if not cross_project and target_branch_id is not None and target_branch_id != branch_id:
+        raise ConfigError(
+            f"--target-branch {target_branch_id} cannot be honoured for a clone within one "
+            f"project: the Storage API copies into the source's own branch "
+            f"({branch_id if branch_id is not None else 'production'}). Clone without "
+            f"--target-branch, or clone into a different project."
+        )
+
+    # Same project omits an empty description so the copy endpoint inherits the
+    # source's; the cross-project path assembles the body itself, so it has to
+    # carry that inheritance over explicitly or the copy comes out blank.
+    effective_description = description or (source.get("description") or "")
+
     # Ciphertext is project-scoped, so it only blocks the cross-project path.
     encrypted_paths = find_encrypted_secret_paths(source_body) if cross_project else []
     row_encrypted_paths = (
@@ -256,6 +342,34 @@ def clone_config(
         else []
     )
     all_encrypted = encrypted_paths + row_encrypted_paths
+
+    # Ciphertext under a plain (non-``#``) key has no supported round-trip:
+    # the encrypt step keys off ``#`` names, so a replacement supplied here
+    # would be written to the target project in the clear. Refuse instead --
+    # leaking a credential is a worse failure than not cloning.
+    unencryptable = (
+        find_unencryptable_secret_paths(source_body)
+        + [
+            f"rows[{index}].{path}"
+            for index, row in enumerate(source_rows)
+            for path in find_unencryptable_secret_paths(row.get("configuration") or {})
+        ]
+        if cross_project
+        else []
+    )
+    if unencryptable and not dry_run:
+        listed = "\n  - ".join(unencryptable)
+        raise ConfigError(
+            f"Cannot clone into project '{target_alias}': the source holds "
+            f"{len(unencryptable)} encrypted value(s) under a plain (non-'#') key, which "
+            f"this CLI cannot re-encrypt -- supplying one would write it to "
+            f"'{target_alias}' in PLAINTEXT.\n"
+            f"  - {listed}\n"
+            f"Encrypt the replacement yourself for the target project with "
+            f"`kbagent encrypt values --project {target_alias} --component-id {component_id}` "
+            f"and pass the ciphertext via --set, or clone within the source project instead."
+        )
+
     missing = [path for path in all_encrypted if path not in secret_overrides]
 
     if missing and not dry_run:
@@ -268,9 +382,14 @@ def clone_config(
             f"project on write), or clone within the source project instead."
         )
 
+    # Row secrets are reported (and therefore re-supplied) under a `rows[N].`
+    # prefix, but they belong to the row body, not the parent -- keep them
+    # apart so each half is applied to the document it actually describes.
+    parent_secrets, row_secrets = split_row_secret_overrides(secret_overrides)
+
     planned_body = _apply_overrides(source_body, set_overrides)
     if cross_project:
-        planned_body = _apply_secret_overrides(planned_body, secret_overrides)
+        planned_body = _apply_secret_overrides(planned_body, parent_secrets)
 
     if dry_run:
         return {
@@ -298,10 +417,11 @@ def clone_config(
             component_id=component_id,
             configuration=planned_body,
             name=name,
-            description=description,
+            description=effective_description,
             target_branch_id=target_branch_id,
             encrypt_fn=encrypt_fn,
             allow_plaintext_fallback=allow_plaintext_fallback,
+            row_secret_overrides=row_secrets,
         )
     else:
         created = _clone_same_project(
@@ -313,6 +433,9 @@ def clone_config(
             description=description,
             set_overrides=set_overrides,
             branch_id=branch_id,
+            project=source_project,
+            encrypt_fn=encrypt_fn,
+            allow_plaintext_fallback=allow_plaintext_fallback,
         )
 
     created["mode"] = "cross-project" if cross_project else "same-project"

@@ -52,7 +52,33 @@ CHANGELOG: dict[str, list[str]] = {
         "IDs are never remapped (`sync clone` is the command that does that), and cross-project "
         "output says so. New `KeboolaClient.create_config_copy`; the flow itself lives in the "
         "new `services/_config_clone.py` because `config_service.py` is already over its "
-        "`make loc-check` budget.",
+        "`make loc-check` budget, and `config clone` / `config oauth-url` moved into private "
+        "command modules so `commands/config.py` SHRANK (1953 code lines, from 2007) rather "
+        "than needing its grandfathered ceiling raised. A matching "
+        "`POST /configs/{project}/{component}/{config}/clone` route keeps the 1:1 CLI/HTTP "
+        "rule.",
+        "Security: `--set` is encrypted on BOTH clone paths. The same-project path applied "
+        "overrides through a direct `update_config`, bypassing the Encryption API -- so a "
+        "`--set 'parameters.db.#password=...'` (repointing a copy at another database is the "
+        "documented use case) would have landed in Storage, and in version history, in "
+        "plaintext. Ciphertext stored under a plain non-`#` key is now REFUSED outright "
+        "instead of accepting a `--secret` for it: `collect_secrets` only picks up `#` keys, "
+        "so the replacement would never have been re-encrypted. Encrypt such a value for the "
+        "target project yourself (`kbagent encrypt values`) and pass the ciphertext via "
+        "`--set`.",
+        "Fix: a re-supplied row secret now lands in that ROW. Row ciphertext is reported "
+        "under a `rows[N].` prefix and the refusal check accepted a `--secret` at that exact "
+        "path, but the substitution applied every override to the PARENT body -- so the "
+        "copied row kept the source project's undecryptable ciphertext while the command "
+        "reported success, which is precisely the outcome this command exists to prevent. "
+        "Paths for secrets inside a list also changed from `parameters.values.[0].#token` to "
+        "`parameters.values.0.value`: the bracketed form raised `ValueError` in "
+        "`set_nested_value`, so the CLI was instructing operators to run a command that then "
+        "crashed. Cross-project clones also inherit the source description instead of "
+        "blanking it, `--target-branch` is rejected on a same-project clone when it differs "
+        "from `--branch` (the server-side copy cannot honour it) rather than silently writing "
+        "to the wrong branch, and a row failing mid-copy now reports the created "
+        "configuration id and how many rows landed so the partial clone can be cleaned up.",
     ],
     "0.84.2": [
         "New (#594): `kbagent billing credits [--project ALIAS ...]` reads the Pay-As-You-Go "

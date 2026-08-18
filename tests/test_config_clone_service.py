@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from helpers import setup_single_project
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.services.config_service import ConfigService
 
 SOURCE_DETAIL = {
@@ -265,6 +265,71 @@ class TestCloneCrossProjectEncryptedValues:
         # Every encryption call was scoped to the target project (id 200).
         assert {project_id for project_id, _ in seen} == {200}
 
+    def test_row_secret_is_written_into_that_row_not_the_parent(self, tmp_config_dir: Path) -> None:
+        """A re-supplied `rows[N].…` secret must land in that row's body.
+
+        The detection reports row ciphertext with a `rows[N].` prefix and the
+        refusal check accepts a `--secret` at that exact path -- so if the
+        substitution then applies it to the PARENT body, the command reports
+        success while the copied row still carries the source project's
+        undecryptable ciphertext. That is precisely the outcome `config clone`
+        exists to prevent, and it would be discovered only at runtime, in the
+        other project.
+        """
+        detail = dict(SOURCE_DETAIL)
+        detail["configuration"] = {"parameters": {"db": {"host": "h"}}}
+        detail["rows"] = [
+            {
+                "id": "r1",
+                "name": "orders",
+                "configuration": {"parameters": {"#token": "KBC::ProjectSecure::xyz"}},
+            }
+        ]
+        service, _, target = _make_two_project_service(tmp_config_dir, detail=detail)
+
+        service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            target_alias="dev",
+            secret_overrides={"rows[0].parameters.#token": "fresh-row-token"},
+        )
+
+        row_body = target.create_config_row.call_args.kwargs["configuration"]
+        assert row_body["parameters"]["#token"] == "fresh-row-token", row_body
+
+        # And the parent must not have grown a bogus "rows[0]" key.
+        parent_body = target.create_config.call_args.kwargs["configuration"]
+        assert "rows[0]" not in parent_body, parent_body
+        assert parent_body == {"parameters": {"db": {"host": "h"}}}, parent_body
+
+    def test_ciphertext_under_a_plain_key_is_refused_not_silently_leaked(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A ``KBC::`` value under a non-``#`` key has no encryption round-trip.
+
+        Accepting a ``--secret`` for it would write the replacement to the
+        target project in plaintext, because the encrypt step only picks up
+        ``#``-prefixed keys. Refusing is the only outcome that does not either
+        break the clone or leak the credential.
+        """
+        detail = dict(SOURCE_DETAIL)
+        detail["configuration"] = {"parameters": {"token": "KBC::ProjectSecure::plain"}}
+        detail["rows"] = []
+        service, _, target = _make_two_project_service(tmp_config_dir, detail=detail)
+
+        with pytest.raises(ConfigError, match="cannot re-encrypt"):
+            service.clone_config(
+                alias="prod",
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                name="copy",
+                target_alias="dev",
+                secret_overrides={"parameters.token": "fresh"},
+            )
+        target.create_config.assert_not_called()
+
     def test_rows_are_copied_into_the_new_configuration(self, tmp_config_dir: Path) -> None:
         """Cross-project has no server-side copy, so rows are recreated by hand."""
         service, _, target = _make_two_project_service(tmp_config_dir)
@@ -347,6 +412,137 @@ class TestCloneCrossProjectEncryptedValues:
         )
 
         assert "rows[0].parameters.#token" in result["missing_secrets"]
+
+
+class TestCloneWriteSafety:
+    """Behaviour the two paths must share, because a flag that works on one and
+    silently does nothing on the other is worse than an unsupported flag.
+    """
+
+    def test_same_project_set_encrypts_hash_prefixed_values(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--set 'parameters.db.#password=…'` must not reach Storage in the clear.
+
+        Repointing the copy at another database is the documented use case, so
+        a `#`-prefixed --set is expected traffic. Every other config write path
+        pre-encrypts through the Encryption API (issue #378, fail-closed); this
+        one bypassed it entirely, and version history would keep the plaintext.
+        """
+        service, client = _make_service(tmp_config_dir)
+        client.get_config_detail.side_effect = [
+            dict(SOURCE_DETAIL),
+            {"id": "clone-1", "version": 1, "configuration": {"parameters": {"db": {}}}},
+        ]
+        encrypted: list[dict] = []
+
+        def fake_encrypt(cl, project, component_id, configuration, *, allow_plaintext_fallback):
+            encrypted.append(configuration)
+            return {"encrypted": True}
+
+        monkeypatch.setattr(service, "_encrypt_secrets_before_write", fake_encrypt)
+
+        service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            set_overrides={"parameters.db.#password": "plaintext"},
+        )
+
+        assert encrypted, "the patched body was never sent through encryption"
+        assert client.update_config.call_args.kwargs["configuration"] == {"encrypted": True}
+
+    def test_cross_project_inherits_the_source_description(self, tmp_config_dir: Path) -> None:
+        """Same-project omits the field so the API copies it; cross-project has
+        to do that itself or the copy comes out blank.
+        """
+        service, _, target = _make_two_project_service(tmp_config_dir)
+
+        service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            target_alias="dev",
+            secret_overrides={"parameters.db.#password": "fresh"},
+        )
+
+        assert target.create_config.call_args.kwargs["description"] == "writes to prod"
+
+    def test_explicit_description_still_wins(self, tmp_config_dir: Path) -> None:
+        service, _, target = _make_two_project_service(tmp_config_dir)
+
+        service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            description="my own",
+            target_alias="dev",
+            secret_overrides={"parameters.db.#password": "fresh"},
+        )
+
+        assert target.create_config.call_args.kwargs["description"] == "my own"
+
+    def test_same_project_rejects_a_differing_target_branch(self, tmp_config_dir: Path) -> None:
+        """The server-side copy writes into the SOURCE branch, so a different
+        --target-branch cannot be honoured. Silently writing to the wrong
+        branch is the one outcome that must not happen.
+        """
+        service, client = _make_service(tmp_config_dir)
+
+        with pytest.raises(ConfigError, match="--target-branch"):
+            service.clone_config(
+                alias="prod",
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                name="copy",
+                branch_id=100,
+                target_branch_id=200,
+            )
+        client.create_config_copy.assert_not_called()
+
+    def test_same_project_accepts_a_matching_target_branch(self, tmp_config_dir: Path) -> None:
+        """Passing the same branch on both sides is redundant, not wrong."""
+        service, client = _make_service(tmp_config_dir)
+
+        service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            branch_id=100,
+            target_branch_id=100,
+        )
+
+        assert client.create_config_copy.call_args.kwargs["branch_id"] == 100
+
+    def test_partial_cross_project_clone_reports_what_landed(self, tmp_config_dir: Path) -> None:
+        """A row failing mid-copy leaves a half-populated configuration behind.
+
+        The caller cannot clean up what it cannot name, so the error has to
+        carry the created configuration id and how many rows made it.
+        """
+        service, _, target = _make_two_project_service(tmp_config_dir)
+        target.create_config_row.side_effect = [
+            {"id": "new-r1"},
+            KeboolaApiError(message="boom", error_code="API_ERROR", status_code=500),
+        ]
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.clone_config(
+                alias="prod",
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                name="copy",
+                target_alias="dev",
+                secret_overrides={"parameters.db.#password": "fresh"},
+            )
+
+        message = str(exc_info.value)
+        assert "clone-1" in message, message
+        assert "1 of 2" in message, message
 
 
 class TestCloneTargetsTheRightClient:

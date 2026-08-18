@@ -1206,6 +1206,24 @@ events and emits a final `done` SSE frame mirroring the same record.
   that actually remaps.
 - `--secret` and `--set` split on the FIRST `=` only, so values may contain
   `=` (base64 padding, connection strings).
+- **Row secrets are supplied under their `rows[N].` path** and are routed back
+  into that row, not the parent body. Paths for secrets inside a list use a
+  plain index segment (`parameters.values.0.value`, not `[0]`) so they can be
+  passed straight back to `--secret`.
+- **Ciphertext under a plain (non-`#`) key is refused outright.** The
+  Encryption API round-trip in this CLI keys off `#` names, so a replacement
+  supplied there would be written to the target project in PLAINTEXT.
+  Encrypt it yourself for the target with `kbagent encrypt values` and pass
+  the ciphertext via `--set`.
+- **`--set` is encrypted on both paths.** A `--set 'parameters.db.#password=...'`
+  goes through the Encryption API before the write, same as `config update`.
+- **`--target-branch` is rejected on a same-project clone** when it differs
+  from `--branch`: the server-side copy writes into the source's own branch,
+  so honouring it is impossible and writing to the wrong branch silently is
+  not acceptable.
+- **A cross-project clone is not transactional.** If a row fails mid-copy the
+  error names the created configuration id and how many rows landed, so you
+  can delete it and re-run.
 
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
