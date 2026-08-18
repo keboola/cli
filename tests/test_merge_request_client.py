@@ -347,7 +347,7 @@ class TestRebaseEnvelope:
     def test_keep_rebase_omits_unset_optionals_and_sends_empty_rows(
         self, client, httpx_mock
     ) -> None:
-        """description/change_description are omitted; rows=[] is sent (it deletes all rows)."""
+        """description=None and an unset change_description are omitted; rows=[] is sent."""
         httpx_mock.add_response(url=self.REBASE_URL, json={})
 
         client.rebase_config(
@@ -359,6 +359,7 @@ class TestRebaseEnvelope:
             rows=[],
             configuration={},
             is_disabled=False,
+            description=None,
         )
 
         body = _sent_json(httpx_mock.get_requests()[0])
@@ -372,7 +373,7 @@ class TestRebaseEnvelope:
     def test_keep_rebase_always_sends_configuration_and_is_disabled(
         self, client, httpx_mock
     ) -> None:
-        """Rebase REPLACES, so neither field may be left to a server-side default.
+        """Rebase REPLACES, so no body field may be left to a server-side default.
 
         A missing ``diff.configuration`` is substituted with ``{}`` and a missing
         ``diff.isDisabled`` with ``false``, so omitting either would wipe the
@@ -390,18 +391,34 @@ class TestRebaseEnvelope:
             rows=[],
             configuration={"parameters": {"keep": "me"}},
             is_disabled=True,
+            description="kept",
         )
 
         diff = _sent_json(httpx_mock.get_requests()[0])["diff"]
         assert diff["configuration"] == {"parameters": {"keep": "me"}}
         assert diff["isDisabled"] is True
+        assert diff["description"] == "kept"
 
-    def test_keep_rebase_requires_configuration_and_is_disabled(self, client) -> None:
-        """Omitting either is a TypeError at the call, not silent data loss on the wire."""
-        with pytest.raises(TypeError):
-            client.rebase_config(
-                "keboola.ex-http", "cfg-1", branch_id=123, version=7, name="N", rows=[]
-            )
+    def test_keep_rebase_requires_every_replaced_body_field(self, client) -> None:
+        """Omitting any replaced body field is a TypeError, not silent loss on the wire.
+
+        ``name`` / ``description`` / ``configuration`` / ``isDisabled`` are the
+        tuple the backend calls "the complete 3-way diff result" and fully
+        replaces the resolved version's body with, so none of them may carry a
+        default here. ``change_description`` is not part of that tuple and stays
+        optional -- omitting it selects a default rebase message.
+        """
+        required = {
+            "name": "N",
+            "rows": [],
+            "configuration": {},
+            "is_disabled": False,
+            "description": None,
+        }
+        for omitted in required:
+            kwargs = {k: v for k, v in required.items() if k != omitted}
+            with pytest.raises(TypeError):
+                client.rebase_config("keboola.ex-http", "cfg-1", branch_id=123, version=7, **kwargs)
 
     def test_delete_rebase_sends_empty_diff_object(self, client, httpx_mock) -> None:
         """Delete resolution is exactly {"version": N, "diff": {}} -- diff a JSON object."""

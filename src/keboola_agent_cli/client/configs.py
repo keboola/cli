@@ -687,7 +687,7 @@ class _ConfigsMixin(_CoreClient):
         rows: list[dict[str, Any]],
         configuration: dict[str, Any],
         is_disabled: bool,
-        description: str | None = None,
+        description: str | None,
         change_description: str | None = None,
     ) -> dict[str, Any]:
         """Rebase a dev-branch configuration onto a newer default-branch version.
@@ -699,15 +699,19 @@ class _ConfigsMixin(_CoreClient):
         The resolved content travels in a ``diff`` envelope mirroring the
         shape ``get_config_diff`` returns each side in, so a resolved diff
         side posts back nearly 1:1. Rebase REPLACES the configuration rather
-        than patching it, so every field the backend fills in on a missing
-        key is required here, not optional: ``name`` and ``rows`` because
-        the backend rejects the request without them (``rows=[]``
-        legitimately deletes all rows), ``configuration`` and ``is_disabled``
-        because it substitutes ``{}`` and ``false`` -- omitting those two
-        wipes the configuration body and re-enables a disabled config, which
-        a caller reading "optional" would not expect. To resolve a conflict
-        by DELETING the config, use ``rebase_config_delete`` -- the two
-        rebase kinds are separate methods on purpose, so no illegal
+        than patching it: server-side, ``name`` / ``description`` /
+        ``configuration`` / ``isDisabled`` are "the complete 3-way diff
+        result" and "fully replace" the resolved version's body
+        (``ConfigurationRebaseService``). So all four are required here, not
+        optional -- an omitted key is not "leave unchanged" but "take the
+        server-side default", which for ``configuration`` is ``{}``, for
+        ``isDisabled`` is ``false`` and for ``description`` is null. ``rows``
+        is required too, because the backend rejects a keep rebase without
+        it (``rows=[]`` legitimately deletes all rows). Only
+        ``change_description`` is genuinely optional: it is not part of the
+        replaced body, and null selects a default rebase message. To resolve
+        a conflict by DELETING the config, use ``rebase_config_delete`` --
+        the two rebase kinds are separate methods on purpose, so no illegal
         combination is expressible (RFC, D6).
 
         ``branch_id`` is required with no production fallback (see
@@ -734,10 +738,13 @@ class _ConfigsMixin(_CoreClient):
                 the backend substitutes ``false``, re-enabling a config that
                 was disabled. Not the tri-state of ``update_config``
                 (RFC, D1) -- that method patches, this one replaces.
-            description: Resolved description. ``None`` omits the key --
-                which costs no expressiveness: server-side an explicit JSON
-                null and an absent key are indistinguishable (``isset``
-                mapping).
+            description: Resolved description. Required, but ``None`` is a
+                legitimate resolved value -- it means the rebased config
+                ends up with no description. ``None`` omits the key rather
+                than sending an explicit null, which costs no expressiveness
+                because server-side the two are indistinguishable (``isset``
+                mapping). It has no default precisely because that default
+                would silently drop an existing description.
             change_description: Change log message; when ``None``/omitted
                 the backend uses a default rebase message.
 
