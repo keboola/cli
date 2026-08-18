@@ -59,7 +59,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 <!-- BEGIN AUTO-GENERATED COMMANDS -->
 | Goal | Command |
 |------|---------|
-| Update kbagent + keboola-mcp-server to the latest versions | `kbagent update` |
+| Update kbagent to the latest version | `kbagent update` |
 | Show recent changelog (what changed in each version) | `kbagent changelog` |
 | Launch the kbagent HTTP API server | `kbagent serve` |
 | Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY>` |

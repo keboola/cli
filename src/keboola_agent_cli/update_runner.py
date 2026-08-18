@@ -223,10 +223,9 @@ def run_install(command: tuple[str, ...], *, timeout: float) -> InstallRun:
     except OSError:
         logger.debug("Could not create the update log directory", exc_info=True)
 
-    # Where this run's own output begins. The log is shared -- the MCP stage
-    # writes to it moments before the kbagent stage, and the Windows helper
-    # appends to it too -- so reporting the tail of the whole file would
-    # attribute someone else's transcript to this command.
+    # Where this run's own output begins. The log is shared -- the Windows
+    # deferred helper appends to it too -- so reporting the tail of the whole
+    # file would attribute someone else's transcript to this command.
     start_offset = _roll_log_if_oversized(destination)
 
     try:

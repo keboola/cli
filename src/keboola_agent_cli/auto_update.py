@@ -26,26 +26,17 @@ from .constants import (
     AUTO_UPDATE_CHECK_INTERVAL,
     ENV_AUTO_UPDATE,
     ENV_SKIP_UPDATE,
-    MCP_UPGRADE_TIMEOUT,
     VERSION_CACHE_FILENAME,
     VERSION_CHECK_TIMEOUT,
 )
 from .frozen_dist import FrozenDistribution, detect_frozen_distribution, is_frozen_build
 from .services.version_service import (
-    MCP_PACKAGE_NAME,
-    MCP_UV_PRERELEASE_FLAG,
     KbagentUpdatePlan,
-    McpUpdatePlan,
-    _detect_mcp_install_method,
     _fetch_kbagent_latest_version,
-    _fetch_mcp_latest_version,
-    _get_local_mcp_version,
     _is_up_to_date,
-    _perform_mcp_update,
     build_kbagent_upgrade_command,
     get_update_timeout,
     prepare_kbagent_update_plan,
-    prepare_mcp_update_plan,
     resolve_kbagent_wheel_url,
 )
 from .update_runner import (
@@ -87,8 +78,7 @@ class UpdateOutcome(enum.Enum):
 #
 # Re-exec'd processes (kbagent self-upgrade -> ``execvpe`` to new binary)
 # start with a fresh sentinel because the module is reloaded into a new
-# Python interpreter, so the kbagent-self-upgrade -> re-exec -> MCP-stage
-# chain from PR #257 is preserved.
+# Python interpreter; the re-exec'd run then short-circuits as up to date.
 _AUTO_UPDATE_RAN: bool = False
 
 
@@ -105,11 +95,12 @@ def _read_cache() -> dict | None:
     """Read the version cache file.
 
     Returns:
-        Parsed dict with ``last_check`` (required) and any of
-        ``latest_version`` / ``mcp_latest_version`` / ``mcp_install_method``,
-        or None if the file is missing, unreadable, or corrupt. Older
-        cache formats lacking the MCP fields are still accepted -- the
-        missing fields trigger a fresh fetch in the same run.
+        Parsed dict with ``last_check`` and ``latest_version`` (both
+        required), or None if the file is missing, unreadable, or corrupt.
+        Deliberately tolerant of extra keys: a cache file written by an
+        older kbagent carries fields this version no longer knows about,
+        and must still load rather than be rejected as corrupt (which would
+        force a needless fetch on the first run after an upgrade).
     """
     cache_path = _get_cache_path()
     try:
@@ -123,20 +114,14 @@ def _read_cache() -> dict | None:
         return None
 
 
-def _write_cache(
-    latest_version: str | None,
-    mcp_latest_version: str | None = None,
-    mcp_install_method: str | None = None,
-) -> None:
+def _write_cache(latest_version: str | None) -> None:
     """Write the version cache file.
 
     Args:
         latest_version: kbagent latest version. Falls back to the running
-            interpreter's ``__version__`` when None -- caller is in a
-            re-exec'd process where Stage 1 was skipped and we still want
-            to persist the MCP-side fields without losing the kbagent key.
-        mcp_latest_version: keboola-mcp-server latest version from PyPI.
-        mcp_install_method: Detected MCP install method (drives upgrade cmd).
+            interpreter's ``__version__`` when None -- the caller is in a
+            re-exec'd process where the update stage was skipped and we
+            still want the TTL to tick.
     """
     if latest_version is None:
         # Re-exec path: persist the running version so cache_is_fresh
@@ -149,10 +134,6 @@ def _write_cache(
             "last_check": time.time(),
             "latest_version": latest_version,
         }
-        if mcp_latest_version is not None:
-            payload["mcp_latest_version"] = mcp_latest_version
-        if mcp_install_method is not None:
-            payload["mcp_install_method"] = mcp_install_method
         cache_path.write_text(json.dumps(payload), encoding="utf-8")
     except OSError:
         pass  # Non-critical; next run will re-fetch
@@ -215,11 +196,10 @@ def _is_dev_install() -> bool:
 def _should_skip_kbagent_stage() -> bool:
     """Whether the kbagent self-upgrade stage should be skipped.
 
-    Re-exec guard (``KBAGENT_SKIP_UPDATE=1``) skips ONLY the kbagent stage.
-    The MCP stage in the re-exec'd process is intentionally allowed to
-    proceed -- otherwise a freshly-upgraded kbagent on a stale MCP would
-    require a second invocation to refresh MCP. See
-    :func:`_should_skip_all` for the wider conditions that gate both stages.
+    Set by the re-exec guard (``KBAGENT_SKIP_UPDATE=1``) so the process a
+    self-upgrade re-exec'd into does not try to upgrade itself again. See
+    :func:`_should_skip_all` for the wider conditions that gate the whole
+    flow, including the cache refresh.
     """
     return os.environ.get(ENV_SKIP_UPDATE) == "1"
 
@@ -252,7 +232,7 @@ def _top_level_subcommand_is_versioning(args: list[str]) -> bool:
 def _should_skip_all() -> bool:
     """Whether the entire auto-update flow should be skipped.
 
-    Skip conditions (apply to BOTH kbagent and MCP stages):
+    Skip conditions:
 
     - ``KBAGENT_AUTO_UPDATE`` in ``{false, 0, no}`` (user opt-out).
     - Development / editable install (we never auto-upgrade a dev tree).
@@ -260,8 +240,8 @@ def _should_skip_all() -> bool:
       versioning themselves and would loop if auto-update fired here too).
 
     Notably **does NOT include** the re-exec guard
-    ``KBAGENT_SKIP_UPDATE=1`` -- that is per-stage and only skips the
-    kbagent stage. See :func:`_should_skip_kbagent_stage`.
+    ``KBAGENT_SKIP_UPDATE=1`` -- that gates only the self-upgrade itself,
+    not the cache refresh. See :func:`_should_skip_kbagent_stage`.
     """
     # User opt-out
     auto_update_val = os.environ.get(ENV_AUTO_UPDATE, "").lower().strip()
@@ -371,139 +351,6 @@ def show_post_update_changelog() -> None:
             sys.stderr.write(msg)
     except Exception:
         pass  # Never crash
-
-
-def _maybe_update_mcp(cache: dict | None, fetched_now: bool) -> str | None:
-    """Check for and apply a keboola-mcp-server upgrade.
-
-    Args:
-        cache: Existing cache dict (may be stale) or None.
-        fetched_now: True if this run has already done a fresh latest-version
-            fetch for kbagent. Used to avoid double network round-trips:
-            when stale, we issue both fetches in the same pass and persist
-            both to the cache.
-
-    Returns:
-        ``mcp_latest_version`` to persist to the cache (None if skipped or
-        fetch failed). Caller composes the cache write.
-    """
-    # Use cached MCP latest if fresh; otherwise fetch.
-    cached_latest: str | None = None
-    if cache is not None:
-        candidate = cache.get("mcp_latest_version")
-        if isinstance(candidate, str) and candidate:
-            cached_latest = candidate
-
-    if not fetched_now and cached_latest:
-        mcp_latest: str | None = cached_latest
-    else:
-        mcp_latest = _fetch_mcp_latest_version(timeout=VERSION_CHECK_TIMEOUT)
-
-    if mcp_latest is None:
-        return cached_latest  # nothing to do; preserve any prior cache
-
-    local_version = _get_local_mcp_version()
-    if local_version is None:
-        # Bug C fix from issue #263: when local-version detection fails,
-        # do NOT fall through to the upgrade attempt. The previous behaviour
-        # printed an "Updating ... vunknown -> v1.59.1" banner and ran the
-        # upgrade subprocess every TTL window because `up_to_date` was None
-        # (not True), which bypassed the short-circuit below. The fix opts
-        # out of the upgrade for this TTL window and lets the next fresh-
-        # cache pass retry detection. The cache write below records the
-        # latest version regardless so the cache TTL still ticks.
-        return mcp_latest
-
-    up_to_date = _is_up_to_date(local_version, mcp_latest)
-    if up_to_date is True:
-        return mcp_latest
-
-    method = _detect_mcp_install_method()
-    if method == "none":
-        # Nothing installed locally; do not auto-install on startup.
-        return mcp_latest
-
-    sys.stderr.write(
-        f"Updating keboola-mcp-server v{local_version or 'unknown'} -> v{mcp_latest}"
-        f" (via {method})...\n"
-    )
-    pre_version = local_version
-    success, info = _perform_mcp_update(method=method, timeout=MCP_UPGRADE_TIMEOUT)
-    if success:
-        # Bug E fix from issue #263: subprocess returncode == 0 is NOT
-        # enough to claim the upgrade actually happened. `uv tool upgrade`
-        # exits 0 even when its resolver backtracks to the previously
-        # installed version (a real-world reproducer: keboola-mcp-server
-        # v1.59.1 declares fastmcp==3.2.0 strict equality, the existing
-        # venv has fastmcp==2.13.0.2, uv resolves back to v1.32.0 and
-        # exits clean). Compare pre and post versions and tell the truth.
-        post_version = _get_local_mcp_version()
-        if post_version and pre_version and post_version != pre_version:
-            sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
-        elif post_version is None:
-            # Probe failed post-upgrade; cannot verify -- assume latest.
-            sys.stderr.write(
-                f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{mcp_latest}).\n"
-            )
-        else:
-            # Subprocess exit 0 but local version unchanged. Cause: uv's
-            # resolver backtracked to an older release that still satisfies
-            # every constraint (a pre-release-only transitive pin, a strict
-            # equality the venv cannot meet, or a Python floor). The upgrade
-            # commands already pass --prerelease=allow (issue #324); if the
-            # version still will not move, force a clean reinstall WITH the
-            # same flag -- a plain reinstall hits the identical wall.
-            sys.stderr.write(
-                f"keboola-mcp-server upgrade exit 0 but local version still v{pre_version} "
-                f"(latest: v{mcp_latest}). The resolver backtracked to an older release -- "
-                f"run `uv tool install --reinstall {MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}` "
-                f"to force the latest.\n"
-            )
-    else:
-        sys.stderr.write(
-            f"keboola-mcp-server upgrade skipped: {info}; continuing with current version.\n"
-        )
-
-    return mcp_latest
-
-
-def _apply_prepared_mcp_update(plan: McpUpdatePlan) -> None:
-    """Apply a previously prepared MCP update while kbagent is still intact."""
-    if plan.latest_version is None or plan.up_to_date is True or plan.install_method == "none":
-        return
-    if plan.current_version is None or plan.command is None:
-        return
-
-    sys.stderr.write(
-        f"Updating keboola-mcp-server v{plan.current_version} -> v{plan.latest_version}"
-        f" (via {plan.install_method})...\n"
-    )
-    success, info = _perform_mcp_update(
-        method=plan.install_method,
-        timeout=MCP_UPGRADE_TIMEOUT,
-        command=plan.command,
-    )
-    if not success:
-        sys.stderr.write(
-            f"keboola-mcp-server upgrade skipped: {info}; continuing with current version.\n"
-        )
-        return
-
-    # A post-MCP probe is permitted: the kbagent environment has not yet
-    # changed. It is deliberately the last discovery operation in this flow.
-    post_version = _get_local_mcp_version()
-    if post_version and post_version != plan.current_version:
-        sys.stderr.write(f"Updated keboola-mcp-server to v{post_version}.\n")
-    elif post_version is None:
-        sys.stderr.write(
-            f"Updated keboola-mcp-server (probe failed; latest on PyPI: v{plan.latest_version}).\n"
-        )
-    else:
-        sys.stderr.write(
-            f"keboola-mcp-server upgrade exit 0 but local version still v{plan.current_version} "
-            f"(latest: v{plan.latest_version}). Run `uv tool install --reinstall "
-            f"{MCP_UV_PRERELEASE_FLAG} {MCP_PACKAGE_NAME}` to force the latest.\n"
-        )
 
 
 def report_finished_deferred_update() -> None:
@@ -621,43 +468,23 @@ def _prepare_auto_kbagent_plan(latest_version: str | None) -> KbagentUpdatePlan:
 def maybe_auto_update() -> None:
     """Main entry point for the auto-update flow.
 
-    Called from ``cli.py`` at the very top of ``main()``. Orchestrates two
-    sequential stages with **independent skip gating** (since v0.30.1):
+    Called from ``cli.py`` at the very top of ``main()``. If the installed
+    version is behind the latest GitHub release, the upgrade is installed and
+    the same argv is ``execvpe``'d into the new binary. The new process
+    re-enters this function and short-circuits as up-to-date, because the
+    re-exec sets ``KBAGENT_SKIP_UPDATE=1``.
 
-    1. **kbagent self-update** -- if the installed version is behind the
-       latest GitHub release, download the upgrade and ``execvpe`` the new
-       binary with the same argv. The new process re-enters this function
-       and the kbagent stage short-circuits as up-to-date.
-    2. **keboola-mcp-server update** -- if the locally installed MCP server
-       is behind PyPI, run the upgrade command matching the install
-       method (``uv tool upgrade`` / ``pip install -U`` / ``uvx --refresh``).
-       No re-exec is needed: the MCP server is spawned by ``tool call``
-       commands and the next spawn picks up the new version.
-
-    **Frozen (PyInstaller) builds replace Stage 1 with a notification.** A
-    native binary from Chocolatey / WinGet / Homebrew / apt / dnf is not a
+    **Frozen (PyInstaller) builds get a notification instead of an install.**
+    A native binary from Chocolatey / WinGet / Homebrew / apt / dnf is not a
     uv-managed tool environment, so neither the inline reinstall nor the
     deferred Windows helper applies -- both would install an unrelated second
     copy instead of upgrading the running one (full rationale in
-    :mod:`keboola_agent_cli.frozen_dist`). **Stage 2 still runs there**, and
-    that is deliberate: ``keboola-mcp-server`` is a *separate* Python
-    distribution that a frozen kbagent only ever spawns as a subprocess, so
-    upgrading it neither touches nor depends on the frozen binary. A pure
-    binary user with no Python at all is unaffected either way --
-    :func:`_detect_mcp_install_method` returns ``"none"`` and the stage
-    short-circuits without installing anything.
-
-    Critical invariant: **the re-exec'd process (KBAGENT_SKIP_UPDATE=1)
-    skips ONLY Stage 1**. Stage 2 always runs, so a kbagent self-upgrade
-    on startup leaves the user with both kbagent AND MCP refreshed in
-    a single boot, not two. This was the B-1 finding in the PR #257
-    review -- gating the MCP stage on the same flag broke the
-    "both stages always run" promise after a kbagent self-upgrade.
+    :mod:`keboola_agent_cli.frozen_dist`).
 
     Cache discipline: a single cache file at
-    ``~/.config/keboola-agent-cli/version_cache.json`` stores both
-    ``latest_version`` (kbagent) and ``mcp_latest_version`` so we make at
-    most two PyPI/GitHub round-trips per ``AUTO_UPDATE_CHECK_INTERVAL``.
+    ``~/.config/keboola-agent-cli/version_cache.json`` stores
+    ``latest_version`` so we make at most one GitHub round-trip per
+    ``AUTO_UPDATE_CHECK_INTERVAL``.
 
     This function NEVER raises. All exceptions are caught and logged at
     debug level so the CLI always proceeds normally.
@@ -687,7 +514,6 @@ def maybe_auto_update() -> None:
         cache = _read_cache()
         cache_is_fresh = bool(cache and _is_cache_fresh(cache, AUTO_UPDATE_CHECK_INTERVAL))
         cached_kbagent = cache.get("latest_version") if cache else None
-        cached_mcp = cache.get("mcp_latest_version") if cache else None
         skip_kbagent_stage = _should_skip_kbagent_stage()
         # A frozen (PyInstaller) binary is upgraded by the package manager that
         # placed it, never by us. Detected BEFORE planning so the wheel-URL HEAD
@@ -696,7 +522,6 @@ def maybe_auto_update() -> None:
         # command this process is never allowed to run.
         frozen_dist = detect_frozen_distribution()
         use_cached_kbagent = cache_is_fresh and isinstance(cached_kbagent, str)
-        use_cached_mcp = cache_is_fresh and isinstance(cached_mcp, str)
         latest_version = (
             cached_kbagent
             if use_cached_kbagent
@@ -706,26 +531,18 @@ def maybe_auto_update() -> None:
                 else _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
             )
         )
-        mcp_latest = (
-            cached_mcp
-            if use_cached_mcp
-            else _fetch_mcp_latest_version(timeout=VERSION_CHECK_TIMEOUT)
-        )
 
-        # Planning is complete before any subprocess can mutate either tool.
-        # In particular, all HTTP requests, import probes, PATH inspection,
-        # and command construction are above this line.
-        mcp_plan = prepare_mcp_update_plan(mcp_latest)
+        # Planning is complete before any subprocess can mutate the tool
+        # environment. In particular, all HTTP requests, import probes, PATH
+        # inspection, and command construction are above this line.
         kbagent_plan = (
             _prepare_auto_kbagent_plan(latest_version)
             if not skip_kbagent_stage and frozen_dist is None
             else KbagentUpdatePlan(__version__, latest_version, True, None, None)
         )
 
-        # MCP is an independent environment. Finish it before the terminal
-        # self-reinstall and persist the prepared cache before self-mutation.
-        _apply_prepared_mcp_update(mcp_plan)
-        if not (use_cached_kbagent and use_cached_mcp):
+        # Persist the prepared cache before any self-mutation.
+        if not use_cached_kbagent:
             _write_cache(
                 latest_version=(
                     latest_version
@@ -734,22 +551,13 @@ def maybe_auto_update() -> None:
                     if isinstance(cached_kbagent, str)
                     else None
                 ),
-                mcp_latest_version=(
-                    mcp_latest
-                    if mcp_latest is not None
-                    else cached_mcp
-                    if isinstance(cached_mcp, str)
-                    else None
-                ),
-                mcp_install_method=mcp_plan.install_method,
             )
 
-        # Frozen builds: Stage 1 becomes a notification. Deliberately placed
-        # AFTER the MCP stage and the cache write -- both stay fully active (see
-        # this function's docstring for why MCP is still updated), and letting
-        # the TTL tick is what throttles the banner below. Placed BEFORE the
-        # `should_defer()` branch further down, so the deferred Windows helper
-        # is never scheduled for a binary it cannot install over either.
+        # Frozen builds: the install becomes a notification. Deliberately placed
+        # AFTER the cache write -- letting the TTL tick is what throttles the
+        # banner below. Placed BEFORE the `should_defer()` branch further down,
+        # so the deferred Windows helper is never scheduled for a binary it
+        # cannot install over either.
         if frozen_dist is not None:
             # Only on a run that actually refreshed the cache, i.e. at most once
             # per AUTO_UPDATE_CHECK_INTERVAL. Unlike the normal path this banner

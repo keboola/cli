@@ -198,7 +198,7 @@ if ! ensure_uv; then
 fi
 
 # Pick the install spec. [server] pulls in FastAPI/uvicorn so `kbagent serve`
-# (REST + MCP + UI) works; KBAGENT_NO_SERVER=1 opts out for a lighter install.
+# (REST + UI) works; KBAGENT_NO_SERVER=1 opts out for a lighter install.
 if [ "${KBAGENT_NO_SERVER:-}" = "1" ]; then
   spec="$PKG"
 else
@@ -255,7 +255,7 @@ bin_path=$(command -v kbagent 2>/dev/null || echo "~/.local/bin/kbagent")
 
 info ""
 printf '  %s%s%s %s%s%s  %s  %s\n' "$GREEN" "$CHECK" "$RESET" "$BOLD" "$ver_str" "$RESET" "$ARROW" "$bin_path" >&2
-printf '  %sno sudo required · keboola-mcp-server bundled & auto-updating%s\n' "$DIM" "$RESET" >&2
+printf '  %sno sudo required%s\n' "$DIM" "$RESET" >&2
 info ""
 printf '  %sNext steps%s\n' "$BOLD" "$RESET" >&2
 printf '    %skbagent project add%s --project myproject \\\n' "$BOLD" "$RESET" >&2

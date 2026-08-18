@@ -76,10 +76,9 @@ class FrozenChannel(enum.StrEnum):
     ARCHIVE = "archive"
 
 
-#: Exact upgrade command per channel. Mirrors the ``mcp_upgrade_cmd_by_method``
-#: mapping in ``version_service.py``: package identity comes from constants, the
-#: verb is inherent to the tool. Channels absent from this map have no single
-#: correct command -- they fall back to :data:`NATIVE_RELEASES_URL`.
+#: Exact upgrade command per channel: package identity comes from constants,
+#: the verb is inherent to the tool. Channels absent from this map have no
+#: single correct command -- they fall back to :data:`NATIVE_RELEASES_URL`.
 _UPGRADE_COMMANDS: dict[FrozenChannel, str] = {
     FrozenChannel.CHOCOLATEY: f"choco upgrade {NATIVE_PACKAGE_NAME}",
     FrozenChannel.WINGET: f"winget upgrade {NATIVE_WINGET_PACKAGE_ID}",
@@ -124,8 +123,8 @@ def _classify_system_package_manager() -> FrozenChannel:
 
     ``build/package/nfpm.yaml`` produces both a ``.deb`` and an ``.rpm`` that
     install to the same ``/usr/bin/kbagent``, so the path alone cannot say which
-    one is present. Probing for the package manager binary is the same idiom
-    ``version_service._detect_mcp_install_method`` uses for uv/pip.
+    one is present, and probing for the package manager binary is what
+    distinguishes them.
     """
     if shutil.which("apt-get") is not None:
         return FrozenChannel.DEBIAN

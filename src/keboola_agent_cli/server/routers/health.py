@@ -34,7 +34,7 @@ def auth_info() -> dict[str, Any]:
 
 @router.get("/version", summary="Show kbagent versions")
 def version(registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Versions of kbagent, MCP server, and Python."""
+    """Versions of kbagent and Python."""
     return registry.version.get_versions()
 
 
