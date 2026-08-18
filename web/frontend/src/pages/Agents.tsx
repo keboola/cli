@@ -25,6 +25,10 @@ import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
 
+// ``mcp_tool`` is a REMOVED action flavour (v0.85.0). It stays in the union
+// because tasks persisted before the removal still arrive from /agents and
+// must render; nothing in the form can create or edit one any more. The
+// backend marks those tasks with an additive ``deprecation`` string.
 type ActionType = "mcp_tool" | "cli_command" | "ai_agent";
 
 /**
@@ -63,6 +67,9 @@ interface AgentTask {
   manual: boolean;
   enabled: boolean;
   action: { type: ActionType; params: Record<string, unknown> };
+  // Additive, only present on tasks whose action flavour was removed
+  // (server/routers/agents.py injects it via annotate_mcp_tool_deprecation).
+  deprecation?: string | null;
   trigger: Trigger | null;
   created_at: string;
   last_run_at: string | null;
@@ -103,6 +110,22 @@ function ChainBadge({ trigger, tasks }: { trigger: Trigger; tasks: AgentTask[] }
       title={`Chains to ${label} on ${trigger.on}`}
     >
       → {label}
+    </span>
+  );
+}
+
+/**
+ * Tombstone marker for a task whose action flavour no longer exists. The
+ * task is inert -- it stays listed so the operator can find and delete it,
+ * but it can never run again. Mirrors ChainBadge's nerd-pill styling.
+ */
+function RemovedBadge({ deprecation }: { deprecation: string }) {
+  return (
+    <span
+      className="nerd-pill !text-[10px] border-red-500/50 text-red-400"
+      title={deprecation}
+    >
+      removed - no longer runs
     </span>
   );
 }
@@ -174,7 +197,7 @@ export function AgentsPage() {
     <div className="space-y-4">
       <PageTitle
         title="Agent Tasks"
-        description="Cron-scheduled tasks running inside kbagent serve. Three flavours: MCP tool calls, raw kbagent CLI, or full AI agents (claude / codex / gemini) with prompts."
+        description="Cron-scheduled tasks running inside kbagent serve. Two flavours: raw kbagent CLI, or full AI agents (claude / codex / gemini) with prompts."
         actions={
           <button
             type="button"
@@ -254,6 +277,7 @@ export function AgentsPage() {
                     {t.trigger ? (
                       <ChainBadge trigger={t.trigger} tasks={q.data?.tasks ?? []} />
                     ) : null}
+                    {t.deprecation ? <RemovedBadge deprecation={t.deprecation} /> : null}
                   </div>
                   {t.description ? (
                     <div
@@ -301,11 +325,14 @@ export function AgentsPage() {
                 <div className="flex justify-end gap-1">
                   <button
                     type="button"
-                    className="nerd-btn text-xs hover:text-keboola"
+                    className="nerd-btn text-xs hover:text-keboola disabled:opacity-40 disabled:hover:text-inherit"
+                    disabled={Boolean(t.deprecation)}
                     title={
-                      t.manual && t.action.type === "ai_agent"
-                        ? "Run with prompt (manual task)"
-                        : "Run now (opens detail with live event stream)"
+                      t.deprecation
+                        ? t.deprecation
+                        : t.manual && t.action.type === "ai_agent"
+                          ? "Run with prompt (manual task)"
+                          : "Run now (opens detail with live event stream)"
                     }
                     onClick={(e) => {
                       e.stopPropagation();
@@ -323,8 +350,9 @@ export function AgentsPage() {
                   </button>
                   <button
                     type="button"
-                    className="nerd-btn text-xs hover:text-neon-pink"
-                    title="Edit task"
+                    className="nerd-btn text-xs hover:text-neon-pink disabled:opacity-40 disabled:hover:text-inherit"
+                    disabled={Boolean(t.deprecation)}
+                    title={t.deprecation ? t.deprecation : "Edit task"}
                     onClick={(e) => {
                       e.stopPropagation();
                       setEditing(t);
@@ -397,8 +425,6 @@ export function AgentsPage() {
 // has a distinct shape; this normalizer is the single place that maps
 // backend params -> form state.
 function extractActionFormFields(task: AgentTask | undefined): {
-  tool: string;
-  toolInput: string;
   argv: string;
   aiCli: "claude" | "codex" | "gemini";
   aiPrompt: string;
@@ -406,20 +432,8 @@ function extractActionFormFields(task: AgentTask | undefined): {
 } | null {
   if (!task) return null;
   const p = task.action.params as Record<string, unknown>;
-  if (task.action.type === "mcp_tool") {
-    return {
-      tool: String(p.tool ?? "get_jobs"),
-      toolInput: JSON.stringify(p.input ?? {}, null, 2),
-      argv: "",
-      aiCli: "claude",
-      aiPrompt: "",
-      aiExtraArgs: "",
-    };
-  }
   if (task.action.type === "cli_command") {
     return {
-      tool: "",
-      toolInput: "",
       argv: Array.isArray(p.argv) ? (p.argv as string[]).join(" ") : "",
       aiCli: "claude",
       aiPrompt: "",
@@ -427,8 +441,6 @@ function extractActionFormFields(task: AgentTask | undefined): {
     };
   }
   return {
-    tool: "",
-    toolInput: "",
     argv: "",
     aiCli: (String(p.cli ?? "claude") as "claude" | "codex" | "gemini"),
     aiPrompt: String(p.prompt ?? ""),
@@ -455,11 +467,12 @@ function NewTaskDrawer({
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   // Chain config: null = no chain, otherwise downstream task id + on filter.
   const [trigger, setTrigger] = useState<Trigger | null>(existing?.trigger ?? null);
+  // A task on the removed ``mcp_tool`` flavour can no longer be edited (its
+  // row's Edit button is disabled), so this never legitimately sees one --
+  // the guard just keeps the form off a flavour it cannot render.
   const [actionType, setActionType] = useState<ActionType>(
-    existing?.action.type ?? "ai_agent",
+    existing && existing.action.type !== "mcp_tool" ? existing.action.type : "ai_agent",
   );
-  const [tool, setTool] = useState(seed?.tool ?? "get_jobs");
-  const [toolInput, setToolInput] = useState(seed?.toolInput ?? '{"status": "error"}');
   const [argv, setArgv] = useState(
     seed?.argv ??
       (project
@@ -525,8 +538,6 @@ function NewTaskDrawer({
         enabled,
         trigger,
         actionType,
-        tool,
-        toolInput,
         argv,
         aiCli,
         aiPrompt,
@@ -542,8 +553,6 @@ function NewTaskDrawer({
     enabled,
     trigger,
     actionType,
-    tool,
-    toolInput,
     argv,
     aiCli,
     aiPrompt,
@@ -559,13 +568,7 @@ function NewTaskDrawer({
   // truth so Test really executes the same action that Create would persist.
   const buildAction = (): { type: ActionType; params: Record<string, unknown> } => {
     let actionParams: Record<string, unknown> = {};
-    if (actionType === "mcp_tool") {
-      actionParams = {
-        tool,
-        project,
-        input: JSON.parse(toolInput || "{}"),
-      };
-    } else if (actionType === "cli_command") {
+    if (actionType === "cli_command") {
       actionParams = { argv: argv.trim().split(/\s+/) };
     } else {
       const extra = aiExtraArgs.trim() ? aiExtraArgs.trim().split(/\s+/) : [];
@@ -691,7 +694,7 @@ function NewTaskDrawer({
       subtitle={
         isEditing
           ? "Modify the schedule or action. Save updates the task in-place; existing run history is preserved."
-          : "Pick a cron schedule and one of three actions: AI agent (claude/codex/gemini), MCP tool call, or kbagent CLI command."
+          : "Pick a cron schedule and one of two actions: AI agent (claude/codex/gemini) or kbagent CLI command."
       }
       width={
         testRunning || testEvents.length > 0 || testRun
@@ -899,15 +902,6 @@ function NewTaskDrawer({
             >
               <Terminal className="w-3 h-3" /> CLI command
             </button>
-            <button
-              type="button"
-              className={`nerd-btn flex items-center gap-1 ${
-                actionType === "mcp_tool" ? "border-keboola text-keboola" : ""
-              }`}
-              onClick={() => setActionType("mcp_tool")}
-            >
-              <Sparkles className="w-3 h-3" /> MCP tool
-            </button>
           </div>
         </div>
 
@@ -960,7 +954,7 @@ function NewTaskDrawer({
               />
             </label>
           </>
-        ) : actionType === "cli_command" ? (
+        ) : (
           <label className="text-xs text-zinc-400 block">
             Argv (will be prefixed with 'kbagent' if missing)
             <input
@@ -972,25 +966,6 @@ function NewTaskDrawer({
               stdout/stderr is captured into the run history.
             </span>
           </label>
-        ) : (
-          <>
-            <label className="text-xs text-zinc-400 block">
-              MCP tool name
-              <input
-                className="nerd-input w-full mt-1 font-mono"
-                value={tool}
-                onChange={(e) => setTool(e.target.value)}
-              />
-            </label>
-            <label className="text-xs text-zinc-400 block">
-              Tool input (JSON, current project = {project ?? "(none)"})
-              <textarea
-                className="nerd-input w-full mt-1 font-mono h-32"
-                value={toolInput}
-                onChange={(e) => setToolInput(e.target.value)}
-              />
-            </label>
-          </>
         )}
 
         <label className="flex items-center gap-2 text-xs text-zinc-400">
@@ -1015,7 +990,7 @@ function NewTaskDrawer({
           {testRun?.output && ("stdout" in testRun.output || "results" in testRun.output) ? (
             <div className="nerd-card">
               <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-                Raw output (cli/mcp action)
+                Raw output (cli action)
               </h3>
               {testRun.output && "stdout" in testRun.output ? (
                 <pre
@@ -1246,7 +1221,7 @@ function TaskDetailDrawer({
       title={task.name}
       subtitle={`${task.action.type} ・ cron: ${task.cron} ・ ${
         task.enabled ? "enabled" : "disabled"
-      }`}
+      }${task.deprecation ? ` ・ removed - no longer runs: ${task.deprecation}` : ""}`}
       width={showLive ? "90vw" : "75vw"}
       actions={
         <>
@@ -1263,9 +1238,10 @@ function TaskDetailDrawer({
           ) : (
             <button
               type="button"
-              className="nerd-btn hover:text-neon-pink"
+              className="nerd-btn hover:text-neon-pink disabled:opacity-40 disabled:hover:text-inherit"
+              disabled={Boolean(task.deprecation)}
               onClick={startLive}
-              title="Run live with SSE event stream"
+              title={task.deprecation ? task.deprecation : "Run live with SSE event stream"}
             >
               <Play className="w-3 h-3 inline mr-1" />
               Run live
@@ -1273,9 +1249,10 @@ function TaskDetailDrawer({
           )}
           <button
             type="button"
-            className="nerd-btn hover:text-keboola"
+            className="nerd-btn hover:text-keboola disabled:opacity-40 disabled:hover:text-inherit"
+            disabled={Boolean(task.deprecation)}
             onClick={onEdit}
-            title="Edit this task"
+            title={task.deprecation ? task.deprecation : "Edit this task"}
           >
             <Pencil className="w-3 h-3 inline mr-1" />
             Edit

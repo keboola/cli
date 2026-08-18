@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 /**
  * Right-side slide-over drawer. Fixed-position, full viewport height,
  * blocks scroll behind it. Use for "open detail / runner without
- * losing place in the table" UX (MCP tool runner, table detail, ...).
+ * losing place in the table" UX (agent task runner, table detail, ...).
  *
  * The drawer is rendered through a React portal into ``document.body`` so it
  * is NOT constrained by any wrapper styles further up the page tree. Without

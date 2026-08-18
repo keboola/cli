@@ -12,7 +12,6 @@ import { FlowsPage } from "./pages/Flows";
 import { JobsPage } from "./pages/Jobs";
 import { LineagePage } from "./pages/Lineage";
 import { LocalAiPage } from "./pages/LocalAi";
-import { McpPage } from "./pages/Mcp";
 import { SemanticLayerPage } from "./pages/SemanticLayer";
 import { MembersPage } from "./pages/Members";
 import { OrgPage } from "./pages/Org";
@@ -59,8 +58,6 @@ function Router() {
       return <SharingPage />;
     case "data-apps":
       return <DataAppsPage />;
-    case "mcp":
-      return <McpPage />;
     case "localai":
       return <LocalAiPage />;
     case "agents":
