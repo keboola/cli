@@ -376,8 +376,9 @@ New `tests/test_merge_request_client.py`, using `pytest_httpx` like `tests/test_
 - **JSON encoding** — the second-most-likely mistake, since the surrounding file does the
   opposite: assert `Content-Type: application/json`, real nested JSON (not strings), JSON
   numbers for `version` / `branchFromId` / `branchIntoId`, `true`/`false` booleans.
-- **Presence detection** — `create` / `update` omit unset optionals; `rebase_config` sends
-  `is_disabled=False` but omits `is_disabled=None`; `rows=[]` is sent, not treated as absent.
+- **Presence detection** — `create` / `update` omit unset optionals; `rebase_config` always
+  sends the replaced body (`name` / `rows` / `configuration` / `isDisabled`) and omits only
+  `description=None` and an unset `change_description`; `rows=[]` is sent, not treated as absent.
 - **The `diff` envelope** — `version` at the top level, every content field inside `diff`,
   nothing content-like at the top level. Pin explicitly: a regression to the flat pre-envelope
   body would not fail loudly in a round-trip test, it would just build the wrong request.
