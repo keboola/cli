@@ -12,7 +12,7 @@ import pytest
 
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.constants import MAX_RETRIES
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 
 def _noop_sleep(seconds: SupportsIndex | float, /) -> None:
@@ -3337,6 +3337,80 @@ class TestUnwrapBigQueryError:
     def test_empty_string_passes_through(self) -> None:
         unwrap = self._import()
         assert unwrap("") == ""
+
+
+class TestWaitForStorageJob:
+    """Tests for _wait_for_storage_job -- terminal states, fast paths, deadline.
+
+    The shared Storage-job poller is reached by 20 call sites across ``client/``
+    (storage tables, dev branches, workspaces) but had no tests of its own; its
+    four contracts are pinned here so they cannot drift apart again.
+    """
+
+    def _mk_client(self):
+        return KeboolaClient(stack_url=_BASE, token=_TOKEN)
+
+    def test_already_successful_body_returns_without_polling(self, httpx_mock) -> None:
+        """A terminal-success initial body is returned as-is, with no HTTP call."""
+        with self._mk_client() as client:
+            job = client._wait_for_storage_job({"id": 1, "status": "success", "results": {"x": 1}})
+
+        assert job["results"] == {"x": 1}
+        # Asserted explicitly rather than left to pytest_httpx's teardown: an
+        # unmatched request surfaces as httpx.TimeoutException, which
+        # _do_request catches and retries with real sleeps -- a regression
+        # would take seconds and report a confusing KeboolaApiError.
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "_wait_for_storage_job returns an already-terminal error body instead of "
+            "raising -- fixed in the follow-up commit on this branch"
+        ),
+    )
+    def test_already_failed_body_raises(self, httpx_mock) -> None:
+        """A terminal-error initial body raises STORAGE_JOB_FAILED, never returns.
+
+        The initial body is the POST/PUT/DELETE response the caller hands in. A
+        Storage API fast fail (terminal straight away, never ``waiting``) must
+        not reach the caller as a normal return value -- every call site either
+        returns the job or ``job.get("results", {})``, so a silently returned
+        error job becomes an empty success.
+        """
+        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "error", "error": {"message": "boom"}})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "boom" in str(exc_info.value)
+        assert httpx_mock.get_requests() == []
+
+    def test_timeout_raises_storage_job_timeout(self, httpx_mock) -> None:
+        """max_wait=0 with a non-terminal body raises immediately -- no sleep, no HTTP.
+
+        Pins that the deadline is checked BEFORE the first sleep, so an
+        exhausted budget never costs a poll interval.
+        """
+        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "waiting"}, max_wait=0)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert httpx_mock.get_requests() == []
+
+    def test_polled_error_raises(self, httpx_mock, monkeypatch) -> None:
+        """A non-terminal initial body is polled; a polled error raises."""
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/jobs/1",
+            method="GET",
+            json={"id": 1, "status": "error", "error": {"message": "polled boom"}},
+        )
+
+        with self._mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 1, "status": "waiting"})
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "polled boom" in str(exc_info.value)
 
 
 class TestWaitForQueueJob:
