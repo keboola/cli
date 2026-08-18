@@ -682,6 +682,30 @@ class TestGetCachePath:
         assert path.name == "version_cache.json"
         assert "keboola-agent-cli" in str(path)
 
+    def test_suite_never_resolves_to_the_real_user_cache(self):
+        """Guard for the `_redirect_version_cache` autouse fixture.
+
+        `_get_cache_path` resolves through `platformdirs`, so it is NOT
+        `--config-dir`-aware and points at the developer's own
+        `version_cache.json`. Two tests in `TestMaybeAutoUpdate` reach the
+        real `_write_cache` (they mock `_read_cache`, not the write), which
+        stamped the canonical fake latest version `1.0.0` into that file --
+        after which every `kbagent` command on the machine spent an hour
+        (`AUTO_UPDATE_CHECK_INTERVAL`) trying to install a release tag that
+        does not exist. The conftest fixture redirects the module attribute
+        per test; this asserts it is actually in force, so deleting the
+        fixture fails here instead of silently on someone's laptop.
+
+        Uses the module attribute, not the name imported at the top of this
+        file -- the latter is bound to the original function object and is
+        deliberately left unpatched for the test above.
+        """
+        import platformdirs
+
+        real_dir = Path(platformdirs.user_config_dir("keboola-agent-cli")).resolve()
+        resolved = auto_update_module._get_cache_path().resolve()
+        assert real_dir != resolved.parent
+
 
 # ---------------------------------------------------------------------------
 # `kbagent changelog` does not duplicate "What's new" output

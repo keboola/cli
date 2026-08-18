@@ -62,6 +62,32 @@ def _no_wheel_asset_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(version_service.httpx, "head", _head)
 
 
+@pytest.fixture(autouse=True)
+def _redirect_version_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep the version cache out of the developer's real config directory.
+
+    ``auto_update._get_cache_path`` resolves through ``platformdirs``, so it
+    ignores ``--config-dir`` and always points at the machine's own
+    ``version_cache.json``. Any test that reaches the real ``_write_cache``
+    -- ``TestMaybeAutoUpdate`` has two that mock ``_read_cache`` but not the
+    write -- therefore stamps the canonical fake latest version ``1.0.0``
+    into that file. The CLI then believes for a full
+    ``AUTO_UPDATE_CHECK_INTERVAL`` (1 hour) that a release tag which does not
+    exist is available, prints an update banner on every command, and fails
+    the reinstall: running ``make test`` broke auto-update for whoever ran it.
+
+    Redirecting the module attribute (not the file's top-level import, which
+    ``TestGetCachePath`` still exercises against the real resolver) fixes it
+    for the whole suite, including tests written later that forget to mock
+    the write. ``test_suite_never_resolves_to_the_real_user_cache`` fails if
+    this fixture is removed.
+    """
+    from keboola_agent_cli import auto_update
+
+    cache_file = tmp_path / "version_cache.json"
+    monkeypatch.setattr(auto_update, "_get_cache_path", lambda: cache_file)
+
+
 @pytest.fixture
 def tmp_config_dir(tmp_path: Path) -> Path:
     """Provide a temporary directory for configuration files."""
