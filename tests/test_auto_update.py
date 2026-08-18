@@ -683,7 +683,7 @@ class TestGetCachePath:
         assert "keboola-agent-cli" in str(path)
 
     def test_suite_never_resolves_to_the_real_user_cache(self):
-        """Guard for the `_redirect_version_cache` autouse fixture.
+        """Guard for the `_redirect_global_state_paths` autouse fixture.
 
         `_get_cache_path` resolves through `platformdirs`, so it is NOT
         `--config-dir`-aware and points at the developer's own
@@ -702,9 +702,17 @@ class TestGetCachePath:
         """
         import platformdirs
 
+        from keboola_agent_cli import update_runner
+
         real_dir = Path(platformdirs.user_config_dir("keboola-agent-cli")).resolve()
-        resolved = auto_update_module._get_cache_path().resolve()
-        assert real_dir != resolved.parent
+        assert real_dir != auto_update_module._get_cache_path().resolve().parent
+        # `update_runner.state_dir` resolves through the very same call and backs
+        # the deferred-update marker / exit / log files. `should_defer()` is True
+        # by default on Windows, so a test reaching the scheduler there would
+        # write real state -- and `report_finished_deferred_update`, which runs
+        # before every skip gate, unlinks a genuine pending report while reading
+        # it. Same class of bug, so the fixture covers both.
+        assert real_dir != update_runner.state_dir().resolve()
 
 
 # ---------------------------------------------------------------------------
