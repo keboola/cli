@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
@@ -598,7 +598,7 @@ def _parse_set_value(raw: str) -> object:
         return raw
 
 
-def _handle_config_service_error(formatter: Any, exc: ConfigError | KeboolaApiError) -> None:
+def _handle_config_service_error(formatter: Any, exc: ConfigError | KeboolaApiError) -> NoReturn:
     """Shared ``ConfigError``/``KeboolaApiError`` -> exit-code mapping.
 
     Nearly every command in this group ends its try/except with this exact

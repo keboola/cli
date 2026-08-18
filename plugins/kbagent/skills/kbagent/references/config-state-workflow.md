@@ -153,11 +153,18 @@ before committing to a value on a config that matters.
 
 ## State document shape for file input mapping
 
-The exact shape mirrors the file input mapping's own `tags`/`query`
-selection criteria; the state you write should describe the same tag set the
-mapping filters on. Confirmed shape (from the API-verified `--set` example in
-#593, and matching an `adaptive`-based file input mapping's checkpoint
-field):
+The shape mirrors the file input mapping's own `tags` selection criteria:
+the state you write should describe the same tag set the mapping filters on,
+and `tags` is an array, not a single string.
+
+**Treat the example below as structure, not as authoritative types.** Issue
+#593 verified the `lastImportId` checkpoint field itself, but a component's
+state document is component-defined -- whether an id serializes as a string
+or a number is not something to infer from a doc example. The reliable move
+is always the same: `state-get` an already-migrated config in the same
+project, and mirror exactly what comes back. Seeding a wrong shape does not
+error; it silently behaves like an empty state, which for `adaptive` means
+the full-history reload this whole workflow exists to avoid.
 
 ```json
 {

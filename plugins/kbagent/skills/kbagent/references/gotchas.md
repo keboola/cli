@@ -3666,11 +3666,14 @@ mapping in favor of `changed_since: adaptive`, which tracks a
   production -- reproduces the full-reload behaviour every time, unless the
   branch's state is seeded first.
 - **The fix is to seed, not to skip validation**: `kbagent config state-set
-  --branch <dev-branch-id> --state '{"storage": {"input": {"files": [{"tag":
-  "...", "lastImportId": <known-recent-id>}]}}}'` before the first `job run`
-  on the branch. See [config-state-workflow](config-state-workflow.md) for
-  the full seed -> run -> verify -> merge sequence and the exact state
-  document shape for file input mappings.
+  --branch <dev-branch-id> --state '{"storage": {"input": {"files": [{"tags":
+  ["<tag>"], "lastImportId": "<known-recent-id>"}]}}}'` before the first `job
+  run` on the branch. Note `tags` is an ARRAY, matching the file input
+  mapping's own selection criteria. Do not copy the field types out of this
+  example -- run `state-get` against an already-migrated production config
+  and mirror what it actually returns. See
+  [config-state-workflow](config-state-workflow.md) for the full seed -> run
+  -> verify -> merge sequence.
 - **An empty state is more dangerous than a seeded one for this input
   mapping type.** For most incremental components an empty/cleared state is
   the deliberate "reprocess everything" reset and is the well-understood,
