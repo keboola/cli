@@ -3342,9 +3342,9 @@ class TestUnwrapBigQueryError:
 class TestWaitForStorageJob:
     """Tests for _wait_for_storage_job -- terminal states, fast paths, deadline.
 
-    The shared Storage-job poller is reached by 20 call sites across ``client/``
-    (storage tables, dev branches, workspaces) but had no tests of its own; its
-    four contracts are pinned here so they cannot drift apart again.
+    The shared Storage-job poller is reached by 19 call sites across ``client/``
+    (storage tables 16x, dev branches 2x, workspaces 1x) but had no tests of its
+    own; its four contracts are pinned here so they cannot drift apart again.
     """
 
     def _mk_client(self):
