@@ -627,7 +627,7 @@ class _ConfigsMixin(_CoreClient):
     def get_config_diff(
         self,
         component_id: str,
-        configuration_id: str,
+        config_id: str,
         branch_id: int,
     ) -> dict[str, Any]:
         """Get the three-way diff of a configuration between branches.
@@ -648,14 +648,14 @@ class _ConfigsMixin(_CoreClient):
         resp = self._request(
             "GET",
             f"/v2/storage/branch/{branch_id}/components/"
-            f"{quote(component_id, safe='')}/configs/{quote(configuration_id, safe='')}/diff",
+            f"{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/diff",
         )
         return resp.json()
 
     def _rebase_request(
         self,
         component_id: str,
-        configuration_id: str,
+        config_id: str,
         branch_id: int,
         version: int,
         diff: dict[str, Any],
@@ -672,7 +672,7 @@ class _ConfigsMixin(_CoreClient):
         resp = self._request(
             "POST",
             f"/v2/storage/branch/{branch_id}/components/"
-            f"{quote(component_id, safe='')}/configs/{quote(configuration_id, safe='')}/rebase",
+            f"{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/rebase",
             json={"version": version, "diff": diff},
         )
         return resp.json()
@@ -680,7 +680,7 @@ class _ConfigsMixin(_CoreClient):
     def rebase_config(
         self,
         component_id: str,
-        configuration_id: str,
+        config_id: str,
         branch_id: int,
         version: int,
         name: str,
@@ -710,7 +710,7 @@ class _ConfigsMixin(_CoreClient):
 
         Args:
             component_id: Component ID.
-            configuration_id: Configuration ID.
+            config_id: Configuration ID.
             branch_id: Dev branch ID (branch-only endpoint).
             version: The DEFAULT-BRANCH version being re-anchored onto
                 (take it from the diff's ``theirs.version``) -- despite the
@@ -744,12 +744,12 @@ class _ConfigsMixin(_CoreClient):
             diff["changeDescription"] = change_description
         if is_disabled is not None:
             diff["isDisabled"] = is_disabled
-        return self._rebase_request(component_id, configuration_id, branch_id, version, diff)
+        return self._rebase_request(component_id, config_id, branch_id, version, diff)
 
     def rebase_config_delete(
         self,
         component_id: str,
-        configuration_id: str,
+        config_id: str,
         branch_id: int,
         version: int,
     ) -> dict[str, Any]:
@@ -765,12 +765,12 @@ class _ConfigsMixin(_CoreClient):
 
         Args:
             component_id: Component ID.
-            configuration_id: Configuration ID.
+            config_id: Configuration ID.
             branch_id: Dev branch ID (branch-only endpoint).
             version: The DEFAULT-BRANCH version being re-anchored onto (from
                 the diff's ``theirs.version``) -- see ``rebase_config``.
         """
-        return self._rebase_request(component_id, configuration_id, branch_id, version, diff={})
+        return self._rebase_request(component_id, config_id, branch_id, version, diff={})
 
     def delete_config(
         self, component_id: str, config_id: str, branch_id: int | None = None

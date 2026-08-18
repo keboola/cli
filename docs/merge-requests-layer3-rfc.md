@@ -328,9 +328,9 @@ Branch-scoped; `branch_id` required (D5).
 
 | Method | Endpoint |
 |---|---|
-| `get_config_diff(component_id, configuration_id, branch_id) -> dict` | `GET …/branch/{branch_id}/components/{c}/configs/{cfg}/diff` |
-| `rebase_config(component_id, configuration_id, branch_id, version, name, rows, configuration=None, description=None, change_description=None, is_disabled=None) -> dict` | `POST …/rebase` (keep) |
-| `rebase_config_delete(component_id, configuration_id, branch_id, version) -> dict` | `POST …/rebase` (delete) |
+| `get_config_diff(component_id, config_id, branch_id) -> dict` | `GET …/branch/{branch_id}/components/{c}/configs/{cfg}/diff` |
+| `rebase_config(component_id, config_id, branch_id, version, name, rows, configuration=None, description=None, change_description=None, is_disabled=None) -> dict` | `POST …/rebase` (keep) |
+| `rebase_config_delete(component_id, config_id, branch_id, version) -> dict` | `POST …/rebase` (delete) |
 
 `get_config_diff` returns the three-way diff (`base` = dev branch v1, `ours` = dev head,
 `theirs` = default head); each side may be null when the config does not exist there.
