@@ -1205,6 +1205,85 @@ def test_docs_query_requires_bearer_auth(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# billing.py  GET /billing/credits
+# Service: billing.get_credits(aliases=...)  (mirrors `kbagent billing credits`)
+# ---------------------------------------------------------------------------
+
+
+def test_billing_credits_passes_none_aliases_when_no_project_given(tmp_path: Path) -> None:
+    """GET /billing/credits with no `project` query param must call get_credits(aliases=None)."""
+    billing_svc = MagicMock()
+    billing_svc.get_credits.return_value = {"credits": [], "errors": []}
+    registry = _mock_registry(billing=billing_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/billing/credits", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    billing_svc.get_credits.assert_called_once_with(aliases=None)
+
+
+def test_billing_credits_repeated_project_param_forwards_alias_list(tmp_path: Path) -> None:
+    """Repeated `?project=a&project=b` must forward aliases=["a", "b"]."""
+    billing_svc = MagicMock()
+    billing_svc.get_credits.return_value = {"credits": [], "errors": []}
+    registry = _mock_registry(billing=billing_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/billing/credits", headers=AUTH, params={"project": ["a", "b"]})
+
+    assert res.status_code == 200, res.text
+    billing_svc.get_credits.assert_called_once_with(aliases=["a", "b"])
+
+
+def test_billing_credits_returns_service_envelope_unchanged(tmp_path: Path) -> None:
+    """The router must return the service's {"credits": ..., "errors": ...} dict verbatim."""
+    billing_svc = MagicMock()
+    envelope = {
+        "credits": [
+            {
+                "project_alias": "prod",
+                "project_id": 123,
+                "consumed": 100.5,
+                "remaining": 25.5,
+                "total": 126.0,
+                "consumed_minutes": 6030.0,
+                "remaining_minutes": 1530.0,
+                "component_jobs_consumed": 95.25,
+                "workspace_jobs": [
+                    {"workspace_type": "sandbox-sql", "warehouse_size": "small", "consumed": 5.0}
+                ],
+            }
+        ],
+        "errors": [],
+    }
+    billing_svc.get_credits.return_value = envelope
+    registry = _mock_registry(billing=billing_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/billing/credits", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert res.json() == envelope
+
+
+def test_billing_credits_requires_bearer_auth(tmp_path: Path) -> None:
+    """GET /billing/credits without an Authorization header must be rejected."""
+    billing_svc = MagicMock()
+    registry = _mock_registry(billing=billing_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/billing/credits")  # no auth header
+
+    assert res.status_code == 401, res.text
+    billing_svc.get_credits.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # configs.py  GET /configs/examples/{component_id}
 # Service: component.get_config_examples(alias=..., component_id=...)
 # (method lives on ComponentService; mirrors `kbagent config examples`)

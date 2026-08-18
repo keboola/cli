@@ -8,6 +8,7 @@ import typer
 
 from .commands.agent import agent_app
 from .commands.auth import auth_app
+from .commands.billing import billing_app
 from .commands.branch import branch_app
 from .commands.changelog import changelog_command
 from .commands.component import component_app
@@ -50,6 +51,7 @@ from .output import OutputFormatter, force_utf8_when_redirected
 from .permissions import PermissionEngine
 from .services.agent_service import AgentService
 from .services.auth_service import AuthService
+from .services.billing_service import BillingService
 from .services.branch_service import BranchService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
@@ -112,6 +114,7 @@ app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
 app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
 app.add_typer(feature_app, name="feature", rich_help_panel=_PROJ)
 app.add_typer(token_app, name="token", rich_help_panel=_PROJ)
+app.add_typer(billing_app, name="billing", rich_help_panel=_PROJ)
 
 # -- Browse & Inspect --
 _BROWSE = "Browse & Inspect"
@@ -355,6 +358,7 @@ def main(
     http_forwarder_service = HttpForwarderService()
     agent_service = AgentService(config_store=config_store, mcp_service=mcp_service)
     auth_service = AuthService(config_store=config_store)
+    billing_service = BillingService(config_store=config_store)
 
     try:
         config = config_store.load()
@@ -414,6 +418,7 @@ def main(
     ctx.obj["http_forwarder_service"] = http_forwarder_service
     ctx.obj["agent_service"] = agent_service
     ctx.obj["auth_service"] = auth_service
+    ctx.obj["billing_service"] = billing_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":

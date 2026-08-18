@@ -140,6 +140,9 @@ class ErrorCode(StrEnum):
     # Password-grant login (since 0.81.0)
     AUTH_MFA_INVALID = "AUTH_MFA_INVALID"
 
+    # Billing / Pay-As-You-Go (since #594)
+    PAYG_NOT_AVAILABLE = "PAYG_NOT_AVAILABLE"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -321,6 +324,13 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.SESSION_EXPIRED: "authentication",
     ErrorCode.SESSION_NOT_FOUND: "authentication",
     ErrorCode.AUTH_MFA_INVALID: "authentication",
+    # Not reachable from today's only emitter: `BillingService` puts
+    # PAYG_NOT_AVAILABLE in its per-project `errors` list, which renders via
+    # `formatter.warning()` and never passes through `formatter.error()`.
+    # Classified anyway so the first single-project billing command to raise
+    # it inherits the right category instead of silently taking the "api"
+    # default -- a missing project feature is a configuration problem.
+    ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
 }
 
 

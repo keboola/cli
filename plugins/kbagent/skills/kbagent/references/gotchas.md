@@ -3564,3 +3564,39 @@ machine's locale, and tolerates files that are not valid UTF-8.
   --value-file`, and `semantic-layer reference-data set --members-file` read
   UTF-8 without a fallback, so a genuinely mis-encoded input file fails loudly
   and identically everywhere rather than being silently mis-parsed.
+
+## `billing credits`: credits vs. minutes, array not object, feature-gated before it ever hits the network (since v0.84.2)
+
+`billing credits [--project ALIAS ...]` is a read-only PAYG (pay-as-you-go)
+balance check (`GET /credits` on `billing.{stack}`, plain Storage token).
+Four things a coding agent will otherwise get wrong:
+
+- **The API speaks credits; the Keboola UI speaks minutes.** `consumed` and
+  `remaining` in the raw response are in PAYG credits. The CLI derives
+  `consumed_minutes` / `remaining_minutes` as `credits * 60`
+  (`MINUTES_PER_CREDIT` in `constants.py`) because that is the unit the UI
+  actually displays. Always report the pre-computed `*_minutes` fields when a
+  user asks "how many minutes do I have left" -- do not hand-multiply the
+  credit fields yourself, and never assume the reverse conversion.
+- **`stats.workspaceJobs` is an ARRAY, not the object shape the public
+  Keboola docs show.** The real payload is
+  `"workspaceJobs": [{"workspaceType": "sandbox-sql", "warehouseSize":
+  "small", "consumed": 5.0}, ...]` -- one entry per workspace type/size
+  combination, not a single object keyed by type. The CLI's `row.workspace_jobs`
+  is already this list, projected to snake_case; do not try to read it as a
+  dict.
+- **`PAYG_NOT_AVAILABLE` is a feature-flag verdict, not a network failure.**
+  Before calling the billing host at all, the service checks the
+  `pay-as-you-go` flag in `owner.features` (`client.has_feature(PAYG_FEATURE)`).
+  A project without that flag never makes a billing-host request -- on some
+  stacks (e.g. a plain `eu-central-1` project) the `billing.{stack}` hostname
+  does not even resolve (NXDOMAIN). Seeing `error_code: PAYG_NOT_AVAILABLE`
+  in a project's `errors` entry means "this project isn't on PAYG," not "the
+  billing service is down." A genuine connection/DNS failure past the
+  feature gate is reported separately and mentions the host is unreachable.
+- **Balance only -- no purchase history, no invoice IDs.** `billing credits`
+  cannot answer "when did we last top up" or "what's our Stripe invoice ID."
+  That data lives on `connection.{stack}` `/pay-as-you-go/billing/*`, which
+  does not accept a Storage API token -- it is the still-open primary ask of
+  issue #594. Do not imply this command covers billing/invoice history; tell
+  the user it is out of reach from the CLI today.

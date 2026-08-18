@@ -183,3 +183,9 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `SESSION_EXPIRED` | The programmatic-auth session's refresh token expired or was revoked; run `kbagent auth login` again |
 | `SESSION_NOT_FOUND` | No programmatic-auth session is persisted for this stack; run `kbagent auth login` |
 | `AUTH_MFA_INVALID` | `auth login-password` hit an MFA factor it cannot resolve without a browser (e.g. WebAuthn-only) -- use `kbagent auth login` for that account instead |
+
+### Billing (Pay-As-You-Go)
+
+| Code | Description |
+|---|---|
+| `PAYG_NOT_AVAILABLE` | The project does not have the `pay-as-you-go` feature, so it has no credit balance; the billing host may not even resolve on this stack |

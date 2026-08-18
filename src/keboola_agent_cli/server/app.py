@@ -34,6 +34,7 @@ from .dependencies import ServiceRegistry, install_registry
 from .routers import (
     agents,
     ai_chat,
+    billing,
     branches,
     components,
     configs,
@@ -114,6 +115,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "`X-Manage-Token` header (super-admin) on every request -- the "
             "manage token is never persisted in config. "
             "Mirrors `kbagent feature list|project-*|user-*`."
+        ),
+    },
+    {
+        "name": "billing",
+        "description": (
+            "**Project Management.** "
+            "PAYG credit balance across projects (read-only). Purchase "
+            "history / Stripe invoice IDs are not reachable with a "
+            "project token. "
+            "Mirrors `kbagent billing credits`."
         ),
     },
     # ---- Configurations ----
@@ -671,6 +682,7 @@ def create_app(
     app.include_router(projects.router)
     app.include_router(members.router)
     app.include_router(feature.router)
+    app.include_router(billing.router)
     app.include_router(configs.router)
     app.include_router(components.router)
     app.include_router(storage.router)

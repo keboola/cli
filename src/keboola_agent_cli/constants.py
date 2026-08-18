@@ -484,6 +484,21 @@ KAI_REQUEST_TIMEOUT: float = 300.0  # 5 min for non-streaming requests
 KAI_STREAM_TIMEOUT: float = 600.0  # 10 min for SSE streaming responses
 SECRET_PLACEHOLDER: str = "<YOUR_SECRET>"
 
+# --- Billing / Pay-As-You-Go (issue #594) ---
+# The billing service (GET /credits on the `billing.<stack-suffix>` host)
+# speaks CREDITS natively; the Keboola UI displays MINUTES = credits * 60.
+# kbagent surfaces the API's native unit and DERIVES minutes from it (never
+# the reverse) so a client-side unit bug can never invert into a wrong
+# credits figure.
+MINUTES_PER_CREDIT: int = 60
+# `owner.features` flag from `GET /v2/storage/tokens/verify` that gates
+# whether a project has a PAYG credit balance at all. Projects without it may
+# resolve to a billing host that does not exist on that stack (e.g.
+# `billing.eu-central-1.keboola.com` is NXDOMAIN) -- checking this flag FIRST
+# lets the billing service return a clear PAYG_NOT_AVAILABLE error instead of
+# an opaque connection/DNS failure.
+PAYG_FEATURE: str = "pay-as-you-go"
+
 # --- Changelog rendering ---
 # `kbagent changelog` shows a one-line summary per version by default (--full
 # expands). A summary is the note's first sentence, capped at this many chars
