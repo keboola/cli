@@ -685,10 +685,10 @@ class _ConfigsMixin(_CoreClient):
         version: int,
         name: str,
         rows: list[dict[str, Any]],
-        configuration: dict[str, Any] | None = None,
+        configuration: dict[str, Any],
+        is_disabled: bool,
         description: str | None = None,
         change_description: str | None = None,
-        is_disabled: bool | None = None,
     ) -> dict[str, Any]:
         """Rebase a dev-branch configuration onto a newer default-branch version.
 
@@ -698,11 +698,17 @@ class _ConfigsMixin(_CoreClient):
 
         The resolved content travels in a ``diff`` envelope mirroring the
         shape ``get_config_diff`` returns each side in, so a resolved diff
-        side posts back nearly 1:1. ``name`` and ``rows`` are required by the
-        backend for a keep rebase (``rows=[]`` legitimately deletes all
-        rows); to resolve a conflict by DELETING the config, use
-        ``rebase_config_delete`` -- the two rebase kinds are separate methods
-        on purpose, so no illegal combination is expressible (RFC, D6).
+        side posts back nearly 1:1. Rebase REPLACES the configuration rather
+        than patching it, so every field the backend fills in on a missing
+        key is required here, not optional: ``name`` and ``rows`` because
+        the backend rejects the request without them (``rows=[]``
+        legitimately deletes all rows), ``configuration`` and ``is_disabled``
+        because it substitutes ``{}`` and ``false`` -- omitting those two
+        wipes the configuration body and re-enables a disabled config, which
+        a caller reading "optional" would not expect. To resolve a conflict
+        by DELETING the config, use ``rebase_config_delete`` -- the two
+        rebase kinds are separate methods on purpose, so no illegal
+        combination is expressible (RFC, D6).
 
         ``branch_id`` is required with no production fallback (see
         ``get_config_diff``); the endpoint also requires the
@@ -722,28 +728,32 @@ class _ConfigsMixin(_CoreClient):
                 (``{id?, name?, description?, isDisabled?, configuration?}``);
                 missing/null ``id`` means a new row, duplicates are rejected,
                 array order becomes sort order.
-            configuration: Resolved configuration body (backend default: {}).
+            configuration: Resolved configuration body. Required: on a
+                missing key the backend substitutes ``{}``, wiping it.
+            is_disabled: Resolved disabled flag. Required: on a missing key
+                the backend substitutes ``false``, re-enabling a config that
+                was disabled. Not the tri-state of ``update_config``
+                (RFC, D1) -- that method patches, this one replaces.
             description: Resolved description. ``None`` omits the key --
-                which loses nothing: server-side an explicit JSON null and
-                an absent key are indistinguishable (``isset`` mapping).
+                which costs no expressiveness: server-side an explicit JSON
+                null and an absent key are indistinguishable (``isset``
+                mapping).
             change_description: Change log message; when ``None``/omitted
                 the backend uses a default rebase message.
-            is_disabled: When None, omitted (backend defaults to False);
-                False is sent explicitly -- tri-state for consistency with
-                ``update_config`` (RFC, D1).
 
         Returns:
             The rebased configuration dict.
         """
-        diff: dict[str, Any] = {"name": name, "rows": rows}
-        if configuration is not None:
-            diff["configuration"] = configuration
+        diff: dict[str, Any] = {
+            "name": name,
+            "rows": rows,
+            "configuration": configuration,
+            "isDisabled": is_disabled,
+        }
         if description is not None:
             diff["description"] = description
         if change_description is not None:
             diff["changeDescription"] = change_description
-        if is_disabled is not None:
-            diff["isDisabled"] = is_disabled
         return self._rebase_request(component_id, config_id, branch_id, version, diff)
 
     def rebase_config_delete(

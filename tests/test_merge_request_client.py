@@ -8,6 +8,7 @@ delete resolution, implicit merge-job waiting, ``include=activityLog``, and
 the namespace-never-touches-the-client seam.
 """
 
+import inspect
 import json
 from typing import Any
 
@@ -15,7 +16,7 @@ import httpx
 import pytest
 
 from keboola_agent_cli.client import KeboolaClient
-from keboola_agent_cli.client.merge_requests import MergeRequests
+from keboola_agent_cli.client.merge_requests import MergeRequests, _optional_mr_fields
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 STACK_URL = "https://connection.keboola.com"
@@ -325,9 +326,9 @@ class TestRebaseEnvelope:
             name="My config",
             rows=[{"id": "r1", "name": "Row 1"}],
             configuration={"parameters": {"baseUrl": "https://example.com"}},
+            is_disabled=False,
             description="resolved",
             change_description="rebase onto v7",
-            is_disabled=False,
         )
 
         body = _sent_json(httpx_mock.get_requests()[0])
@@ -346,15 +347,61 @@ class TestRebaseEnvelope:
     def test_keep_rebase_omits_unset_optionals_and_sends_empty_rows(
         self, client, httpx_mock
     ) -> None:
-        """is_disabled=None is omitted; rows=[] is sent (it deletes all rows)."""
+        """description/change_description are omitted; rows=[] is sent (it deletes all rows)."""
         httpx_mock.add_response(url=self.REBASE_URL, json={})
 
         client.rebase_config(
-            "keboola.ex-http", "cfg-1", branch_id=123, version=7, name="My config", rows=[]
+            "keboola.ex-http",
+            "cfg-1",
+            branch_id=123,
+            version=7,
+            name="My config",
+            rows=[],
+            configuration={},
+            is_disabled=False,
         )
 
         body = _sent_json(httpx_mock.get_requests()[0])
-        assert body["diff"] == {"name": "My config", "rows": []}
+        assert body["diff"] == {
+            "name": "My config",
+            "rows": [],
+            "configuration": {},
+            "isDisabled": False,
+        }
+
+    def test_keep_rebase_always_sends_configuration_and_is_disabled(
+        self, client, httpx_mock
+    ) -> None:
+        """Rebase REPLACES, so neither field may be left to a server-side default.
+
+        A missing ``diff.configuration`` is substituted with ``{}`` and a missing
+        ``diff.isDisabled`` with ``false``, so omitting either would wipe the
+        configuration body and re-enable a disabled config. Both are required
+        parameters; this pins that they always reach the wire.
+        """
+        httpx_mock.add_response(url=self.REBASE_URL, json={})
+
+        client.rebase_config(
+            "keboola.ex-http",
+            "cfg-1",
+            branch_id=123,
+            version=7,
+            name="My config",
+            rows=[],
+            configuration={"parameters": {"keep": "me"}},
+            is_disabled=True,
+        )
+
+        diff = _sent_json(httpx_mock.get_requests()[0])["diff"]
+        assert diff["configuration"] == {"parameters": {"keep": "me"}}
+        assert diff["isDisabled"] is True
+
+    def test_keep_rebase_requires_configuration_and_is_disabled(self, client) -> None:
+        """Omitting either is a TypeError at the call, not silent data loss on the wire."""
+        with pytest.raises(TypeError):
+            client.rebase_config(
+                "keboola.ex-http", "cfg-1", branch_id=123, version=7, name="N", rows=[]
+            )
 
     def test_delete_rebase_sends_empty_diff_object(self, client, httpx_mock) -> None:
         """Delete resolution is exactly {"version": N, "diff": {}} -- diff a JSON object."""
@@ -388,6 +435,40 @@ class TestRequesterSeam:
 
         assert namespace.list() == [SAMPLE_MR]
         assert calls == [("GET", "/v2/storage/merge-request")]
+
+
+class TestOptionalFieldHelper:
+    """_optional_mr_fields is keyword-only, so create/update cannot transpose."""
+
+    def test_every_field_is_keyword_only(self) -> None:
+        """No parameter may be positional -- a transposition would type-check cleanly.
+
+        Asserted on the signature rather than by making a deliberately wrong
+        call: a positional call is a static error too (which is the point), so
+        writing one would just mean fighting ``ty`` to prove ``ty`` is right.
+        """
+        kinds = {
+            name: param.kind
+            for name, param in inspect.signature(_optional_mr_fields).parameters.items()
+        }
+        assert set(kinds) == {
+            "description",
+            "reviewer_ids",
+            "auto_merge_strategy",
+            "auto_merge_at",
+            "external_id",
+        }
+        assert all(kind is inspect.Parameter.KEYWORD_ONLY for kind in kinds.values()), kinds
+
+    def test_helper_omits_unset_fields(self) -> None:
+        """Only non-None fields are included, under their camelCase wire names."""
+        assert _optional_mr_fields(
+            description=None,
+            reviewer_ids=[7],
+            auto_merge_strategy=None,
+            auto_merge_at=None,
+            external_id="DMD-1701",
+        ) == {"reviewerIds": [7], "externalId": "DMD-1701"}
 
     def test_namespace_is_cached_on_the_client(self) -> None:
         """client.merge_requests returns the same namespace instance every time."""
