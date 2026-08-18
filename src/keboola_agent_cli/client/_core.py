@@ -195,8 +195,19 @@ class _CoreClient(BaseHttpClient):
     ) -> dict[str, Any]:
         """Poll a Storage API job until it reaches a terminal state.
 
+        The terminal state is evaluated in ONE place for the caller's initial
+        body and for every polled body alike -- the loop checks before it
+        fetches. Keep it that way: this used to be two checks (an early return
+        before the loop plus a second check inside it) and they drifted, so an
+        already-terminal ERROR initial body was returned as-is instead of
+        raising. Every call site either returns the job or its ``results``, so
+        that surfaced as a silent empty success. Same shape as the sibling
+        pollers ``wait_for_queue_job`` / ``wait_for_query_job``.
+
         Args:
-            job: Initial job response from POST/DELETE.
+            job: Initial job response from POST/DELETE. May already be
+                terminal (the Storage API can fail fast, never returning
+                ``waiting``), in which case no request is made at all.
             max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
 
         Returns:
@@ -206,14 +217,8 @@ class _CoreClient(BaseHttpClient):
             KeboolaApiError: If the job fails or times out.
         """
         job_id = job.get("id")
-        if job.get("status") in ("success", "error"):
-            return job
-
         deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            time.sleep(STORAGE_JOB_POLL_INTERVAL)
-            response = self._request("GET", f"/v2/storage/jobs/{job_id}")
-            job = response.json()
+        while True:
             status = job.get("status")
             if status == "success":
                 return job
@@ -225,6 +230,13 @@ class _CoreClient(BaseHttpClient):
                     error_code=ErrorCode.STORAGE_JOB_FAILED,
                     retryable=False,
                 )
+            # Checked before sleeping, so an exhausted budget never costs a
+            # poll interval.
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(STORAGE_JOB_POLL_INTERVAL)
+            job = self._request("GET", f"/v2/storage/jobs/{job_id}").json()
+
         raise KeboolaApiError(
             message=f"Storage job {job_id} did not complete within {max_wait}s",
             status_code=504,

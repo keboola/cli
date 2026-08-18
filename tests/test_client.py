@@ -3362,13 +3362,6 @@ class TestWaitForStorageJob:
         # would take seconds and report a confusing KeboolaApiError.
         assert httpx_mock.get_requests() == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "_wait_for_storage_job returns an already-terminal error body instead of "
-            "raising -- fixed in the follow-up commit on this branch"
-        ),
-    )
     def test_already_failed_body_raises(self, httpx_mock) -> None:
         """A terminal-error initial body raises STORAGE_JOB_FAILED, never returns.
 
