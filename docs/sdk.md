@@ -29,7 +29,7 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
 
 **It is:**
 
-- **Stateless.** A `Client` holds the stack URL, the token, one pooled HTTP client (with the shared retry/backoff), and an optional idempotency store. Nothing else.
+- **Stateless.** A `Client` holds the stack URL, the token, one pooled HTTP client (with the shared retry/backoff), and an optional idempotency store. Nothing else. The retry loop deliberately skips the credential-minting calls (`create_scoped_token` and friends) on an ambiguous failure -- a replayed 5xx or read timeout could mint a second live token you never see a value for (#599). A 429, connect error or connect timeout never reached the handler, so those stay retryable.
 - **Config-dir-free.** No `~/.config/keboola-agent-cli/`, no `kbagent project add`, no `config.json`. Auth is the token you pass in (12-factor: you read `KBC_TOKEN` yourself).
 - **In-process.** No CLI subprocess, no `kbagent serve` daemon. Just function calls.
 - **Typed.** `py.typed` ships in the wheel; the high-traffic operations return pydantic models (`JobResult`, `QueryResult`, ...). Your `mypy`/`ty`/IDE sees the shapes.

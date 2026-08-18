@@ -770,7 +770,13 @@ class AuthClient(BaseHttpClient):
     # Shared error mapping
     # ------------------------------------------------------------------
 
-    def _raise_api_error(self, response: httpx.Response, base_url: str | None = None) -> None:
+    def _raise_api_error(
+        self,
+        response: httpx.Response,
+        base_url: str | None = None,
+        *,
+        idempotent: bool = True,
+    ) -> None:
         """Escalate a 404 before falling back to the shared error mapping.
 
         `BaseHttpClient._do_request` calls this method for every
@@ -778,6 +784,10 @@ class AuthClient(BaseHttpClient):
         (rather than adding a check in each method) covers all of them at
         once. `poll_device_token` bypasses `_do_request` entirely and calls
         `_map_auth_error` directly for the same 404 case.
+
+        `idempotent` is accepted to keep the override signature-compatible
+        with the base class; no auth call passes it, and `_map_auth_error`
+        raises before the base mapping (which reads it) is ever reached.
         """
         self._map_auth_error(response)
 

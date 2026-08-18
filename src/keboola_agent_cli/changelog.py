@@ -25,6 +25,32 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.84.2": [
+        "Fix: credential-minting API calls are no longer replayed on an ambiguous failure "
+        "(closes #599). `POST /v2/storage/tokens` (`token create`, the SDK's "
+        "`create_scoped_token`, short-lived component tokens) and the data-app managed-repo "
+        "`git-credentials-create` are creates, not reads: the shared retry loop treated their "
+        "500/502/503/504 and read-timeout failures like any other request and replayed them up "
+        "to 3 times. A server that mints the token and then fails to answer would hand back a "
+        "second live credential the caller never sees a value for -- and therefore can never "
+        "revoke. `BaseHttpClient._do_request` now takes `idempotent` (default True, so every "
+        "existing call site is byte-identical) and those four call sites pass False. Failures "
+        "that provably never reached the handler stay retryable even then -- a 429 (rejected by "
+        "the rate limiter before the handler runs), a connect error, a connect timeout -- so the "
+        "change costs no resilience where replay is safe. `token refresh` is deliberately left "
+        "retryable: a replayed rotation overwrites the value the lost response carried instead "
+        "of leaving a second credential behind.",
+        "Change: a 5xx now says it is upstream and carries the support id. `API error 500 ... "
+        "Application error.` gave the caller no next step, so a persistent upstream outage read "
+        "like a broken request and cost the reporter of #599 an investigation across two "
+        "projects and two tokens before concluding it was not theirs to fix. Server errors now "
+        "append `This is an upstream Keboola API failure, not a rejected request. If it "
+        "persists across retries -- and across projects and tokens -- it is an upstream "
+        "incident: check https://status.keboola.com and report it to Keboola support`, plus "
+        "`(exceptionId: ...)` whenever the response body carries one (the first thing Keboola "
+        "support asks for, and previously discarded). 4xx messages are untouched -- a rejected "
+        "request is the caller's to fix and must not blame upstream. A non-idempotent 5xx also "
+        "reports `retryable: false` in the `--json` error envelope, so an automated caller does "
+        "not replay a mint the server may already have honoured.",
         "New: `kbagent config clone` duplicates a configuration WHOLE (closes #587). "
         "`--project P --component-id C --config-id ID --name N [--target-project P2] "
         "[--set PATH=VALUE ...] [--secret PATH=VALUE ...] [--dry-run]`. Until now there was "

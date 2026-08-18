@@ -7,7 +7,13 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from keboola_agent_cli.constants import APP_NAME, MAX_API_ERROR_LENGTH, MAX_RETRIES
+from keboola_agent_cli.constants import (
+    APP_NAME,
+    MAX_API_ERROR_LENGTH,
+    MAX_RETRIES,
+    NON_IDEMPOTENT_NOT_RETRIED_HINT,
+    UPSTREAM_ERROR_HINT,
+)
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.http_base import BaseHttpClient, build_user_agent
 
@@ -220,6 +226,232 @@ class TestBaseHttpClientRetry:
         finally:
             alt_client.close()
             base_client.close()
+
+
+class TestNonIdempotentRetryPolicy:
+    """A credential-minting call must not be replayed on an ambiguous failure.
+
+    Replaying ``POST /v2/storage/tokens`` after a 5xx (or a read timeout) can
+    mint a SECOND live token the caller never sees a value for and therefore
+    can never revoke -- issue #599.
+    """
+
+    @staticmethod
+    def _client() -> BaseHttpClient:
+        return BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    def test_non_idempotent_500_is_not_retried(self, httpx_mock) -> None:
+        """A single 500 ends the call: no replay, no second token."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            status_code=500,
+            json={"error": "Application error."},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert len(httpx_mock.get_requests()) == 1
+            assert exc_info.value.status_code == 500
+            # Automated callers read `retryable`; replaying a mint is not safe.
+            assert exc_info.value.retryable is False
+            assert NON_IDEMPOTENT_NOT_RETRIED_HINT in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_idempotent_500_still_retries(self, httpx_mock) -> None:
+        """The default path is unchanged: a read still gets its 3 attempts."""
+        for _ in range(MAX_RETRIES):
+            httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=500)
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert len(httpx_mock.get_requests()) == MAX_RETRIES
+            assert exc_info.value.retryable is True
+            assert NON_IDEMPOTENT_NOT_RETRIED_HINT not in exc_info.value.message
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_non_idempotent_429_still_retries(self, httpx_mock) -> None:
+        """429 is rejected before the handler runs, so replay cannot duplicate."""
+        httpx_mock.add_response(url=f"{STACK_URL}/v2/storage/tokens", status_code=429)
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens", status_code=201, json={"id": "1"}
+        )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert response.status_code == 201
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_non_idempotent_read_timeout_is_not_retried(self, httpx_mock) -> None:
+        """A read timeout may have been applied server-side -- do not replay it."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("Read timed out"), url=f"{STACK_URL}/v2/storage/tokens"
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert len(httpx_mock.get_requests()) == 1
+            assert exc_info.value.error_code == "TIMEOUT"
+            assert exc_info.value.retryable is False
+            assert NON_IDEMPOTENT_NOT_RETRIED_HINT in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_non_idempotent_connect_timeout_still_retries(self, httpx_mock) -> None:
+        """A connect timeout never handed the request over -- replay is safe."""
+        httpx_mock.add_exception(
+            httpx.ConnectTimeout("Connect timed out"), url=f"{STACK_URL}/v2/storage/tokens"
+        )
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens", status_code=201, json={"id": "1"}
+        )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert response.status_code == 201
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_non_idempotent_connect_error_still_retries(self, httpx_mock) -> None:
+        """A refused connection never reached the handler -- replay is safe."""
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"), url=f"{STACK_URL}/v2/storage/tokens"
+        )
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens", status_code=201, json={"id": "1"}
+        )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert response.status_code == 201
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_non_idempotent_4xx_is_unchanged(self, httpx_mock) -> None:
+        """A 403 was never retried and still maps to ACCESS_DENIED, no 5xx hint."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            status_code=403,
+            json={"error": "You don't have access to the resource."},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/v2/storage/tokens", idempotent=False)
+            assert exc_info.value.error_code == "ACCESS_DENIED"
+            assert UPSTREAM_ERROR_HINT not in exc_info.value.message
+        finally:
+            client.close()
+
+
+class TestUpstreamErrorGuidance:
+    """A 5xx should tell the caller it is upstream, and carry the support id."""
+
+    def test_5xx_message_carries_upstream_hint(self, httpx_mock) -> None:
+        for _ in range(MAX_RETRIES):
+            httpx_mock.add_response(
+                url=f"{STACK_URL}/test-path",
+                status_code=500,
+                json={"error": "Application error."},
+            )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert "Application error." in exc_info.value.message
+            assert UPSTREAM_ERROR_HINT in exc_info.value.message
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_exception_id_surfaced_when_present(self, httpx_mock) -> None:
+        """Keboola's support-traceable id is the first thing support asks for."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=503,
+            json={"error": "Application error.", "exceptionId": "storage-api-abc123"},
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path", idempotent=False)
+            assert "exceptionId: storage-api-abc123" in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_4xx_has_no_upstream_hint(self, httpx_mock) -> None:
+        """A rejected request is the caller's to fix -- do not blame upstream."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=400,
+            json={"error": "Invalid bucket id"},
+        )
+
+        client = BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert UPSTREAM_ERROR_HINT not in exc_info.value.message
+            assert exc_info.value.retryable is False
+        finally:
+            client.close()
 
 
 class TestBaseHttpClientErrorSanitization:

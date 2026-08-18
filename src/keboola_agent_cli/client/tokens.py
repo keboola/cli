@@ -103,6 +103,7 @@ class _TokensMixin(_CoreClient):
                 "expiresIn": str(expires_in),
                 "componentAccess[]": component_access,
             },
+            idempotent=False,
         )
         return response.json()
 
@@ -156,7 +157,7 @@ class _TokensMixin(_CoreClient):
             data[f"bucketPermissions[{bucket_id}]"] = permission
         if component_access:
             data["componentAccess[]"] = component_access
-        response = self._request("POST", "/v2/storage/tokens", data=data)
+        response = self._request("POST", "/v2/storage/tokens", data=data, idempotent=False)
         return response.json()
 
     def delete_token(self, token_id: str) -> None:
@@ -176,6 +177,11 @@ class _TokensMixin(_CoreClient):
         **old** token string becomes immediately invalid (rotation, not
         additive), so every place using it must be updated. The token id is
         stable across a refresh.
+
+        Deliberately left retryable, unlike the create calls above: a replayed
+        rotation overwrites the value the lost response carried instead of
+        leaving a second live credential behind, so the caller still ends up
+        holding the only token that authenticates.
         """
         response = self._request(
             "POST", f"/v2/storage/tokens/{quote(str(token_id), safe='')}/refresh"

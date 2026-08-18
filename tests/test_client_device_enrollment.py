@@ -13,7 +13,10 @@ import json
 from typing import Any
 from urllib.parse import parse_qs
 
+import pytest
+
 from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.errors import KeboolaApiError
 
 STACK_URL = "https://connection.keboola.com"
 STREAM_BASE_URL = "https://stream.keboola.com"
@@ -121,6 +124,27 @@ class TestCreateScopedToken:
         # No bucket grants / no expiry requested here.
         assert not any(k.startswith("bucketPermissions[") for k in body)
         assert "expiresIn" not in body
+
+
+class TestCreateScopedTokenIsNotReplayed:
+    """``POST /v2/storage/tokens`` mints a credential -- never replay it (#599)."""
+
+    def test_persistent_500_makes_exactly_one_attempt(self, httpx_mock) -> None:
+        """The reported EU-GCP 500 must cost one attempt, not three mint tries."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            status_code=500,
+            json={"error": "Application error."},
+        )
+
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.create_scoped_token(description="device 42", expires_in=60)
+            assert len(httpx_mock.get_requests()) == 1
+            assert exc_info.value.retryable is False
+        finally:
+            client.close()
 
 
 class TestDeleteToken:

@@ -350,5 +350,8 @@ class DataScienceClient(BaseHttpClient):
             f"/apps/{quote(str(app_id), safe='')}/git-repo/credentials",
             content=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
+            # Mints a one-time secret: a replayed 5xx would leave a second live
+            # credential on the repo that the caller never sees (issue #599).
+            idempotent=False,
         )
         return response.json()

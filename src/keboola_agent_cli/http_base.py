@@ -19,10 +19,14 @@ from .constants import (
     APP_NAME,
     BACKOFF_BASE,
     ENV_CONVERSATION_ID,
+    HTTP_STATUS_SERVER_ERROR_MIN,
     MAX_API_ERROR_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
+    NON_IDEMPOTENT_NOT_RETRIED_HINT,
+    NON_IDEMPOTENT_RETRY_STATUS_CODES,
     RETRYABLE_STATUS_CODES,
+    UPSTREAM_ERROR_HINT,
 )
 from .errors import ErrorCode, KeboolaApiError, mask_token
 
@@ -144,6 +148,7 @@ class BaseHttpClient:
         *,
         client: httpx.Client | None = None,
         base_url: str | None = None,
+        idempotent: bool = True,
         **kwargs: Any,
     ) -> httpx.Response:
         """Execute an HTTP request with retry and exponential backoff.
@@ -157,6 +162,15 @@ class BaseHttpClient:
             client: Optional httpx.Client to use (defaults to self._client).
                 Useful for subclasses that maintain multiple clients (e.g. queue client).
             base_url: Optional base URL for error messages (defaults to self._base_url).
+            idempotent: False for a call whose replay would create a SECOND
+                resource -- the credential-minting endpoints, above all
+                ``POST /v2/storage/tokens``. Such a request is not replayed on
+                an ambiguous failure (a 5xx, or a read/write timeout, either of
+                which the server may have applied before failing to answer),
+                because the duplicate it would mint is a live credential the
+                caller never sees and therefore can never revoke (issue #599).
+                Failures that provably never reached the handler -- a 429, a
+                connect error, a connect timeout -- stay retryable regardless.
             **kwargs: Additional arguments passed to httpx.Client.request().
 
         Returns:
@@ -168,6 +182,11 @@ class BaseHttpClient:
         http_client = client or self._client
         url_label = base_url or self._base_url
         last_response: httpx.Response | None = None
+        retryable_statuses = (
+            RETRYABLE_STATUS_CODES
+            if idempotent
+            else RETRYABLE_STATUS_CODES & NON_IDEMPOTENT_RETRY_STATUS_CODES
+        )
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -176,7 +195,7 @@ class BaseHttpClient:
                 if response.status_code < 400:
                     return response
 
-                if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
+                if response.status_code in retryable_statuses and attempt < MAX_RETRIES - 1:
                     if response.status_code == 429:
                         retry_after = response.headers.get("Retry-After")
                         if retry_after:
@@ -201,10 +220,14 @@ class BaseHttpClient:
                     last_response = response
                     continue
 
-                self._raise_api_error(response, url_label)
+                self._raise_api_error(response, url_label, idempotent=idempotent)
 
             except httpx.TimeoutException as exc:
-                if attempt < MAX_RETRIES - 1:
+                # A connect timeout never handed the request to the server, so
+                # replaying it is safe even for a non-idempotent call; a read or
+                # write timeout may have been applied and answered too slowly.
+                timeout_retryable = idempotent or isinstance(exc, httpx.ConnectTimeout)
+                if timeout_retryable and attempt < MAX_RETRIES - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
@@ -216,11 +239,16 @@ class BaseHttpClient:
                     )
                     time.sleep(delay)
                     continue
+                message = (
+                    f"Request timed out connecting to {url_label} (token: {self._masked_token})"
+                )
+                if not timeout_retryable:
+                    message = f"{message}. {NON_IDEMPOTENT_NOT_RETRIED_HINT}"
                 raise KeboolaApiError(
-                    message=f"Request timed out connecting to {url_label} (token: {self._masked_token})",
+                    message=message,
                     status_code=0,
                     error_code=ErrorCode.TIMEOUT,
-                    retryable=True,
+                    retryable=timeout_retryable,
                 ) from exc
 
             except httpx.ConnectError as exc:
@@ -244,7 +272,7 @@ class BaseHttpClient:
                 ) from exc
 
         if last_response is not None:
-            self._raise_api_error(last_response, url_label)
+            self._raise_api_error(last_response, url_label, idempotent=idempotent)
 
         raise KeboolaApiError(
             message=f"Request failed after {MAX_RETRIES} retries to {url_label} (token: {self._masked_token})",
@@ -253,7 +281,13 @@ class BaseHttpClient:
             retryable=True,
         )
 
-    def _raise_api_error(self, response: httpx.Response, base_url: str | None = None) -> None:
+    def _raise_api_error(
+        self,
+        response: httpx.Response,
+        base_url: str | None = None,
+        *,
+        idempotent: bool = True,
+    ) -> None:
         """Convert an HTTP error response into a KeboolaApiError.
 
         Parses the response body for error messages, truncates long messages
@@ -263,12 +297,19 @@ class BaseHttpClient:
         Args:
             response: The HTTP error response.
             base_url: Optional URL label for error messages.
+            idempotent: See :meth:`_do_request`. False marks a 5xx as "answered
+                once, not replayed", which is both a different next step for the
+                caller and a different ``retryable`` verdict on the raised error.
 
         Raises:
             KeboolaApiError: Always raised with appropriate error code and message.
         """
         status = response.status_code
         url_label = base_url or self._base_url
+        # Keboola services put a support-traceable id on server-side failures.
+        # Surfaced when present, silently skipped when not -- it is the first
+        # thing support asks for and the caller cannot otherwise see it.
+        exception_id: str | None = None
 
         try:
             body = response.json()
@@ -296,6 +337,9 @@ class BaseHttpClient:
             )
             if not isinstance(api_message, str):
                 api_message = json.dumps(api_message)
+            raw_exception_id = body.get("exceptionId") if isinstance(body, dict) else None
+            if raw_exception_id:
+                exception_id = str(raw_exception_id)
         except Exception:
             api_message = response.text
 
@@ -328,8 +372,20 @@ class BaseHttpClient:
             )
 
         retryable = status in RETRYABLE_STATUS_CODES
+        message = (
+            f"API error {status} from {url_label} (token: {self._masked_token}): {api_message}"
+        )
+        if exception_id:
+            message = f"{message} (exceptionId: {exception_id})"
+        if status >= HTTP_STATUS_SERVER_ERROR_MIN:
+            message = f"{message}. {UPSTREAM_ERROR_HINT}"
+            if not idempotent:
+                # An automated caller reading `retryable` must not replay a mint
+                # call the server may already have honoured.
+                retryable = False
+                message = f"{message}. {NON_IDEMPOTENT_NOT_RETRIED_HINT}"
         raise KeboolaApiError(
-            message=f"API error {status} from {url_label} (token: {self._masked_token}): {api_message}",
+            message=message,
             status_code=status,
             error_code=ErrorCode.API_ERROR,
             retryable=retryable,

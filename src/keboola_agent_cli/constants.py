@@ -51,6 +51,13 @@ METADATA_NOT_FOUND = object()
 
 # --- HTTP Retry Constants ---
 RETRYABLE_STATUS_CODES: set[int] = {429, 500, 502, 503, 504}
+# Subset of the above that stays retryable when the request is NOT idempotent
+# (a create/mint call such as ``POST /v2/storage/tokens``). A 429 is rejected by
+# the rate limiter before the handler runs, so replaying it cannot duplicate a
+# side effect. Every 5xx is ambiguous -- the server may have completed the write
+# and then failed to answer -- so replaying one can mint a second live
+# credential the caller never sees and can never revoke (issue #599).
+NON_IDEMPOTENT_RETRY_STATUS_CODES: set[int] = {429}
 MAX_RETRIES: int = 3
 BACKOFF_BASE: float = 1.0  # seconds; delays: 1s, 2s, 4s
 
@@ -59,6 +66,29 @@ DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.
 
 # --- API Error Handling ---
 MAX_API_ERROR_LENGTH: int = 500
+
+# Lowest status the server owns: at or above it the request was accepted and
+# then failed inside Keboola, so no amount of reshaping it helps the caller.
+HTTP_STATUS_SERVER_ERROR_MIN: int = 500
+
+# Appended to 5xx errors. A server-side failure is never fixable by reshaping
+# the request, and a *persistent* one (identical across retries, projects and
+# tokens) is an upstream incident rather than caller error -- saying so turns a
+# dead end into a next step.
+UPSTREAM_ERROR_HINT: str = (
+    "This is an upstream Keboola API failure, not a rejected request. "
+    "If it persists across retries -- and across projects and tokens -- "
+    "it is an upstream incident: check https://status.keboola.com and "
+    "report it to Keboola support"
+)
+
+# Appended when a non-idempotent request fails: it was answered once and not
+# replayed, but the server may still have applied it.
+NON_IDEMPOTENT_NOT_RETRIED_HINT: str = (
+    "Not retried automatically: this request is not idempotent, so it may "
+    "still have taken effect server-side -- verify the current state before "
+    "retrying"
+)
 
 # --- Developer Portal MFA ---
 # Challenge type sent on the second `/auth/login` step (after the first call
