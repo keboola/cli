@@ -79,6 +79,7 @@ class _ClientRequester:
 
 
 def _optional_mr_fields(
+    *,
     description: str | None,
     reviewer_ids: _IntList | None,
     auto_merge_strategy: str | None,
@@ -88,7 +89,10 @@ def _optional_mr_fields(
     """Build the optional-field part of a create/update body.
 
     Shared so the two bodies cannot drift: only provided (non-None) fields
-    are included, under their wire (camelCase) names.
+    are included, under their wire (camelCase) names. Keyword-only by
+    signature: four of the five parameters are ``str | None``, so a
+    positional transposition would type-check cleanly and only surface as a
+    backend 422 -- the one drift mode this helper otherwise cannot catch.
     """
     body: dict[str, Any] = {}
     if description is not None:
@@ -194,7 +198,11 @@ class MergeRequests:
         }
         body.update(
             _optional_mr_fields(
-                description, reviewer_ids, auto_merge_strategy, auto_merge_at, external_id
+                description=description,
+                reviewer_ids=reviewer_ids,
+                auto_merge_strategy=auto_merge_strategy,
+                auto_merge_at=auto_merge_at,
+                external_id=external_id,
             )
         )
         return self._requester.request("POST", _BASE, json=body).json()
@@ -222,7 +230,11 @@ class MergeRequests:
         PUTs ``{}``, which the backend treats as a no-op returning the MR.
         """
         body = _optional_mr_fields(
-            description, reviewer_ids, auto_merge_strategy, auto_merge_at, external_id
+            description=description,
+            reviewer_ids=reviewer_ids,
+            auto_merge_strategy=auto_merge_strategy,
+            auto_merge_at=auto_merge_at,
+            external_id=external_id,
         )
         if title is not None:
             body["title"] = title

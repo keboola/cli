@@ -135,9 +135,31 @@ per source branch, ever; both guards are **404**, not 400 (`MergeRequestCreateAc
 
 **D1 — Explicit typed parameters, not payload dicts.** House style is named parameters with
 presence detection inside the method — see `update_config` (`client/configs.py:352`, *"Only
-provided (non-None) fields are sent"*). `is_disabled: bool | None` stays tri-state for
-consistency with `update_config` / `update_config_row`, not because the API forces it (inside a
-non-empty `diff` envelope, omitting it defaults to `false` server-side).
+provided (non-None) fields are sent"*).
+
+Presence detection is the right idiom for `update_config`, which **patches**, and the wrong one
+for `rebase_config`, which **replaces**: there, an omitted key is not "leave unchanged" but
+"take the server-side default". `diff.configuration` defaults to `{}` and `diff.isDisabled` to
+`false`, and an absent `diff.description` to null (`RebaseRequest::mapValidatedData`). So a
+tri-state `is_disabled: bool | None` and optional `configuration` / `description` would make
+silent data loss the signature's default — a caller resolving a conflict on a disabled config
+and passing only `name` / `rows` would wipe the configuration body, drop the description and
+re-enable the config, then merge that into production.
+
+`ConfigurationRebaseService` settles which fields that covers: `$name` / `$description` /
+`$configuration` / `$isDisabled` are *"the complete 3-way diff result"* and *"fully replace"* the
+resolved version's body. All four are therefore **required** parameters, alongside `rows` (which
+the backend rejects the request without). `description` is required-but-nullable — `None` is a
+legitimate resolved value meaning "no description", and it omits the key rather than sending an
+explicit null, which costs no expressiveness because the two are indistinguishable server-side.
+
+`change_description` is the one genuine optional: it is not part of the replaced body, and null
+selects a default rebase message rather than clearing anything.
+
+The same reasoning applies to `_optional_mr_fields` in `client/merge_requests.py`, where
+presence detection *is* correct (create and update genuinely patch): the helper is keyword-only,
+because four of its five parameters are `str | None` and a positional transposition would
+type-check cleanly and surface only as a backend 422.
 
 **D2 — JSON bodies throughout, deviating from `configs.py`.** Per *Request bodies are JSON*:
 `json=`, real nested objects, no `json.dumps`, no `"1"` / `"0"` booleans. Every method gets a
@@ -329,7 +351,7 @@ Branch-scoped; `branch_id` required (D5).
 | Method | Endpoint |
 |---|---|
 | `get_config_diff(component_id, config_id, branch_id) -> dict` | `GET …/branch/{branch_id}/components/{c}/configs/{cfg}/diff` |
-| `rebase_config(component_id, config_id, branch_id, version, name, rows, configuration=None, description=None, change_description=None, is_disabled=None) -> dict` | `POST …/rebase` (keep) |
+| `rebase_config(component_id, config_id, branch_id, version, name, rows, configuration, is_disabled, description, change_description=None) -> dict` | `POST …/rebase` (keep) |
 | `rebase_config_delete(component_id, config_id, branch_id, version) -> dict` | `POST …/rebase` (delete) |
 
 `get_config_diff` returns the three-way diff (`base` = dev branch v1, `ours` = dev head,
@@ -337,8 +359,10 @@ Branch-scoped; `branch_id` required (D5).
 Flattening the nested `diff` payload is Layer 2's job.
 
 The Python signatures are flat; only the body construction knows about the envelope.
-`rebase_config` sends `version` at the top level and puts `name` and `rows` (always) plus any
-non-`None` optional inside `diff`; `is_disabled=None` is omitted, `is_disabled=False` is sent.
+`rebase_config` sends `version` at the top level and puts the five required content fields
+(`name`, `rows`, `configuration`, `is_disabled`, `description`) plus `change_description` when
+set inside `diff`. `description=None` is required-but-nullable: it omits the key, which is how
+"the resolved config has no description" is expressed.
 `rebase_config_delete` sends exactly `{"version": N, "diff": {}}`. Component and configuration
 ids are `quote()`d, as everywhere in `configs.py`.
 
