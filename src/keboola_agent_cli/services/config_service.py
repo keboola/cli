@@ -16,12 +16,16 @@ from typing import Any
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
+from ..constants import (
+    CONFIG_STATE_MAX_BYTES,
+)
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
 from ..models import ComponentDetail, ProjectConfig
 from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
+from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService, ClientFactory, sanitize_unexpected_error
 from .workspace_service import find_storage_workspace_for_sandbox_config
@@ -110,6 +114,16 @@ def _find_matches_in_json(
         if obj is not None and match_fn(str(obj)):
             paths.append(path)
     return paths
+
+
+def _not_found(message: str) -> KeboolaApiError:
+    """Build a 404 NOT_FOUND error (issue #593 -- shared by ConfigService._extract_state)."""
+    return KeboolaApiError(status_code=404, error_code=ErrorCode.NOT_FOUND, message=message)
+
+
+def _bad_state(message: str) -> KeboolaApiError:
+    """Build a 400 VALIDATION_ERROR error (issue #593 -- shared by ConfigService.set_config_state)."""
+    return KeboolaApiError(status_code=400, error_code=ErrorCode.VALIDATION_ERROR, message=message)
 
 
 class ConfigService(BaseService):
@@ -836,7 +850,14 @@ class ConfigService(BaseService):
         When *merge* is True or *set_paths* are given, the current
         configuration is fetched from the API and changes are applied
         on top of it (deep-merge for dicts, replace for scalars/lists).
+
+        Raises:
+            KeboolaApiError: If *set_paths* targets a top-level API sibling
+                of ``configuration`` (see :func:`validate_set_paths`).
+                Raised before ``client.get_config_detail`` so the rejection
+                also covers ``--dry-run`` -- no network call happens first.
         """
+        validate_set_paths(set_paths)
         needs_current = merge or bool(set_paths)
 
         if needs_current:
@@ -997,6 +1018,199 @@ class ConfigService(BaseService):
         result["branch_id"] = effective_branch_id
         result["default_bucket"] = target
         return result
+
+    @staticmethod
+    def _extract_state(
+        detail: dict[str, Any], row_id: str | None, component_id: str, config_id: str
+    ) -> dict[str, Any]:
+        """Pull the ``state`` dict for the root config or a specific row out of
+        a config-detail response (see "Reading row state" in issue #593).
+
+        Storage API has no standalone ``GET .../state`` for either the root
+        config or a row -- both are served inline in the config detail
+        response. Root state lives at ``detail["state"]``; row state lives at
+        ``row["state"]`` for the matching entry of ``detail["rows"]``.
+
+        Args:
+            detail: A config detail response (from ``get_config_detail``).
+            row_id: If given, return the named row's state instead of root.
+            component_id: Used only to build a clear error message.
+            config_id: Used only to build a clear error message.
+
+        Raises:
+            KeboolaApiError: ``error_code=ErrorCode.NOT_FOUND`` if *row_id*
+                is given but no row with that ID exists. A missing row must
+                fail loudly and name the row -- silently returning ``{}`` for
+                a typo'd row ID would repeat the exact class of bug issue
+                #593 fixes for ``--set``.
+        """
+        if row_id is None:
+            state = detail.get("state")
+            return state if isinstance(state, dict) else {}
+        for row in detail.get("rows") or []:
+            if isinstance(row, dict) and row.get("id") == row_id:
+                state = row.get("state")
+                return state if isinstance(state, dict) else {}
+        raise _not_found(f"Row '{row_id}' not found in configuration {component_id}/{config_id}.")
+
+    def get_config_state(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        row_id: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Read the runtime ``state`` dict of a config or one of its rows.
+
+        Storage API serves ``state`` inline in the config detail response
+        only (no standalone ``GET .../state`` for either root or row state --
+        see ``client.get_config_state``'s docstring for the production-404 /
+        branch-scoped-501 behaviour this mirrors). This method always fetches
+        the full detail and extracts the requested state locally.
+
+        Args:
+            alias: Project alias.
+            component_id: Component ID.
+            config_id: Configuration ID.
+            row_id: If given, return this row's state instead of the config's
+                root state. When a config uses rows, the root ``state`` node
+                is typically unused -- row state is the primary path for
+                row-based components.
+            branch_id: Dev branch override; falls back to the project's
+                active branch when None.
+
+        Returns:
+            ``{"project_alias", "component_id", "config_id", "row_id",
+            "branch_id", "state"}``.
+
+        Raises:
+            KeboolaApiError: ``NOT_FOUND`` if *row_id* is given but does not
+                exist on the config.
+            ConfigError: When the alias is unknown.
+        """
+        project = self.resolve_projects([alias])[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        base = {
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "row_id": row_id,
+            "branch_id": effective_branch_id,
+        }
+        try:
+            detail = client.get_config_detail(
+                component_id, config_id, branch_id=effective_branch_id
+            )
+            state = self._extract_state(detail, row_id, component_id, config_id)
+        finally:
+            client.close()
+        return base | {"state": state}
+
+    def set_config_state(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        state: dict[str, Any],
+        row_id: str | None = None,
+        branch_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Overwrite the runtime ``state`` dict of a config or one of its rows.
+
+        Read-modify-write for the diff/no-op semantics: fetches the current
+        config detail, extracts the current state (root or row, see
+        ``_extract_state``), and PUTs the new state via the dedicated
+        ``update_config_state`` / ``update_config_row_state`` write endpoint
+        (see those docstrings for why writes have a standalone resource while
+        reads are served inline only).
+
+        Args:
+            alias: Project alias.
+            component_id: Component ID.
+            config_id: Configuration ID.
+            state: The new state dict. Must be a JSON object under
+                ``CONFIG_STATE_MAX_BYTES`` when serialized -- validated
+                locally before any network call so a bad payload never looks
+                like a successful ``--dry-run`` preview.
+            row_id: If given, write this row's state instead of the config's
+                root state.
+            branch_id: Dev branch override; falls back to the project's
+                active branch when None.
+            dry_run: If True, return a diff without writing.
+
+        Returns:
+            On a real write: ``{"project_alias", "component_id", "config_id",
+            "row_id", "branch_id", "state", "changed": True}``.
+            On a no-op (new state == current state): same shape with
+            ``"changed": False`` -- no API write.
+            On dry_run: ``{"dry_run": True, "project_alias", "component_id",
+            "config_id", "row_id", "branch_id", "changes", "old_state",
+            "new_state"}`` mirroring ``set_default_bucket``'s dry-run shape.
+
+        Raises:
+            KeboolaApiError: ``VALIDATION_ERROR`` if *state* is not a JSON
+                object or exceeds the size cap; ``NOT_FOUND`` if *row_id* is
+                given but does not exist; underlying API errors otherwise.
+            ConfigError: When the alias is unknown.
+        """
+        if not isinstance(state, dict):
+            raise _bad_state(f"--state must be a JSON object, got {type(state).__name__}.")
+        size = len(json.dumps(state).encode("utf-8"))
+        if size >= CONFIG_STATE_MAX_BYTES:
+            raise _bad_state(f"--state is {size} bytes; cap is {CONFIG_STATE_MAX_BYTES}.")
+
+        project = self.resolve_projects([alias])[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        base = {
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "row_id": row_id,
+            "branch_id": effective_branch_id,
+        }
+        try:
+            detail = client.get_config_detail(
+                component_id, config_id, branch_id=effective_branch_id
+            )
+            current_state = self._extract_state(detail, row_id, component_id, config_id)
+
+            # Semantic no-op: short-circuit before any write.
+            if current_state == state:
+                return base | {"state": current_state, "changed": False}
+
+            if dry_run:
+                return base | {
+                    "dry_run": True,
+                    "changes": compute_diff(current_state, state),
+                    "old_state": current_state,
+                    "new_state": state,
+                }
+
+            if row_id is not None:
+                result = client.update_config_row_state(
+                    component_id, config_id, row_id, state, branch_id=effective_branch_id
+                )
+            else:
+                result = client.update_config_state(
+                    component_id, config_id, state, branch_id=effective_branch_id
+                )
+        finally:
+            client.close()
+
+        # Both PUTs carry the updated state at the response's TOP level, but in
+        # different envelopes: the root endpoint answers with the full config
+        # detail, the row endpoint with the bare row object (no "rows" key at
+        # all). So read it with row_id=None in both cases -- passing row_id here
+        # would search a rows[] array the row response never has, which reported
+        # a false NOT_FOUND on every row write even though it had landed. Caught
+        # by the live E2E run against project 5946; mock-based tests could not
+        # see it, since the mocks returned the assumed shape, not the real one.
+        new_state = self._extract_state(result, None, component_id, config_id)
+        return base | {"state": new_state, "changed": True}
 
     def delete_config(
         self,
@@ -2030,7 +2244,14 @@ class ConfigService(BaseService):
         """Build the final row configuration dict by merging/setting paths.
 
         Mirrors ``_resolve_configuration`` but operates on a row's config.
+
+        Raises:
+            KeboolaApiError: If *set_paths* targets a top-level API sibling
+                of ``configuration`` (see :func:`validate_set_paths`).
+                Raised before ``client.get_config_row`` so the rejection
+                also covers ``--dry-run`` -- no network call happens first.
         """
+        validate_set_paths(set_paths)
         needs_current = merge or bool(set_paths)
 
         if needs_current:

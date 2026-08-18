@@ -216,6 +216,96 @@ class _ConfigsMixin(_CoreClient):
         state = body.get("state")
         return state if isinstance(state, dict) else {}
 
+    def update_config_state(
+        self,
+        component_id: str,
+        config_id: str,
+        state: dict[str, Any],
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Overwrite the runtime state dict of a specific configuration.
+
+        Unlike reads (see ``get_config_state``), writes to ``state`` DO have a
+        standalone Storage API resource: ``PUT .../state``. The asymmetry is
+        intentional on the API side -- state is embedded read-only in the
+        config detail response (there is no ``GET .../state``), but mutating
+        it in place would require callers to round-trip the entire
+        configuration body (including ``configuration`` and ``rows``) just to
+        change one field, and would race with concurrent configuration edits.
+        A dedicated write endpoint lets state be updated atomically and
+        independently of ``configuration``.
+
+        The request body is genuine JSON (``+ Request (application/json)`` in
+        the apiary spec), e.g. ``{"state": {"lastId": 123}}`` -- NOT the
+        form-encoded ``data={"state": json.dumps(state)}`` shape that
+        ``update_config`` uses for ``configuration``. ``state`` must be a
+        JSON object and the serialized body is capped at
+        ``CONFIG_STATE_MAX_BYTES`` by the API; size/type validation is the
+        service layer's responsibility, not this client method's.
+
+        The branch-scoped URL form is preferred for new code; passing
+        ``branch_id=None`` falls back to the non-branch (production) prefix,
+        mirroring every other config method in this mixin.
+
+        Args:
+            component_id: The component ID (e.g. keboola.ex-db-snowflake).
+            config_id: The configuration ID.
+            state: The new state dict to store (replaces the existing state).
+            branch_id: If set, write state on a specific dev branch.
+
+        Returns:
+            The full updated configuration detail dict (id, name, version,
+            changeDescription, configuration, rows, state, currentVersion) --
+            NOT a bare state dict.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_component_id = quote(component_id, safe="")
+        safe_config_id = quote(config_id, safe="")
+        response = self._request(
+            "PUT",
+            f"{prefix}/components/{safe_component_id}/configs/{safe_config_id}/state",
+            json={"state": state},
+        )
+        return response.json()
+
+    def update_config_row_state(
+        self,
+        component_id: str,
+        config_id: str,
+        row_id: str,
+        state: dict[str, Any],
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Overwrite the runtime state dict of a specific configuration row.
+
+        Row-level sibling of ``update_config_state`` -- see that docstring
+        for why writes have a dedicated resource while reads are served
+        inline from the config/row detail. Same JSON body shape
+        (``{"state": state}``, not form-encoded), same 4 MB cap enforced by
+        the service layer, same branch-scoped-preferred URL convention.
+
+        Args:
+            component_id: The component ID (e.g. keboola.ex-db-snowflake).
+            config_id: The configuration ID.
+            row_id: The configuration row ID.
+            state: The new state dict to store (replaces the existing state).
+            branch_id: If set, write state on a specific dev branch.
+
+        Returns:
+            The full updated configuration detail dict, same shape as
+            ``update_config_state`` returns.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_component_id = quote(component_id, safe="")
+        safe_config_id = quote(config_id, safe="")
+        safe_row_id = quote(row_id, safe="")
+        response = self._request(
+            "PUT",
+            f"{prefix}/components/{safe_component_id}/configs/{safe_config_id}/rows/{safe_row_id}/state",
+            json={"state": state},
+        )
+        return response.json()
+
     def list_config_folder_metadata(self, branch_id: int) -> dict[str, str]:
         """Fetch folder names for all configurations via metadata search.
 

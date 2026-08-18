@@ -86,6 +86,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.row-update": "write",
     "config.row-delete": "destructive",
     "config.oauth-url": "read",
+    "config.state-get": "read",
+    "config.state-set": "write",
     # Job history
     "job.list": "read",
     "job.detail": "read",

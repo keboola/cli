@@ -3600,3 +3600,84 @@ Four things a coding agent will otherwise get wrong:
   does not accept a Storage API token -- it is the still-open primary ask of
   issue #594. Do not imply this command covers billing/invoice history; tell
   the user it is out of reach from the CLI today.
+## `config update --set 'state...'` is now a hard error, not a silent no-op (since v0.84.2)
+
+Before v0.84.2, `--set` on `config update` / `config row-update` applied every
+path to `configuration` unconditionally. `state` is a **sibling** of
+`configuration` in the Storage API response (see the `config detail
+--with-state` entry above), not a child of it -- so
+`--set 'state.storage.input.files[0].lastImportId=176200172'` silently wrote
+to `configuration.state.storage...` instead. The command exited 0, bumped the
+config version, and even showed a plausible-looking `--dry-run` diff, while
+the actual runtime `state` was completely untouched (#593). A second,
+independent bug compounded it: `set_nested_value` (`json_utils.py`) splits
+paths on `.` only, so the `files[0]` segment became a literal dict key
+`"files[0]"` rather than list index `0` -- the resulting structure wasn't
+even shaped like a real state document.
+
+- **Since v0.84.2**, any `--set PATH=VALUE` whose first dot-separated segment
+  matches a known top-level field of the config detail response (`state`,
+  `rows`, `name`, `description`, `id`, `version`, `currentVersion`,
+  `changeDescription`, `created`, `creatorToken`, `isDeleted`, `isDisabled`)
+  is **rejected before any network call**, exit code 2 (usage error). This
+  fires under `--dry-run` too -- there is no way to preview your way past it.
+- The error names the offending path and its first segment, and routes you to
+  the right tool: `state.*` -> `kbagent config state-set`; `name` -> `--name`;
+  `description` -> `--description`; `isDisabled` on a row -> `config
+  row-update --is-disabled/--is-enabled` (the config-level flag is simply not
+  settable via `--set`); anything else -> "not settable via --set". If a
+  component genuinely has a `configuration.<prefix>` key with one of these
+  names, pass the full body via `--configuration JSON|@file|-` instead of
+  `--set`.
+- **A plain `--set 'parameters.x=y'` is unaffected** -- only paths whose
+  *first* segment collides with a sibling field are rejected; the guard does
+  not touch anything under `configuration`.
+- **`files[0]` bracket syntax is now also rejected**, by the same guard, with
+  the same exit 2, before any network call -- with a message pointing at the
+  `files.0` form (which already worked, and still does, over an existing
+  list). It no longer silently creates a literal `"files[0]"` key. Note the
+  example path at the top of this entry contains BOTH mistakes at once: a
+  `state` first segment and a `files[0]` segment. Either one alone is now
+  enough to be rejected.
+- If you hit the new exit-2 error on a script written before v0.84.2 and the
+  intent really was to edit runtime state, switch to `kbagent config
+  state-set --state ...` (see [config-state-workflow](config-state-workflow.md))
+  -- do not work around the guard by nesting the path differently.
+
+## `changed_since: adaptive` with empty state reloads the ENTIRE file history (since v0.84.2)
+
+This is a platform behaviour, not a kbagent bug, but it is the trap that
+motivated `config state-set` (#593) and it is easy to hit by accident on a
+dev branch. Keboola is retiring `processed_tags` / `query` in file input
+mapping in favor of `changed_since: adaptive`, which tracks a
+`lastImportId`-style checkpoint in the configuration's runtime `state`
+(see the `config detail --with-state` entry above for what `state` is).
+
+- **`adaptive` with an empty `state` does not mean "start watching from
+  now"** -- it means "there is no checkpoint", so the component downloads
+  the component's entire file history from the very beginning. On a real
+  project this can mean years of files; one reported case was killed after
+  118 seconds with thousands of files already downloaded and no end in
+  sight.
+- **A dev branch always starts with `state: {}`** (`branch create` gives you
+  a fresh runtime state, not a copy of production's). So testing the
+  `processed_tags`/`query` -> `changed_since: adaptive` migration on a branch
+  -- exactly the safe place you'd want to validate it before touching
+  production -- reproduces the full-reload behaviour every time, unless the
+  branch's state is seeded first.
+- **The fix is to seed, not to skip validation**: `kbagent config state-set
+  --branch <dev-branch-id> --state '{"storage": {"input": {"files": [{"tags":
+  ["<tag>"], "lastImportId": "<known-recent-id>"}]}}}'` before the first `job
+  run` on the branch. Note `tags` is an ARRAY, matching the file input
+  mapping's own selection criteria. Do not copy the field types out of this
+  example -- run `state-get` against an already-migrated production config
+  and mirror what it actually returns. See
+  [config-state-workflow](config-state-workflow.md) for the full seed -> run
+  -> verify -> merge sequence.
+- **An empty state is more dangerous than a seeded one for this input
+  mapping type.** For most incremental components an empty/cleared state is
+  the deliberate "reprocess everything" reset and is the well-understood,
+  documented behaviour. `changed_since: adaptive` inverts the usual safety
+  assumption: here the empty state is the expensive, surprising path, and a
+  seeded checkpoint is the conservative one. Do not assume "no state = safe
+  default" when adaptive is involved.
