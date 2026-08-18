@@ -205,9 +205,11 @@ class _CoreClient(BaseHttpClient):
         pollers ``wait_for_queue_job`` / ``wait_for_query_job``.
 
         Args:
-            job: Initial job response from POST/DELETE. May already be
-                terminal (the Storage API can fail fast, never returning
-                ``waiting``), in which case no request is made at all.
+            job: Initial job response from the request that enqueued the job
+                (POST, PUT or DELETE -- e.g. ``change_sharing_type`` enqueues
+                with PUT). May already be terminal (the Storage API can fail
+                fast, never returning ``waiting``), in which case no request
+                is made at all.
             max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
 
         Returns:
