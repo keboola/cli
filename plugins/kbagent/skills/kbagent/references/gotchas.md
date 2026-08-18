@@ -3633,6 +3633,7 @@ Four things a coding agent will otherwise get wrong:
   does not accept a Storage API token -- it is the still-open primary ask of
   issue #594. Do not imply this command covers billing/invoice history; tell
   the user it is out of reach from the CLI today.
+
 ## A Storage job that failed instantly used to report success (since v0.84.3)
 
 Every async Storage operation -- table import/export, `create-table`,

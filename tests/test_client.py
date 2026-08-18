@@ -2478,6 +2478,21 @@ def _mk_client() -> KeboolaClient:
     return KeboolaClient(stack_url=_BASE, token=_TOKEN)
 
 
+class _Omit:
+    """Sentinel: leave the key out entirely, as distinct from setting it to None.
+
+    Spelling "absent" as ``None`` would collapse the two shapes, and ``None`` is
+    the more interesting of them -- ``{"error": None}`` is one of the two bodies
+    that made the pre-0.84.3 extraction raise AttributeError.
+    """
+
+    def __repr__(self) -> str:
+        return "<omitted>"
+
+
+_OMIT = _Omit()
+
+
 class TestPrepareFileUpload:
     """Tests for KeboolaClient.prepare_file_upload()."""
 
@@ -3455,10 +3470,10 @@ class TestWaitForStorageJob:
         assert "plain text boom" in str(exc_info.value)
 
     def test_unusable_error_field_falls_back_to_generic_message(self, httpx_mock) -> None:
-        """A missing / non-string / message-less `error` yields the generic text."""
-        for error_field in ({}, {"message": ""}, 422, None, ["boom"]):
+        """A missing / null / non-string / message-less `error` yields the generic text."""
+        for error_field in ({}, {"message": ""}, 422, None, ["boom"], _OMIT):
             job: dict[str, Any] = {"id": 1, "status": "error"}
-            if error_field is not None:
+            if error_field is not _OMIT:
                 job["error"] = error_field
             with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
                 client._wait_for_storage_job(job)
