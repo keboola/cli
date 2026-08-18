@@ -356,7 +356,7 @@ def main(
     doctor_service = DoctorService(config_store=config_store, mcp_service=mcp_service)
     version_service = VersionService()
     http_forwarder_service = HttpForwarderService()
-    agent_service = AgentService(config_store=config_store, mcp_service=mcp_service)
+    agent_service = AgentService(config_store=config_store)
     auth_service = AuthService(config_store=config_store)
     billing_service = BillingService(config_store=config_store)
 

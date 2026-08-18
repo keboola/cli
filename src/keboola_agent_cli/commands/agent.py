@@ -23,24 +23,23 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, ErrorCode
-from ..mcp_parity import (
-    MCP_REMOVAL_TARGET_DATE,
-    MCP_REMOVAL_VERSION,
-    MCP_TOOL_ACTION_DEPRECATION,
-    annotate_mcp_tool_deprecation,
-)
 from ..output import OutputFormatter, write_machine_output
-from ..server.agents_store import AgentAction, Trigger
+from ..server.agents_store import (
+    REMOVED_ACTION_MESSAGE,
+    REMOVED_ACTION_TYPES,
+    AgentAction,
+    Trigger,
+    annotate_removed_action,
+)
 from ..services.agent_service import AgentService
 from ._helpers import check_cli_permission, get_formatter, get_service
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 
-# The mcp_tool action flavour rides the deprecated MCP passthrough (epic
-# #390 phase 2). Tasks keep running -- this only surfaces the deprecation:
-# stderr warning in human mode, additive "deprecation" envelope key in
-# JSON mode. Creation is never blocked; agents.json / REST payloads are
-# unchanged.
+# The mcp_tool action flavour was REMOVED in v0.85.0 (epic #390 phase 3).
+# Creating one is refused here (exit 2) and a persisted one no longer runs;
+# the literal survives in agents.json only so an existing task is not
+# silently deleted on the next unrelated write. See REMOVED_ACTION_TYPES.
 
 
 @agent_app.callback(invoke_without_command=True)
@@ -95,10 +94,6 @@ def _action_from_flags(
     prompt: str | None,
     extra_arg: list[str],
     argv: list[str],
-    tool: str | None,
-    mcp_project: str | None,
-    mcp_branch: int | None,
-    input_payload: str | None,
     timeout: int | None,
 ) -> AgentAction:
     """Build an AgentAction from CLI flags or ``--from-file PATH|-``.
@@ -106,24 +101,30 @@ def _action_from_flags(
     ``--from-file`` wins outright -- the file is expected to contain the
     full ``{type, params}`` envelope, mirroring the REST POST body. The
     convenience flags are for the common "single ai_agent" / "single
-    cli_command" / "single mcp_tool" cases where typing a JSON file would
-    be overkill.
+    cli_command" cases where typing a JSON file would be overkill.
+
+    Action types listed in ``REMOVED_ACTION_TYPES`` are refused on both
+    paths (exit 2) -- they no longer execute anywhere.
     """
     if from_file is not None:
         raw = _read_payload(from_file, formatter)
         payload = _parse_json(raw, formatter, label="--from-file")
         try:
-            return AgentAction.model_validate(payload)
+            action = AgentAction.model_validate(payload)
         except Exception as exc:
             formatter.error(
                 message=f"Invalid action payload: {exc}",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
+        if action.type in REMOVED_ACTION_TYPES:
+            formatter.error(message=REMOVED_ACTION_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT)
+            raise typer.Exit(code=2) from None
+        return action
 
     if action_type is None:
         formatter.error(
-            message="--type is required (one of: ai_agent, cli_command, mcp_tool) "
+            message="--type is required (one of: ai_agent, cli_command) "
             "or pass --from-file PATH|- with a full {type, params} JSON.",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
@@ -156,25 +157,12 @@ def _action_from_flags(
             params["timeout"] = timeout
         return AgentAction(type="cli_command", params=params)
 
-    if action_type == "mcp_tool":
-        if not tool:
-            formatter.error(
-                message="mcp_tool action requires --tool NAME.",
-                error_code=ErrorCode.MISSING_PARAMETER,
-            )
-            raise typer.Exit(code=2) from None
-        params: dict[str, Any] = {"tool": tool}
-        if mcp_project:
-            params["project"] = mcp_project
-        if mcp_branch is not None:
-            params["branch_id"] = mcp_branch
-        if input_payload:
-            raw = _read_payload(input_payload, formatter)
-            params["input"] = _parse_json(raw, formatter, label="--input")
-        return AgentAction(type="mcp_tool", params=params)
+    if action_type in REMOVED_ACTION_TYPES:
+        formatter.error(message=REMOVED_ACTION_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
 
     formatter.error(
-        message=f"Unknown --type {action_type!r}; expected ai_agent|cli_command|mcp_tool.",
+        message=f"Unknown --type {action_type!r}; expected ai_agent|cli_command.",
         error_code=ErrorCode.INVALID_ARGUMENT,
     )
     raise typer.Exit(code=2) from None
@@ -271,15 +259,13 @@ def _render_tasks_table(console: Any, data: dict[str, Any]) -> None:
     # enough that Rich truncated the tag to "DEPRECA…", which is worse than not
     # flagging it at all. Below the table there is room to name the affected
     # tasks AND what to do about them.
-    deprecated = [t for t in tasks if (t.get("action") or {}).get("type") == "mcp_tool"]
+    deprecated = [t for t in tasks if (t.get("action") or {}).get("type") in REMOVED_ACTION_TYPES]
     if deprecated:
         ids = ", ".join(str(t.get("id", "?")) for t in deprecated)
         console.print(
-            f"[yellow]{len(deprecated)} task(s) use the deprecated 'mcp_tool' action "
-            f"({ids}) -- REMOVED in kbagent v{MCP_REMOVAL_VERSION} "
-            f"({MCP_REMOVAL_TARGET_DATE}).[/yellow] They run unattended, so they get no "
-            f"warning at removal. Run [cyan]kbagent doctor[/cyan] for the native "
-            f"replacement of each."
+            f"[yellow]{len(deprecated)} task(s) use the REMOVED 'mcp_tool' action and no "
+            f"longer run -- see docs/mcp-migration.md[/yellow] ({ids}). Recreate each with "
+            f"[cyan]kbagent agent create --type cli_command[/cyan]."
         )
 
 
@@ -522,7 +508,7 @@ def agent_list(ctx: typer.Context) -> None:
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    payload = {"tasks": [annotate_mcp_tool_deprecation(t.model_dump(mode="json")) for t in tasks]}
+    payload = {"tasks": [annotate_removed_action(t.model_dump(mode="json")) for t in tasks]}
     formatter.output(payload, _render_tasks_table)
 
 
@@ -561,7 +547,7 @@ def agent_create(
     action_type: str | None = typer.Option(
         None,
         "--type",
-        help="Action type when not using --from-file: ai_agent|cli_command|mcp_tool",
+        help="Action type when not using --from-file: ai_agent|cli_command",
     ),
     from_file: str | None = typer.Option(
         None,
@@ -580,18 +566,6 @@ def agent_create(
         "--argv",
         help="cli_command: argv element (repeatable). 'kbagent' prefix is auto-added.",
     ),
-    tool: str | None = typer.Option(None, "--tool", help="mcp_tool: tool name (e.g. get_jobs)"),
-    mcp_project: str | None = typer.Option(
-        None, "--mcp-project", help="mcp_tool: project alias to dispatch into."
-    ),
-    mcp_branch: int | None = typer.Option(
-        None, "--mcp-branch", help="mcp_tool: branch ID (optional)."
-    ),
-    input_payload: str | None = typer.Option(
-        None,
-        "--input",
-        help="mcp_tool: JSON input. Inline, @path, or -.",
-    ),
     timeout: int | None = typer.Option(None, "--timeout", help="Action timeout in seconds."),
     trigger_task_id: str | None = typer.Option(
         None, "--trigger-task-id", help="Chain: ID of downstream task to fire after this one."
@@ -607,7 +581,7 @@ def agent_create(
     Two ways to specify the action:
     1. ``--from-file PATH|-`` with the full {type, params} JSON envelope.
     2. ``--type TYPE`` plus the type-specific flags (ai_agent: --cli/--prompt,
-       cli_command: --argv ..., mcp_tool: --tool/--input/--mcp-project).
+       cli_command: --argv ...).
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
@@ -619,14 +593,8 @@ def agent_create(
         prompt=prompt,
         extra_arg=list(extra_arg),
         argv=list(argv),
-        tool=tool,
-        mcp_project=mcp_project,
-        mcp_branch=mcp_branch,
-        input_payload=input_payload,
         timeout=timeout,
     )
-    if action.type == "mcp_tool":
-        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
     trigger = _trigger_from_flags(trigger_task_id, trigger_on)
     try:
         task = service.create_task(
@@ -642,8 +610,6 @@ def agent_create(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     payload = task.model_dump(mode="json")
-    if action.type == "mcp_tool" and formatter.json_mode:
-        payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
     formatter.output(payload, _render_created_task)
 
 
@@ -695,13 +661,13 @@ def agent_update(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     # `update` cannot change the action, so warn based on the task's
-    # persisted flavour: touching an mcp_tool task keeps it on the
-    # deprecated MCP passthrough (epic #390).
+    # persisted flavour: an mcp_tool task stays inert no matter what
+    # else is patched on it (epic #390 phase 3).
     payload = task.model_dump(mode="json")
-    if task.action.type == "mcp_tool":
-        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
+    if task.action.type in REMOVED_ACTION_TYPES:
+        formatter.warning(REMOVED_ACTION_MESSAGE)
         if formatter.json_mode:
-            payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
+            payload["deprecation"] = REMOVED_ACTION_MESSAGE
     formatter.output(payload, _render_updated_task)
 
 
@@ -889,16 +855,12 @@ def agent_test(
     stream: bool = typer.Option(
         False, "--stream", help="Stream events live instead of returning the final run record."
     ),
-    action_type: str | None = typer.Option(None, "--type", help="ai_agent|cli_command|mcp_tool"),
+    action_type: str | None = typer.Option(None, "--type", help="ai_agent|cli_command"),
     from_file: str | None = typer.Option(None, "--from-file", help="Action JSON (or @path / -)."),
     cli: str | None = typer.Option(None, "--cli"),
     prompt: str | None = typer.Option(None, "--prompt"),
     extra_arg: list[str] = typer.Option([], "--extra-arg"),
     argv: list[str] = typer.Option([], "--argv"),
-    tool: str | None = typer.Option(None, "--tool"),
-    mcp_project: str | None = typer.Option(None, "--mcp-project"),
-    mcp_branch: int | None = typer.Option(None, "--mcp-branch"),
-    input_payload: str | None = typer.Option(None, "--input"),
     timeout: int | None = typer.Option(None, "--timeout"),
 ) -> None:
     """Execute an action ad-hoc (no persistence, no scheduling).
@@ -916,14 +878,8 @@ def agent_test(
         prompt=prompt,
         extra_arg=list(extra_arg),
         argv=list(argv),
-        tool=tool,
-        mcp_project=mcp_project,
-        mcp_branch=mcp_branch,
-        input_payload=input_payload,
         timeout=timeout,
     )
-    if action.type == "mcp_tool":
-        formatter.warning(MCP_TOOL_ACTION_DEPRECATION)
     if stream:
         # NDJSON event lines mirror the SSE surface byte-for-byte; the
         # deprecation is not injected into stream events on purpose.
@@ -931,8 +887,6 @@ def agent_test(
         return
     run = asyncio.run(service.test_action(action, name=name))
     payload = run.model_dump(mode="json")
-    if action.type == "mcp_tool" and formatter.json_mode:
-        payload["deprecation"] = MCP_TOOL_ACTION_DEPRECATION
     formatter.output(payload, _render_test_result)
 
 

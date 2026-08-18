@@ -19,14 +19,37 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# "mcp_tool" is a tombstone -- see REMOVED_ACTION_TYPES
 ActionType = Literal["mcp_tool", "cli_command", "ai_agent"]
+
+#: Action types removed in 0.85.0. Kept in ``ActionType`` on purpose: load_tasks()
+#: skips entries that fail validation and save_tasks() rewrites the file from the
+#: loaded list, so dropping the literal would silently delete the user's task from
+#: disk on the next unrelated write. Round-trip must survive; execution must not.
+REMOVED_ACTION_TYPES: frozenset[str] = frozenset({"mcp_tool"})
+REMOVED_IN_VERSION: str = "0.85.0"
+REMOVED_ACTION_MESSAGE = (
+    f"agent action type 'mcp_tool' was REMOVED in kbagent v{REMOVED_IN_VERSION} "
+    "(epic #390). This task no longer runs. Recreate it with --type cli_command "
+    "using the native kbagent command -- see docs/mcp-migration.md for the "
+    "tool->command map."
+)
+
+
+def annotate_removed_action(task: dict) -> dict:
+    """Add an additive ``deprecation`` key to a task using a removed action type.
+
+    Additive and only on affected tasks, so every existing consumer sees a
+    byte-identical payload. Mutates and returns the same dict.
+    """
+    if (task.get("action") or {}).get("type") in REMOVED_ACTION_TYPES:
+        task["deprecation"] = REMOVED_ACTION_MESSAGE
+    return task
 
 
 class AgentAction(BaseModel):
     """What the task does when triggered.
 
-    - ``mcp_tool``:    call a keboola-mcp-server tool
-        params: { tool: "get_jobs", project: "padak", input: {...} }
     - ``cli_command``: spawn ``kbagent <argv>`` and capture stdout
         params: { argv: ["job", "list", "--project", "padak", "--status", "error"], timeout: 300 }
     - ``ai_agent``:    spawn an AI CLI (claude/codex/gemini) with a prompt
@@ -87,8 +110,8 @@ class AgentRun(BaseModel):
 
     - ``summary``: aggregated metrics produced by ``pricing.build_run_summary``
       (model, token totals, cost breakdown, per-tool call counts). Always
-      present for ai_agent runs after v0.10.x; ``None`` for cli_command /
-      mcp_tool runs (no per-step structure to summarize).
+      present for ai_agent runs after v0.10.x; ``None`` for cli_command
+      runs (no per-step structure to summarize).
     - ``events_path``: relative path under the store's run directory pointing
       at ``<task_id>/<run_id>.jsonl`` -- the full event timeline as it was
       streamed live. Lets the detail drawer "replay" a finished run with the
@@ -299,8 +322,6 @@ def merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) -
       operator's static instructions and the runtime ask.
     - ``cli_command``: ``runtime_input.argv`` (list of strings) is appended
       to the persisted argv list.
-    - ``mcp_tool``: ``runtime_input`` (dict) is shallow-merged into the
-      persisted MCP tool input, with runtime keys winning on conflict.
     """
     if not runtime_input:
         return task
@@ -317,9 +338,5 @@ def merge_runtime_input(task: AgentTask, runtime_input: dict[str, Any] | None) -
         if isinstance(extra_argv, list) and extra_argv:
             base_argv = list(merged_params.get("argv") or [])
             merged_params["argv"] = [*base_argv, *(str(a) for a in extra_argv)]
-    elif task.action.type == "mcp_tool":
-        base_input = dict(merged_params.get("input") or {})
-        base_input.update(runtime_input)
-        merged_params["input"] = base_input
     merged_action = AgentAction(type=task.action.type, params=merged_params)
     return task.model_copy(update={"action": merged_action})

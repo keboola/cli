@@ -112,16 +112,18 @@ class _ActiveRun:
         try:
             if self.task.action.type != "ai_agent":
                 # Only ai_agent has structured streaming today. For
-                # cli_command / mcp_tool we fall back to a single
-                # "done" event so the UI gets one consolidated payload.
-                # (Splitting these into a streaming generator is a
-                # follow-up; their output is one-shot text/JSON anyway.)
-                from .agent_runner import _run_cli, _run_mcp_tool
+                # cli_command we fall back to a single "done" event so the
+                # UI gets one consolidated payload. (Splitting it into a
+                # streaming generator is a follow-up; its output is
+                # one-shot text/JSON anyway.) Removed action types
+                # (v0.85.0 tombstones) raise instead -- the except below
+                # persists the refusal as an errored run.
+                from .agent_runner import _run_cli
+                from .agents_store import REMOVED_ACTION_MESSAGE, REMOVED_ACTION_TYPES
 
-                if self.task.action.type == "cli_command":
-                    output = await _run_cli(self.registry, self.task.action.params)
-                else:
-                    output = await _run_mcp_tool(self.registry, self.task.action.params)
+                if self.task.action.type in REMOVED_ACTION_TYPES:
+                    raise ValueError(REMOVED_ACTION_MESSAGE)
+                output = await _run_cli(self.registry, self.task.action.params)
                 await self._publish(
                     {
                         "event": "done",

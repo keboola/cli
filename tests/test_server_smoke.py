@@ -446,3 +446,14 @@ def test_sentinel_unsupported_path_keeps_its_error_code(tmp_path: Path) -> None:
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
     assert "static Storage token" in res.json()["error"]["message"]
+
+
+def test_post_agents_rejects_mcp_tool(client: TestClient) -> None:
+    """The mcp_tool action type was removed in v0.85.0 -- POST /agents refuses it."""
+    resp = client.post(
+        "/agents",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text

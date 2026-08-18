@@ -14,9 +14,8 @@ CLI commands?
    merging, next-run computation) so commands stay thin.
 2. Build a *minimal* runtime registry on demand for ``run_task`` /
    ``stream_run`` -- ``run_task_once`` and ``stream_ai_agent_events`` only
-   need ``config_store`` (for env propagation) and ``mcp`` (for mcp_tool
-   actions). The full FastAPI ``ServiceRegistry`` (with all 25+ services)
-   is overkill for the CLI path.
+   need ``config_store`` (for env propagation). The full FastAPI
+   ``ServiceRegistry`` (with all 25+ services) is overkill for the CLI path.
 3. Translate :class:`ValueError` from the boundary helpers into
    :class:`ConfigError` so the CLI exit-code mapper handles them uniformly.
 """
@@ -50,7 +49,6 @@ from ..server.agents_store import (
     merge_runtime_input,
     validate_trigger,
 )
-from .mcp_service import McpService
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +58,8 @@ class CliAgentRegistry:
     """Minimal registry passed to ``run_task_once`` / ``stream_ai_agent_events``.
 
     The runner duck-types its ``registry`` argument: it only reads
-    ``config_store`` (for ``_build_subprocess_env``), ``mcp`` (for
-    ``mcp_tool`` action dispatch), and the optional ``serve_url`` /
-    ``serve_token`` (None means "no live serve to call back into"; the
+    ``config_store`` (for ``_build_subprocess_env``) and the optional
+    ``serve_url`` / ``serve_token`` (None means "no live serve to call back into"; the
     spawned subprocess just falls through to local CLI mode).
 
     Mirrors the shape of :class:`~keboola_agent_cli.server.dependencies.ServiceRegistry`
@@ -72,7 +69,6 @@ class CliAgentRegistry:
     """
 
     config_store: ConfigStore
-    mcp: McpService
     serve_url: str | None = None
     serve_token: str | None = None
 
@@ -112,9 +108,8 @@ class AgentService:
     create + ``serve`` boot picks up the new task on the next tick.
     """
 
-    def __init__(self, config_store: ConfigStore, mcp_service: McpService) -> None:
+    def __init__(self, config_store: ConfigStore) -> None:
         self._config_store = config_store
-        self._mcp_service = mcp_service
         # Resolve the actual config directory (not the value passed by tests)
         # so CLI + serve always agree on the agents.json location.
         config_dir = config_store.config_path.parent
@@ -306,7 +301,7 @@ class AgentService:
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a preview run -- mirrors POST /agents/test/stream.
 
-        Non-streaming action types (cli_command, mcp_tool) emit a single
+        The non-streaming action type (cli_command) emits a single
         ``done`` event with the run dict, matching the server's behavior.
         """
         yield {
@@ -455,4 +450,4 @@ class AgentService:
         subprocesses. Children fall back to local CLI mode against
         ``KBAGENT_CONFIG_DIR``.
         """
-        return CliAgentRegistry(config_store=self._config_store, mcp=self._mcp_service)
+        return CliAgentRegistry(config_store=self._config_store)

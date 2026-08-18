@@ -21,11 +21,7 @@ from .. import __version__
 from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
-from ..mcp_parity import (
-    MCP_REMOVAL_TARGET_DATE,
-    MCP_REMOVAL_VERSION,
-    native_equivalent,
-)
+from ..mcp_parity import native_equivalent
 from ..models import AppConfig
 from .base import ClientFactory, make_client_factory
 from .mcp_service import McpService, ensure_mcp_installed
@@ -180,24 +176,24 @@ class DoctorService:
         }
 
     def _check_mcp_tool_tasks(self) -> dict[str, Any]:
-        """Check 9: flag scheduled tasks that use the MCP passthrough (epic #390).
+        """Check 9: flag scheduled tasks that still use the REMOVED MCP passthrough.
 
-        ``agent --type mcp_tool`` is removed in the version named by
-        :data:`MCP_REMOVAL_VERSION`. Unlike an interactive ``tool call`` -- which
-        warns on every invocation right up to removal -- these tasks live in
-        ``agents.json`` and then run unattended, so nobody is present to be
-        warned when they break: a cron task simply starts failing. This check is
+        ``agent --type mcp_tool`` was removed in the version named by
+        :data:`REMOVED_IN_VERSION` (epic #390 phase 3). Such a task still
+        round-trips through ``agents.json`` -- so it is not silently deleted --
+        but it no longer runs: every firing is persisted as an errored run.
+        Because it runs unattended, nobody is present to see that; this check is
         the standing reminder in the one command people run when something feels
         off. Read-only: filesystem only, no API call, no MCP spawn.
         """
         # Local import: keeps the server package off the doctor cold-start path.
-        from ..server.agents_store import AgentStore
+        from ..server.agents_store import REMOVED_IN_VERSION, AgentStore
 
         agents_path = self._config_store.config_dir / AGENTS_FILENAME
         if not agents_path.exists():
             return {
                 "check": "mcp_tool_tasks",
-                "name": "Deprecated mcp_tool agent tasks",
+                "name": "Removed mcp_tool agent tasks",
                 "status": "skip",
                 "message": f"No {AGENTS_FILENAME} in the config dir -- no agent tasks registered.",
             }
@@ -214,22 +210,22 @@ class DoctorService:
         except (OSError, json.JSONDecodeError) as exc:
             return {
                 "check": "mcp_tool_tasks",
-                "name": "Deprecated mcp_tool agent tasks",
+                "name": "Removed mcp_tool agent tasks",
                 "status": "warn",
                 "message": (
                     f"Could not read {AGENTS_FILENAME} ({exc}), so tasks using the "
-                    f"deprecated 'mcp_tool' action could not be checked. Fix the file to "
-                    f"find out whether any need migrating before v{MCP_REMOVAL_VERSION}."
+                    f"removed 'mcp_tool' action could not be checked. Fix the file to "
+                    f"find out whether any need migrating."
                 ),
             }
         if not isinstance(raw, list):
             return {
                 "check": "mcp_tool_tasks",
-                "name": "Deprecated mcp_tool agent tasks",
+                "name": "Removed mcp_tool agent tasks",
                 "status": "warn",
                 "message": (
                     f"{AGENTS_FILENAME} is not a JSON list, so it holds no usable tasks and "
-                    f"none could be checked for the deprecated 'mcp_tool' action."
+                    f"none could be checked for the removed 'mcp_tool' action."
                 ),
             }
 
@@ -241,20 +237,20 @@ class DoctorService:
             if unreadable > 0:
                 return {
                     "check": "mcp_tool_tasks",
-                    "name": "Deprecated mcp_tool agent tasks",
+                    "name": "Removed mcp_tool agent tasks",
                     "status": "warn",
                     "message": (
                         f"{unreadable} of {len(raw)} entries in {AGENTS_FILENAME} could not be "
                         f"parsed and were skipped, so they could not be checked for the "
-                        f"deprecated 'mcp_tool' action. The {len(tasks)} readable task(s) are "
+                        f"removed 'mcp_tool' action. The {len(tasks)} readable task(s) are "
                         f"clean."
                     ),
                 }
             return {
                 "check": "mcp_tool_tasks",
-                "name": "Deprecated mcp_tool agent tasks",
+                "name": "Removed mcp_tool agent tasks",
                 "status": "pass",
-                "message": f"No tasks use the deprecated 'mcp_tool' action ({len(tasks)} checked).",
+                "message": f"No tasks use the removed 'mcp_tool' action ({len(tasks)} checked).",
             }
 
         shown = ", ".join(
@@ -267,17 +263,15 @@ class DoctorService:
         )
         return {
             "check": "mcp_tool_tasks",
-            "name": "Deprecated mcp_tool agent tasks",
-            "status": "warn",
+            "name": "Removed mcp_tool agent tasks",
+            "status": "fail",
             "message": (
-                f"{len(affected)} scheduled task(s) use the deprecated 'mcp_tool' action, "
-                f"REMOVED in kbagent v{MCP_REMOVAL_VERSION} ({MCP_REMOVAL_TARGET_DATE}): "
-                f"{shown}{more}. They run unattended, so they get NO warning at removal -- "
-                f"they just start failing. Migrate each to --type cli_command; "
-                f"`kbagent tool list` prints the native command per tool."
+                f"{len(affected)} scheduled task(s) use the REMOVED 'mcp_tool' action "
+                f"(removed in v{REMOVED_IN_VERSION}) and NO LONGER RUN: {shown}{more}. "
+                f"Recreate each with --type cli_command -- see docs/mcp-migration.md."
             ),
             "details": {
-                "removal_version": MCP_REMOVAL_VERSION,
+                "removed_in": REMOVED_IN_VERSION,
                 "tasks": [
                     {
                         "id": t.id,

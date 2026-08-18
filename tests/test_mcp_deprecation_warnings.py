@@ -1,8 +1,9 @@
 """Deprecation warnings for the MCP passthrough (epic #390 phase 2).
 
-The whole ``tool`` group and the ``agent --type mcp_tool`` action flavour
-are deprecated in favor of native commands (``mcp_parity.MCP_TOOL_PARITY``).
-These tests pin the surfacing contract:
+The whole ``tool`` group is deprecated in favor of native commands
+(``mcp_parity.MCP_TOOL_PARITY``). The ``agent --type mcp_tool`` action
+flavour is gone entirely -- its tombstone contract lives in
+``test_agent_tombstone.py``. These tests pin the surfacing contract:
 
 - human mode: yellow warning on STDERR only -- stdout stays byte-clean,
 - JSON mode: additive ``deprecation`` key inside the success envelope's
@@ -217,201 +218,11 @@ class TestToolListDeprecation:
         assert "see the cli_equivalent column" in stdout
 
 
-class TestAgentMcpToolDeprecation:
-    """`agent create/update` with an mcp_tool action warns without blocking."""
-
-    def test_create_mcp_tool_human_warns_on_stderr(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            [
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-mcp",
-                "--type",
-                "mcp_tool",
-                "--tool",
-                "get_buckets",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        stderr = _flat(result.stderr)
-        assert "Warning:" in stderr
-        assert "agent action type 'mcp_tool' is deprecated (epic #390)" in stderr
-        assert "--type cli_command" in stderr
-        # creation is NOT blocked
-        assert "Created" in result.stdout
-
-    def test_create_mcp_tool_json_gains_deprecation_key(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-mcp",
-                "--type",
-                "mcp_tool",
-                "--tool",
-                "get_buckets",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.stdout)
-        assert payload["status"] == "ok"
-        task = payload["data"]
-        assert task["action"]["type"] == "mcp_tool"
-        assert "mcp_tool' is deprecated" in task["deprecation"]
-        assert "deprecated" not in result.stderr
-
-        # agents.json schema is unchanged: re-reading the task shows no
-        # deprecation field was persisted
-        shown = runner.invoke(
-            app,
-            ["--json", "--config-dir", str(tmp_path), "agent", "show", task["id"]],
-        )
-        assert shown.exit_code == 0, shown.output
-        assert "deprecation" not in json.loads(shown.stdout)["data"]
-
-    def test_create_cli_command_has_no_warning(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-cli",
-                "--type",
-                "cli_command",
-                "--argv",
-                "version",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.stdout)
-        assert "deprecation" not in payload["data"]
-        assert "deprecated" not in result.stderr
-
-        human = runner.invoke(
-            app,
-            [
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-cli-2",
-                "--type",
-                "cli_command",
-                "--argv",
-                "version",
-            ],
-        )
-        assert human.exit_code == 0, human.output
-        assert "deprecated" not in human.stderr
-
-    def test_update_mcp_tool_task_warns(self, tmp_path: Path) -> None:
-        created = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-upd",
-                "--type",
-                "mcp_tool",
-                "--tool",
-                "get_buckets",
-            ],
-        )
-        task_id = json.loads(created.stdout)["data"]["id"]
-
-        updated = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "update",
-                task_id,
-                "--name",
-                "T-upd-renamed",
-            ],
-        )
-        assert updated.exit_code == 0, updated.output
-        payload = json.loads(updated.stdout)
-        assert "mcp_tool' is deprecated" in payload["data"]["deprecation"]
-
-        human = runner.invoke(
-            app,
-            [
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "update",
-                task_id,
-                "--name",
-                "T-upd-again",
-            ],
-        )
-        assert human.exit_code == 0, human.output
-        assert "mcp_tool' is deprecated" in _flat(human.stderr)
-
-    def test_update_cli_command_task_has_no_warning(self, tmp_path: Path) -> None:
-        created = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "create",
-                "--name",
-                "T-plain",
-                "--type",
-                "cli_command",
-                "--argv",
-                "version",
-            ],
-        )
-        task_id = json.loads(created.stdout)["data"]["id"]
-
-        updated = runner.invoke(
-            app,
-            [
-                "--json",
-                "--config-dir",
-                str(tmp_path),
-                "agent",
-                "update",
-                task_id,
-                "--name",
-                "T-plain-renamed",
-            ],
-        )
-        assert updated.exit_code == 0, updated.output
-        assert "deprecation" not in json.loads(updated.stdout)["data"]
-
-
 class TestRemovalTargetIsNamedEverywhere:
     """Every deprecation surface must quote the same removal version and date.
 
     Until 0.80.0 the notices said only "a future release". A deprecation
-    without a date is not a window -- users have nothing to plan against, and
-    `agent --type mcp_tool` tasks are persisted in agents.json, so their owner
-    is only present to hear the deadline at creation time.
+    without a date is not a window -- users have nothing to plan against.
     """
 
     def test_constants_agree_with_the_announced_target(self) -> None:
@@ -424,7 +235,6 @@ class TestRemovalTargetIsNamedEverywhere:
         assert MCP_REMOVAL_TARGET_DATE == "end of August 2026"
 
     def test_every_warning_names_the_version(self) -> None:
-        from keboola_agent_cli.commands.agent import MCP_TOOL_ACTION_DEPRECATION
         from keboola_agent_cli.commands.tool import TOOL_LIST_DEPRECATION
         from keboola_agent_cli.mcp_parity import (
             MCP_REMOVAL_VERSION,
@@ -434,7 +244,6 @@ class TestRemovalTargetIsNamedEverywhere:
 
         surfaces = {
             "tool list banner": TOOL_LIST_DEPRECATION,
-            "agent mcp_tool warning": MCP_TOOL_ACTION_DEPRECATION,
             "tool call (mapped)": deprecation_message(sorted(MCP_TOOL_PARITY)[0]),
             "tool call (unmapped)": deprecation_message("no_such_upstream_tool"),
         }
