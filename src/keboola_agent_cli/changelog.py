@@ -24,6 +24,27 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.84.3": [
+        "Fix: a Storage job that failed instantly no longer reports success. "
+        "`_wait_for_storage_job`, the poller every async Storage operation waits on, checked "
+        "for a terminal state in two places -- once on the response body the caller hands in, "
+        "once on each polled body -- and the two had drifted: the polled check raised "
+        "`STORAGE_JOB_FAILED` on `status: error`, the initial check handed the job straight "
+        "back. So whenever the Storage API failed FAST (answering with an already-terminal "
+        "error instead of a queued `waiting` job) the failure was swallowed. All 19 call "
+        "sites in `client/` either return that job or its `results` -- and an error job "
+        "carries no `results` -- so a failed table import, dev-branch create/delete, "
+        "snapshot, bucket share or table export came back as an empty success: exit 0, no "
+        "error, nothing done. Only jobs that failed after at least one poll ever raised. "
+        "The poller now evaluates the terminal state ONCE, at the top of the loop, so the "
+        "caller's body and every polled body travel identical code and the two checks cannot "
+        "drift apart again. Wait budgets, poll cadence, overshoot, error messages and exit "
+        "codes are unchanged -- the only behaviour that moves is that a fast failure now "
+        "raises instead of returning. Scripts that treated an empty result as success will "
+        "now see the error they should always have seen. Also adds the poller's first tests "
+        "(`TestWaitForStorageJob`): it had none of its own, and neither the fast-fail path "
+        "nor the timeout path was covered anywhere.",
+    ],
     "0.84.2": [
         "New: `kbagent config clone` duplicates a configuration WHOLE (closes #587). "
         "`--project P --component-id C --config-id ID --name N [--target-project P2] "

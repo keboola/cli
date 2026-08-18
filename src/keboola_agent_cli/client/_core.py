@@ -201,8 +201,17 @@ class _CoreClient(BaseHttpClient):
         before the loop plus a second check inside it) and they drifted, so an
         already-terminal ERROR initial body was returned as-is instead of
         raising. Every call site either returns the job or its ``results``, so
-        that surfaced as a silent empty success. Same shape as the sibling
-        pollers ``wait_for_queue_job`` / ``wait_for_query_job``.
+        that surfaced as a silent empty success.
+
+        The check-then-fetch *shape* matches the sibling pollers
+        ``wait_for_queue_job`` / ``wait_for_query_job``; the behaviour does not,
+        and deliberately so -- this is not a parity claim. Two differences worth
+        knowing: this poller recognises only ``success`` and ``error``, so any
+        other terminal status the Storage API might report would exhaust the
+        whole budget and surface as ``STORAGE_JOB_TIMEOUT`` (the queue poller
+        keys off ``isFinished`` and ends on any terminal state), and the sleep
+        here is not capped to the remaining budget, so a wait overshoots its
+        deadline by up to one poll interval. Both predate this restructure.
 
         Args:
             job: Initial job response from the request that enqueued the job

@@ -3633,6 +3633,42 @@ Four things a coding agent will otherwise get wrong:
   does not accept a Storage API token -- it is the still-open primary ask of
   issue #594. Do not imply this command covers billing/invoice history; tell
   the user it is out of reach from the CLI today.
+## A Storage job that failed instantly used to report success (since v0.84.3)
+
+Every async Storage operation -- table import/export, `create-table`,
+`delete-table`, `truncate-table`, snapshot create/restore, dev-branch
+create/delete, bucket share, workspace table load -- enqueues a Storage job and
+waits on the same shared poller. Before v0.84.3 that poller checked for a
+terminal state in **two** places, and they had drifted: the check on each
+*polled* body raised `STORAGE_JOB_FAILED` on `status: error`, but the check on
+the *initial* response body (the one the enqueuing POST/PUT/DELETE returns)
+handed the job straight back to the caller.
+
+So when the Storage API failed **fast** -- answering with an already-terminal
+error instead of a queued `waiting` job -- the failure was swallowed. Every call
+site returns either that job or `job.get("results", {})`, and an error job
+carries no `results`, so the operation came back as an **empty success**: exit
+code 0, no error output, nothing actually done. Jobs that failed after at least
+one poll always raised correctly, which is why this never showed up in normal
+use -- only fast failures were affected.
+
+- **Since v0.84.3** the terminal state is evaluated once, at the top of the poll
+  loop, so the initial body and every polled body travel identical code. A fast
+  failure now raises `STORAGE_JOB_FAILED` like any other failed job.
+- **If you have a script that treated an empty result as success**, it will now
+  see the error it should always have seen. That is the intended change; check
+  for `if not result:` style guards written against the old behaviour.
+- **Nothing else moved**: wait budgets (`STORAGE_JOB_MAX_WAIT` 60 s,
+  `IMPORT_JOB_MAX_WAIT` / `EXPORT_JOB_MAX_WAIT` 600 s), poll cadence, the
+  up-to-one-interval deadline overshoot, error messages and exit codes are
+  byte-identical.
+- **Known narrowness, unchanged by the fix**: the poller recognises only
+  `success` and `error`. Any other terminal status the Storage API might report
+  would exhaust the whole budget and surface as `STORAGE_JOB_TIMEOUT`
+  (`retryable: true`) rather than a failure -- so a wait that times out suspiciously
+  fast against a small budget is worth reading as "unknown status", not "still
+  running".
+
 ## `config update --set 'state...'` is now a hard error, not a silent no-op (since v0.84.2)
 
 Before v0.84.2, `--set` on `config update` / `config row-update` applied every
