@@ -117,12 +117,15 @@ function ChainBadge({ trigger, tasks }: { trigger: Trigger; tasks: AgentTask[] }
 /**
  * Tombstone marker for a task whose action flavour no longer exists. The
  * task is inert -- it stays listed so the operator can find and delete it,
- * but it can never run again. Mirrors ChainBadge's nerd-pill styling.
+ * but it can never run again. Uses the canonical ``.nerd-pill-red`` class
+ * (index.css) -- the same one the run-status pill uses for "error" -- so the
+ * badge keeps the codebase's light-mode contrast, not just the dark palette.
+ * The ``!text-[10px]`` override matches ChainBadge's compact in-row sizing.
  */
 function RemovedBadge({ deprecation }: { deprecation: string }) {
   return (
     <span
-      className="nerd-pill !text-[10px] border-red-500/50 text-red-400"
+      className="nerd-pill-red !text-[10px]"
       title={deprecation}
     >
       removed - no longer runs
