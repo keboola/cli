@@ -12675,7 +12675,7 @@ class TestE2EDeviceEnrollmentPrimitives:
 
     # ------------------------------------------------------------------
     def test_scoped_token_mint_rotate_revoke(self) -> None:
-        """`token create` (scoped, expiring) -> `token refresh` -> `token delete`.
+        """`token create` (scoped, expiring) -> `token list` -> `token refresh` -> `token delete`.
 
         Never prints the secret; deletes the token the moment its shape is
         verified so no live credential outlives the test.
@@ -12725,13 +12725,26 @@ class TestE2EDeviceEnrollmentPrimitives:
         assert bool(data.get("token")), "minted token must reveal a non-empty secret once"
         assert data.get("alias") == self.alias
 
-        _step(2, "token refresh", "rotate the secret; id is stable, old value dies")
+        _step(2, "token list", "the minted token is visible, and no row carries a secret")
+        listed = self._run_ok("token", "list", "--project", self.alias)["data"]
+        assert listed.get("alias") == self.alias
+        assert listed.get("count") == len(listed.get("tokens") or [])
+        rows = {str(row.get("id")): row for row in listed.get("tokens") or []}
+        assert token_id in rows, "the freshly minted token must appear in the listing"
+        assert rows[token_id].get("description", "").endswith("e2e device-enrollment token")
+        # The whole point of the strip: `create` is the only reveal, so not one
+        # row -- not even another project token's -- may carry a value.
+        assert all("token" not in row for row in rows.values()), (
+            "token list must never carry a secret value"
+        )
+
+        _step(3, "token refresh", "rotate the secret; id is stable, old value dies")
         refreshed = self._run_ok(
             "token", "refresh", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]
         assert bool(refreshed.get("token")), "rotated token must reveal a new non-empty secret"
 
-        _step(3, "token delete", "revoke immediately -- no live credential left behind")
+        _step(4, "token delete", "revoke immediately -- no live credential left behind")
         deleted = self._run_ok(
             "token", "delete", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]

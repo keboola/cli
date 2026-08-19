@@ -22,6 +22,7 @@ from .constants import (
     MAX_API_ERROR_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
+    RETRY_SAFE_METHODS,
     RETRYABLE_STATUS_CODES,
 )
 from .errors import ErrorCode, KeboolaApiError, mask_token
@@ -151,6 +152,13 @@ class BaseHttpClient:
         Retries on status codes 429, 500, 502, 503, 504 up to MAX_RETRIES times
         with exponential backoff (1s, 2s, 4s).
 
+        A 5xx (and a read/write timeout) is only repeated on an idempotent
+        method -- see ``RETRY_SAFE_METHODS``. Repeating a failed POST/PATCH can
+        duplicate server-side state the caller never gets to see, so those fail
+        on the first attempt with a message saying so (issue #599). A 429 and a
+        refused connection are repeated on every method: in both cases the
+        server provably did not process the request.
+
         Args:
             method: HTTP method (GET, POST, etc.).
             path: URL path relative to base_url.
@@ -168,6 +176,7 @@ class BaseHttpClient:
         http_client = client or self._client
         url_label = base_url or self._base_url
         last_response: httpx.Response | None = None
+        retry_safe = method.upper() in RETRY_SAFE_METHODS
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -176,7 +185,13 @@ class BaseHttpClient:
                 if response.status_code < 400:
                     return response
 
-                if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
+                # 429 is repeatable on any method; a 5xx only on an idempotent one.
+                may_repeat = retry_safe or response.status_code == 429
+                if (
+                    response.status_code in RETRYABLE_STATUS_CODES
+                    and may_repeat
+                    and attempt < MAX_RETRIES - 1
+                ):
                     if response.status_code == 429:
                         retry_after = response.headers.get("Retry-After")
                         if retry_after:
@@ -201,10 +216,23 @@ class BaseHttpClient:
                     last_response = response
                     continue
 
-                self._raise_api_error(response, url_label)
+                hint = self._server_error_hint(method, response.status_code, attempt + 1)
+                self._raise_api_error(
+                    response,
+                    url_label,
+                    hint=hint,
+                    retryable=may_repeat and response.status_code in RETRYABLE_STATUS_CODES,
+                )
 
             except httpx.TimeoutException as exc:
-                if attempt < MAX_RETRIES - 1:
+                # A connect/pool timeout never delivered the request, so it is
+                # repeatable on any method. A read/write timeout means the
+                # request WAS sent and the outcome is unknown -- only repeat it
+                # when the method is idempotent.
+                timeout_repeatable = retry_safe or isinstance(
+                    exc, httpx.ConnectTimeout | httpx.PoolTimeout
+                )
+                if timeout_repeatable and attempt < MAX_RETRIES - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
@@ -216,11 +244,15 @@ class BaseHttpClient:
                     )
                     time.sleep(delay)
                     continue
+                unsafe_note = "" if timeout_repeatable else f" {self._non_idempotent_note(method)}"
                 raise KeboolaApiError(
-                    message=f"Request timed out connecting to {url_label} (token: {self._masked_token})",
+                    message=(
+                        f"Request timed out connecting to {url_label} "
+                        f"(token: {self._masked_token}){unsafe_note}"
+                    ),
                     status_code=0,
                     error_code=ErrorCode.TIMEOUT,
-                    retryable=True,
+                    retryable=timeout_repeatable,
                 ) from exc
 
             except httpx.ConnectError as exc:
@@ -244,7 +276,11 @@ class BaseHttpClient:
                 ) from exc
 
         if last_response is not None:
-            self._raise_api_error(last_response, url_label)
+            self._raise_api_error(
+                last_response,
+                url_label,
+                hint=self._server_error_hint(method, last_response.status_code, MAX_RETRIES),
+            )
 
         raise KeboolaApiError(
             message=f"Request failed after {MAX_RETRIES} retries to {url_label} (token: {self._masked_token})",
@@ -253,7 +289,46 @@ class BaseHttpClient:
             retryable=True,
         )
 
-    def _raise_api_error(self, response: httpx.Response, base_url: str | None = None) -> None:
+    @staticmethod
+    def _non_idempotent_note(method: str) -> str:
+        """One sentence naming the partial-effect risk of an unrepeated write."""
+        return (
+            f"{method.upper()} is not idempotent, so this request was not retried -- "
+            "the operation may already have taken effect server-side; verify the resource "
+            "state before trying again."
+        )
+
+    @classmethod
+    def _server_error_hint(cls, method: str, status: int, attempts: int) -> str | None:
+        """Return the actionable next step for a 5xx, or None if there isn't one.
+
+        Two situations need two different answers (issue #599). A 5xx that
+        survived every retry is an upstream incident nobody on this side can
+        fix, and the operator's next step is to escalate with the exceptionId.
+        A 5xx on the single attempt of a non-idempotent write is the opposite:
+        the server may already have done the work, so the next step is to check
+        before repeating. A generic "API error 500" said neither.
+        """
+        if status < 500:
+            return None
+        if attempts > 1:
+            return (
+                f"The same 5xx came back on all {attempts} attempts, which points at an "
+                "upstream Keboola incident rather than a caller mistake -- check "
+                "status.keboola.com and contact Keboola support, quoting the exceptionId above."
+            )
+        if method.upper() not in RETRY_SAFE_METHODS:
+            return cls._non_idempotent_note(method)
+        return None
+
+    def _raise_api_error(
+        self,
+        response: httpx.Response,
+        base_url: str | None = None,
+        *,
+        hint: str | None = None,
+        retryable: bool | None = None,
+    ) -> None:
         """Convert an HTTP error response into a KeboolaApiError.
 
         Parses the response body for error messages, truncates long messages
@@ -263,6 +338,12 @@ class BaseHttpClient:
         Args:
             response: The HTTP error response.
             base_url: Optional URL label for error messages.
+            hint: Optional actionable next step appended to a 5xx message
+                (see :meth:`_server_error_hint`).
+            retryable: Overrides the status-derived ``retryable`` flag. A 500
+                on a POST is in RETRYABLE_STATUS_CODES but must NOT be
+                advertised as retryable -- kbagent deliberately did not repeat
+                it, and neither should the caller without checking first.
 
         Raises:
             KeboolaApiError: Always raised with appropriate error code and message.
@@ -270,8 +351,17 @@ class BaseHttpClient:
         status = response.status_code
         url_label = base_url or self._base_url
 
+        exception_id = ""
         try:
             body = response.json()
+            # Keboola answers a 5xx with a generic `error` ("Application
+            # error.") plus an `exceptionId` -- the ONLY handle Keboola support
+            # can trace the incident by. Dropping it, as this parser used to,
+            # left the operator with nothing to escalate (issue #599).
+            if isinstance(body, dict):
+                raw_exception_id = body.get("exceptionId")
+                if isinstance(raw_exception_id, str) and raw_exception_id:
+                    exception_id = raw_exception_id
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
@@ -327,10 +417,18 @@ class BaseHttpClient:
                 retryable=False,
             )
 
-        retryable = status in RETRYABLE_STATUS_CODES
+        # Truncation above guards the API's own text; the id and the hint are
+        # kbagent-authored and short, so they are appended after it and always
+        # survive into the message the operator actually reads.
+        suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
+        if hint:
+            suffix += f" {hint}"
         raise KeboolaApiError(
-            message=f"API error {status} from {url_label} (token: {self._masked_token}): {api_message}",
+            message=(
+                f"API error {status} from {url_label} "
+                f"(token: {self._masked_token}): {api_message}{suffix}"
+            ),
             status_code=status,
             error_code=ErrorCode.API_ERROR,
-            retryable=retryable,
+            retryable=status in RETRYABLE_STATUS_CODES if retryable is None else retryable,
         )

@@ -169,6 +169,17 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   list` flags them). No migration command -- you do the argv mapping. Tool->command
   map in `docs/mcp-migration.md`; recipe in gotchas.md.
 
+**A write that failed with a 5xx**
+- `POST`/`PATCH` is NOT retried on 5xx any more (0.86.0+); `retryable: false`
+  there is deliberate -- never wrap it in your own retry loop. The work may have
+  landed: check with `token list` / `job list` before repeating. The message
+  carries the `exceptionId` -- quote it when escalating. gotchas.md.
+
+**Finding an existing Storage token**
+- `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
+  that `token delete`/`refresh` need. Secrets are stripped from every row,
+  `--json` included; do not route around it with `kbagent http get`.
+
 **Upgrading kbagent itself**
 - `install_channel` in `kbagent --json version` => native binary; `kbagent
   update` REFUSES by design. Quote `upgrade_command` (choco/winget/brew/apt/dnf);

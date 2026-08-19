@@ -159,6 +159,28 @@ class _TokensMixin(_CoreClient):
         response = self._request("POST", "/v2/storage/tokens", data=data)
         return response.json()
 
+    def list_tokens(self) -> list[dict[str, Any]]:
+        """List the project's Storage API tokens (``GET /v2/storage/tokens``).
+
+        Returns the API's array verbatim -- one dict per token, carrying ``id``,
+        ``description``, ``created``, ``expires``, ``isExpired``,
+        ``isMasterToken``, the ``can*`` grants, ``bucketPermissions`` and (when
+        the token was minted by another token) ``creatorToken``.
+
+        The acting token must carry ``canManageTokens``; the API answers 403
+        otherwise (surfaced as ``ACCESS_DENIED``).
+
+        A **secret is never listed here as a rule, but the API is not a
+        guarantee**: on a project carrying the ``force-decrypted-token``
+        feature the response embeds each token's live value in a ``token``
+        field. Callers that render this must strip it -- ``TokenService``
+        does. Anything past the documented array shape (an envelope object,
+        say) degrades to an empty list rather than blowing up in the caller.
+        """
+        response = self._request("GET", "/v2/storage/tokens")
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+
     def delete_token(self, token_id: str) -> None:
         """Revoke a Storage API token immediately (``DELETE /v2/storage/tokens/{id}``).
 

@@ -253,3 +253,41 @@ class TestDeleteStreamSource:
 
         assert client.delete_stream_source("cam01-src", branch_id="default") is None
         mock_kc.delete_stream_source.assert_called_once_with("cam01-src", branch_id="default")
+
+
+class TestListTokens:
+    def test_returns_typed_entries(self) -> None:
+        mock_kc = MagicMock()
+        mock_kc.list_tokens.return_value = [
+            {
+                "id": "12345",
+                "description": "device 42",
+                "created": "2026-08-01T10:00:00+0200",
+                "expires": None,
+                "isExpired": False,
+                "isMasterToken": False,
+            }
+        ]
+        result = _make_client(mock_kc).list_tokens()
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.id == "12345"
+        assert entry.description == "device 42"
+        assert entry.expires is None
+        assert entry.is_expired is False
+        assert entry.is_master_token is False
+        mock_kc.list_tokens.assert_called_once_with()
+
+    def test_secret_never_reaches_the_caller(self) -> None:
+        """`create_scoped_token` is the one and only secret reveal."""
+        mock_kc = MagicMock()
+        mock_kc.list_tokens.return_value = [
+            {"id": "1", "description": "master", "token": "1-liveSecretValue"}
+        ]
+        result = _make_client(mock_kc).list_tokens()
+        assert "liveSecretValue" not in str(result[0].model_dump())
+
+    def test_empty_project(self) -> None:
+        mock_kc = MagicMock()
+        mock_kc.list_tokens.return_value = []
+        assert _make_client(mock_kc).list_tokens() == []

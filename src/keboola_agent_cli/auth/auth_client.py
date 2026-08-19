@@ -770,7 +770,14 @@ class AuthClient(BaseHttpClient):
     # Shared error mapping
     # ------------------------------------------------------------------
 
-    def _raise_api_error(self, response: httpx.Response, base_url: str | None = None) -> None:
+    def _raise_api_error(
+        self,
+        response: httpx.Response,
+        base_url: str | None = None,
+        *,
+        hint: str | None = None,
+        retryable: bool | None = None,
+    ) -> None:
         """Escalate a 404 before falling back to the shared error mapping.
 
         `BaseHttpClient._do_request` calls this method for every
@@ -778,10 +785,20 @@ class AuthClient(BaseHttpClient):
         (rather than adding a check in each method) covers all of them at
         once. `poll_device_token` bypasses `_do_request` entirely and calls
         `_map_auth_error` directly for the same 404 case.
-        """
-        self._map_auth_error(response)
 
-    def _map_auth_error(self, response: httpx.Response) -> NoReturn:
+        `hint` / `retryable` are the base class's 5xx guidance; they are
+        forwarded untouched so an auth-endpoint 500 reads the same as any
+        other (issue #599). A 404 is escalated before they matter.
+        """
+        self._map_auth_error(response, hint=hint, retryable=retryable)
+
+    def _map_auth_error(
+        self,
+        response: httpx.Response,
+        *,
+        hint: str | None = None,
+        retryable: bool | None = None,
+    ) -> NoReturn:
         """Map a failed auth-endpoint response, escalating 404 to a dedicated code.
 
         `login_password`/`verify_mfa_totp` never reach this method -- both
@@ -812,7 +829,7 @@ class AuthClient(BaseHttpClient):
                 error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
                 retryable=False,
             )
-        super()._raise_api_error(response, self._base_url)
+        super()._raise_api_error(response, self._base_url, hint=hint, retryable=retryable)
         # BaseHttpClient._raise_api_error always raises; the static type
         # checker cannot see that across the base-class call, so make the
         # divergence explicit rather than relax this method's NoReturn type.

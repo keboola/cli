@@ -788,6 +788,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Scoped Storage Tokens
 
+  kbagent token list --project NAME
+    List the project's Storage API tokens (id, description, created, expires, master flag,
+    creating token). Secrets are never listed -- `token create` is the only reveal. This is where
+    the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
   kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
     Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
     --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.

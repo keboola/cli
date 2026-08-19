@@ -12,6 +12,7 @@ from .result_models import (
     ScopedTokenResult,
     StreamSourceResult,
     SyncPushResult,
+    TokenListEntryResult,
     UploadTableResult,
 )
 from .services.job_idempotency_store import JobIdempotencyStore
@@ -33,6 +34,7 @@ __all__ = [
     "ScopedTokenResult",
     "StreamSourceResult",
     "SyncPushResult",
+    "TokenListEntryResult",
     "UploadTableResult",
     "__version__",
 ]

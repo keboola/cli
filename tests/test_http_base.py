@@ -222,6 +222,242 @@ class TestBaseHttpClientRetry:
             base_client.close()
 
 
+class TestNonIdempotentRetryPolicy:
+    """A 5xx/transport failure on a non-idempotent method must NOT be retried.
+
+    ``POST`` creates server-side state. Keboola's own token mint persists the
+    token row *before* the step that can fail, so a blind retry of a failed
+    ``POST /v2/storage/tokens`` can silently leave two live credentials behind
+    (issue #599). Only the RFC 9110 idempotent methods are safe to repeat.
+    """
+
+    def _client(self) -> BaseHttpClient:
+        return BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    def test_post_not_retried_on_500(self, httpx_mock) -> None:
+        """A POST answered with 500 fails on the first attempt -- no second mint."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            status_code=500,
+            json={"error": "Application error."},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/v2/storage/tokens")
+            assert exc_info.value.status_code == 500
+            assert len(httpx_mock.get_requests()) == 1
+        finally:
+            client.close()
+
+    def test_post_not_retried_on_502(self, httpx_mock) -> None:
+        """The gate is the method, not the specific 5xx code."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=502, text="Bad Gateway")
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client._do_request("POST", "/test-path")
+            assert len(httpx_mock.get_requests()) == 1
+        finally:
+            client.close()
+
+    def test_patch_not_retried_on_500(self, httpx_mock) -> None:
+        """PATCH is not idempotent either (RFC 9110), so it gets the same gate."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=500, text="boom")
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client._do_request("PATCH", "/test-path")
+            assert len(httpx_mock.get_requests()) == 1
+        finally:
+            client.close()
+
+    def test_post_still_retried_on_429(self, httpx_mock) -> None:
+        """429 means the server refused to process it -- repeating is safe."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=429, text="slow down")
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=200, json={"ok": True})
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("POST", "/test-path")
+            assert response.status_code == 200
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_put_retried_on_500(self, httpx_mock) -> None:
+        """PUT is idempotent, so it keeps the retry safety net."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=500, text="boom")
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=200, json={"ok": True})
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("PUT", "/test-path")
+            assert response.status_code == 200
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_delete_retried_on_503(self, httpx_mock) -> None:
+        """DELETE is idempotent -- repeating a delete converges on the same state."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=503, text="unavailable")
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=204)
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("DELETE", "/test-path")
+            assert response.status_code == 204
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_post_not_retried_on_timeout(self, httpx_mock) -> None:
+        """A timed-out POST may already have taken effect -- never repeat it."""
+        httpx_mock.add_exception(httpx.ReadTimeout("Read timed out"), url=f"{STACK_URL}/test-path")
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            assert exc_info.value.error_code == "TIMEOUT"
+            assert len(httpx_mock.get_requests()) == 1
+        finally:
+            client.close()
+
+    def test_post_retried_on_connect_error(self, httpx_mock) -> None:
+        """A refused connection never reached the server, so a POST may repeat."""
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"), url=f"{STACK_URL}/x")
+        httpx_mock.add_response(url=f"{STACK_URL}/x", status_code=200, json={"ok": True})
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("POST", "/x")
+            assert response.status_code == 200
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+
+class TestServerErrorGuidance:
+    """A 5xx must tell the operator what to do next (issue #599)."""
+
+    def _client(self) -> BaseHttpClient:
+        return BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    def test_unretried_500_names_the_partial_effect_risk(self, httpx_mock) -> None:
+        """The POST hint must warn the operation may already have taken effect."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            status_code=500,
+            json={"error": "Application error."},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/v2/storage/tokens")
+            message = exc_info.value.message
+            assert "POST" in message
+            assert "not retried" in message
+            assert "may already have taken effect" in message
+        finally:
+            client.close()
+
+    def test_exhausted_500_points_at_an_upstream_incident(self, httpx_mock) -> None:
+        """A 500 that survives every retry is an incident, not a caller mistake."""
+        for _ in range(MAX_RETRIES):
+            httpx_mock.add_response(
+                url=f"{STACK_URL}/test-path",
+                status_code=500,
+                json={"error": "Application error."},
+            )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            message = exc_info.value.message
+            assert f"{MAX_RETRIES} attempts" in message
+            assert "upstream Keboola incident" in message
+            assert "support" in message
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_exception_id_surfaced_for_support(self, httpx_mock) -> None:
+        """Keboola's exceptionId is the only handle support can trace -- keep it."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=500,
+            json={
+                "error": "Application error.",
+                "exceptionId": "kbc-eu-central-1-connection-abc123",
+                "message": "Please contact our support",
+            },
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            assert "kbc-eu-central-1-connection-abc123" in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_no_hint_appended_to_client_errors(self, httpx_mock) -> None:
+        """A 4xx is the caller's problem -- the incident hint would be misleading."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=400,
+            json={"error": "Bad request"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            message = exc_info.value.message
+            assert "not retried" not in message
+            assert "upstream Keboola incident" not in message
+        finally:
+            client.close()
+
+
 class TestBaseHttpClientErrorSanitization:
     """Verify message truncation and error mapping in the base class."""
 

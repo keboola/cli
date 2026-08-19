@@ -297,6 +297,36 @@ class ScopedTokenResult(_ApiResultModel):
     )
 
 
+class TokenListEntryResult(_ApiResultModel):
+    """One Storage API token as listed by :meth:`keboola_agent_cli.Client.list_tokens`.
+
+    Deliberately carries **no** secret field. `create_scoped_token` is the one
+    and only reveal in this SDK; a listing that returned live values would
+    break that contract for every token in the project at once, so the facade
+    drops the field before validating even when the API includes it (projects
+    with the ``force-decrypted-token`` feature do). Everything else the API
+    reports -- ``bucketPermissions``, ``componentAccess``, the remaining
+    ``can*`` grants -- is preserved as model extras.
+    """
+
+    id: str = Field(default="", description="Token ID (use with delete_token / refresh_token).")
+    description: str = Field(default="", description="Human-readable token description.")
+    created: str | None = Field(default=None, description="ISO creation timestamp.")
+    expires: str | None = Field(
+        default=None, description="ISO expiry timestamp; None = never expires."
+    )
+    is_expired: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("isExpired", "is_expired"),
+        description="True once the token is past its expiry.",
+    )
+    is_master_token: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("isMasterToken", "is_master_token"),
+        description="True for the project's master token (cannot be deleted).",
+    )
+
+
 class StreamSourceResult(_ApiResultModel):
     """A per-device Data Streams (OTLP) source (issue: device enrollment).
 
