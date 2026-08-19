@@ -341,6 +341,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "flow.schedule": "write",
     "flow.schedule-remove": "destructive",
     # Schedule discovery / audit (read-only)
+    "notification.list": "read",
+    "notification.detail": "read",
     "schedule.list": "read",
     "schedule.detail": "read",
     "schedule.find": "read",

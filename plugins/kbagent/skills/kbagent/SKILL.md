@@ -7,7 +7,8 @@ description: >
   debugging, GitOps config sync (pull/push/diff/clone), bucket sharing and
   linking, encrypting secrets, Storage tables, files, and snapshots
   (backup/restore), data apps (create/deploy/logs/secrets), flows and
-  schedules, members and invitations, feature flags, OTLP data streams,
+  schedules, notification subscriptions (Flow Notifications tab),
+  members and invitations, feature flags, OTLP data streams,
   scoped Storage tokens, the semantic layer (models, metrics, constraints),
   the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
@@ -15,7 +16,8 @@ description: >
   data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
-  browser login, PAYG credits.
+  browser login, PAYG credits, flow notifications, notification
+  subscription, alert recipients, who gets notified.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -221,6 +223,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |
+| List notification subscriptions (Flow Notifications tab) across projects | `kbagent notification list` |
+| Show one notification subscription, including its raw filter list | `kbagent notification detail --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |

@@ -1,0 +1,433 @@
+"""Unit tests for NotificationService -- issue #600.
+
+Tests the business logic in isolation using a mocked KeboolaClient. Covers:
+
+- ``_extract_subscription_fields``: the wire-format shapes that are easy to get
+  wrong (dotted filter paths, webhook ``url`` vs email ``address``, filter-less
+  project-wide subscriptions).
+- ``list_subscriptions``: multi-project fan-out, client-side component/config
+  filters, config-name join (pair match + unique-config-id fallback), the
+  project-wide exclusion counter, and error accumulation.
+- ``get_subscription_detail``: name join and tolerance of a deleted parent.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.services.notification_service import (
+    NotificationService,
+    _extract_subscription_fields,
+)
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _mock_config_store(projects: dict) -> MagicMock:
+    cs = MagicMock()
+    config = MagicMock()
+    config.projects = {
+        alias: MagicMock(stack_url=v["url"], token=v["token"], active_branch_id=None)
+        for alias, v in projects.items()
+    }
+    config.max_parallel_workers = 10
+    cs.load.return_value = config
+    cs.get_project.side_effect = lambda alias: config.projects.get(alias)
+    return cs
+
+
+def _make_service(
+    mock_client: MagicMock | dict[str, MagicMock],
+    projects: dict | None = None,
+) -> NotificationService:
+    if projects is None:
+        projects = {"prod": {"url": "https://connection.keboola.com", "token": "tok"}}
+    cs = _mock_config_store(projects)
+
+    if isinstance(mock_client, dict):
+        # Per-project clients keyed by stack URL, so a fan-out test can give
+        # each project its own payload (and its own failure).
+        def factory(url: str, _tok: str) -> MagicMock:
+            return mock_client[url]
+    else:
+
+        def factory(_url: str, _tok: str) -> MagicMock:
+            return mock_client
+
+    return NotificationService(config_store=cs, client_factory=factory)
+
+
+def _components_payload(configs: list[tuple[str, str, str]]) -> list[dict]:
+    """Build a list_components_with_configs payload from (comp, cfg_id, name)."""
+    by_component: dict[str, list[dict]] = {}
+    for comp_id, cfg_id, name in configs:
+        by_component.setdefault(comp_id, []).append({"id": cfg_id, "name": name})
+    return [
+        {"id": comp_id, "configurations": cfgs} for comp_id, cfgs in sorted(by_component.items())
+    ]
+
+
+FLOW_SUBSCRIPTION = {
+    "id": "1234",
+    "event": "job-failed",
+    "filters": [
+        {"field": "job.component.id", "value": "keboola.flow"},
+        {"field": "job.configuration.id", "value": "98765"},
+    ],
+    "recipient": {"channel": "email", "address": "ops@example.com"},
+}
+
+CATCHALL_SUBSCRIPTION = {
+    "id": "1235",
+    "event": "job-failed",
+    "recipient": {"channel": "email", "address": "catchall@example.com"},
+}
+
+WEBHOOK_SUBSCRIPTION = {
+    "id": "1236",
+    "event": "job-processing-long",
+    "expiresAt": "2027-01-07T14:00:00+01:00",
+    "filters": [
+        {"field": "job.configuration.id", "value": "98765"},
+        {"field": "durationOvertimePercentage", "operator": ">=", "value": 0.75},
+    ],
+    "recipient": {"channel": "webhook", "url": "https://hooks.example.com/kbc"},
+}
+
+BRANCHED_SUBSCRIPTION = {
+    "id": "1237",
+    "event": "phase-job-failed",
+    "filters": [
+        {"field": "branch.id", "value": "4242"},
+        {"field": "job.component.id", "value": "keboola.flow"},
+        {"field": "job.configuration.id", "value": "98765"},
+        {"field": "phase.id", "value": "7"},
+    ],
+    "recipient": {"channel": "email", "address": "dev@example.com"},
+}
+
+
+# ---------------------------------------------------------------------------
+# _extract_subscription_fields
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSubscriptionFields:
+    def test_flow_scoped_email_subscription(self) -> None:
+        row = _extract_subscription_fields(FLOW_SUBSCRIPTION)
+
+        assert row["subscription_id"] == "1234"
+        assert row["event"] == "job-failed"
+        assert row["component_id"] == "keboola.flow"
+        assert row["config_id"] == "98765"
+        assert row["channel"] == "email"
+        assert row["address"] == "ops@example.com"
+        assert row["scope"] == "config"
+        assert row["branch_id"] == ""
+        assert row["expires_at"] == ""
+
+    def test_subscription_without_filters_is_project_wide(self) -> None:
+        """Only ``event`` and ``recipient`` are required -- filters are optional."""
+        row = _extract_subscription_fields(CATCHALL_SUBSCRIPTION)
+
+        assert row["scope"] == "project-wide"
+        assert row["component_id"] == ""
+        assert row["config_id"] == ""
+        assert row["address"] == "catchall@example.com"
+
+    def test_webhook_recipient_address_comes_from_url(self) -> None:
+        """RecipientChannel_Webhook carries ``url``; only email carries ``address``."""
+        row = _extract_subscription_fields(WEBHOOK_SUBSCRIPTION)
+
+        assert row["channel"] == "webhook"
+        assert row["address"] == "https://hooks.example.com/kbc"
+        assert row["expires_at"] == "2027-01-07T14:00:00+01:00"
+
+    def test_config_filter_without_component_still_scopes_to_config(self) -> None:
+        row = _extract_subscription_fields(WEBHOOK_SUBSCRIPTION)
+
+        assert row["config_id"] == "98765"
+        assert row["component_id"] == ""
+        assert row["scope"] == "config"
+
+    def test_branch_and_phase_filters_are_extracted(self) -> None:
+        row = _extract_subscription_fields(BRANCHED_SUBSCRIPTION)
+
+        assert row["branch_id"] == "4242"
+        assert row["phase_id"] == "7"
+        assert row["event"] == "phase-job-failed"
+
+    def test_raw_filters_are_preserved(self) -> None:
+        """Threshold filters have no dedicated column -- callers keep the raw list."""
+        row = _extract_subscription_fields(WEBHOOK_SUBSCRIPTION)
+
+        assert {"field": "durationOvertimePercentage", "operator": ">=", "value": 0.75} in row[
+            "filters"
+        ]
+
+    def test_numeric_filter_values_are_stringified(self) -> None:
+        """The API allows integer values; columns must not leak raw ints."""
+        row = _extract_subscription_fields(
+            {
+                "id": 7,
+                "event": "job-failed",
+                "filters": [{"field": "job.configuration.id", "value": 98765}],
+                "recipient": {"channel": "email", "address": "a@b.c"},
+            }
+        )
+
+        assert row["subscription_id"] == "7"
+        assert row["config_id"] == "98765"
+
+    def test_unknown_recipient_channel_degrades_gracefully(self) -> None:
+        row = _extract_subscription_fields(
+            {"id": "9", "event": "job-failed", "recipient": {"channel": "carrier-pigeon"}}
+        )
+
+        assert row["channel"] == "carrier-pigeon"
+        assert row["address"] == ""
+
+
+# ---------------------------------------------------------------------------
+# list_subscriptions
+# ---------------------------------------------------------------------------
+
+
+class TestListSubscriptions:
+    def test_single_project_resolves_config_name_from_pair(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
+        client.list_components_with_configs.return_value = _components_payload(
+            [("keboola.flow", "98765", "Daily ETL")]
+        )
+
+        result = _make_service(client).list_subscriptions()
+
+        assert len(result["subscriptions"]) == 1
+        assert result["subscriptions"][0]["config_name"] == "Daily ETL"
+        assert result["subscriptions"][0]["project_alias"] == "prod"
+        assert result["errors"] == []
+
+    def test_config_name_falls_back_to_unique_config_id_match(self) -> None:
+        """A subscription filtering only on config id still resolves a name."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [WEBHOOK_SUBSCRIPTION]
+        client.list_components_with_configs.return_value = _components_payload(
+            [("keboola.flow", "98765", "Daily ETL")]
+        )
+
+        result = _make_service(client).list_subscriptions()
+
+        assert result["subscriptions"][0]["config_name"] == "Daily ETL"
+
+    def test_ambiguous_config_id_leaves_name_empty(self) -> None:
+        """Two components sharing a config id must not be guessed between."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [WEBHOOK_SUBSCRIPTION]
+        client.list_components_with_configs.return_value = _components_payload(
+            [
+                ("keboola.flow", "98765", "Daily ETL"),
+                ("keboola.orchestrator", "98765", "Legacy ETL"),
+            ]
+        )
+
+        result = _make_service(client).list_subscriptions()
+
+        assert result["subscriptions"][0]["config_name"] == ""
+
+    def test_deleted_parent_config_leaves_name_empty(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
+        client.list_components_with_configs.return_value = _components_payload([])
+
+        result = _make_service(client).list_subscriptions()
+
+        assert result["subscriptions"][0]["config_name"] == ""
+
+    def test_no_join_call_when_nothing_is_config_scoped(self) -> None:
+        """The join payload is proportional to project size -- skip it when useless."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [CATCHALL_SUBSCRIPTION]
+
+        result = _make_service(client).list_subscriptions()
+
+        client.list_components_with_configs.assert_not_called()
+        assert result["subscriptions"][0]["config_name"] == ""
+
+    def test_event_filter_is_forwarded_to_the_api(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = []
+
+        _make_service(client).list_subscriptions(event="job-failed")
+
+        client.list_project_subscriptions.assert_called_once_with(event="job-failed")
+
+    def test_component_filter_is_applied_client_side(self) -> None:
+        """The API has no component filter -- only ``?event=``."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [
+            FLOW_SUBSCRIPTION,
+            {
+                "id": "999",
+                "event": "job-failed",
+                "filters": [{"field": "job.component.id", "value": "keboola.ex-db-snowflake"}],
+                "recipient": {"channel": "email", "address": "dba@example.com"},
+            },
+        ]
+        client.list_components_with_configs.return_value = _components_payload([])
+
+        result = _make_service(client).list_subscriptions(component_id="keboola.flow")
+
+        assert [s["subscription_id"] for s in result["subscriptions"]] == ["1234"]
+
+    def test_config_filter_is_applied_client_side(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION, BRANCHED_SUBSCRIPTION]
+        client.list_components_with_configs.return_value = _components_payload([])
+
+        result = _make_service(client).list_subscriptions(config_id="98765")
+
+        assert len(result["subscriptions"]) == 2
+
+    def test_project_wide_subscriptions_are_counted_when_filtered_out(self) -> None:
+        """A catch-all also pages on this flow -- never drop it silently."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [
+            FLOW_SUBSCRIPTION,
+            CATCHALL_SUBSCRIPTION,
+        ]
+        client.list_components_with_configs.return_value = _components_payload([])
+
+        result = _make_service(client).list_subscriptions(config_id="98765")
+
+        assert [s["subscription_id"] for s in result["subscriptions"]] == ["1234"]
+        assert result["project_wide_excluded"] == 1
+
+    def test_no_exclusion_counter_without_a_scope_filter(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [CATCHALL_SUBSCRIPTION]
+
+        result = _make_service(client).list_subscriptions()
+
+        assert result["project_wide_excluded"] == 0
+        assert len(result["subscriptions"]) == 1
+
+    def test_multi_project_fanout_merges_rows(self) -> None:
+        prod, dev = MagicMock(), MagicMock()
+        prod.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
+        prod.list_components_with_configs.return_value = _components_payload(
+            [("keboola.flow", "98765", "Prod ETL")]
+        )
+        dev.list_project_subscriptions.return_value = [CATCHALL_SUBSCRIPTION]
+
+        service = _make_service(
+            {"https://connection.keboola.com": prod, "https://connection.eu.keboola.com": dev},
+            projects={
+                "prod": {"url": "https://connection.keboola.com", "token": "t1"},
+                "dev": {"url": "https://connection.eu.keboola.com", "token": "t2"},
+            },
+        )
+        result = service.list_subscriptions()
+
+        assert {s["project_alias"] for s in result["subscriptions"]} == {"prod", "dev"}
+        assert len(result["subscriptions"]) == 2
+
+    def test_one_project_failing_does_not_abort_the_others(self) -> None:
+        prod, broken = MagicMock(), MagicMock()
+        prod.list_project_subscriptions.return_value = [CATCHALL_SUBSCRIPTION]
+        broken.list_project_subscriptions.side_effect = KeboolaApiError(
+            message="Access denied", error_code="AUTH_ERROR", status_code=403
+        )
+
+        service = _make_service(
+            {"https://connection.keboola.com": prod, "https://connection.eu.keboola.com": broken},
+            projects={
+                "prod": {"url": "https://connection.keboola.com", "token": "t1"},
+                "broken": {"url": "https://connection.eu.keboola.com", "token": "t2"},
+            },
+        )
+        result = service.list_subscriptions()
+
+        assert len(result["subscriptions"]) == 1
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["project_alias"] == "broken"
+        assert result["errors"][0]["error_code"] == "AUTH_ERROR"
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).list_subscriptions(aliases=["nope"])
+
+    def test_rows_are_sorted_deterministically(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [
+            WEBHOOK_SUBSCRIPTION,
+            CATCHALL_SUBSCRIPTION,
+            FLOW_SUBSCRIPTION,
+        ]
+        client.list_components_with_configs.return_value = _components_payload([])
+
+        result = _make_service(client).list_subscriptions()
+
+        assert [s["subscription_id"] for s in result["subscriptions"]] == ["1234", "1235", "1236"]
+
+    def test_client_is_closed_even_on_failure(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.side_effect = KeboolaApiError(
+            message="boom", error_code="API_ERROR", status_code=500
+        )
+
+        _make_service(client).list_subscriptions()
+
+        client.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# get_subscription_detail
+# ---------------------------------------------------------------------------
+
+
+class TestGetSubscriptionDetail:
+    def test_returns_row_with_resolved_config_name(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.list_components_with_configs.return_value = _components_payload(
+            [("keboola.flow", "98765", "Daily ETL")]
+        )
+
+        result = _make_service(client).get_subscription_detail("prod", "1234")
+
+        assert result["subscription_id"] == "1234"
+        assert result["config_name"] == "Daily ETL"
+        assert result["project_alias"] == "prod"
+        client.get_project_subscription.assert_called_once_with("1234")
+
+    def test_project_wide_subscription_skips_the_join(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = CATCHALL_SUBSCRIPTION
+
+        result = _make_service(client).get_subscription_detail("prod", "1235")
+
+        client.list_components_with_configs.assert_not_called()
+        assert result["scope"] == "project-wide"
+
+    def test_join_failure_still_returns_the_subscription(self) -> None:
+        """The name is a nicety; a broken lookup must not hide the recipient."""
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.list_components_with_configs.side_effect = KeboolaApiError(
+            message="boom", error_code="API_ERROR", status_code=500
+        )
+
+        result = _make_service(client).get_subscription_detail("prod", "1234")
+
+        assert result["config_name"] == ""
+        assert result["address"] == "ops@example.com"
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).get_subscription_detail("nope", "1")

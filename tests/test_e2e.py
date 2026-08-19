@@ -5488,6 +5488,164 @@ class TestE2EBillingCredits:
 
 
 # ---------------------------------------------------------------------------
+# Notification subscriptions (Flow Notifications tab)
+# ---------------------------------------------------------------------------
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2ENotificationSubscriptions:
+    """End-to-end test for `kbagent notification list` / `detail` (issue #600).
+
+    The CLI has no write path for subscriptions, so this test cannot create
+    its own fixture: whether the E2E project has any Notifications-tab
+    subscription at all is out of its control. The honest contract to assert
+    is therefore the envelope and the live auth path -- that a plain project
+    Storage token reaches the notification sibling host and gets a well-formed
+    ``{"subscriptions": [...], "errors": [...], "project_wide_excluded": N}``
+    back with exit 0, and that per-row shape and ``detail`` hold *when* rows
+    exist. That makes the test meaningful on an empty project (it still proves
+    the host derivation, auth, and envelope) and start covering the row path
+    the day a subscription is added, without needing a rewrite.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-notif"
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def test_notification_list_returns_well_formed_envelope(self) -> None:
+        """A plain Storage token must reach the notification host and list."""
+        _step(1, "notification list -- envelope + live auth path")
+        result = self._run("notification", "list", "--project", self.alias)
+        data = _json_ok(result)
+
+        assert isinstance(data["subscriptions"], list)
+        assert isinstance(data["errors"], list)
+        assert data["project_wide_excluded"] == 0
+        # The read path needs no elevated scope -- a permission failure here
+        # would mean the "plain project token is enough" contract broke.
+        assert not data["errors"], f"unexpected per-project errors: {data['errors']}"
+
+        for row in data["subscriptions"]:
+            assert row["project_alias"] == self.alias
+            assert row["scope"] in ("config", "project-wide")
+            assert isinstance(row["filters"], list)
+            # Email carries `address`, webhook carries `url`; both must land
+            # in the single normalized column.
+            if row["channel"] in ("email", "webhook"):
+                assert row["address"], f"recipient missing an address: {row}"
+
+    def test_event_filter_narrows_without_error(self) -> None:
+        """`--event` is forwarded verbatim as ?event= and must not 400."""
+        _step(2, "notification list --event job-failed")
+        result = self._run("notification", "list", "--project", self.alias, "--event", "job-failed")
+        data = _json_ok(result)
+
+        assert all(row["event"] == "job-failed" for row in data["subscriptions"])
+
+    def test_unknown_event_returns_empty_not_error(self) -> None:
+        """EventName is an open string -- a typo yields no rows, not a failure.
+
+        This is exactly why the CLI does not validate `--event`: the check
+        would have to be a client-side allowlist that goes stale the moment
+        the platform adds an event.
+        """
+        _step(3, "notification list --event <nonexistent>")
+        result = self._run(
+            "notification",
+            "list",
+            "--project",
+            self.alias,
+            "--event",
+            "definitely-not-an-event",
+        )
+        data = _json_ok(result)
+
+        assert data["subscriptions"] == []
+
+    def test_config_filter_counts_excluded_catchalls(self) -> None:
+        """Project-wide subscriptions dropped by a scope filter must be counted."""
+        _step(4, "notification list --component-id keboola.flow")
+        unfiltered = _json_ok(self._run("notification", "list", "--project", self.alias))
+        catchalls = sum(1 for row in unfiltered["subscriptions"] if row["scope"] == "project-wide")
+
+        filtered = _json_ok(
+            self._run(
+                "notification",
+                "list",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.flow",
+            )
+        )
+
+        assert filtered["project_wide_excluded"] == catchalls
+        assert all(row["component_id"] == "keboola.flow" for row in filtered["subscriptions"])
+
+    def test_detail_round_trips_a_listed_subscription(self) -> None:
+        """`detail` must resolve the same row `list` reported."""
+        _step(5, "notification detail -- round-trip from list")
+        listed = _json_ok(self._run("notification", "list", "--project", self.alias))
+        if not listed["subscriptions"]:
+            pytest.skip("project has no notification subscriptions to inspect")
+
+        expected = listed["subscriptions"][0]
+        detail = _json_ok(
+            self._run(
+                "notification",
+                "detail",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                expected["subscription_id"],
+            )
+        )
+
+        assert detail["subscription_id"] == expected["subscription_id"]
+        assert detail["event"] == expected["event"]
+        assert detail["address"] == expected["address"]
+
+    def test_detail_of_missing_subscription_fails_cleanly(self) -> None:
+        _step(6, "notification detail -- unknown ID")
+        result = self._run(
+            "notification",
+            "detail",
+            "--project",
+            self.alias,
+            "--subscription-id",
+            "0",
+        )
+
+        assert result.exit_code != 0
+        assert "error" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
 # Job run variable values resolution
 # ---------------------------------------------------------------------------
 

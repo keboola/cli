@@ -24,6 +24,29 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.86.0": [
+        "New `kbagent notification` command group (read-only): `notification list` and "
+        "`notification detail` expose the Flow Builder's **Notifications tab** recipients "
+        "(the bell icon -- Success / Error / Processing-delay / Warning cards) across one, "
+        "many, or all registered projects in one parallel fan-out. Those recipients are "
+        "stored in a separate platform service, not in the flow's `configuration` JSON, so "
+        "`flow detail` / `config detail` never showed them -- they were the last "
+        'unauditable notification surface in a fleet-wide "are our alert recipients still '
+        'valid" sweep (issue #600). The in-flow `type: "notification"` TASK is a '
+        "different mechanism and stays visible via `flow detail`. Authenticates with the "
+        "plain project Storage token every registered alias already holds -- no elevated "
+        "scope, no manage token.",
+        "`notification list --component-id` / `--config-id` filter client-side (the API's "
+        "only server-side filter is `?event=`) and match the subscription's own "
+        "`job.component.id` / `job.configuration.id` filter values. A subscription with NO "
+        "filters is project-wide and fires for every job in the project; those rows are "
+        "excluded by those two flags but counted in `project_wide_excluded` (plus a warning "
+        'in human mode), so "who gets paged when this flow breaks" is never silently '
+        "under-reported. Event names are kebab-case (`job-failed`, `job-succeeded`, "
+        "`job-succeeded-with-warning`, `job-processing-long` and the `phase-job-*` "
+        "variants); `--event` is forwarded verbatim and deliberately not validated against "
+        "that list, because the API declares `EventName` as an open string.",
+    ],
     "0.85.1": [
         "Fix: `kbagent config new --push` no longer creates a broken configuration from a "
         "body that forgot the `parameters` wrapper (#605). A component's "
