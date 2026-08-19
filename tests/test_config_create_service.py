@@ -561,3 +561,102 @@ class TestParametersLevelSchemaValidation:
                 configuration={"phases": []},  # 'tasks' missing
             )
         storage.create_config.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Missing `parameters` wrapper (issue #605)
+# ---------------------------------------------------------------------------
+
+# A parameters-level schema with NO required fields: an empty ``parameters``
+# section is legitimate for such a component, so a body that carries only
+# sibling keys must not be rejected.
+OPTIONAL_TABLE_SCHEMA = {
+    "type": "object",
+    "properties": {"table": {"type": "string"}},
+}
+
+
+class TestMissingParametersWrapper:
+    """A body missing the ``parameters`` wrapper must fail, not create silently.
+
+    Issue #587 fixed one half of the mismatch (a correctly nested body was
+    rejected). The other half survived: a FLATTENED body -- the component's
+    parameters sitting at the configuration root -- was validated whole against
+    the parameters-level schema, matched it, and was POSTed verbatim. The
+    result was a live configuration with no ``parameters`` key at all, which
+    the UI and the component runtime both read as empty, while ``--push``
+    reported success (issue #605).
+    """
+
+    def test_flattened_body_fails_instead_of_creating_a_broken_config(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The parameters section of a flattened body is empty, so a schema with
+        required fields must reject it -- nothing reaches the Storage API.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+
+        with pytest.raises(ConfigError, match="failed schema validation"):
+            service.create_config(
+                alias="prod",
+                component_id="keboola.ex-db-snowflake",
+                name="My Config",
+                configuration={"table": "orders"},  # missing the parameters wrapper
+            )
+        storage.create_config.assert_not_called()
+
+    def test_flattened_body_error_names_the_missing_wrapper(self, tmp_config_dir: Path) -> None:
+        """ "'table' is a required property" alone is baffling when the caller DID
+        supply ``table`` -- at the wrong level. The errors must say so.
+        """
+        service, _, _ = _make_service(tmp_config_dir, schema=TABLE_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration={"table": "orders"},
+            dry_run=True,
+        )
+
+        assert result["validation_status"] == "failed"
+        assert result["validation_errors"][0] == "parameters: 'table' is a required property"
+        assert any("no 'parameters' key" in err for err in result["validation_errors"]), result[
+            "validation_errors"
+        ]
+
+    def test_body_without_parameters_passes_when_the_schema_requires_nothing(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Treating a missing wrapper as an empty ``parameters`` section must not
+        invent a failure: a config that is legitimately storage-only still creates.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=OPTIONAL_TABLE_SCHEMA)
+
+        result = service.create_config(
+            alias="prod",
+            component_id="keboola.ex-db-snowflake",
+            name="My Config",
+            configuration={"storage": {"input": {"tables": []}}},
+        )
+
+        storage.create_config.assert_called_once()
+        assert result["validation_status"] == "ok", result
+
+    def test_whole_body_carve_out_is_keyed_on_the_component_not_the_body_shape(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """``keboola.flow`` keeps whole-body validation because ITS configuration
+        root is what the schema describes -- an ordinary component with a
+        flow-shaped body does not inherit that exemption.
+        """
+        service, storage, _ = _make_service(tmp_config_dir, schema=FLOW_SCHEMA)
+
+        with pytest.raises(ConfigError, match="failed schema validation"):
+            service.create_config(
+                alias="prod",
+                component_id="keboola.ex-db-snowflake",
+                name="My Config",
+                configuration={"phases": [], "tasks": []},
+            )
+        storage.create_config.assert_not_called()

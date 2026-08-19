@@ -24,6 +24,25 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.85.1": [
+        "Fix: `kbagent config new --push` no longer creates a broken configuration from a "
+        "body that forgot the `parameters` wrapper (#605). A component's "
+        "`configurationSchema` describes the CONTENTS of `configuration.parameters`, so a "
+        "flattened body -- the component's own fields sitting at the configuration root -- "
+        "matched that schema, validated `ok`, and was POSTed verbatim. The result was a "
+        "live configuration with no `parameters` key at all, which the Keboola UI and the "
+        "component runtime both read as empty (blank boilerplate) while `--push` reported "
+        "success and returned a config id. A body with no `parameters` key is now validated "
+        "as an EMPTY parameters section, so the schema's required fields fail it, and the "
+        "error list carries a `hint:` line naming the missing wrapper -- otherwise the "
+        "report reads \"'db' is a required property\" to a caller who did supply `db`, one "
+        "level too high. The whole-body exemption that this used to ride on is now keyed on "
+        "the component (`keboola.flow` / `keboola.orchestrator`, whose `phases` / `tasks` "
+        "genuinely are the configuration root) instead of on the body's shape -- deciding it "
+        "from the body meant the one thing under test was also the thing granting the "
+        "exemption. Pass `--no-validate` if a component legitimately takes a root-level "
+        "body. Completes the half of #587 that #589 left standing.",
+    ],
     "0.85.0": [
         "BREAKING: the MCP passthrough is removed (epic #390 phase 3, deprecated since "
         "0.74.0). `kbagent tool list` and `kbagent tool call` are gone, `kbagent agent "
