@@ -22,6 +22,32 @@ from ..http_base import BaseHttpClient
 from ..stream_client import StreamClient
 
 
+def _storage_job_error_message(job: dict[str, Any]) -> str:
+    """Best-effort human message out of a failed Storage job's ``error`` field.
+
+    Written tolerantly on purpose. An API ``error`` field is not reliably a
+    dict in this codebase's experience: the Metastore once answered with an
+    int (``{"error": 422}``), which is why ``BaseHttpClient._raise_api_error``
+    accepts ``error`` only when it is a non-empty string; the Queue poller
+    guards its own ``result`` with ``isinstance``; and
+    ``_extract_query_job_error`` handles strings, dicts and unknown shapes.
+    Assuming a dict here would turn a failed job into an ``AttributeError``
+    traceback instead of ``STORAGE_JOB_FAILED`` -- and since the terminal
+    check now also sees the caller's initial response body, that shape would
+    arrive from one more direction than before.
+    """
+    error = job.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        # A dict without a usable message falls through to the generic text
+        # rather than rendering "None" or a raw dict repr at the user.
+        if isinstance(message, str) and message:
+            return message
+    elif isinstance(error, str) and error:
+        return error
+    return "Storage job failed"
+
+
 class _CoreClient(BaseHttpClient):
     """Shared plumbing base for the Keboola client mixins."""
 
@@ -195,8 +221,30 @@ class _CoreClient(BaseHttpClient):
     ) -> dict[str, Any]:
         """Poll a Storage API job until it reaches a terminal state.
 
+        The terminal state is evaluated in ONE place for the caller's initial
+        body and for every polled body alike -- the loop checks before it
+        fetches. Keep it that way: this used to be two checks (an early return
+        before the loop plus a second check inside it) and they drifted, so an
+        already-terminal ERROR initial body was returned as-is instead of
+        raising. Every call site either returns the job or its ``results``, so
+        that surfaced as a silent empty success.
+
+        The check-then-fetch *shape* matches the sibling pollers
+        ``wait_for_queue_job`` / ``wait_for_query_job``; the behaviour does not,
+        and deliberately so -- this is not a parity claim. Two differences worth
+        knowing: this poller recognises only ``success`` and ``error``, so any
+        other terminal status the Storage API might report would exhaust the
+        whole budget and surface as ``STORAGE_JOB_TIMEOUT`` (the queue poller
+        keys off ``isFinished`` and ends on any terminal state), and the sleep
+        here is not capped to the remaining budget, so a wait overshoots its
+        deadline by up to one poll interval. Both predate this restructure.
+
         Args:
-            job: Initial job response from POST/DELETE.
+            job: Initial job response from the request that enqueued the job
+                (POST, PUT or DELETE -- e.g. ``change_sharing_type`` enqueues
+                with PUT). May already be terminal (the Storage API can fail
+                fast, never returning ``waiting``), in which case no request
+                is made at all.
             max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
 
         Returns:
@@ -206,25 +254,25 @@ class _CoreClient(BaseHttpClient):
             KeboolaApiError: If the job fails or times out.
         """
         job_id = job.get("id")
-        if job.get("status") in ("success", "error"):
-            return job
-
         deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            time.sleep(STORAGE_JOB_POLL_INTERVAL)
-            response = self._request("GET", f"/v2/storage/jobs/{job_id}")
-            job = response.json()
+        while True:
             status = job.get("status")
             if status == "success":
                 return job
             if status == "error":
-                error_msg = job.get("error", {}).get("message", "Storage job failed")
                 raise KeboolaApiError(
-                    message=error_msg,
+                    message=_storage_job_error_message(job),
                     status_code=500,
                     error_code=ErrorCode.STORAGE_JOB_FAILED,
                     retryable=False,
                 )
+            # Checked before sleeping, so an exhausted budget never costs a
+            # poll interval.
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(STORAGE_JOB_POLL_INTERVAL)
+            job = self._request("GET", f"/v2/storage/jobs/{job_id}").json()
+
         raise KeboolaApiError(
             message=f"Storage job {job_id} did not complete within {max_wait}s",
             status_code=504,
