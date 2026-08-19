@@ -5591,7 +5591,13 @@ class TestE2ENotificationSubscriptions:
         """Project-wide subscriptions dropped by a scope filter must be counted."""
         _step(4, "notification list --component-id keboola.flow")
         unfiltered = _json_ok(self._run("notification", "list", "--project", self.alias))
-        catchalls = sum(1 for row in unfiltered["subscriptions"] if row["scope"] == "project-wide")
+        # Only the rows the filter DROPS are counted -- a project-wide
+        # subscription that filters on keboola.flow survives and is shown.
+        expected_excluded = sum(
+            1
+            for row in unfiltered["subscriptions"]
+            if row["scope"] == "project-wide" and row["component_id"] != "keboola.flow"
+        )
 
         filtered = _json_ok(
             self._run(
@@ -5604,7 +5610,7 @@ class TestE2ENotificationSubscriptions:
             )
         )
 
-        assert filtered["project_wide_excluded"] == catchalls
+        assert filtered["project_wide_excluded"] == expected_excluded
         assert all(row["component_id"] == "keboola.flow" for row in filtered["subscriptions"])
 
     def test_detail_round_trips_a_listed_subscription(self) -> None:

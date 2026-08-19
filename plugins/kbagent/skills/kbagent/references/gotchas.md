@@ -1236,10 +1236,13 @@ events and emits a final `done` SSE frame mirroring the same record.
   `filters` is optional in the schema (only `event` and `recipient` are
   required), so a catch-all "page me on any failure" subscription is legal and
   common. `--component-id`/`--config-id` exclude those rows -- but they also
-  page for the config being audited, so the count of excluded catch-alls is
-  reported as `project_wide_excluded` (and a warning in human mode). **Never
-  answer "who gets paged for this flow" from a filtered run alone** -- add the
-  project-wide rows from an unfiltered run.
+  page for the config being audited, so the count of the ones actually
+  **dropped** is reported as `project_wide_excluded` (and a warning in human
+  mode). Note `scope` keys off the config filter alone, so a subscription
+  filtering only on `job.component.id` is labelled `project-wide` yet is
+  *kept* by a matching `--component-id`; kept rows are never counted.
+  **Never answer "who gets paged for this flow" from a filtered run alone**
+  -- add the project-wide rows from an unfiltered run.
 - **Webhook recipients carry `url`, email recipients carry `address`.** Both
   render in the single `address` column; a `--json` consumer reading the raw
   API would need to handle both keys.

@@ -298,13 +298,20 @@ class NotificationService(BaseService):
             raw = client.list_project_subscriptions(event=event)
             rows = [_extract_subscription_fields(sub) for sub in raw]
 
-            scope_filtered = component_id is not None or config_id is not None
-            if scope_filtered:
-                kept = [r for r in rows if _matches_scope(r, component_id, config_id)]
-                excluded = sum(1 for r in rows if r["scope"] == SCOPE_PROJECT_WIDE)
+            # Count only rows the filter actually DROPPED. A subscription
+            # filtering on job.component.id alone is labelled project-wide
+            # (scope keys off the config filter), but --component-id KEEPS
+            # it -- warning that it was hidden would contradict the table
+            # the user is looking at.
+            excluded = 0
+            if component_id is not None or config_id is not None:
+                kept: list[dict[str, Any]] = []
+                for row in rows:
+                    if _matches_scope(row, component_id, config_id):
+                        kept.append(row)
+                    elif row["scope"] == SCOPE_PROJECT_WIDE:
+                        excluded += 1
                 rows = kept
-            else:
-                excluded = 0
 
             for row in rows:
                 row["project_alias"] = alias
@@ -345,22 +352,44 @@ class NotificationService(BaseService):
         the whole project, and a project full of catch-all subscriptions would
         otherwise pay for a join that can only ever produce blanks.
 
+        Which listing call is used depends on what the rows actually need.
+        ``list_components_with_configs`` sends ``include=configuration,rows``
+        -- every config body and row in the project -- which is a steep price
+        for a display name, and it is paid once per project in the fan-out.
+        When every config-scoped row names its component (the common case:
+        a Notifications-tab subscription filters on both), one cheap
+        per-component listing answers the same question. Only a subscription
+        filtering on a bare config ID needs the whole-project view, because
+        resolving that ID means searching every component.
+
         A failing lookup is swallowed: ``config_name`` is a display nicety,
         and losing it must never hide the recipient the audit came for.
         """
         for row in rows:
             row["config_name"] = ""
 
-        if not any(row["config_id"] for row in rows):
+        scoped = [row for row in rows if row["config_id"]]
+        if not scoped:
             return
 
+        by_pair: dict[tuple[str, str], str] = {}
+        names_by_config_id: dict[str, list[str]] = {}
+
         try:
-            components = client.list_components_with_configs(branch_id=branch_id)
+            if any(not row["component_id"] for row in scoped):
+                by_pair, names_by_config_id = _build_config_indexes(
+                    client.list_components_with_configs(branch_id=branch_id)
+                )
+            else:
+                for component_id in sorted({row["component_id"] for row in scoped}):
+                    for cfg in client.list_component_configs(component_id, branch_id=branch_id):
+                        by_pair[(component_id, str(cfg.get("id", "")))] = str(
+                            cfg.get("name", "") or ""
+                        )
         except Exception as exc:
             logger.debug("Config-name join failed for notification subscriptions: %s", exc)
             return
 
-        by_pair, names_by_config_id = _build_config_indexes(components)
         for row in rows:
             row["config_name"] = _resolve_config_name(row, by_pair, names_by_config_id)
 

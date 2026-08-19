@@ -39,6 +39,7 @@ EXPECTED_ROUTER_PREFIXES = {
     "/workspaces",
     "/flows",
     "/schedules",
+    "/notifications",
     "/lineage/edges",
     "/sharing",
     "/data-apps",

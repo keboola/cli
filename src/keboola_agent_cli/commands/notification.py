@@ -66,6 +66,16 @@ def _config_cell(row: dict[str, Any]) -> str:
     return escape(row.get("config_name") or row.get("config_id") or "")
 
 
+def _component_cell(row: dict[str, Any]) -> str:
+    """Render the component column, or a dim "any" when unfiltered.
+
+    The markup has to sit OUTSIDE ``escape()``: escaping the fallback itself
+    turns ``[dim]`` into ``\\[dim]``, which Rich then prints literally.
+    """
+    component_id = row.get("component_id", "")
+    return escape(component_id) if component_id else "[dim]any[/dim]"
+
+
 def _format_subscription_table(formatter: Any, subscriptions: list[dict[str, Any]]) -> None:
     tbl = Table(
         "Project",
@@ -84,7 +94,7 @@ def _format_subscription_table(formatter: Any, subscriptions: list[dict[str, Any
             escape(sub.get("project_alias", "")),
             escape(sub.get("event", "")),
             _config_cell(sub),
-            escape(sub.get("component_id", "") or "[dim]any[/dim]"),
+            _component_cell(sub),
             escape(sub.get("channel", "")),
             escape(sub.get("address", "")),
             escape(sub.get("branch_id", "") or ""),

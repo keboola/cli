@@ -128,6 +128,26 @@ class TestNotificationListCli:
         assert "catchall@example.com" in result.output
         assert "project-wide" in result.output
 
+    def test_component_column_shows_any_not_raw_markup(self, tmp_path: Path) -> None:
+        """A config-scoped row with no component filter renders a dim "any".
+
+        Escaping the fallback would turn `[dim]` into a literal, so the cell
+        would read `[dim]any[/dim]` on screen.
+        """
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.list_subscriptions.return_value = {
+            "subscriptions": [_row(component_id="")],
+            "errors": [],
+            "project_wide_excluded": 0,
+        }
+
+        result = _run(["notification", "list"], store, service)
+
+        assert result.exit_code == 0
+        assert "any" in result.output
+        assert "[dim]" not in result.output
+
     def test_filters_are_passed_to_the_service(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()

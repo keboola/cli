@@ -72,6 +72,20 @@ def _components_payload(configs: list[tuple[str, str, str]]) -> list[dict]:
     ]
 
 
+def _wire_configs(client: MagicMock, configs: list[tuple[str, str, str]]) -> None:
+    """Make both config-listing calls answer consistently for the same fixture.
+
+    The service picks between them: a component-scoped join uses the cheap
+    per-component listing, a config-id-only join needs the whole-project one.
+    """
+    client.list_components_with_configs.return_value = _components_payload(configs)
+
+    def per_component(component_id: str, branch_id: int | None = None) -> list[dict]:
+        return [{"id": cfg, "name": name} for comp, cfg, name in configs if comp == component_id]
+
+    client.list_component_configs.side_effect = per_component
+
+
 FLOW_SUBSCRIPTION = {
     "id": "1234",
     "event": "job-failed",
@@ -97,6 +111,13 @@ WEBHOOK_SUBSCRIPTION = {
         {"field": "durationOvertimePercentage", "operator": ">=", "value": 0.75},
     ],
     "recipient": {"channel": "webhook", "url": "https://hooks.example.com/kbc"},
+}
+
+COMPONENT_ONLY_SUBSCRIPTION = {
+    "id": "1238",
+    "event": "job-failed",
+    "filters": [{"field": "job.component.id", "value": "keboola.flow"}],
+    "recipient": {"channel": "email", "address": "flowops@example.com"},
 }
 
 BRANCHED_SUBSCRIPTION = {
@@ -202,9 +223,7 @@ class TestListSubscriptions:
     def test_single_project_resolves_config_name_from_pair(self) -> None:
         client = MagicMock()
         client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
-        client.list_components_with_configs.return_value = _components_payload(
-            [("keboola.flow", "98765", "Daily ETL")]
-        )
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
 
         result = _make_service(client).list_subscriptions()
 
@@ -217,9 +236,7 @@ class TestListSubscriptions:
         """A subscription filtering only on config id still resolves a name."""
         client = MagicMock()
         client.list_project_subscriptions.return_value = [WEBHOOK_SUBSCRIPTION]
-        client.list_components_with_configs.return_value = _components_payload(
-            [("keboola.flow", "98765", "Daily ETL")]
-        )
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
 
         result = _make_service(client).list_subscriptions()
 
@@ -229,11 +246,12 @@ class TestListSubscriptions:
         """Two components sharing a config id must not be guessed between."""
         client = MagicMock()
         client.list_project_subscriptions.return_value = [WEBHOOK_SUBSCRIPTION]
-        client.list_components_with_configs.return_value = _components_payload(
+        _wire_configs(
+            client,
             [
                 ("keboola.flow", "98765", "Daily ETL"),
                 ("keboola.orchestrator", "98765", "Legacy ETL"),
-            ]
+            ],
         )
 
         result = _make_service(client).list_subscriptions()
@@ -243,11 +261,51 @@ class TestListSubscriptions:
     def test_deleted_parent_config_leaves_name_empty(self) -> None:
         client = MagicMock()
         client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
-        client.list_components_with_configs.return_value = _components_payload([])
+        _wire_configs(client, [])
 
         result = _make_service(client).list_subscriptions()
 
         assert result["subscriptions"][0]["config_name"] == ""
+
+    def test_component_scoped_join_uses_the_cheap_per_component_listing(self) -> None:
+        """`list_components_with_configs` sends `include=configuration,rows`.
+
+        That is the whole project's config bodies and rows, fetched purely to
+        map an ID to a display name. When every config-scoped row names its
+        component, one listing per component answers the same question.
+        """
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).list_subscriptions()
+
+        client.list_components_with_configs.assert_not_called()
+        client.list_component_configs.assert_called_once_with("keboola.flow", branch_id=None)
+        assert result["subscriptions"][0]["config_name"] == "Daily ETL"
+
+    def test_component_less_row_falls_back_to_the_whole_project_listing(self) -> None:
+        """Resolving a bare config ID needs every component's configs."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [WEBHOOK_SUBSCRIPTION]
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).list_subscriptions()
+
+        client.list_components_with_configs.assert_called_once_with(branch_id=None)
+        assert result["subscriptions"][0]["config_name"] == "Daily ETL"
+
+    def test_each_component_is_listed_once_for_many_subscriptions(self) -> None:
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [
+            FLOW_SUBSCRIPTION,
+            BRANCHED_SUBSCRIPTION,
+        ]
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        _make_service(client).list_subscriptions()
+
+        assert client.list_component_configs.call_count == 1
 
     def test_no_join_call_when_nothing_is_config_scoped(self) -> None:
         """The join payload is proportional to project size -- skip it when useless."""
@@ -257,6 +315,7 @@ class TestListSubscriptions:
         result = _make_service(client).list_subscriptions()
 
         client.list_components_with_configs.assert_not_called()
+        client.list_component_configs.assert_not_called()
         assert result["subscriptions"][0]["config_name"] == ""
 
     def test_event_filter_is_forwarded_to_the_api(self) -> None:
@@ -279,7 +338,7 @@ class TestListSubscriptions:
                 "recipient": {"channel": "email", "address": "dba@example.com"},
             },
         ]
-        client.list_components_with_configs.return_value = _components_payload([])
+        _wire_configs(client, [])
 
         result = _make_service(client).list_subscriptions(component_id="keboola.flow")
 
@@ -288,7 +347,7 @@ class TestListSubscriptions:
     def test_config_filter_is_applied_client_side(self) -> None:
         client = MagicMock()
         client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION, BRANCHED_SUBSCRIPTION]
-        client.list_components_with_configs.return_value = _components_payload([])
+        _wire_configs(client, [])
 
         result = _make_service(client).list_subscriptions(config_id="98765")
 
@@ -301,11 +360,39 @@ class TestListSubscriptions:
             FLOW_SUBSCRIPTION,
             CATCHALL_SUBSCRIPTION,
         ]
-        client.list_components_with_configs.return_value = _components_payload([])
+        _wire_configs(client, [])
 
         result = _make_service(client).list_subscriptions(config_id="98765")
 
         assert [s["subscription_id"] for s in result["subscriptions"]] == ["1234"]
+        assert result["project_wide_excluded"] == 1
+
+    def test_kept_rows_are_never_counted_as_excluded(self) -> None:
+        """A row the filter KEPT must not also be reported as hidden.
+
+        `scope` is derived from the config filter alone, so a subscription
+        filtering only on `job.component.id` is labelled project-wide -- but
+        `--component-id` keeps it, and warning that it was hidden would
+        contradict the table the user is looking at.
+        """
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [COMPONENT_ONLY_SUBSCRIPTION]
+        _wire_configs(client, [])
+
+        result = _make_service(client).list_subscriptions(component_id="keboola.flow")
+
+        assert [s["subscription_id"] for s in result["subscriptions"]] == ["1238"]
+        assert result["project_wide_excluded"] == 0
+
+    def test_dropped_component_only_subscription_is_counted(self) -> None:
+        """It has no config filter, so it fires for the audited config too."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [COMPONENT_ONLY_SUBSCRIPTION]
+        _wire_configs(client, [])
+
+        result = _make_service(client).list_subscriptions(config_id="98765")
+
+        assert result["subscriptions"] == []
         assert result["project_wide_excluded"] == 1
 
     def test_no_exclusion_counter_without_a_scope_filter(self) -> None:
@@ -320,9 +407,7 @@ class TestListSubscriptions:
     def test_multi_project_fanout_merges_rows(self) -> None:
         prod, dev = MagicMock(), MagicMock()
         prod.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
-        prod.list_components_with_configs.return_value = _components_payload(
-            [("keboola.flow", "98765", "Prod ETL")]
-        )
+        _wire_configs(prod, [("keboola.flow", "98765", "Prod ETL")])
         dev.list_project_subscriptions.return_value = [CATCHALL_SUBSCRIPTION]
 
         service = _make_service(
@@ -369,7 +454,7 @@ class TestListSubscriptions:
             CATCHALL_SUBSCRIPTION,
             FLOW_SUBSCRIPTION,
         ]
-        client.list_components_with_configs.return_value = _components_payload([])
+        _wire_configs(client, [])
 
         result = _make_service(client).list_subscriptions()
 
@@ -395,9 +480,7 @@ class TestGetSubscriptionDetail:
     def test_returns_row_with_resolved_config_name(self) -> None:
         client = MagicMock()
         client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
-        client.list_components_with_configs.return_value = _components_payload(
-            [("keboola.flow", "98765", "Daily ETL")]
-        )
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
 
         result = _make_service(client).get_subscription_detail("prod", "1234")
 
@@ -413,13 +496,14 @@ class TestGetSubscriptionDetail:
         result = _make_service(client).get_subscription_detail("prod", "1235")
 
         client.list_components_with_configs.assert_not_called()
+        client.list_component_configs.assert_not_called()
         assert result["scope"] == "project-wide"
 
     def test_join_failure_still_returns_the_subscription(self) -> None:
         """The name is a nicety; a broken lookup must not hide the recipient."""
         client = MagicMock()
         client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
-        client.list_components_with_configs.side_effect = KeboolaApiError(
+        client.list_component_configs.side_effect = KeboolaApiError(
             message="boom", error_code="API_ERROR", status_code=500
         )
 

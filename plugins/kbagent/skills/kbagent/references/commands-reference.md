@@ -311,6 +311,7 @@ Requires the project to be added with its **master ('owner') Storage API token**
 - Event names are **kebab-case**: `job-failed`, `job-succeeded`, `job-succeeded-with-warning`, `job-processing-long`, plus the `phase-job-*` variants. `--event` is forwarded verbatim as `?event=` and deliberately **not** validated -- the API declares `EventName` as an open string, so a newer platform event works without a kbagent release
 - `--component-id` / `--config-id` filter **client-side**: the API's only server-side filter is `?event=`. They match the subscription's own `job.component.id` / `job.configuration.id` filter values (dotted paths into the event payload -- not flat `componentId`/`configurationId` keys)
 - A subscription with **no filters at all** is project-wide and fires for every job. Those are excluded by `--component-id`/`--config-id` and reported as `project_wide_excluded` (plus a warning in human mode), so "who gets paged when this flow breaks" is never silently under-reported -- see [gotchas.md](gotchas.md)
+- Exposed over `kbagent serve` as `GET /notifications` and `GET /notifications/{project}/{subscription_id}`
 - Read-only in this release; creating/deleting subscriptions is not exposed
 
 ## Sync (GitOps)

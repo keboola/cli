@@ -46,6 +46,8 @@ CHANGELOG: dict[str, list[str]] = {
         "`job-processing-long` and the `phase-job-*` variants); `--event` is forwarded "
         "verbatim and deliberately not validated against that list, because the API "
         "declares `EventName` as an open string.",
+        "`kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
+        "`GET /notifications/{project}/{subscription_id}`.",
     ],
     "0.85.1": [
         "Fix: `kbagent config new --push` no longer creates a broken configuration from a "
