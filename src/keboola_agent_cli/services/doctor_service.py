@@ -21,6 +21,7 @@ from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
 from ..models import AppConfig
+from ..permissions import INERT_PATTERN_HINT, INERT_SINCE_VERSION, find_inert_patterns
 from .base import ClientFactory, make_client_factory
 
 # Cap on how many offending items a single check names inline; the rest are
@@ -86,6 +87,10 @@ class DoctorService:
         # Check 8: scheduled tasks still using the removed mcp_tool action
         mcp_tool_task_check = self._check_mcp_tool_tasks()
         all_checks.append(mcp_tool_task_check)
+
+        # Check 9: persisted permission patterns that can no longer match
+        inert_patterns_check = self._check_inert_permission_patterns(config)
+        all_checks.append(inert_patterns_check)
 
         # Build summary
         total = len(all_checks)
@@ -265,6 +270,52 @@ class DoctorService:
                     }
                     for t in affected
                 ],
+            },
+        }
+
+    @staticmethod
+    def _check_inert_permission_patterns(config: AppConfig | None) -> dict[str, Any]:
+        """Check 9: flag persisted permission patterns that can never match.
+
+        The ``tool:`` operation namespace went away with the MCP passthrough in
+        v0.85.0. A policy written before that still LOADS, but every ``tool:*``
+        pattern in it now matches nothing: harmless in a ``mode="allow"`` deny
+        list, but in ``mode="deny"`` an allowance like ``tool:read`` silently
+        stops allowing anything. WARN rather than FAIL -- the policy is still
+        enforced, it is just narrower than its author intended. Read-only:
+        config.json only, no API call.
+        """
+        policy = config.permissions if config is not None else None
+        if policy is None:
+            return {
+                "check": "inert_permission_patterns",
+                "name": "Inert permission patterns",
+                "status": "skip",
+                "message": "No persisted permission policy in config.json.",
+            }
+
+        inert = find_inert_patterns(policy)
+        if not inert:
+            return {
+                "check": "inert_permission_patterns",
+                "name": "Inert permission patterns",
+                "status": "pass",
+                "message": "No inert patterns in the persisted permission policy.",
+            }
+
+        return {
+            "check": "inert_permission_patterns",
+            "name": "Inert permission patterns",
+            "status": "warn",
+            "message": (
+                f"{len(inert)} pattern(s) in the persisted permission policy have been inert "
+                f"since v{INERT_SINCE_VERSION} (the 'tool:' namespace was removed with the "
+                f"MCP passthrough) and match nothing: {', '.join(inert)}. {INERT_PATTERN_HINT}"
+            ),
+            "details": {
+                "inert_since": INERT_SINCE_VERSION,
+                "mode": policy.mode,
+                "patterns": inert,
             },
         }
 

@@ -51,7 +51,11 @@ CHANGELOG: dict[str, list[str]] = {
         "with `tool:*` patterns in it, but those patterns are now inert and never match -- "
         'a `mode="deny"` policy whose only read allowance was `tool:read` therefore denies '
         "everything, fail-closed; re-run `kbagent permissions set` with `cli:read` if that "
-        "is your setup. `kbagent doctor` also lost `--fix`, which only ever installed the "
+        "is your setup. Such stale patterns are no longer silent: `kbagent permissions show` "
+        "names them (and adds an `inert_patterns` key in `--json`) and `kbagent doctor` "
+        "reports them through a new `inert_permission_patterns` check (WARN, not FAIL -- the "
+        "policy is still enforced, just narrower than its author intended). `kbagent doctor` "
+        "also lost `--fix`, which only ever installed the "
         "MCP server, and its `mcp_tool_tasks` check no longer carries "
         "`details.tasks[].native_command` -- the mapping lives in `docs/mcp-migration.md` "
         "instead of being duplicated in the payload. Closes #478 by deletion: the fail-open "

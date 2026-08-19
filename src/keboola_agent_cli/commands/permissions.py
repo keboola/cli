@@ -17,7 +17,12 @@ from ..config_store import ConfigStore
 from ..constants import EXIT_PERMISSION_DENIED
 from ..errors import ErrorCode
 from ..models import PermissionPolicy
-from ..permissions import PermissionEngine
+from ..permissions import (
+    INERT_PATTERN_HINT,
+    INERT_SINCE_VERSION,
+    PermissionEngine,
+    find_inert_patterns,
+)
 from ._helpers import get_formatter, get_service, require_random_code_confirmation
 
 permissions_app = typer.Typer(help="Manage operation permissions (firewall rules)")
@@ -166,6 +171,12 @@ def permissions_show(
         "session_flags": session_flags,
     }
 
+    # Additive key: only present when the persisted policy actually carries
+    # dead rules, so existing JSON consumers see no change on a clean policy.
+    inert_patterns = find_inert_patterns(persisted)
+    if inert_patterns:
+        policy_data["inert_patterns"] = inert_patterns
+
     # Keep legacy top-level keys when a persisted policy exists so existing
     # JSON consumers that read policy_data["mode"] / ["allow"] / ["deny"]
     # remain compatible. Clients that need the new session-layer view read
@@ -190,6 +201,12 @@ def permissions_show(
             formatter.console.print(f"[bold]Allow:[/bold] {', '.join(persisted.allow)}")
         if persisted.deny:
             formatter.console.print(f"[bold]Deny:[/bold] {', '.join(persisted.deny)}")
+        if inert_patterns:
+            formatter.console.print(
+                f"[yellow]{len(inert_patterns)} inert pattern(s) since v{INERT_SINCE_VERSION} "
+                "(the 'tool:' namespace was removed with the MCP passthrough): "
+                f"{', '.join(inert_patterns)}. {INERT_PATTERN_HINT}[/yellow]"
+            )
     else:
         formatter.console.print("[dim]No persisted permission policy (config.json is clean).[/dim]")
 

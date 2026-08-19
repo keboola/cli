@@ -377,6 +377,37 @@ FLAG_ESCALATIONS: dict[str, str] = {
 }
 
 
+# The operation namespace that disappeared with the MCP passthrough, and the
+# version that removed it. A pattern aimed at it can no longer match anything.
+INERT_PATTERN_PREFIX = "tool:"
+INERT_SINCE_VERSION = "0.85.0"
+
+# Single wording for the "your policy carries dead rules" hint, so `permissions
+# show` and `kbagent doctor` cannot drift apart.
+INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
+
+
+def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
+    """Patterns in a persisted policy that can no longer match any operation.
+
+    The MCP passthrough was removed in 0.85.0 and with it the ``tool:``
+    operation namespace; patterns targeting it fall through to fnmatch and
+    match nothing. Surfaced by ``permissions show`` and ``kbagent doctor``
+    so a pre-0.85 policy does not silently carry dead rules.
+
+    Returns the offending patterns in policy order (allow first, then deny),
+    de-duplicated -- the same dead pattern listed twice is one problem.
+    """
+    if policy is None:
+        return []
+
+    inert: list[str] = []
+    for pattern in [*policy.allow, *policy.deny]:
+        if pattern.startswith(INERT_PATTERN_PREFIX) and pattern not in inert:
+            inert.append(pattern)
+    return inert
+
+
 def _matches_pattern(operation: str, pattern: str) -> bool:
     """Check if an operation matches a permission pattern.
 

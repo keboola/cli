@@ -196,6 +196,39 @@ class TestPermissionsShow:
         assert result.exit_code == 0
         assert "No permission policy configured" in result.output
 
+    def test_show_json_reports_inert_tool_patterns(self, tmp_path: Path) -> None:
+        """A pre-0.85 policy carrying tool:* patterns exposes them additively."""
+        policy = PermissionPolicy(mode="deny", allow=["tool:read", "cli:read"], deny=["tool:write"])
+        store = _make_store(tmp_path, policy)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "show"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["inert_patterns"] == ["tool:read", "tool:write"]
+
+    def test_show_json_omits_inert_patterns_when_policy_is_clean(self, tmp_path: Path) -> None:
+        """The key is additive -- absent entirely for a policy with no dead rules."""
+        policy = PermissionPolicy(mode="allow", deny=["cli:write"])
+        store = _make_store(tmp_path, policy)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["--json", "permissions", "show"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert "inert_patterns" not in data
+
+    def test_show_human_mode_warns_about_inert_patterns(self, tmp_path: Path) -> None:
+        policy = PermissionPolicy(mode="deny", allow=["tool:read"])
+        store = _make_store(tmp_path, policy)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["permissions", "show"])
+        assert result.exit_code == 0
+        assert "inert pattern(s) since v0.85.0" in result.output
+        assert "tool:read" in result.output
+        assert "docs/mcp-migration.md" in result.output
+
 
 class TestPermissionsSet:
     """Tests for `kbagent permissions set`."""

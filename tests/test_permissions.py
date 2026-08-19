@@ -10,6 +10,7 @@ from keboola_agent_cli.permissions import (
     FLAG_ESCALATIONS,
     OPERATION_REGISTRY,
     PermissionEngine,
+    find_inert_patterns,
 )
 
 
@@ -414,3 +415,26 @@ class TestFlagEscalations:
         )
         assert entry["category"] == "admin"
         assert entry["status"] == "denied"
+
+
+class TestFindInertPatterns:
+    """Tests for find_inert_patterns() -- dead rules in a pre-0.85 policy."""
+
+    def test_none_policy_returns_empty(self) -> None:
+        assert find_inert_patterns(None) == []
+
+    def test_returns_only_tool_namespace_patterns(self) -> None:
+        policy = PermissionPolicy(
+            mode="deny",
+            allow=["tool:read", "cli:read", "config.list"],
+            deny=["tool:write", "branch.delete", "storage.*"],
+        )
+        assert find_inert_patterns(policy) == ["tool:read", "tool:write"]
+
+    def test_clean_policy_returns_empty(self) -> None:
+        policy = PermissionPolicy(mode="allow", deny=["cli:write", "branch.delete"])
+        assert find_inert_patterns(policy) == []
+
+    def test_duplicates_are_reported_once(self) -> None:
+        policy = PermissionPolicy(mode="deny", allow=["tool:read"], deny=["tool:read"])
+        assert find_inert_patterns(policy) == ["tool:read"]

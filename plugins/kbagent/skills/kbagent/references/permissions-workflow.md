@@ -24,7 +24,9 @@ The agent CANNOT:
 > `tool:*` patterns are INERT since v0.85.0 -- the MCP passthrough they
 > guarded is gone. They still LOAD from an existing policy, they simply match
 > nothing, so a `--mode deny` policy whose only allowance was `tool:read` now
-> denies everything. Rewrite such a policy with `cli:read`.
+> denies everything. Rewrite such a policy with `cli:read`. `kbagent permissions
+> show` names any such pattern (key `inert_patterns` in `--json`) and `kbagent
+> doctor` WARNs via its `inert_permission_patterns` check.
 
 ## Common restriction recipes
 

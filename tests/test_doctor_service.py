@@ -8,7 +8,12 @@ import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
-from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
+from keboola_agent_cli.models import (
+    AppConfig,
+    PermissionPolicy,
+    ProjectConfig,
+    TokenVerifyResponse,
+)
 from keboola_agent_cli.services.doctor_service import DoctorService
 
 
@@ -585,3 +590,58 @@ class TestDoctorServiceCheckClaudePlugin:
         plugin_checks = [c for c in result["checks"] if c["check"] == "claude_plugin"]
         assert len(plugin_checks) == 1
         assert plugin_checks[0]["status"] == "skip"
+
+
+class TestDoctorServiceCheckInertPermissionPatterns:
+    """Tests for DoctorService._check_inert_permission_patterns() (check 9)."""
+
+    def test_skip_without_persisted_policy(self) -> None:
+        result = DoctorService._check_inert_permission_patterns(AppConfig())
+
+        assert result["check"] == "inert_permission_patterns"
+        assert result["status"] == "skip"
+
+    def test_skip_when_config_could_not_be_parsed(self) -> None:
+        result = DoctorService._check_inert_permission_patterns(None)
+
+        assert result["status"] == "skip"
+
+    def test_pass_when_policy_has_no_tool_patterns(self) -> None:
+        config = AppConfig(permissions=PermissionPolicy(mode="allow", deny=["cli:write"]))
+
+        result = DoctorService._check_inert_permission_patterns(config)
+
+        assert result["status"] == "pass"
+        assert "details" not in result
+
+    def test_warn_lists_the_inert_patterns(self) -> None:
+        config = AppConfig(
+            permissions=PermissionPolicy(
+                mode="deny",
+                allow=["tool:read", "cli:read"],
+                deny=["tool:write"],
+            )
+        )
+
+        result = DoctorService._check_inert_permission_patterns(config)
+
+        assert result["status"] == "warn"
+        assert "tool:read" in result["message"]
+        assert "tool:write" in result["message"]
+        assert "docs/mcp-migration.md" in result["message"]
+        assert result["details"]["patterns"] == ["tool:read", "tool:write"]
+        assert result["details"]["inert_since"] == "0.85.0"
+        assert result["details"]["mode"] == "deny"
+
+    def test_check_is_registered_in_run_checks(self, tmp_config_dir: Path) -> None:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        config = store.load()
+        config.permissions = PermissionPolicy(mode="deny", allow=["tool:read"])
+        store.save(config)
+
+        service = DoctorService(config_store=store)
+        checks = service.run_checks()["checks"]
+
+        matching = [c for c in checks if c["check"] == "inert_permission_patterns"]
+        assert len(matching) == 1
+        assert matching[0]["status"] == "warn"
