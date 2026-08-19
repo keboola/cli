@@ -104,23 +104,6 @@ MAX_JOB_LIMIT: int = 500
 # --- Retry-After Header ---
 MAX_RETRY_AFTER_SECONDS: int = 60
 
-# --- MCP Timeouts ---
-DEFAULT_MCP_TOOL_TIMEOUT: int = 60
-DEFAULT_MCP_INIT_TIMEOUT: int = 30
-
-# --- MCP Concurrency ---
-# 0 = unlimited (all projects run in parallel); set KBAGENT_MCP_MAX_SESSIONS to throttle
-DEFAULT_MCP_MAX_SESSIONS: int = 0
-
-# --- MCP HTTP Transport ---
-# Transport mode: "http" (persistent server) or "stdio" (subprocess per call)
-ENV_MCP_TRANSPORT: str = "KBAGENT_MCP_TRANSPORT"
-DEFAULT_MCP_TRANSPORT: str = "stdio"
-# Timeout for the persistent MCP server to start and be healthy
-MCP_SERVER_STARTUP_TIMEOUT: float = 15.0
-# Timeout for health check requests to persistent MCP server
-MCP_SERVER_HEALTH_TIMEOUT: float = 2.0
-
 # --- Storage Job Polling ---
 STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
@@ -230,9 +213,6 @@ ENV_KBC_MASTER_TOKEN: str = "KBC_MASTER_TOKEN"
 ENV_KBC_LOGIN_EMAIL: str = "KBC_LOGIN_EMAIL"
 ENV_KBC_LOGIN_PASSWORD: str = "KBC_LOGIN_PASSWORD"
 ENV_KBC_LOGIN_TOTP_SECRET: str = "KBC_LOGIN_TOTP_SECRET"
-ENV_MCP_TOOL_TIMEOUT: str = "KBAGENT_MCP_TOOL_TIMEOUT"
-ENV_MCP_INIT_TIMEOUT: str = "KBAGENT_MCP_INIT_TIMEOUT"
-ENV_MCP_MAX_SESSIONS: str = "KBAGENT_MCP_MAX_SESSIONS"
 ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 
 # --- Serve subprocess context (since v0.7.x) ---
@@ -284,40 +264,8 @@ AI_CHAT_HELPER_TIMEOUT: float = 300.0
 
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
-MCP_PYPI_URL: str = "https://pypi.org/pypi/keboola-mcp-server/json"
 KBAGENT_GITHUB_REPO: str = "keboola/cli"
 KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/keboola/cli"
-
-# --- MCP self-upgrade (since v0.30.1) ---
-# Subprocess timeout for the `keboola_mcp_server --version` probe and the
-# `uv tool list` install-method probe. These are local subprocess calls,
-# so 5s leaves plenty of headroom for cold-start CPython without slowing
-# kbagent startup observably.
-MCP_PROBE_TIMEOUT: float = 5.0
-# Subprocess timeout for the actual upgrade command (`uv tool upgrade` /
-# `pip install -U` / `uvx --refresh`). Network bound; 180s tolerates a
-# slow PyPI link plus the worst-case dependency-resolution cost.
-MCP_UPGRADE_TIMEOUT: float = 180.0
-# Pre-release opt-in flags for installing/upgrading keboola-mcp-server (#324).
-#
-# keboola-mcp-server >= 1.55.0 declares a pre-release-only transitive
-# dependency: ``toon-format~=0.9.0b1``. On PyPI ``toon-format`` ships exactly
-# two releases -- ``0.1.0`` (stable) and ``0.9.0b1`` (pre-release) -- so the
-# ``~=0.9.0b1`` constraint can ONLY be satisfied by the pre-release.
-#
-# uv refuses pre-releases by default. Crucially, ``--prerelease=if-necessary``
-# does NOT help here: a *stable* toon-format (0.1.0) exists, so uv decides a
-# pre-release is "not necessary", then fails because 0.1.0 violates the pin.
-# Only ``--prerelease=allow`` resolves it (verified empirically, uv 0.10.x).
-# Without the flag ``uv tool upgrade``/``install`` silently backtracks to the
-# last MCP release predating the pin (v1.32.0) and exits 0 -- pinning the
-# fleet to a stale server while reporting a newer version is "available".
-#
-# Scoped to the MCP environment only; never affects the kbagent self-update
-# channel (which stays stable-only unless --beta).
-MCP_UV_PRERELEASE_FLAG: str = "--prerelease=allow"
-MCP_PIP_PRERELEASE_FLAG: str = "--pre"
-
 
 # --- Auto-Update ---
 ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
@@ -351,9 +299,9 @@ ENV_DEFER_UPDATE: str = "KBAGENT_DEFER_UPDATE"
 DEFERRED_UPDATE_MARKER_FILENAME: str = "pending_update.json"
 DEFERRED_UPDATE_EXIT_FILENAME: str = "pending_update.exit"
 DEFERRED_UPDATE_LOG_FILENAME: str = "pending_update.log"
-# The install log is appended to by every update (kbagent and MCP, inline and
-# deferred), so it is rolled once it passes this size rather than growing for
-# the life of the install.
+# The install log is appended to by every update (inline and deferred), so it
+# is rolled once it passes this size rather than growing for the life of the
+# install.
 DEFERRED_UPDATE_LOG_MAX_BYTES: int = 1_048_576
 # How much of a run's own output is carried back in the result. Only the bytes
 # this run appended are ever read, so this bounds one transcript, not the file.

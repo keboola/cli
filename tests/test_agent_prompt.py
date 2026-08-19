@@ -85,8 +85,8 @@ NON_NEGOTIABLE_RULES = [
     ("DRY-RUN FIRST", "must dry-run before apply"),
     # rule 3: never chain update + run
     ("NEVER chain `config update` + `job run`", "no implicit job run"),
-    # rule 4: prefer CLI over MCP
-    ("PREFER CLI OVER MCP", "SKILL.md rule 9"),
+    # rule 4: the MCP passthrough is gone (removed in v0.85.0)
+    ("THERE IS NO MCP PASSTHROUGH", "SKILL.md rule 8"),
     # rule 5: prefer CLI over REST
     ("PREFER CLI OVER REST", "no raw keboola.com REST"),
     # rule 6: version gate
@@ -112,8 +112,8 @@ class TestNonNegotiableRules:
 INLINE_GOTCHAS = [
     # Conditional flows: validate-before-push + INVALID_FLOW_DEFINITION (since 0.57.0)
     ("INVALID_FLOW_DEFINITION", "conditional-flow validation error code"),
-    # Snowflake transformation scaffolding refusal by MCP create_config
-    ("keboola.snowflake-transformation", "MCP create_config refuses this component"),
+    # Snowflake transformation scaffolding (config new --push accepts it)
+    ("keboola.snowflake-transformation", "scaffolding a SQL transformation config"),
     # Primary keys on new output tables crash first run (nullable default)
     ("Primary keys on new output tables", "nullable first-run crash"),
     # source vs destination swap in output mappings

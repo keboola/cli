@@ -192,16 +192,16 @@ class DeveloperPortalIdentity(BaseModel):
 
 
 class PermissionPolicy(BaseModel):
-    """Firewall-style permission policy for CLI and MCP operations.
+    """Firewall-style permission policy for CLI operations.
 
     Controls which operations are allowed/blocked:
     - mode='allow' (default-allow): everything allowed unless in deny list
     - mode='deny' (default-deny): everything denied unless in allow list
 
     Patterns support exact names, globs, and categories:
-    - Exact: 'branch.delete', 'tool:create_config'
-    - Glob: 'sync.*', 'tool:create_*'
-    - Category: 'cli:write', 'cli:read', 'tool:write', 'tool:read'
+    - Exact: 'branch.delete', 'config.update'
+    - Glob: 'sync.*', 'config.row-*'
+    - Category: 'cli:read', 'cli:write', 'cli:destructive', 'cli:admin'
     """
 
     mode: str = Field(

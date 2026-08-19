@@ -285,7 +285,6 @@ looks odd, and every path that would spend it as a credential refuses to.
 | `semantic-layer` (Metastore Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
 | `data-app` (Data Science Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
 | `stream` (Data Streams Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `tool` (MCP server subprocess) | `AUTH_NOT_SUPPORTED_ON_STACK` |
 | AI Service paths — `docs query`, `config examples`, `config new`, `component detail`, `component list --query`, `flow new` / `update` / `validate --project` | `AUTH_NOT_SUPPORTED_ON_STACK` |
 | Scheduler Service paths — `flow schedule`, `flow schedule-remove` | `AUTH_NOT_SUPPORTED_ON_STACK` |
 | `sharing`, when it needs a master token | `AUTH_NOT_SUPPORTED_ON_STACK` unless a master token is in the environment |
@@ -361,8 +360,8 @@ login only completes where a human sits, so the remedy names
 ## 6. Converting a session project to a static token
 
 Sometimes you want a project registered by browser login to keep working
-somewhere sessions do not reach — a scheduled agent, a CI step, the MCP
-subprocess. Give that project a static token explicitly:
+somewhere sessions do not reach — a scheduled agent, a CI step, the importable
+SDK. Give that project a static token explicitly:
 
 ```bash
 kbagent project edit --project my-project-9840 --token YOUR_STATIC_TOKEN

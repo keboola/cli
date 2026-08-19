@@ -164,12 +164,6 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `DP_PUBLISH_REQUIREMENTS_MISSING` | App is missing required fields for publishing (fix via `dev-portal patch` first) |
 | `DP_ICON_UPLOAD_FAILED` | Uploading the app icon to the Developer Portal failed |
 
-### MCP
-
-| Code | Description |
-|---|---|
-| `MCP_ERROR` | The MCP layer itself failed (transport, subprocess, or protocol), as opposed to the tool returning an error result |
-
 ### Programmatic Auth (browser login)
 
 | Code | Description |

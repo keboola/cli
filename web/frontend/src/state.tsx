@@ -21,7 +21,6 @@ export type PageId =
   | "sharing"
   | "data-apps"
   | "components"
-  | "mcp"
   | "localai"
   | "agents"
   | "search"

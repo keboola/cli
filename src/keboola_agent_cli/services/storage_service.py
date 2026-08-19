@@ -1,7 +1,7 @@
 """Storage service - business logic for bucket and table operations.
 
-Provides direct access to Storage API data including sharing/linked bucket
-metadata that MCP tools strip from responses.
+Provides direct access to Storage API data including the sharing/linked
+bucket metadata (sourceBucket, sourceProject) that thinner listings drop.
 """
 
 import csv
@@ -407,8 +407,7 @@ class StorageService(BaseService):
     ) -> dict[str, Any]:
         """List storage buckets from one or more projects.
 
-        Includes sharing/linked bucket metadata (sourceBucket, sourceProject)
-        that is not available via MCP tools.
+        Includes sharing/linked bucket metadata (sourceBucket, sourceProject).
 
         Args:
             aliases: Project aliases to query. If None, queries all.

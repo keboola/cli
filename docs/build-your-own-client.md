@@ -100,7 +100,6 @@ without first knowing the token. Everything else needs auth.
 /lineage         kbagent lineage (build, show, info)
 /sharing         kbagent sharing (list, share, link, unshare, unlink, edges)
 /data-apps       kbagent data-app (CRUD, deploy, start/stop, secrets-*, validate-repo)
-/mcp             kbagent tool (list, call) -- multi-project MCP fan-out
 /kai             kbagent kai (ping, ask, chat, history, preflight, chat-detail)
 /encrypt         kbagent encrypt values
 /search          kbagent search QUERY
@@ -508,7 +507,7 @@ st.dataframe(recent_jobs(alias))
 ```
 
 `streamlit run app.py` and you have the bones of a custom Keboola
-dashboard. Add MCP tool calls, deep lineage, SQL queries — every endpoint
+dashboard. Add deep lineage, SQL queries, scheduled agents — every endpoint
 that powers the bundled SPA is available the same way.
 
 ### OpenAPI-generated SDK

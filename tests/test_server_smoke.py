@@ -42,7 +42,6 @@ EXPECTED_ROUTER_PREFIXES = {
     "/lineage/edges",
     "/sharing",
     "/data-apps",
-    "/mcp/tools",
     "/kai/ping",
     "/encrypt/values",
     "/search",
@@ -104,6 +103,15 @@ def test_openapi_lists_all_routers(client: TestClient) -> None:
     paths = set(spec["paths"].keys())
     missing = EXPECTED_ROUTER_PREFIXES - paths
     assert not missing, f"OpenAPI is missing expected paths: {sorted(missing)}"
+
+
+def test_mcp_routes_are_gone(client: TestClient) -> None:
+    """The `/mcp/*` passthrough was removed in v0.85.0 (epic #390 phase 3)."""
+    spec = client.get("/openapi.json").json()
+    assert not [p for p in spec["paths"] if p.startswith("/mcp")]
+
+    res = client.get("/mcp/tools", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 404
 
 
 def test_every_router_tag_has_openapi_metadata(client: TestClient) -> None:
@@ -439,10 +447,65 @@ def test_sentinel_unsupported_path_keeps_its_error_code(tmp_path: Path) -> None:
     """
     from keboola_agent_cli.errors import SessionAuthUnsupportedError
 
-    exc = SessionAuthUnsupportedError("The MCP server subprocess")
+    exc = SessionAuthUnsupportedError("The Keboola AI Service")
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
         res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
     assert "static Storage token" in res.json()["error"]["message"]
+
+
+def test_post_agents_rejects_mcp_tool(client: TestClient) -> None:
+    """The mcp_tool action type was removed in v0.85.0 -- POST /agents refuses it."""
+    resp = client.post(
+        "/agents",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
+
+
+def test_patch_agents_rejects_mcp_tool(client: TestClient) -> None:
+    """Re-pointing a live task onto the removed type is refused too."""
+    created = client.post(
+        "/agents",
+        json={"name": "live", "action": {"type": "cli_command", "params": {"argv": ["version"]}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+
+    resp = client.patch(
+        f"/agents/{task_id}",
+        json={"action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
+    # the persisted task keeps its live action
+    after = client.get(f"/agents/{task_id}", headers={"Authorization": "Bearer test-token"})
+    assert after.json()["action"]["type"] == "cli_command"
+
+
+def test_agents_test_route_rejects_mcp_tool(client: TestClient) -> None:
+    """The ad-hoc preview route refuses before dispatching anything."""
+    resp = client.post(
+        "/agents/test",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text
+
+
+def test_agents_test_stream_route_rejects_mcp_tool(client: TestClient) -> None:
+    """422 arrives as a normal JSON error, not as an SSE `done` frame."""
+    resp = client.post(
+        "/agents/test/stream",
+        json={"name": "x", "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}}},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "REMOVED" in resp.text

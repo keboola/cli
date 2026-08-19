@@ -1,8 +1,8 @@
-"""Firewall-style permission engine for CLI commands and MCP tools.
+"""Firewall-style permission engine for CLI commands.
 
-Provides an operation registry mapping every CLI command and MCP tool category
-to a risk level, and a PermissionEngine that evaluates allow/deny policies
-with pattern matching (exact, glob, category).
+Provides an operation registry mapping every CLI command to a risk level, and
+a PermissionEngine that evaluates allow/deny policies with pattern matching
+(exact, glob, category).
 """
 
 import fnmatch
@@ -146,9 +146,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "agent.test": "write",
     "agent.cron-preview": "read",
     "agent.prompt-improve": "write",
-    # MCP tools
-    "tool.list": "read",
-    "tool.call": "write",
     # Kai (Keboola AI Assistant)
     "kai.ping": "read",
     "kai.preflight": "read",
@@ -379,53 +376,36 @@ FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
 }
 
-# Prefixes for classifying MCP tools. Single source of truth -- also drives
-# mcp_service.py multi-project dispatch (read tools fan out, others don't).
-# Order of evaluation: destructive > read > write > fail-closed default.
-_MCP_DESTRUCTIVE_PREFIXES = ("delete_", "remove_", "truncate_", "drop_", "purge_")
-# Read markers cover the whole current keboola-mcp-server catalog:
-# get_*, docs_query, query_data, search / search_*, find_component_id,
-# validate_semantic_query, list_* (future-proof).
-_MCP_READ_PREFIXES = ("get_", "list_", "find_", "search_", "docs_", "query_", "validate_", "read_")
-_MCP_READ_EXACT = frozenset({"search"})
-_MCP_WRITE_PREFIXES = (
-    "create_",
-    "update_",
-    "add_",
-    "set_",
-    "modify_",
-    "deploy_",
-    "run_",
-    "start_",
-    "stop_",
-    "cancel_",
-    "upload_",
-    "import_",
-    "push_",
-    "refresh_",
-)
+
+# The operation namespace that disappeared with the MCP passthrough, and the
+# version that removed it. A pattern aimed at it can no longer match anything.
+INERT_PATTERN_PREFIX = "tool:"
+INERT_SINCE_VERSION = "0.85.0"
+
+# Single wording for the "your policy carries dead rules" hint, so `permissions
+# show` and `kbagent doctor` cannot drift apart.
+INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
 
 
-def classify_mcp_tool(tool_name: str) -> str:
-    """Classify an MCP tool by its name prefix -- FAIL-CLOSED (issue #478).
+def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
+    """Patterns in a persisted policy that can no longer match any operation.
 
-    A tool that matches no known read or write marker is classified
-    ``'destructive'`` (the strictest category), so both ``--deny-writes``
-    and ``--deny-destructive`` block it and multi-project dispatch never
-    fans it out. Before 0.73.0 unknown tools fell through to ``'read'``,
-    which allowed e.g. ``run_job`` or a hypothetical ``truncate_table``
-    to pass a write-deny firewall and run on every configured project.
+    The MCP passthrough was removed in 0.85.0 and with it the ``tool:``
+    operation namespace; patterns targeting it fall through to fnmatch and
+    match nothing. Surfaced by ``permissions show`` and ``kbagent doctor``
+    so a pre-0.85 policy does not silently carry dead rules.
 
-    Returns:
-        Risk category: 'read', 'write', or 'destructive'.
+    Returns the offending patterns in policy order (allow first, then deny),
+    de-duplicated -- the same dead pattern listed twice is one problem.
     """
-    if tool_name.startswith(_MCP_DESTRUCTIVE_PREFIXES):
-        return "destructive"
-    if tool_name in _MCP_READ_EXACT or tool_name.startswith(_MCP_READ_PREFIXES):
-        return "read"
-    if tool_name.startswith(_MCP_WRITE_PREFIXES):
-        return "write"
-    return "destructive"
+    if policy is None:
+        return []
+
+    inert: list[str] = []
+    for pattern in [*policy.allow, *policy.deny]:
+        if pattern.startswith(INERT_PATTERN_PREFIX) and pattern not in inert:
+            inert.append(pattern)
+    return inert
 
 
 def _matches_pattern(operation: str, pattern: str) -> bool:
@@ -433,17 +413,18 @@ def _matches_pattern(operation: str, pattern: str) -> bool:
 
     Supports:
     - Exact: 'branch.delete' matches 'branch.delete'
-    - Glob: 'sync.*' matches 'sync.push', 'tool:create_*' matches 'tool:create_config'
+    - Glob: 'sync.*' matches 'sync.push', 'config.*' matches 'config.update'
     - Category 'cli:read' matches all CLI ops with category 'read'
     - Category 'cli:write' matches all CLI ops with category 'write' or 'destructive' or 'admin'
-    - Category 'tool:read' matches all MCP tools (tool:*) with read classification
-    - Category 'tool:write' matches all MCP tools (tool:*) with write or destructive classification
+
+    A policy persisted before v0.85.0 may still carry `tool:read|write|
+    destructive` category patterns or `tool:*` globs from the removed MCP
+    passthrough. They are not special-cased any more: no operation string
+    starts with `tool:`, so they fall through to the plain fnmatch below,
+    match nothing, and stay inert instead of raising.
     """
-    # Category patterns: cli:read, cli:write, tool:read, tool:write
+    # Category patterns: cli:read, cli:write, cli:destructive, cli:admin
     if pattern in ("cli:read", "cli:write", "cli:destructive", "cli:admin"):
-        # cli:* patterns only match CLI operations, never MCP tools
-        if operation.startswith("tool:"):
-            return False
         target_category = pattern.split(":")[1]
         # Fail-closed: unknown CLI ops default to 'write' so they are
         # blocked by cli:write policies. This prevents new commands from
@@ -453,17 +434,6 @@ def _matches_pattern(operation: str, pattern: str) -> bool:
             # cli:write matches write, destructive, and admin
             return op_category in ("write", "destructive", "admin")
         return op_category == target_category
-
-    if pattern in ("tool:read", "tool:write", "tool:destructive"):
-        target_category = pattern.split(":")[1]
-        if not operation.startswith("tool:"):
-            return False
-        tool_name = operation[5:]  # strip 'tool:' prefix
-        tool_category = classify_mcp_tool(tool_name)
-        if target_category == "write":
-            # tool:write matches write and destructive
-            return tool_category in ("write", "destructive")
-        return tool_category == target_category
 
     # Exact or glob match
     return fnmatch.fnmatch(operation, pattern)
@@ -517,7 +487,6 @@ class PermissionEngine:
         """List all known operations with their category and allowed/denied status.
 
         Returns a list of dicts with keys: name, category, status ('allowed' or 'denied').
-        Includes both CLI operations and MCP tool category summaries.
         """
         ops: list[dict[str, str]] = []
 
@@ -526,40 +495,5 @@ class PermissionEngine:
         for name, category in sorted({**OPERATION_REGISTRY, **FLAG_ESCALATIONS}.items()):
             status = "allowed" if self.is_allowed(name) else "denied"
             ops.append({"name": name, "type": "cli", "category": category, "status": status})
-
-        # MCP tool categories (virtual entries for reference)
-        mcp_categories = [
-            (
-                "tool:read",
-                "read",
-                "All MCP read tools (get_*, list_*, search*, find_*, docs_*, query_*, validate_*)",
-            ),
-            (
-                "tool:write",
-                "write",
-                "All MCP write tools (create_*, update_*, add_*, set_*, modify_*, deploy_*, run_*)",
-            ),
-            (
-                "tool:destructive",
-                "destructive",
-                "All MCP destructive tools (delete_*, remove_*, truncate_*, drop_*, purge_*) "
-                "+ any tool matching no known prefix (fail-closed)",
-            ),
-        ]
-        for name, category, description in mcp_categories:
-            # Check a representative tool for status
-            representative = "tool:get_buckets" if category == "read" else "tool:create_config"
-            if category == "destructive":
-                representative = "tool:delete_config"
-            status = "allowed" if self.is_allowed(representative) else "denied"
-            ops.append(
-                {
-                    "name": name,
-                    "type": "mcp",
-                    "category": category,
-                    "status": status,
-                    "description": description,
-                }
-            )
 
         return ops

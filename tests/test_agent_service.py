@@ -21,15 +21,13 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.server.agents_store import AgentAction, AgentRun, Trigger
 from keboola_agent_cli.services.agent_service import AgentService
-from keboola_agent_cli.services.mcp_service import McpService
 
 
 @pytest.fixture
 def agent_service(tmp_config_dir: Path) -> AgentService:
     """Real service backed by a temp config dir."""
     store = ConfigStore(config_dir=tmp_config_dir)
-    mcp = McpService(config_store=store)
-    return AgentService(config_store=store, mcp_service=mcp)
+    return AgentService(config_store=store)
 
 
 def _ai_action(prompt: str = "do something") -> AgentAction:
@@ -38,10 +36,6 @@ def _ai_action(prompt: str = "do something") -> AgentAction:
 
 def _cli_action(*argv: str) -> AgentAction:
     return AgentAction(type="cli_command", params={"argv": list(argv) or ["version"]})
-
-
-def _mcp_action(tool: str = "get_jobs") -> AgentAction:
-    return AgentAction(type="mcp_tool", params={"tool": tool, "input": {"status": "error"}})
 
 
 class TestCrud:

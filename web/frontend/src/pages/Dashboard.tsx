@@ -256,12 +256,6 @@ export function DashboardPage() {
               target="lineage"
               setPage={setPage}
             />
-            <SuggestedAction
-              icon={<Sparkles className="w-3.5 h-3.5 text-accent" />}
-              text="Browse MCP tools and call one ad-hoc"
-              target="mcp"
-              setPage={setPage}
-            />
           </div>
         </section>
       </div>

@@ -1,7 +1,7 @@
 # Demo for docs/TUTORIAL.md §Prerequisites
 # Shows `kbagent doctor` run against the live demo workspace:
 # config + parseable + connectivity (per project) + CLI version +
-# MCP server + conversation id + Claude Code plugin check.
+# conversation id + Claude Code plugin check.
 #
 # Regenerate: make demos (or: vhs docs/demos/demo-doctor.tape)
 

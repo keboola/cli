@@ -24,7 +24,6 @@ make test-e2e
 | `TestE2EErrorHandling` | 6 | Invalid tokens, nonexistent resources, correct exit codes |
 | `TestE2EJsonConsistency` | 2 | All read commands return valid JSON; token never leaks |
 | `TestE2ESyncWorkflow` | 1 (5 steps) | Sync init/pull/status/diff/push in a temp git repo |
-| `TestE2EToolCommands` | 2 | MCP tool list + tool call (skipped if no MCP server) |
 
 ---
 
@@ -138,7 +137,7 @@ Steps 21-27 are wrapped in try/except -- if workspace API is unavailable on the 
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 38 | `kai ping` | Server health, timestamp, MCP status. Gracefully skips all kai tests if `agent-chat` feature not enabled |
+| 38 | `kai ping` | Server health, timestamp, Kai's own MCP status (server-side). Gracefully skips all kai tests if `agent-chat` feature not enabled |
 | 38 | `kai ask -m "..."` | One-shot question, verify response text + chat_id. Skips if auth fails (token type) |
 | 38 | `kai history --limit 5` | At least 1 chat after asking |
 
@@ -196,17 +195,6 @@ Runs in a temporary git repository (`git init` + initial commit).
 
 ---
 
-## TestE2EToolCommands
-
-Skipped if `keboola-mcp-server` is not installed.
-
-| Test | Command | What is verified |
-|------|---------|------------------|
-| `test_tool_list` | `tool list --project ALIAS` | Exit code 0, tools returned |
-| `test_tool_call_get_buckets` | `tool call get_buckets --project ALIAS` | Exit code 0, bucket data returned |
-
----
-
 ## Commands NOT covered by E2E (with reasons)
 
 | Command | Reason |
@@ -220,6 +208,5 @@ Skipped if `keboola-mcp-server` is not installed.
 | `workspace query --file` | Equivalent to `--sql`; only the input source differs |
 | `update` | Would actually update the installed package via PyPI |
 | `repl` | Interactive REPL, not testable via CliRunner |
-| `doctor --fix` | Installs MCP server binary; side effect not suitable for E2E |
 | `init --from-global` | Requires global config with projects; tested via unit tests |
 | `init --read-only` | Creates Claude Code permission rules; tested via unit tests |

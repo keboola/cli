@@ -191,7 +191,6 @@ Use `kbagent <command> --help` for full flag details and examples.
     - kbagent semantic-layer (Metastore Service)
     - kbagent data-app (Data Science Service)
     - kbagent stream (Data Streams Service)
-    - kbagent tool (MCP server subprocess)
     - kbagent sharing, unless a master token is set in the environment
     - AI Service paths: docs query, config examples, config new,
       component detail/search, flow new/update/validate
@@ -220,9 +219,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   single attempt under a short budget by design (a retry would re-present the
   same refresh token); just run the command again.
 
-  In multi-project commands (`data-app list`, `tool list`, `tool call`,
-  `flow list`) a per-project failure keeps its real error_code in the --json
-  `errors[]` array instead of being relabelled UNEXPECTED_ERROR / MCP_ERROR.
+  In multi-project commands (`data-app list`, `flow list`, `storage tables`)
+  a per-project failure keeps its real error_code in the --json `errors[]`
+  array instead of being relabelled UNEXPECTED_ERROR.
   A session project on an unsupported surface therefore reports
   error_code AUTH_NOT_SUPPORTED_ON_STACK per project -- branch on that code
   to auto-remediate (register a static-token alias) rather than parsing the
@@ -417,7 +416,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {{}}
     (empty shell, validation auto-skipped). Works for ALL component types including
-    keboola.snowflake-transformation (unlike tool call create_config which refuses it).
+    keboola.snowflake-transformation.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]
@@ -1305,8 +1304,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|-  [--output-file PATH]
     Encrypt #-prefixed secret values via Keboola Encryption API (one-way, no decrypt).
-    Scope: ComponentSecure (project + component). Use for MCP tool call workflows
-    where ciphertext must exist before calling update_config / create_config.
+    Scope: ComponentSecure (project + component). Use when ciphertext must exist
+    before a `config update` / `config new` / `config clone` write.
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
@@ -1478,9 +1477,6 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
                                         [--extra-arg ARG ...] [--timeout SECONDS]
                        |--type cli_command --argv ARG [--argv ARG ...]
                                            [--timeout SECONDS]
-                       |--type mcp_tool --tool TOOL [--mcp-project ALIAS]
-                                        [--mcp-branch ID] [--input JSON|@file|-]
-                                        [--timeout SECONDS]
                        |--from-file PATH|@path|-)
                        [--trigger-task-id ID --trigger-on success|error|always]
     Persist a new scheduled task. --manual skips the cron loop. Use
@@ -1519,7 +1515,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent agent test [--type ... | --from-file PATH] [--stream] [--name N]
                      [common action flags from `create`]
     Execute an action ad-hoc -- nothing is persisted. Useful for
-    sanity-checking a prompt / tool / argv before saving.
+    sanity-checking a prompt or argv before saving.
 
   kbagent agent cron-preview --cron "0 6 * * 1" [--count N]
     Validate a cron expression and show the next N firings (UTC, max 20).
@@ -1535,25 +1531,16 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
-### MCP Tools (Multi-Project) -- DEPRECATED since 0.74.0, REMOVED in 0.85.0
+### The `tool` group is GONE (removed in v0.85.0)
 
-  The `tool` group and `agent --type mcp_tool` are REMOVED in kbagent
-  v0.85.0, scheduled for the end of August 2026. Migrate before then.
-  Run `kbagent doctor` to list scheduled tasks still on `mcp_tool` --
-  the mcp_tool_tasks check names each task's tool and native replacement.
-  The MCP passthrough is on a removal track (epic #390): every catalog tool
-  has a native command. Prefer the native command in ALL new work -- `tool
-  list` prints the replacement in the cli_equivalent column and `tool call`
-  warns with it (stderr in human mode; additive "deprecation" key in --json).
-
-  kbagent tool list [--project NAME] [--branch ID]
-    List MCP tools with inputSchema + cli_equivalent. Use --json to inspect
-    accepted parameters.
-
-  kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
-    Call an MCP tool. Read tools auto-query all projects. Write tools need --project.
-    --input accepts: inline JSON, @file.json (from file), or - (from stdin).
-    --branch is a CLI flag (NOT a tool input param). Do not pass branch_id in --input.
+  `kbagent tool list` / `kbagent tool call` and `agent --type mcp_tool` no
+  longer exist (epic #390 phase 3). Every tool the old catalog exposed has a
+  native command -- if you know a historical tool name, look it up in
+  docs/mcp-migration.md, which maps each one to its replacement. Never
+  suggest `tool call` or `--type mcp_tool` to a user: those commands fail.
+  Existing `mcp_tool` agent tasks are kept as inert tombstones that never
+  run; `kbagent doctor` reports them as FAIL and `agent list` flags them.
+  Recreate each as `--type cli_command`.
 
 ### Kai -- Keboola AI Assistant (BETA)
 
@@ -1713,30 +1700,35 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
 
-  kbagent doctor [--fix]
-    Health checks. --fix auto-installs MCP server binary. Inside a sync working
-    tree, the sync_secrets check (since 0.55.0) warns about in-sync configs that
-    still hold plaintext #-secrets (#378); skipped outside a sync tree.
+  kbagent doctor
+    Health checks (no --fix since 0.85.0 -- it only installed the MCP server).
+    Inside a sync working tree, the sync_secrets check (since 0.55.0) warns about
+    in-sync configs that still hold plaintext #-secrets (#378); skipped outside a
+    sync tree. The mcp_tool_tasks check FAILs on agent tasks still using the
+    removed `--type mcp_tool`; recreate them as `--type cli_command`.
 
   kbagent version [--beta]
-    Version info for kbagent + keboola-mcp-server. Reports both the locally
-    installed version and the latest available; flags any staleness.
+    Version info for kbagent. Reports both the locally installed version and
+    the latest available; flags any staleness. Since 0.85.0 it reports kbagent
+    only -- keboola-mcp-server is a separate distribution kbagent no longer
+    tracks, so there is no `dependencies` key in --json.
     --beta (since 0.42.0) reports the latest pre-release (beta / rc) instead
     of the latest stable. Same env override: KBAGENT_INCLUDE_PRERELEASE=1.
 
   kbagent update [--beta]
-    Two-stage upgrade (since 0.30.1): kbagent itself AND keboola-mcp-server.
-    The MCP server is detected (uv tool / pip env / uvx) and bumped via the
-    matching command. Both stages always run, regardless of whether kbagent
-    itself needed an upgrade. The same flow runs automatically on every
-    kbagent startup -- the explicit `update` command forces a fresh check.
+    Upgrade kbagent. Since 0.85.0 this is the ONLY thing `update` touches --
+    keboola-mcp-server is neither installed nor refreshed by kbagent; keep it
+    fresh yourself with `uv tool install --upgrade --prerelease=allow
+    keboola-mcp-server` (see docs/mcp-migration.md). The same flow runs
+    automatically on every kbagent startup -- the explicit `update` command
+    forces a fresh check.
     Since 0.79.0 a STANDALONE (PyInstaller) binary -- Chocolatey / WinGet /
     Homebrew / apt / dnf / signed zip -- refuses the kbagent stage and reports
     that channel's own upgrade command instead; a uv/pip reinstall there
     installs a SECOND, unrelated kbagent rather than upgrading the packaged
     one. `version --json` then carries kbagent.install_channel and
     kbagent.upgrade_hint; upgrade_command is empty for a hand-unpacked
-    archive. The MCP stage still runs -- it is a separate distribution.
+    archive.
     --beta (since 0.42.0) opts into pre-release versions (PEP 440 betas/rc,
     e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
     /releases/latest endpoint, which excludes prereleases server-side --
@@ -1756,7 +1748,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
     Set firewall-style permission policy. Patterns: exact (branch.delete),
-    glob (sync.*), category (cli:write, tool:read).
+    glob (sync.*), category (cli:read, cli:write, cli:destructive).
+    NOTE: `tool:*` patterns are INERT since 0.85.0 -- the MCP passthrough
+    they matched is gone. A persisted policy still loads with them, but they
+    match nothing, so a mode=deny policy whose only allowance was `tool:read`
+    now denies everything. Rewrite such a policy with `cli:read`.
 
   kbagent permissions reset
     Remove all restrictions.
@@ -1790,7 +1786,6 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
 6. Health check and setup:
      kbagent --json doctor           # full health check
-     kbagent doctor --fix            # auto-install MCP server
      kbagent --json project status   # test all connections
 
 7. Environment variables:
@@ -1818,7 +1813,6 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
                               (raise for slow WSL git+ source builds). Since 0.60.0 install/update
                               prefer a prebuilt wheel Release asset, so timeouts are rare.
      KBAGENT_UPDATED_FROM     Set to an older version to trigger "What's new" display on next run
-     KBAGENT_MCP_TRANSPORT    MCP transport mode: "http" (default, persistent) or "stdio" (subprocess)
      KBAGENT_INCLUDE_PRERELEASE  Set to "1" (or "true"/"yes"/"on") to opt into pre-release versions for
                               `kbagent update` / `kbagent version` in this shell (equivalent to --beta flag,
                               since 0.43.3). NEVER affects the startup auto-update hook -- that path is
@@ -1827,12 +1821,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
 
-9. MCP tool parameters -- discover with `kbagent --json tool list`:
-     - Only pass parameters defined in the tool's inputSchema via --input
-     - branch_id is a CLI flag (--branch), NOT a tool input parameter
-     - Example: get_configs uses "configs" (list of objects), not flat "config_id"
-       kbagent --json tool call get_configs --project prod --branch 456 \\
-         --input '{{"configs": [{{"component_id": "keboola.snowflake-transformation", "configuration_id": "12345"}}]}}'
+9. Historical MCP tool names: the `tool` group was removed in v0.85.0. If a
+   user or an old script names a tool (get_configs, query_data, ...), map it to
+   its native command with docs/mcp-migration.md -- do not try `tool call`.
 
 10. Parquet export (typed analytics data, no CSV round-trip):
      # Export + download as Parquet dataset (default layout mirrors Keboola addressing)

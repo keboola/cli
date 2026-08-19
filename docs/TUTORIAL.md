@@ -25,8 +25,8 @@ kbagent --version
 kbagent doctor
 ```
 
-`kbagent doctor` walks through config, connectivity, CLI version, MCP
-server, and Claude Code plugin detection. Everything it reports as
+`kbagent doctor` walks through config, connectivity, CLI version, and
+Claude Code plugin detection. Everything it reports as
 `warn` or `fail` comes with a concrete repair step.
 
 ![kbagent doctor output](assets/demo-doctor.gif)
@@ -258,7 +258,7 @@ kbagent init --from-global --read-only
 ```
 
 This creates `.kbagent/config.json` with a permissions policy that
-denies all write CLI commands and all write MCP tools. It also:
+denies all write CLI commands. It also:
 
 - Sets `config.json` to permissions `0400` (read-only even for you;
   kbagent reads via its own path).
@@ -430,9 +430,9 @@ you can rely on:
 2. **Dry-run first, then confirm, then apply** -- no direct mutative
    call without explicit go-ahead.
 3. **Never chain `config update` + `job run`** in one response.
-4. **Prefer CLI over MCP tool call** -- MCP only when CLI does not
-   cover; on `isError: true`, fall back to the `kbagent serve` REST API
-   instead of retrying with reformatted inputs.
+4. **No MCP passthrough** -- `tool call` and `--type mcp_tool` were
+   removed in 0.85.0; the subagent maps any historical tool name to its
+   native command via `docs/mcp-migration.md`.
 5. **Prefer CLI over REST** -- never constructs raw
    curl/httpx/requests calls against `*.keboola.com`.
 6. **Version gate** -- refuses the task if required commands are

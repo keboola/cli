@@ -3,8 +3,8 @@
 ## TL;DR
 
 `kbagent serve` is the kbagent **kernel exposed as an HTTP API**, plus a
-local **agent host** that schedules background tasks (cron + AI CLIs +
-MCP tools), plus a **React web UI** that drives both. Single Python
+local **agent host** that schedules background tasks (cron + kbagent CLI
+runs + AI CLIs), plus a **React web UI** that drives both. Single Python
 process, localhost-only, bearer-auth, scoped to one config directory.
 
 ```
@@ -23,7 +23,7 @@ process, localhost-only, bearer-auth, scoped to one config directory.
 │       └─ they call back via `kbagent http` to *this* serve  │
 │   │                                                         │
 │   ▼                                                         │
-│ Keboola APIs (Storage, Queue, Manage, AI, MCP)              │
+│ Keboola APIs (Storage, Queue, Manage, AI, ...)              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,12 +47,12 @@ parallel surface.
 ### Stage 2 — Local agent host (today, in progress)
 
 Once you have a long-running serve with a token, the obvious next step
-is "let me schedule things to run inside it". Three flavours:
+is "let me schedule things to run inside it". Two flavours:
 
 - `cli_command` — periodic `kbagent <cmd>` runs (the *cron-for-kbagent* use case).
-- `mcp_tool` — periodic MCP tool invocations across all projects.
 - `ai_agent` — periodic prompts to a **local AI CLI** (`claude`, `codex`,
-  `gemini`). The AI can use its own tools (file ops, web search, MCP)
+  `gemini`). The AI can use its own tools (file ops, web search, its own MCP
+  servers)
   to satisfy the prompt, *and* it can call back into this serve via
   `kbagent http get /…` because the scheduler injects the serve URL +
   bearer token into the subprocess environment.
@@ -89,7 +89,6 @@ else lives here, with their own agents that know their projects.
 | `/lineage` | sharing graph, deep-lineage `build` + `show` | `lineage *` + `sync pull` wrapper |
 | `/sharing` | share/unshare/link/unlink | `kbagent sharing *` |
 | `/data-apps` | CRUD, deploy, start/stop, **secrets** | `kbagent data-app *` |
-| `/mcp/tools` | list, schema, **call** (multi-project) | `kbagent tool *` |
 | `/kai/*` | ping, ask, chat, history | `kbagent kai *` |
 | `/encrypt` | encrypt secret values | `kbagent encrypt values` |
 | `/search` | textual + config-based cross-project search | `kbagent search` |
@@ -137,10 +136,8 @@ A NERD-themed React SPA that drives the API:
 - **Data Apps** — list, start/stop, secrets, validate-repo.
 - **Lineage** — Sharing graph (live, cross-project) + Deep lineage (UI
   triggers `sync pull` + `lineage build`, then renders the JSON cache).
-- **MCP Tools** — tile grid; click a tool to open a runner Drawer with
-  pre-filled required-param skeleton from the tool's input schema.
 - **Kai Chat** — chat history scoped to the current project.
-- **Agent Tasks** — cron-scheduled tasks (CLI / MCP / AI agent), with
+- **Agent Tasks** — cron-scheduled tasks (kbagent CLI / AI agent), with
   run-now, run history with AI-response/stdout panels, and an ad-hoc
   "Test now" button on the create form (runs through `/agents/test`,
   same code path as the scheduler, no persistence).

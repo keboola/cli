@@ -22,12 +22,6 @@ def _deterministic_console_width(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _force_stdio_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force stdio transport in all tests to prevent spawning persistent server."""
-    monkeypatch.setenv("KBAGENT_MCP_TRANSPORT", "stdio")
-
-
-@pytest.fixture(autouse=True)
 def _clear_updated_from(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent auto-update changelog leaking between tests."""
     monkeypatch.delenv("KBAGENT_UPDATED_FROM", raising=False)

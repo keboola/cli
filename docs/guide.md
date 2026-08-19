@@ -25,8 +25,7 @@ Resolution order: `--config-dir` flag > `KBAGENT_CONFIG_DIR` env > `.kbagent/` i
 ### Health check
 
 ```bash
-kbagent doctor       # verify setup, token validity, MCP server availability
-kbagent doctor --fix # auto-fix common issues
+kbagent doctor       # verify setup, token validity, plugin install
 ```
 
 ## Auto-update
@@ -40,7 +39,7 @@ kbagent checks for updates on startup and upgrades itself automatically.
 
 ## Permissions
 
-Control which commands and MCP tools your AI agent can use -- like a firewall with allow/deny rules.
+Control which commands your AI agent can use -- like a firewall with allow/deny rules.
 
 ### Quick start -- read-only mode
 
@@ -49,10 +48,10 @@ Control which commands and MCP tools your AI agent can use -- like a firewall wi
 kbagent init --from-global --read-only
 
 # Existing setup: switch to read-only
-kbagent permissions set --mode allow --deny "cli:write" --deny "tool:write"
+kbagent permissions set --mode allow --deny "cli:write"
 ```
 
-The agent can browse configs, list jobs, trace lineage, and read MCP tools -- but cannot create branches, delete workspaces, modify configs, or call write MCP tools. Any blocked command returns exit code 6 with a clear error message.
+The agent can browse configs, list jobs and trace lineage -- but cannot create branches, delete workspaces or modify configs. Any blocked command returns exit code 6 with a clear error message.
 
 ### Policy modes
 
@@ -67,11 +66,9 @@ The agent can browse configs, list jobs, trace lineage, and read MCP tools -- bu
 |---------|---------|
 | `cli:write` | All write/delete/admin CLI commands |
 | `cli:read` | All read-only CLI commands |
-| `tool:write` | All MCP write tools (create_\*, update_\*, delete_\*) |
-| `tool:read` | All MCP read tools (get_\*, list_\*) |
 | `branch.delete` | Exact command |
 | `sync.*` | All sync subcommands |
-| `tool:create_*` | MCP tools matching glob |
+| `tool:*` | Nothing -- inert since 0.85.0 (the MCP passthrough is gone); a `--mode deny` policy that only allowed `tool:read` now denies everything |
 
 ### Management commands
 
@@ -88,7 +85,7 @@ kbagent permissions reset            # Remove restrictions (requires confirmatio
 
 | Layer | What it does | What it stops |
 |-------|-------------|---------------|
-| **kbagent policy** | Deny rules in `config.json` block write commands and MCP tools | Agent running `kbagent branch create`, `tool call create_config`, etc. |
+| **kbagent policy** | Deny rules in `config.json` block write commands | Agent running `kbagent branch create`, `kbagent config update`, etc. |
 | **Filesystem `chmod 0400`** | `config.json` owner-read-only | Agent editing the file directly |
 | **`.claude/settings.json`** | Deny rules block Claude Code from touching the config | Claude Code specifically -- deny rules evaluated before any tool executes |
 
@@ -144,7 +141,7 @@ Create a branch, and every subsequent command auto-targets it:
 kbagent branch create --project prod --name "refactor-pipeline"
 # All commands now target this branch:
 kbagent config list --project prod           # branch configs
-kbagent tool call create_configuration ...   # creates on branch
+kbagent config update --project prod ...     # writes on branch
 kbagent sync pull                            # pulls branch state
 
 # Done? Reset to main:
@@ -202,4 +199,4 @@ kbagent encrypt values --project prod \
   --input '{"#password": "secret123", "#api_token": "tok_xxx"}'
 ```
 
-Returns encrypted values ready for `sync push` or `tool call update_configuration`.
+Returns encrypted values ready for `sync push` or a `config update` write.

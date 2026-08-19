@@ -31,7 +31,6 @@ from ..services.flow_service import FlowService
 from ..services.job_service import JobService
 from ..services.kai_service import KaiService
 from ..services.lineage_service import LineageService
-from ..services.mcp_service import McpService
 from ..services.member_service import MemberService
 from ..services.org_service import OrgService
 from ..services.project_service import ProjectService
@@ -65,7 +64,7 @@ class ServiceRegistry:
     factory`, see `services/base.py` and each service's own factory). There
     is no separate chokepoint to guard here; `kbagent serve` inherits both
     the bearer-session support (Storage/Manage) and the `AUTH_NOT_SUPPORTED_
-    ON_STACK` fail-fast guards (MCP, AI/data-science/metastore/dev-portal/
+    ON_STACK` fail-fast guards (AI/data-science/metastore/dev-portal/
     stream) purely by delegating to those already-guarded services.
 
     Serving session-registered projects is a deliberate trade for web-UI
@@ -115,7 +114,6 @@ class ServiceRegistry:
     dev_portal: DeveloperPortalService = field(init=False)
     semantic_layer: SemanticLayerService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
-    mcp: McpService = field(init=False)
     kai: KaiService = field(init=False)
     encrypt: EncryptService = field(init=False)
     search: SearchService = field(init=False)
@@ -158,7 +156,6 @@ class ServiceRegistry:
         # optional metastore_client_factory; the defaults work for both.
         self.semantic_layer = SemanticLayerService(config_store=cs)
         self.repo_validate = RepoValidateService(config_store=cs)
-        self.mcp = McpService(config_store=cs)
         self.kai = KaiService(config_store=cs)
         self.encrypt = EncryptService(config_store=cs)
         self.search = SearchService(config_store=cs)
@@ -167,7 +164,7 @@ class ServiceRegistry:
         self.feature = FeatureService(config_store=cs)
         self.sync = SyncService(config_store=cs)
         self.variables = VariablesService(config_store=cs)
-        self.doctor = DoctorService(config_store=cs, mcp_service=self.mcp)
+        self.doctor = DoctorService(config_store=cs)
         self.version = VersionService()
         self.token = TokenService(config_store=cs)
         self.docs = DocsService(config_store=cs)

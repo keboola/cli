@@ -2,7 +2,7 @@
 
 One CLI to manage all your Keboola projects. Designed to be driven by AI agents -- Claude Code, Codex, Gemini, Cursor -- but works great standalone too.
 
-No more switching between the UI, old CLI, MCP server, and raw API calls. `kbagent` wraps everything into workflow-oriented commands where dev branches propagate automatically, multi-project operations run in parallel, and AI agents can be sandboxed safely.
+No more switching between the UI, the old CLI, and raw API calls. `kbagent` wraps everything into workflow-oriented commands where dev branches propagate automatically, multi-project operations run in parallel, and AI agents can be sandboxed safely.
 
 ![kbagent in action](docs/assets/demo-hero.gif)
 
@@ -52,7 +52,7 @@ A note on package managers, so nobody loses an afternoon to it: there is **no Wi
 
 A fresh Windows install has no real Python either: `python` resolves to a Microsoft Store stub that only prints an ad for the Store, so a script that probes "is `python` on PATH?" will wrongly conclude yes. None of the paths above need Python on `PATH` -- uv brings its own.
 
-Auto-updates kbagent **and** its `keboola-mcp-server` dependency on every launch (since 0.30.1) -- no more silently running on a six-month-old MCP server; the self-update prefers the prebuilt wheel when available. Run `kbagent changelog` to see what changed.
+Auto-updates kbagent on every launch; the self-update prefers the prebuilt wheel when available. Run `kbagent changelog` to see what changed. (Since 0.85.0 kbagent updates itself only -- if you also run `keboola-mcp-server` in Claude Desktop / Cursor, refresh it yourself with `uv tool install --upgrade --prerelease=allow keboola-mcp-server`.)
 
 ## Web UI (optional)
 
@@ -64,14 +64,13 @@ kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
 
-The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, MCP tools, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") surface in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
+The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") surface in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
 
 ## Agent Tasks
 
-Schedule AI agents to run **inside `kbagent serve`** -- cron, manual triggers, or chained (one agent finishes, another starts). Each task picks one of three action flavours:
+Schedule AI agents to run **inside `kbagent serve`** -- cron, manual triggers, or chained (one agent finishes, another starts). Each task picks one of two action flavours:
 
 - **AI agent** -- `claude` / `codex` / `gemini` with a custom prompt. The subprocess inherits `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` so it calls back via `kbagent http get /...` instead of forking fresh CLI processes against stale config.
-- **MCP tool call** -- any tool from `keboola-mcp-server`, validated against its input schema.
 - **Raw kbagent CLI** -- any `kbagent ...` command with its args (encrypted secrets supported).
 
 Every run is recorded as a persisted timeline (JSONL on disk, `0600`) with authoritative cost & token accounting (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 pricing built-in) and per-step replay over SSE. Long-form markdown reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") auto-surface in a dedicated **Artifacts** tab with GFM preview + one-click Copy / Download `.md` for Slack, Notion, or your editor.
@@ -101,7 +100,7 @@ This CLI is built AI-first. Every command outputs structured JSON (`--json`), er
 /plugin install kbagent@keboola-agent-cli
 ```
 
-Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over REST/MCP, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
+Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over raw REST, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
 
 **Any other agent** -- just tell it to run `kbagent context` and it gets the full command reference.
 
@@ -181,10 +180,9 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Jobs** | List, inspect, run with `--wait` polling (exponential curve), `--timeout` auto-kill, log tail on failure. Row-level execution for multi-row configs. Bulk terminate by ID list or filter (`job terminate --status processing` -- since 0.20.2). |
 | **Flows** | Create, update, delete **conditional flows** (`keboola.flow`) with schema-backed validation (`next[].goto` transitions + conditions; typed `job`/`notification`/`variable` tasks; string ids). Offline `flow validate` and `flow schema --full`. Attach cron schedules (timezone + enabled/disabled state). `keboola.orchestrator` is not supported (dropped in 0.57.0). |
 | **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). Native column types (`VARCHAR(40)`, `NUMBER(18,2)`, `TIMESTAMP_TZ`, `VARIANT`, ...) with per-column `--not-null` and `--default` flags; dev branches auto-materialize target buckets on first write. **`storage swap-tables`** -- atomically swap a typed rebuild back into the original table name in a dev branch without touching downstream config references (since 0.28.0; closes the typify migration footgun). Streamed downloads cap memory at ~1 MiB regardless of table size. Parquet export via `unload-table --file-type parquet`. BigQuery dialect-aware paths in `bucket-detail`. |
-| **Dev branches** | Create a branch, activate it, and every command auto-targets it. Storage writes, MCP, sync -- everything follows. Storage reads default to production (safer). |
+| **Dev branches** | Create a branch, activate it, and every command auto-targets it. Configs, storage writes, sync -- everything follows. Storage reads default to production (safer). |
 | **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. Adopt existing kbc Go CLI checkouts (`sync init --adopt-existing`). |
-| **MCP tools** | Call `keboola-mcp-server` tools with auto-expand, multi-project fan-out, branch propagation, schema validation. **MCP server itself is also auto-updated on every kbagent startup** (since 0.30.1) -- no more "the AI agent recommends a feature my MCP install does not support." |
-| **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Three action flavours per task: `claude` / `codex` / `gemini` with prompt, MCP tool call, or raw kbagent CLI. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
+| **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Two action flavours per task: `claude` / `codex` / `gemini` with a prompt, or a raw kbagent CLI command. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
 | **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
@@ -192,9 +190,9 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Semantic layer** | Define and manage a metastore semantic model per project — datasets, metrics, relationships, constraints, glossary. Validate (incl. `--deep`), export, diff two models/files, import/promote across projects, AI-assisted `build` from tables. `kbagent semantic-layer ...` (alias `sl`). |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
-| **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with sync push and MCP. |
+| **Encryption** | Encrypt secrets (`#password`, `#api_token`) via Keboola Encryption API. Works with `config` writes and `sync push`. |
 | **Permissions** | Firewall for AI agents: read-only, deny-writes, deny-destructive (session-only flags or persisted policy). Project pin + `KBAGENT_PROJECT` env override. Code-level enforcement, stable `ErrorCode` enum, not prompt tricks. |
-| **Auto-update** | Self-updates kbagent + `keboola-mcp-server` on every startup (since 0.30.1). "What's new" after each update. Full changelog via `kbagent changelog`. |
+| **Auto-update** | Self-updates kbagent on every startup. "What's new" after each update. Full changelog via `kbagent changelog`. |
 
 ## Setup options
 
@@ -239,11 +237,11 @@ kbagent auth register-projects --all      # non-interactive
 > **Needs a human at a browser.** There is no headless path, so never run
 > `auth login` from an unattended AI-agent task or a CI step — use a static
 > Storage token there. Session-registered projects also do not work with every
-> command (MCP tools, Kai, data apps, semantic layer, streams, the Python SDK
-> need a static token). Details, capability matrix and error codes:
+> command (Kai, data apps, semantic layer, streams, the Python SDK need a
+> static token). Details, capability matrix and error codes:
 > [docs/auth.md](docs/auth.md).
 
-Run `kbagent doctor` to verify setup (token validity, CLI version, MCP server, Claude Code plugin install).
+Run `kbagent doctor` to verify setup (token validity, CLI version, Claude Code plugin install).
 
 > **Step-by-step guide with dry-runs, token descriptions, expiry, and
 > global-vs-local config:** see [docs/TUTORIAL.md](docs/TUTORIAL.md).
@@ -289,7 +287,6 @@ kbagent semantic-layer  model | show | validate | export | diff | import | promo
 kbagent branch      list | create | use | reset | delete | merge
                     metadata-list | metadata-get | metadata-set | metadata-delete
 kbagent workspace   create | list | detail | delete | password | load | query | from-transformation | gc
-kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
 kbagent schedule    list | detail | find
 kbagent kai         ping | preflight | ask | chat | chat-detail | history
@@ -315,6 +312,7 @@ kbagent             init | context | doctor | version | update | changelog
 | [User Guide](docs/guide.md) | Configuration, permissions, per-directory isolation, workflows |
 | [Python SDK](docs/sdk.md) | The in-process importable `Client`: method reference, typed result models, `py.typed`, idempotent jobs, gotchas, and how to extend the SDK. Demo: [`examples/storage_tui/`](examples/storage_tui/). |
 | [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |
+| [MCP migration](docs/mcp-migration.md) | Migrating off the removed MCP passthrough (v0.85.0): the tool-to-command map, what to do with persisted `mcp_tool` agent tasks, and how to keep `keboola-mcp-server` fresh yourself. |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 
 ## Development

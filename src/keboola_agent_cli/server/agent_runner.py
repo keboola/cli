@@ -2,8 +2,8 @@
 
 Two action types are supported today:
 
-- ``mcp_tool``:    call a keboola-mcp-server tool via :class:`McpService`.
 - ``cli_command``: spawn ``kbagent <argv>`` as a subprocess and capture stdout.
+- ``ai_agent``:    spawn an AI CLI (claude/codex/gemini) with a prompt.
 
 The scheduler is a single asyncio loop attached to the FastAPI lifespan
 (``serve.create_app()``); it ticks once a minute, checks every enabled
@@ -35,7 +35,13 @@ from ..constants import (
     ENV_KBAGENT_UPSTREAM_STATUS,
     ENV_KBAGENT_UPSTREAM_TASK_ID,
 )
-from .agents_store import AgentRun, AgentStore, AgentTask
+from .agents_store import (
+    REMOVED_ACTION_MESSAGE,
+    REMOVED_ACTION_TYPES,
+    AgentRun,
+    AgentStore,
+    AgentTask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +85,9 @@ def _build_subprocess_env(
     it reaches Keboola via ``kbagent http`` (KBAGENT_SERVE_*) or by forking
     ``kbagent`` against the serve's on-disk config (KBAGENT_CONFIG_DIR) -- and
     handing a prompt-injectable child the highest-value credentials is the leak
-    fixed here (GHSA-wm54-r2hh-cxm9). Mirrors the MCP-child isolation in
-    ``mcp_transport._build_minimal_env`` and the manage-token default-deny. The
+    fixed here (GHSA-wm54-r2hh-cxm9). Same principle as the manage-token
+    default-deny: a child process gets a minimal, explicitly allowed env and
+    never inherits admin credentials just because the parent holds them. The
     per-project storage token (``KBC_TOKEN``) is intentionally retained so the
     child can still run headless ``--project __env__`` reads; cli_command
     children keep every token -- they are ``kbagent`` itself and need them.
@@ -692,23 +699,6 @@ def is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
     return prev > last_run
 
 
-async def _run_mcp_tool(registry: Any, params: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch an mcp_tool action via the McpService."""
-    tool = params.get("tool")
-    if not tool:
-        raise ValueError("mcp_tool action requires a 'tool' name in params")
-    project = params.get("project")
-    branch_id = params.get("branch_id")
-    tool_input = params.get("input") or {}
-    return await asyncio.to_thread(
-        registry.mcp.validate_and_call_tool,
-        tool_name=str(tool),
-        tool_input=tool_input,
-        alias=project,
-        branch_id=branch_id,
-    )
-
-
 async def _run_cli(
     registry: Any,
     params: dict[str, Any],
@@ -1104,9 +1094,13 @@ async def run_task_once(
 
     This unifies cron-driven runs with UI-driven runs (RunBroadcaster):
     both produce the same persisted shape, and the detail drawer can
-    replay either using the same /events endpoint. cli_command and
-    mcp_tool runs still use the one-shot path; their structured output
-    fits in the ``output`` field directly.
+    replay either using the same /events endpoint. cli_command runs still
+    use the one-shot path; their structured output fits in the ``output``
+    field directly.
+
+    Action types listed in ``REMOVED_ACTION_TYPES`` (v0.85.0 tombstones)
+    never execute: the run is persisted as an ``error`` naming the
+    migration path.
 
     When ``upstream_run`` + ``upstream_task`` are supplied (the run was
     triggered as a chained downstream), the subprocess receives extra
@@ -1123,14 +1117,9 @@ async def run_task_once(
     run = AgentRun(task_id=task.id, started_at=started.isoformat())
     captured_events: list[dict[str, Any]] = []
     try:
-        if task.action.type == "mcp_tool":
-            # mcp_tool runs in-process via McpService, no env vars to
-            # propagate. The upstream payload, when relevant, can still
-            # be read from store by a follow-up ai_agent task.
-            output = await _run_mcp_tool(registry, task.action.params)
-            run.status = "ok"
-            run.output = output if isinstance(output, dict) else {"value": output}
-        elif task.action.type == "cli_command":
+        if task.action.type in REMOVED_ACTION_TYPES:
+            raise ValueError(REMOVED_ACTION_MESSAGE)
+        if task.action.type == "cli_command":
             output = await _run_cli(
                 registry,
                 task.action.params,
@@ -1168,7 +1157,16 @@ async def run_task_once(
         else:
             raise ValueError(f"Unknown action type: {task.action.type}")
     except Exception as exc:
-        logger.exception("Agent task %s failed", task.id)
+        if task.action.type in REMOVED_ACTION_TYPES:
+            # Designed refusal, not a crash: a traceback here reads as a bug
+            # to whoever ran `kbagent agent run <id>` on a tombstone task.
+            logger.warning(
+                "Agent task %s uses the removed %r action; refusing",
+                task.id,
+                task.action.type,
+            )
+        else:
+            logger.exception("Agent task %s failed", task.id)
         run.status = "error"
         run.error = str(exc)
     finally:
@@ -1245,6 +1243,15 @@ async def run_task_once(
     return run
 
 
+def is_dispatchable(task: AgentTask) -> bool:
+    """Whether the cron scheduler may dispatch this task at all.
+
+    Removed action types (v0.85.0 tombstones) never dispatch, regardless of
+    the persisted ``enabled`` flag.
+    """
+    return task.action.type not in REMOVED_ACTION_TYPES
+
+
 async def scheduler_loop(store: AgentStore, registry: Any, *, tick_seconds: int = 60) -> None:
     """Run forever: every tick, dispatch due tasks."""
     logger.info("Agent scheduler started (tick=%ss)", tick_seconds)
@@ -1255,6 +1262,8 @@ async def scheduler_loop(store: AgentStore, registry: Any, *, tick_seconds: int 
         try:
             now = _now_utc()
             for task in store.load_tasks():
+                if not is_dispatchable(task):
+                    continue
                 if not task.enabled:
                     continue
                 if task.manual:

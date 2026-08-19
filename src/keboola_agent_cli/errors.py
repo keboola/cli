@@ -122,11 +122,6 @@ class ErrorCode(StrEnum):
     DP_PUBLISH_REQUIREMENTS_MISSING = "DP_PUBLISH_REQUIREMENTS_MISSING"
     DP_ICON_UPLOAD_FAILED = "DP_ICON_UPLOAD_FAILED"
 
-    # MCP tool dispatch
-    # Failure originating in the MCP layer itself (transport, subprocess,
-    # protocol) rather than in the tool's own result.
-    MCP_ERROR = "MCP_ERROR"
-
     # Programmatic auth / browser login (since 0.80.0)
     AUTH_NOT_SUPPORTED_ON_STACK = "AUTH_NOT_SUPPORTED_ON_STACK"
     AUTH_FLOW_TIMEOUT = "AUTH_FLOW_TIMEOUT"
@@ -256,9 +251,9 @@ class SessionAuthUnsupportedError(ConfigError):
     reaches a code path that only understands static Storage tokens.
 
     v1 wires bearer sessions through the Storage and Manage clients. Everything
-    outside those paths fails fast here -- the MCP subprocess, the
-    AI/data-science/metastore/stream/Scheduler clients, the ``sharing``
-    master-token path, and the importable SDK; the authoritative list is
+    outside those paths fails fast here -- the AI / data-science / metastore /
+    stream / Scheduler clients, the ``sharing`` master-token path, and the
+    importable SDK; the authoritative list is
     ``SESSION_UNSUPPORTED_FEATURES`` in ``services/_auth_registration.py``. The
     Developer Portal client is absent from it because it authenticates with its
     own identity, never a project token. Failing fast beats sending the literal
@@ -296,7 +291,7 @@ class SessionAuthUnsupportedError(ConfigError):
 
 # Sparse by design: only codes whose broad type differs from the ``"api"``
 # default `map_error_code_to_type` returns. Catch-alls (`UNKNOWN_ERROR`,
-# `INTERNAL_ERROR`, `UNEXPECTED_ERROR`, `MCP_ERROR`, ...) and the API/job/storage
+# `INTERNAL_ERROR`, `UNEXPECTED_ERROR`, ...) and the API/job/storage
 # families are deliberately absent -- a new ErrorCode member needs an entry here
 # only when "api" would be wrong for it.
 _ERROR_CODE_TO_TYPE: dict[str, str] = {

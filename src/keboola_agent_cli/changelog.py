@@ -24,6 +24,43 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.85.0": [
+        "BREAKING: the MCP passthrough is removed (epic #390 phase 3, deprecated since "
+        "0.74.0). `kbagent tool list` and `kbagent tool call` are gone, `kbagent agent "
+        "--type mcp_tool` no longer exists, and the `/mcp/*` REST routes were dropped from "
+        "`kbagent serve`. Every tool the catalog exposed has a native command -- the full "
+        "tool-to-command map now lives in `docs/mcp-migration.md`. Persisted `mcp_tool` "
+        "tasks in `agents.json` are NOT deleted: they survive load/save round-trips as "
+        "inert tombstones, the scheduler skips them instead of firing them, a manual "
+        "`agent run` records an error naming the migration guide, `agent list` flags them, "
+        "and `kbagent doctor` reports them as FAIL -- which flips `doctor --json` "
+        "`summary.healthy` to false (the check was a WARN before), so any CI step gating "
+        "on that flag surfaces them on upgrade. Recreate each one as `--type "
+        "cli_command` with the native command from the guide.",
+        "BREAKING: kbagent no longer installs or auto-updates `keboola-mcp-server`. "
+        "`kbagent update` and the startup auto-update hook update kbagent only, and "
+        "`kbagent version` reports kbagent only -- the `dependencies` key is gone from "
+        "`--json` and the Dependencies panel is gone from the human output. If you use "
+        "keboola-mcp-server with Claude Desktop or Cursor it keeps working exactly as "
+        "before, but you now keep it fresh yourself: `uv tool install --upgrade "
+        "--prerelease=allow keboola-mcp-server` (the pre-release flag is required -- see "
+        "`docs/mcp-migration.md`).",
+        "Removed: the `mcp` Python dependency, the `MCP_ERROR` error code and the "
+        "`tool:*` permission categories. Also gone: the weekly mcp-parity-canary workflow "
+        "(nothing left to keep in parity). A persisted permission policy still loads "
+        "with `tool:*` patterns in it, but those patterns are now inert and never match -- "
+        'a `mode="deny"` policy whose only read allowance was `tool:read` therefore denies '
+        "everything, fail-closed; re-run `kbagent permissions set` with `cli:read` if that "
+        "is your setup. Such stale patterns are no longer silent: `kbagent permissions show` "
+        "names them (and adds an `inert_patterns` key in `--json`) and `kbagent doctor` "
+        "reports them through a new `inert_permission_patterns` check (WARN, not FAIL -- the "
+        "policy is still enforced, just narrower than its author intended). `kbagent doctor` "
+        "also lost `--fix`, which only ever installed the "
+        "MCP server, and its `mcp_tool_tasks` check no longer carries "
+        "`details.tasks[].native_command` -- the mapping lives in `docs/mcp-migration.md` "
+        "instead of being duplicated in the payload. Closes #478 by deletion: the fail-open "
+        "MCP tool classifier no longer exists.",
+    ],
     "0.84.3": [
         "Fix: a Storage job that failed instantly no longer reports success. "
         "`_wait_for_storage_job`, the poller every async Storage operation waits on, checked "

@@ -1,12 +1,16 @@
 # Encryption Workflow
 
-Encrypt secret values before passing them to Keboola configs via MCP tools or API.
+Encrypt secret values before writing them into a Keboola config through an API path that does not encrypt for you.
 
 ## Why you need this
 
-MCP write tools (`update_config`, `create_config`) accept a complete config JSON
-and forward it to the Storage API. They do NOT encrypt anything. If your payload
-contains `#`-prefixed credentials, the ciphertext must be ready BEFORE the tool call.
+Raw Storage API writes (curl, a custom client, or a config body you assemble
+elsewhere) forward your JSON verbatim -- they do NOT encrypt anything. If the
+payload contains `#`-prefixed credentials, the ciphertext must be ready BEFORE
+the write. (`kbagent config update` / `config new` / `config row-*` /
+`config clone` encrypt `#`-keys for you since v0.54.0, fail-closed; you need
+this command when you are composing a body for something else, or want the
+ciphertext up front.)
 
 `kbagent encrypt values` calls the Keboola Encryption API and returns ciphertext
 that Keboola components can decrypt at runtime. The API is **one-way** -- there is
@@ -34,9 +38,9 @@ kbagent --json encrypt values \
 # Output: {"#password": "KBC::ProjectSecure::...encrypted..."}
 ```
 
-## Pipe workflow (MCP tool calls)
+## Pipe workflow
 
-The primary use case -- encrypt, then pass to a write tool:
+The primary use case -- encrypt, then pass the ciphertext to a write:
 
 ```bash
 # Step 1: Encrypt the secret
@@ -46,9 +50,10 @@ CIPHER=$(kbagent --json encrypt values \
   --input '{"#api_token": "rotated-value"}' \
   | jq -r '.data["#api_token"]')
 
-# Step 2: Use in a tool call
-kbagent --json tool call update_config --project my-proj \
-  --input "{\"component_id\": \"keboola.python-transformation-v2\", \"configuration_id\": \"123\", \"parameters\": {\"#api_token\": \"$CIPHER\"}}"
+# Step 2: Write it
+kbagent --json config update --project my-proj \
+  --component-id keboola.python-transformation-v2 --config-id 123 \
+  --set "parameters.#api_token=$CIPHER"
 ```
 
 Or encrypt from a file:

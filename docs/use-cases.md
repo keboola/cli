@@ -255,7 +255,7 @@ kbagent config detail --project marketing \
   --component-id keboola.ex-google-ads --config-id 456
 
 # Check overall project health
-kbagent doctor --fix
+kbagent doctor
 ```
 
 The `--json` flag makes it easy to pipe into scripts, Slack notifications,

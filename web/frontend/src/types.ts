@@ -151,13 +151,6 @@ export interface LineageEdge {
   target_bucket_id: string;
 }
 
-export interface McpTool {
-  name: string;
-  description: string;
-  multi_project: boolean;
-  inputSchema: Record<string, unknown>;
-}
-
 export interface DoctorCheck {
   name: string;
   status: "pass" | "fail" | "warn" | "skip";

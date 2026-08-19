@@ -12,18 +12,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ...constants import AI_PROMPT_HELPER_TIMEOUT
-from ...mcp_parity import annotate_mcp_tool_deprecation
 from ..agent_runner import (
     compute_next_run,
     run_task_once,
     stream_ai_agent_events,
 )
 from ..agents_store import (
+    REMOVED_ACTION_MESSAGE,
+    REMOVED_ACTION_TYPES,
     AgentAction,
     AgentRun,
     AgentStore,
     AgentTask,
     Trigger,
+    annotate_removed_action,
     merge_runtime_input,
     validate_trigger,
 )
@@ -74,6 +76,16 @@ def _validate_trigger(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _reject_removed_action(action: AgentAction | None) -> None:
+    """422 on an action type removed in v0.85.0 (epic #390 phase 3).
+
+    The literal still validates so persisted tasks round-trip, but no
+    surface may create or re-point a task onto one.
+    """
+    if action is not None and action.type in REMOVED_ACTION_TYPES:
+        raise HTTPException(status_code=422, detail=REMOVED_ACTION_MESSAGE)
+
+
 class AgentTaskCreate(BaseModel):
     name: str
     description: str = ""
@@ -114,7 +126,7 @@ def list_tasks(request: Request) -> dict[str, Any]:
     tasks = store.load_tasks()
     # Same additive `deprecation` key the CLI adds -- the Web UI reads this
     # route, and its users are the least likely to run `kbagent doctor`.
-    return {"tasks": [annotate_mcp_tool_deprecation(t.model_dump(mode="json")) for t in tasks]}
+    return {"tasks": [annotate_removed_action(t.model_dump(mode="json")) for t in tasks]}
 
 
 @router.post("", summary="Create a scheduled task")
@@ -123,6 +135,7 @@ def create_task(body: AgentTaskCreate, request: Request) -> dict[str, Any]:
     only runs via `POST /agents/{id}/run` or downstream `trigger` chain.
     """
     store = _store(request)
+    _reject_removed_action(body.action)
     _validate_trigger(store, body.trigger)
     task = AgentTask(
         name=body.name,
@@ -157,6 +170,7 @@ def update_task(task_id: str, body: AgentTaskUpdate, request: Request) -> dict[s
     used to distinguish absent vs. explicit-null).
     """
     store = _store(request)
+    _reject_removed_action(body.action)
     task = store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -212,8 +226,6 @@ class RunNowBody(BaseModel):
       operator's static instructions and the runtime ask.
     - ``cli_command``: ``runtime_input.argv`` (list of strings) is appended
       to the persisted argv list.
-    - ``mcp_tool``: ``runtime_input`` (dict) is shallow-merged into the
-      persisted MCP tool input, with runtime keys winning on conflict.
     """
 
     runtime_input: dict[str, Any] | None = None
@@ -351,8 +363,9 @@ async def test_action(
     produce, but nothing is written to ``agents.json`` or run history.
     """
     # Build a transient task. Reuse run_task_once so the dispatch logic
-    # (mcp_tool / cli_command / ai_agent) is the same code path that
-    # the scheduler uses -- prevents test-time and live-time divergence.
+    # (cli_command / ai_agent) is the same code path that the scheduler
+    # uses -- prevents test-time and live-time divergence.
+    _reject_removed_action(body.action)
     transient = AgentTask(
         name=body.name or "[preview]",
         description=body.description,
@@ -387,10 +400,11 @@ async def test_action_stream(
     and full stderr -- so even if the client missed earlier events, the
     last one is self-contained.
 
-    Non-streaming action types (``cli_command``, ``mcp_tool``) are wrapped:
-    the full result is emitted as a single ``done`` event. This keeps the
-    frontend code path uniform (always `/agents/test/stream`).
+    The non-streaming action type (``cli_command``) is wrapped: the full
+    result is emitted as a single ``done`` event. This keeps the frontend
+    code path uniform (always `/agents/test/stream`).
     """
+    _reject_removed_action(body.action)
     action_type = body.action.type
 
     async def gen() -> AsyncIterator[bytes]:

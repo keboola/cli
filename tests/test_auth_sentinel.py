@@ -53,16 +53,16 @@ class TestRequireStaticToken:
 
     def test_static_token_passes_through(self) -> None:
         # Must not raise.
-        require_static_token("12345-67890-abcdefghijklmnop", feature="The MCP server subprocess")
+        require_static_token("12345-67890-abcdefghijklmnop", feature="The Keboola AI Service")
 
     def test_session_token_raises_with_correct_error_code(self) -> None:
         with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            require_static_token(make_session_token(1), feature="The MCP server subprocess")
+            require_static_token(make_session_token(1), feature="The Keboola AI Service")
 
         error = exc_info.value
         assert error.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert error.feature == "The MCP server subprocess"
-        assert "The MCP server subprocess" in error.message
+        assert error.feature == "The Keboola AI Service"
+        assert "The Keboola AI Service" in error.message
         assert "kbagent project add" in error.message
 
     def test_remedy_is_appended_to_message(self) -> None:
