@@ -287,7 +287,6 @@ kbagent semantic-layer  model | show | validate | export | diff | import | promo
 kbagent branch      list | create | use | reset | delete | merge
                     metadata-list | metadata-get | metadata-set | metadata-delete
 kbagent workspace   create | list | detail | delete | password | load | query | from-transformation | gc
-kbagent tool        list | call
 kbagent sync        init | pull | status | diff | push | branch-link | branch-unlink | branch-status
 kbagent schedule    list | detail | find
 kbagent kai         ping | preflight | ask | chat | chat-detail | history

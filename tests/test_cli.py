@@ -1066,7 +1066,7 @@ class TestFirewallFlags:
                 ],
             )
 
-        # Merged policy: mode=deny, allow=[cli:write,cli:read], deny=[cli:write,tool:write].
+        # Merged policy: mode=deny, allow=[cli:write,cli:read], deny=[cli:write].
         # Default-deny rule: allowed AND not denied. cli:write matches both
         # allow and deny -- deny wins.
         assert result.exit_code == 6, result.output

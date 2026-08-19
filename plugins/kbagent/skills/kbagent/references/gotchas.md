@@ -80,11 +80,11 @@ Versioning convention:
   `session_unsupported_features` (`auth status` does **not** carry it), so read
   it from there instead of reconstructing it from memory:
   `kai`; `semantic-layer` (Metastore); `data-app` (Data Science);
-  `stream` (Data Streams); `sharing` unless a master
-  token is in the environment; the AI Service paths (`docs query`,
-  `config examples`, `config new`, `component detail`/`search`,
-  `flow new`/`update`/`validate`); the Scheduler Service paths
-  (`flow schedule`, `flow schedule-remove`); and the importable SDK
+  `stream` (Data Streams); `sharing` unless a master token is in the
+  environment; the AI Service paths (`docs query`, `config examples`,
+  `config new`, `component detail`/`search`, `flow new`/`update`/`validate`);
+  the Scheduler Service paths (`flow schedule`, `flow schedule-remove`);
+  and the importable SDK
   (`lib.Client`). If a task needs one of those, register the same project again
   with a static Storage token (`project add --project <alias2> --token ...`)
   instead of fighting the guard.
@@ -1884,7 +1884,7 @@ unknown -- do not try to parse a fallback message.
 ## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
 
 - Session-only. Flags synthesize a `PermissionPolicy` for the current invocation and merge it with any persisted policy in `config.json`. **Never** written to disk.
-- Classes: `--deny-writes` blocks `cli:write` + `tool:write` (covers write+destructive+admin). `--deny-destructive` is narrower -- blocks only `cli:destructive` + `tool:destructive`; pure write ops like `storage create-bucket` stay allowed.
+- Classes: `--deny-writes` appends `cli:write` (covers write+destructive+admin). `--deny-destructive` is narrower -- it appends only `cli:destructive`; pure write ops like `storage create-bucket` stay allowed. (Both flags also appended a matching `tool:*` pattern until v0.85.0; those patterns are inert now that the MCP passthrough is gone.)
 - Blocked operation exits **6** with `error.code = PERMISSION_DENIED`. Read commands stay unaffected.
 - Safe to run under either flag without mutating the saved policy -- useful when your agent needs a one-shot read-only run on a machine with a write-enabled config.
 - `permissions check OPERATION` reflects the EFFECTIVE policy (persisted policy MERGED with session flags) **(since v0.30.5)**. Pre-0.30.5 it consulted only the persisted policy, so an agent doing self-introspection (`kbagent --deny-writes permissions check branch.create`) got `allowed: true` despite the session flag denying that op at execution time. If your agent uses `permissions check` to gate destructive actions and may run against pre-0.30.5 installs, also re-check at execution-time exit codes (6 = denied) rather than trusting the dry probe alone.

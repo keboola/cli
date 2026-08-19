@@ -40,11 +40,11 @@ naming the static-token fallback. `SESSION_UNSUPPORTED_FEATURES` in
 `auth register-projects` print it and both ship it in `--json` as the additive
 key `session_unsupported_features` (`auth status` does **not** carry it):
 `kai`; `semantic-layer` (Metastore); `data-app` (Data Science); `stream` (Data
-Streams); `sharing` unless a master token is in the
-environment; the AI Service paths (`docs query`, `config examples`,
-`config new`, `component detail`/`search`, `flow new`/`update`/`validate`); the
-Scheduler Service paths (`flow schedule`, `flow schedule-remove`); and the
-importable SDK (`lib.Client`).
+Streams); `sharing` unless a master token is in the environment; the AI Service
+paths (`docs query`, `config examples`, `config new`, `component
+detail`/`search`, `flow new`/`update`/`validate`); the Scheduler Service paths
+(`flow schedule`, `flow schedule-remove`); and the importable SDK
+(`lib.Client`).
 
 `dev-portal` is **not** on that list -- it authenticates with its own Developer
 Portal identity, never a project token. `flow` splits: `flow list` /
@@ -94,7 +94,7 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 The `permissions` subcommands persist a write/destructive policy to config.json (the `--deny-*` flags above are the one-shot form). The engine guards against agent mistakes; it is not a sandbox.
 - `permissions list [--category read|write|destructive|admin]` -- list all operations with their risk category and current allowed/denied status
 - `permissions show` -- show the current active permission policy
-- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:write`, `cli:destructive`, `tool:write`
+- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:read`, `cli:write`, `cli:destructive`. `tool:*` patterns are INERT since v0.85.0 (the MCP passthrough is gone) -- they load but match nothing, so a `--mode deny` policy whose only allowance was `tool:read` now denies everything
 - `permissions reset` -- remove all permission restrictions
 - `permissions check OPERATION` -- check if a specific operation is allowed (e.g. `permissions check storage.delete-table`)
 
@@ -415,7 +415,7 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 - `agent runs TASK_ID [--limit N]` -- run history (newest first; default limit 50).
 - `agent run-detail TASK_ID RUN_ID` -- single AgentRun record (status / summary / output / error).
 - `agent run-events TASK_ID RUN_ID` -- replay the persisted ai_agent event timeline (only present for ai_agent runs from v0.10+).
-- `agent test [--type ... | --from-file PATH] [--stream] [--name N] [common action flags]` -- execute an action ad-hoc; nothing is persisted. Same dispatcher as the cron scheduler, useful for sanity-checking a prompt / tool / argv before saving.
+- `agent test [--type ... | --from-file PATH] [--stream] [--name N] [common action flags]` -- execute an action ad-hoc; nothing is persisted. Same dispatcher as the cron scheduler, useful for sanity-checking a prompt / argv before saving.
 - `agent cron-preview --cron "..." [--count N]` -- validate a cron expression and show the next N firings (UTC, capped at 20).
 - `agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|gemini] [--project ALIAS] [--extra-arg X ...] [--stream/--no-stream]` -- AI-polished single-shot prompt for an unattended agent task. The final `done` event's `data.prompt` carries the cleaned body ready to drop into `agent create --prompt ...`. `--extra-arg` is subject to the `KBAGENT_ALLOW_AI_EXTRA_ARGS` opt-in (since v0.60.2) -- see [gotchas.md](gotchas.md).
 

@@ -1748,7 +1748,11 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
     Set firewall-style permission policy. Patterns: exact (branch.delete),
-    glob (sync.*), category (cli:write, tool:read).
+    glob (sync.*), category (cli:read, cli:write, cli:destructive).
+    NOTE: `tool:*` patterns are INERT since 0.85.0 -- the MCP passthrough
+    they matched is gone. A persisted policy still loads with them, but they
+    match nothing, so a mode=deny policy whose only allowance was `tool:read`
+    now denies everything. Rewrite such a policy with `cli:read`.
 
   kbagent permissions reset
     Remove all restrictions.

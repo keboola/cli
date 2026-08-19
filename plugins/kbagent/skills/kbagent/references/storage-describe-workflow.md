@@ -2,8 +2,8 @@
 
 `kbagent storage describe-*` attaches human-readable descriptions to storage
 buckets, tables, and columns so that downstream consumers (dashboards, the
-the Keboola UI, `kbagent storage buckets`/`tables`, AI agents) can surface meaningful
-documentation rather than raw IDs. Descriptions are stored as metadata on
+Keboola UI, `kbagent storage buckets`/`tables`, AI agents) can surface
+meaningful documentation rather than raw IDs. Descriptions are stored as metadata on
 the storage object and round-trip via `storage bucket-detail` / `storage
 table-detail`.
 

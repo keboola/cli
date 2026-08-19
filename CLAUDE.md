@@ -520,7 +520,9 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 
 # permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
 # flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns
-# like cli:write, cli:destructive, tool:write). The agent guards rails against mistakes; not a sandbox.
+# like cli:read, cli:write, cli:destructive). `tool:*` patterns are INERT since 0.85.0 (the MCP
+# passthrough is gone): they load but match nothing, so a mode=deny policy whose only allowance was
+# tool:read now denies everything. The agent guards rails against mistakes; not a sandbox.
 kbagent permissions list [--category read|write|destructive|admin]
 kbagent permissions show
 kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
