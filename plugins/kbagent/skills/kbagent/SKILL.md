@@ -7,8 +7,7 @@ description: >
   debugging, GitOps config sync (pull/push/diff/clone), bucket sharing and
   linking, encrypting secrets, Storage tables, files, and snapshots
   (backup/restore), data apps (create/deploy/logs/secrets), flows and
-  schedules, notification subscriptions (Flow Notifications tab),
-  members and invitations, feature flags, OTLP data streams,
+  schedules, members and invitations, feature flags, OTLP data streams,
   scoped Storage tokens, the semantic layer (models, metrics, constraints),
   the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
@@ -16,8 +15,7 @@ description: >
   data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
-  browser login, PAYG credits, flow notifications, notification
-  subscription, alert recipients, who gets notified.
+  PAYG credits, flow notifications, alert recipients.
 ---
 
 # kbagent -- Keboola Agent CLI
