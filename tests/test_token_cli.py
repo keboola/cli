@@ -188,3 +188,76 @@ class TestErrors:
         )
         assert result.exit_code != 0
         assert json.loads(result.output)["status"] == "error"
+
+
+class TestList:
+    def _svc_with(self, tokens: list[dict]) -> MagicMock:
+        svc = MagicMock()
+        svc.list_tokens.return_value = {
+            "alias": ALIAS,
+            "count": len(tokens),
+            "tokens": tokens,
+        }
+        return svc
+
+    def test_list_json(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with(
+            [
+                {
+                    "id": "12345",
+                    "description": "device enrollment",
+                    "created": "2026-08-01T10:00:00+0200",
+                    "expires": "2026-09-01T10:00:00+0200",
+                    "isExpired": False,
+                    "isMasterToken": False,
+                }
+            ]
+        )
+        result = _invoke(config_dir, svc, ["--json", "token", "list", "--project", ALIAS])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["data"]["count"] == 1
+        assert payload["data"]["tokens"][0]["id"] == "12345"
+        svc.list_tokens.assert_called_once_with(alias=ALIAS)
+
+    def test_list_human_renders_rows(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with(
+            [
+                {"id": "1", "description": "master token", "isMasterToken": True},
+                {"id": "2", "description": "device enrollment", "isMasterToken": False},
+            ]
+        )
+        result = _invoke(config_dir, svc, ["token", "list", "--project", ALIAS])
+        assert result.exit_code == 0
+        assert "device enrollment" in result.stdout
+        assert "12345" not in result.stdout
+
+    def test_list_human_empty(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(config_dir, self._svc_with([]), ["token", "list", "--project", ALIAS])
+        assert result.exit_code == 0
+        assert "No tokens" in result.stdout
+
+    def test_list_api_error_exits_nonzero(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = MagicMock()
+        svc.list_tokens.side_effect = KeboolaApiError(
+            message="Access denied", status_code=403, error_code="ACCESS_DENIED"
+        )
+        result = _invoke(config_dir, svc, ["--json", "token", "list", "--project", ALIAS])
+        # ACCESS_DENIED is a general error (1) in this CLI's exit-code map;
+        # only INVALID_TOKEN / session failures are the auth class (3).
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "ACCESS_DENIED"

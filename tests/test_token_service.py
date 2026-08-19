@@ -141,3 +141,54 @@ class TestRefreshToken:
         factory, _ = client_factory
         with pytest.raises(ConfigError):
             _svc(store, factory).refresh_token(alias="nope", token_id="1")
+
+
+class TestListTokens:
+    def test_returns_alias_and_tokens(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_tokens.return_value = [
+            {"id": "1", "description": "master", "isMasterToken": True},
+            {"id": "2", "description": "device", "isMasterToken": False},
+        ]
+        result = _svc(store, factory).list_tokens(alias=ALIAS)
+        assert result["alias"] == ALIAS
+        assert result["count"] == 2
+        assert [t["id"] for t in result["tokens"]] == ["1", "2"]
+        factory.assert_called_once_with(STACK_URL, TOKEN)
+        mock.close.assert_called_once()
+
+    def test_secret_values_are_stripped(self, store, client_factory) -> None:
+        """A project with `force-decrypted-token` returns live secrets in the list.
+
+        `token create` reveals a secret ONCE by design; a listing that dumped
+        every live token's value to stdout would break that contract wholesale.
+        """
+        factory, mock = client_factory
+        mock.list_tokens.return_value = [
+            {"id": "1", "description": "master", "token": "1-liveSecretValue"},
+            {"id": "2", "description": "device"},
+        ]
+        result = _svc(store, factory).list_tokens(alias=ALIAS)
+        assert "token" not in result["tokens"][0]
+        assert "liveSecretValue" not in str(result)
+        # everything else survives untouched
+        assert result["tokens"][0]["description"] == "master"
+
+    def test_empty_list(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_tokens.return_value = []
+        result = _svc(store, factory).list_tokens(alias=ALIAS)
+        assert result["tokens"] == []
+        assert result["count"] == 0
+
+    def test_unknown_alias_raises(self, store, client_factory) -> None:
+        factory, _ = client_factory
+        with pytest.raises(ConfigError):
+            _svc(store, factory).list_tokens(alias="nope")
+
+    def test_client_closed_when_listing_raises(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_tokens.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError):
+            _svc(store, factory).list_tokens(alias=ALIAS)
+        mock.close.assert_called_once()

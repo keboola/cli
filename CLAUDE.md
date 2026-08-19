@@ -511,12 +511,18 @@ kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
 # token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
+kbagent token list --project NAME
 kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
 kbagent token delete --project NAME --token-id ID [--yes]
 kbagent token refresh --project NAME --token-id ID [--yes]
-# SDK (importable Client(url,token)) now exposes create_scoped_token / delete_token / refresh_token /
-# create_stream_source / get_stream_source / list_stream_sources / delete_stream_source: dicts on .raw,
-# typed ScopedTokenResult / StreamSourceResult on the facade. See docs/sdk.md.
+# `token list` (issue #599): GET /v2/storage/tokens -- the only way to see what already exists and to
+#   get the id `delete`/`refresh` need, without the web UI. Secrets are STRIPPED from every row: a
+#   project with the `force-decrypted-token` feature has the API embed live values in the listing, and
+#   echoing those would break the group's "revealed once, at mint" contract for every token at once.
+# SDK (importable Client(url,token)) now exposes create_scoped_token / list_tokens / delete_token /
+# refresh_token / create_stream_source / get_stream_source / list_stream_sources /
+# delete_stream_source: dicts on .raw, typed ScopedTokenResult / TokenListEntryResult /
+# StreamSourceResult on the facade. See docs/sdk.md.
 
 # permissions: session write/destructive firewall. The top-level --deny-writes / --deny-destructive
 # flags are the one-shot form; `permissions set` persists a policy (mode allow|deny + allow/deny patterns

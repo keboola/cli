@@ -3715,3 +3715,65 @@ mapping in favor of `changed_since: adaptive`, which tracks a
   assumption: here the empty state is the expensive, surprising path, and a
   seeded checkpoint is the conservative one. Do not assume "no state = safe
   default" when adaptive is involved.
+
+## A failed POST/PATCH is no longer retried -- and the error now says what to do (since v0.86.0)
+
+kbagent used to retry every request on `429/500/502/503/504`, regardless of
+HTTP method. That is safe for a read and unsafe for a write, because a 5xx does
+not mean "nothing happened":
+
+- **Keboola's token mint persists the token row before the step that can
+  throw.** `POST /v2/storage/tokens` saves the new token, generates its secret,
+  and only then resolves bucket permissions -- and that last block is outside
+  any transaction. A 500 raised there leaves a live token behind that the
+  caller never saw, so three attempts could leave three of them. This is what
+  [issue #599](https://github.com/keboola/cli/issues/599) reported from the
+  `europe-west3.gcp` stack.
+- The same hazard applies to every other non-idempotent call: `job run`,
+  `job terminate`, `config new`, `flow new`, `config oauth-url` (which mints a
+  token of its own), `data-app deploy`.
+
+What changed:
+
+- **5xx is retried only on `GET/HEAD/OPTIONS/PUT/DELETE`.** A `POST`/`PATCH`
+  answered with a 5xx fails on the first attempt.
+- **429 is still retried on every method** -- the server is stating it did not
+  process the request, so repeating it is safe.
+- **Transport failures are split by what they prove.** A refused connection
+  (`ConnectError`) or a connect/pool timeout never delivered the request and is
+  still retried on any method. A read/write timeout means the request was sent
+  and the outcome is unknown, so it is not retried on a `POST`/`PATCH`.
+
+Two consequences for an agent reading an error:
+
+1. **`retryable: false` on a 500 from a write is deliberate, not a
+   misclassification.** Do not paper over it with a retry loop of your own. The
+   correct next step is to check what the server already did -- for a token
+   mint, `kbagent token list`; for a job, `kbagent job list`.
+2. **A 5xx message now carries the `exceptionId`** the Keboola API returns
+   alongside its generic `"Application error."`, plus one of two hints: the
+   request was not retried because the method is not idempotent, or the same
+   5xx survived all 3 attempts and is therefore an upstream incident. Quote the
+   `exceptionId` when escalating to Keboola support -- it is the only handle
+   that traces back to the actual server-side exception.
+
+## `token list` is the only way to see what exists -- and it never shows secrets (since v0.86.0)
+
+`kbagent token list --project P` (`GET /v2/storage/tokens`) closes the gap where
+the `token` group could mint, revoke, and rotate but not enumerate -- so there
+was no way to obtain the `--token-id` that `delete` / `refresh` require without
+the web UI.
+
+- **Secrets are stripped from every row, including under `--json`.** On a
+  project carrying the `force-decrypted-token` feature the Storage API embeds
+  each token's live value in the listing. kbagent removes it at the service
+  layer (and in the SDK facade) before anything is rendered: `token create` /
+  `token refresh` are the only reveals, and a listing that dumped live values
+  would break that contract for every token in the project at once. Do not
+  reach for `kbagent http get` to work around this.
+- **It needs `canManageTokens`, same as `create`.** A plain Storage token gets
+  a 403 -> `ACCESS_DENIED`.
+- The master token appears in the listing with `isMasterToken: true` and cannot
+  be deleted -- the API refuses.
+- SDK parity: `Client.list_tokens() -> list[TokenListEntryResult]`, secrets
+  stripped there too.

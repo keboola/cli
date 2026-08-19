@@ -57,6 +57,7 @@ from .result_models import (
     QueryResult,
     ScopedTokenResult,
     StreamSourceResult,
+    TokenListEntryResult,
     UploadTableResult,
 )
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
@@ -566,6 +567,22 @@ class Client:
                 expires_in=expires_in,
             )
         )
+
+    def list_tokens(self) -> list[TokenListEntryResult]:
+        """List the project's Storage API tokens as typed entries.
+
+        The counterpart to :meth:`create_scoped_token`: it answers "what did I
+        already mint" and hands back the ``id`` that :meth:`delete_token` /
+        :meth:`refresh_token` need. Secrets are stripped before validation --
+        the mint is the only reveal (see :class:`TokenListEntryResult`). The
+        acting token must carry ``canManageTokens``.
+        """
+        return [
+            TokenListEntryResult.model_validate(
+                {key: value for key, value in token.items() if key != "token"}
+            )
+            for token in self._client.list_tokens()
+        ]
 
     def delete_token(self, token_id: str) -> None:
         """Revoke a Storage API token immediately (active per-device revocation)."""

@@ -292,14 +292,14 @@ class TestIconUpload:
             url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
-        # Add 3 responses (MAX_RETRIES=3) since 500 is retryable.
-        for _ in range(3):
-            httpx_mock.add_response(
-                method="POST",
-                url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/icon",
-                status_code=500,
-                json={"error": "boom"},
-            )
+        # One response: an icon upload is a POST, and a POST is no longer
+        # retried on 500 (issue #599).
+        httpx_mock.add_response(
+            method="POST",
+            url="https://apps-api.keboola.com/vendors/keboola/apps/keboola.ex-foo/icon",
+            status_code=500,
+            json={"error": "boom"},
+        )
         # Suppress retry sleeps.
         import keboola_agent_cli.http_base as http_base_module
 

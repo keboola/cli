@@ -3092,14 +3092,14 @@ class TestKillJob:
         missing jobs. Client passes the error through; service layer distinguishes
         the two cases via a follow-up GET.
         """
-        # HTTP 500 triggers retry path (MAX_RETRIES total attempts); stub each.
-        for _ in range(MAX_RETRIES):
-            httpx_mock.add_response(
-                url="https://queue.keboola.com/jobs/1/kill",
-                method="POST",
-                json={"error": "Internal Server Error occurred.", "code": 404},
-                status_code=500,
-            )
+        # A kill is a POST, so the 500 is NOT retried -- one stub, one attempt
+        # (issue #599). Retrying it would be a second terminate command.
+        httpx_mock.add_response(
+            url="https://queue.keboola.com/jobs/1/kill",
+            method="POST",
+            json={"error": "Internal Server Error occurred.", "code": 404},
+            status_code=500,
+        )
 
         with (
             KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
@@ -3108,6 +3108,7 @@ class TestKillJob:
             client.kill_job("1")
 
         assert exc_info.value.status_code == 500
+        assert len(httpx_mock.get_requests()) == 1
 
     def test_kill_job_url_encodes_job_id(self, httpx_mock) -> None:
         """kill_job() URL-encodes the job ID to prevent path injection."""

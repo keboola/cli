@@ -19,6 +19,7 @@ from typing import Any, NoReturn
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
@@ -69,6 +70,43 @@ def _format_created_token(console: Console, data: dict[str, Any]) -> None:
             f"--token-id {data.get('id', '')}[/bold]"
         )
     console.print(Panel("\n".join(lines), title="Scoped token created", expand=False))
+
+
+def _format_token_list(console: Console, data: dict[str, Any]) -> None:
+    """Render the project's tokens as a table -- never their secret values."""
+    tokens = data.get("tokens") or []
+    alias = data.get("alias", "")
+    if not tokens:
+        console.print(
+            f"No tokens visible in project [cyan]{alias}[/cyan]. "
+            "Mint one with [bold]kbagent token create[/bold]."
+        )
+        return
+    table = Table(title=f"Storage API tokens -- {alias} ({len(tokens)})")
+    table.add_column("ID", style="bold cyan")
+    table.add_column("Description")
+    table.add_column("Created", style="dim")
+    table.add_column("Expires", style="dim")
+    table.add_column("Master", justify="center")
+    table.add_column("Created by", style="dim")
+    for token in tokens:
+        expires = token.get("expires")
+        if not expires:
+            expires_label = "never"
+        elif token.get("isExpired"):
+            expires_label = f"[red]{expires} (expired)[/red]"
+        else:
+            expires_label = str(expires)
+        creator = token.get("creatorToken") or {}
+        table.add_row(
+            str(token.get("id", "")),
+            str(token.get("description", "")),
+            str(token.get("created") or ""),
+            expires_label,
+            "yes" if token.get("isMasterToken") else "",
+            str(creator.get("description") or ""),
+        )
+    console.print(table)
 
 
 def _format_deleted_token(console: Console, data: dict[str, Any]) -> None:
@@ -143,6 +181,26 @@ def token_create(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_created_token)
+
+
+@token_app.command("list")
+def token_list(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+) -> None:
+    """List the project's Storage API tokens (no secrets -- those are mint-only).
+
+    Answers "what already exists" and hands you the token id that `token delete`
+    and `token refresh` require, without a detour through the web UI. The acting
+    project token must carry canManageTokens, same as `token create`.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "token_service")
+    try:
+        result = service.list_tokens(alias=project)
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_errors(formatter, exc)
+    formatter.output(result, _format_token_list)
 
 
 @token_app.command("delete")

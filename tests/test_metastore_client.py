@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from keboola_agent_cli.constants import MAX_RETRIES
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.metastore_client import (
     SEMANTIC_TYPES,
@@ -189,13 +188,16 @@ class TestDuplicateNameNormalization:
         assert excinfo.value.retryable is False
 
     def test_duplicate_name_500_becomes_already_exists(self, httpx_mock, metastore_client) -> None:
-        """Legacy / pre-fix metastore still returns 500 -- retain the workaround."""
-        for _ in range(MAX_RETRIES):
-            httpx_mock.add_response(
-                url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
-                status_code=500,
-                json={"error": "Failed to create meta object: duplicate name 'foo'"},
-            )
+        """Legacy / pre-fix metastore still returns 500 -- retain the workaround.
+
+        A single response: ``post_item`` is a POST, which is no longer retried
+        on a 5xx (issue #599), so normalisation has to happen on attempt one.
+        """
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            status_code=500,
+            json={"error": "Failed to create meta object: duplicate name 'foo'"},
+        )
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
@@ -206,12 +208,11 @@ class TestDuplicateNameNormalization:
 
     def test_unrelated_500_passes_through(self, httpx_mock, metastore_client) -> None:
         """A 500 without the magic phrase keeps its API_ERROR code."""
-        for _ in range(MAX_RETRIES):
-            httpx_mock.add_response(
-                url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
-                status_code=500,
-                json={"error": "some unrelated internal error"},
-            )
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            status_code=500,
+            json={"error": "some unrelated internal error"},
+        )
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code != ErrorCode.ALREADY_EXISTS

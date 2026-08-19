@@ -96,6 +96,29 @@ class TokenService:
         finally:
             client.close()
 
+    def list_tokens(self, *, alias: str) -> dict[str, Any]:
+        """List every Storage token in ``alias``'s project.
+
+        Returns ``{"alias", "count", "tokens"}``. Each entry is the raw API
+        token dict **minus its ``token`` field**: a project with the
+        ``force-decrypted-token`` feature has the Storage API embed live secret
+        values in the listing, and echoing those would break the group's
+        "the secret is revealed once, at mint" contract for every token at
+        once. Everything else is passed through untouched.
+
+        The acting token needs ``canManageTokens``, same as create/refresh.
+        """
+        creds = self._resolve_project(alias)
+        client = self._client_factory(creds.stack_url, creds.token)
+        try:
+            tokens = [
+                {key: value for key, value in token.items() if key != "token"}
+                for token in client.list_tokens()
+            ]
+            return {"alias": alias, "count": len(tokens), "tokens": tokens}
+        finally:
+            client.close()
+
     def delete_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Revoke a token immediately in ``alias``'s project."""
         creds = self._resolve_project(alias)

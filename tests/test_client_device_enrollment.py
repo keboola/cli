@@ -166,6 +166,50 @@ class TestRefreshToken:
         assert str(request.url) == f"{STACK_URL}/v2/storage/tokens/9001/refresh"
 
 
+class TestListTokens:
+    def test_list_returns_raw_array(self, httpx_mock) -> None:
+        """GET /v2/storage/tokens -> the API's array, passed through verbatim."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            method="GET",
+            json=[
+                {"id": "9001", "description": "device 42", "isMasterToken": False},
+                {"id": "1", "description": "master", "isMasterToken": True},
+            ],
+            status_code=200,
+        )
+
+        client = _make_client()
+        try:
+            result = client.list_tokens()
+        finally:
+            client.close()
+
+        assert [t["id"] for t in result] == ["9001", "1"]
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "GET"
+        assert str(request.url) == f"{STACK_URL}/v2/storage/tokens"
+
+    def test_non_list_body_returns_empty(self, httpx_mock) -> None:
+        """A non-array body cannot be iterated as tokens -- degrade to empty.
+
+        Guards the caller from a TypeError if the endpoint ever answers with an
+        envelope object instead of the bare array it documents today.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/tokens",
+            method="GET",
+            json={"unexpected": "envelope"},
+            status_code=200,
+        )
+
+        client = _make_client()
+        try:
+            assert client.list_tokens() == []
+        finally:
+            client.close()
+
+
 # ----------------------------------------------------------------------------
 # Per-device stream-source lifecycle
 # ----------------------------------------------------------------------------

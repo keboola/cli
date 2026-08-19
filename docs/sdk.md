@@ -175,9 +175,10 @@ print(res.imported_rows, res.warnings)
 
 Seven methods for the "provision an OTLP ingest endpoint, then mint a narrowly-scoped Storage token a device can hold" flow. They live on the facade and delegate straight to `KeboolaClient`; the token/stream ones return the typed models in [§5](#5-typed-result-models).
 
-**Scoped Storage tokens** — mint, revoke, rotate:
+**Scoped Storage tokens** — mint, list, revoke, rotate:
 
 - **`create_scoped_token(*, description, bucket_permissions=None, component_access=None, can_read_all_file_uploads=False, expires_in=None) -> ScopedTokenResult`** — `POST /v2/storage/tokens`. `bucket_permissions` is `{bucket_id: "read"|"write"}`; `expires_in` is seconds. The acting token must carry **`canManageTokens`** or the create 403s.
+- **`list_tokens() -> list[TokenListEntryResult]`** — `GET /v2/storage/tokens` (`0.86.0+`). Where the `token_id` for `delete_token` / `refresh_token` comes from. **Secrets are stripped before validation**: a project carrying the `force-decrypted-token` feature has the API embed live values in the listing, and `create_scoped_token` is meant to be the only reveal. The acting token needs `canManageTokens`.
 - **`delete_token(token_id) -> None`** — `DELETE /v2/storage/tokens/{id}` (204, no body). Revokes.
 - **`refresh_token(token_id) -> ScopedTokenResult`** — `POST .../tokens/{id}/refresh`. Rotates the secret in place; the returned `.token` is the new secret.
 
@@ -236,7 +237,7 @@ Escape hatch for endpoints the facade omits. See [§7](#7-clientraw-the-escape-h
 
 ## 5. Typed result models
 
-`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, and the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
+`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`, and `TokenListEntryResult` from `0.86.0+`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
 
 Two design rules every model follows (`_ApiResultModel` base):
 
@@ -257,7 +258,9 @@ The two device-enrollment models (`0.66.0+`) commit these named fields:
 - **`ScopedTokenResult`** — `id`, `token` (the one-time secret, see the gotcha in §4), `description`, `expires` (`str | None`), `can_read_all_file_uploads` (alias `canReadAllFileUploads`).
 - **`StreamSourceResult`** — `id`, `source_id`, `name`, `type`, `description`, `branch_id` (default `"default"`), `otlp_url` (ingest URL, secret in the path — unmasked), `otlp_secret`, `base_endpoint`, `sink_bucket_id` (`str | None`; the `in.c-otlp-<id>` bucket to grant a device token write on).
 
-> **The committed surface is `__all__`.** Anything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`, the six result models, `JobIdempotencyStore`, `__version__`) is public API under semver. Renaming or removing a named field, or tightening a type, is a breaking change.
+`TokenListEntryResult` (`0.86.0+`) commits `id`, `description`, `created` (`str | None`), `expires` (`str | None`), `is_expired` (alias `isExpired`), `is_master_token` (alias `isMasterToken`). It has **no secret field by design** — see `list_tokens` above.
+
+> **The committed surface is `__all__`.** Anything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`, the result models, `JobIdempotencyStore`, `__version__`) is public API under semver. Renaming or removing a named field, or tightening a type, is a breaking change.
 
 ---
 

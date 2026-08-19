@@ -32,6 +32,17 @@ class TokenIdBody(BaseModel):
     token_id: str
 
 
+@router.get("/{project}/list", summary="List the project's Storage tokens")
+def list_tokens(
+    project: str,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List the project's tokens without their secrets. Mirrors
+    `kbagent token list`. The acting project token must have canManageTokens.
+    """
+    return registry.token.list_tokens(alias=project)
+
+
 @router.post("/{project}/create", summary="Mint a scoped Storage token")
 def create_token(
     project: str,

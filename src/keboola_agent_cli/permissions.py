@@ -61,6 +61,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "stream.delete": "destructive",
     # Storage API scoped tokens: minting/rotating is a write (creates a
     # credential), revoking is destructive (a live token stops working).
+    "token.list": "read",
     "token.create": "write",
     "token.refresh": "write",
     "token.delete": "destructive",

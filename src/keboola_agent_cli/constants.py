@@ -54,6 +54,22 @@ RETRYABLE_STATUS_CODES: set[int] = {429, 500, 502, 503, 504}
 MAX_RETRIES: int = 3
 BACKOFF_BASE: float = 1.0  # seconds; delays: 1s, 2s, 4s
 
+# RFC 9110 idempotent methods -- the only ones a 5xx or a read timeout may be
+# repeated on. A failed POST/PATCH can have taken effect server-side before the
+# error surfaced: Keboola's own token mint persists the token row BEFORE the
+# step that can throw, so retrying a 500 from `POST /v2/storage/tokens` can
+# leave live credentials behind that the caller never sees (issue #599).
+# 429 is exempt from this gate -- the server states it did not process the
+# request, so repeating it is safe regardless of method.
+RETRY_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+# Cap on the server-supplied `exceptionId` echoed into a 5xx error message.
+# The value is untrusted input rendered into a Rich-markup console, so it gets
+# the same "bounded before it reaches a terminal" treatment as the API's own
+# error text (MAX_API_ERROR_LENGTH). Real Keboola ids run ~70 chars
+# ("com-keboola-gcp-europe-west3-connection-<32 hex>"), so this is generous.
+MAX_EXCEPTION_ID_LENGTH: int = 128
+
 # --- HTTP Timeout ---
 DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
