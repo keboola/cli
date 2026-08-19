@@ -493,9 +493,18 @@ jobs:
           choco push "keboola-cli2.$env:VERSION.nupkg" -s https://push.chocolatey.org
 
   # ── WinGet: submit a PR to microsoft/winget-pkgs via wingetcreate.
+  #
+  # DISABLED (if: false): `wingetcreate update` fails on every tag because the
+  # `Keboola.KeboolaCLI2` package has never had its FIRST submission to
+  # microsoft/winget-pkgs -- there is no manifest to update, so the job has been
+  # red on every release since it was added, masking real failures. Re-enable by
+  # restoring the original condition (kept below) AFTER the bootstrap submission
+  # lands; see the NOTE in the first step for what that submission must contain.
   winget:
     needs: [version, chocolatey, publish-s3]
-    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    # Original condition, restore when re-enabling:
+    #   needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    if: false
     runs-on: windows-latest
     environment: release
     env:
