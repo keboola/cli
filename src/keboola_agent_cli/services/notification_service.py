@@ -29,6 +29,7 @@ erroring or dropping the row.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import KeboolaApiError
@@ -117,35 +118,37 @@ def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_config_indexes(
-    components: list[dict[str, Any]],
-) -> tuple[dict[tuple[str, str], str], dict[str, list[str]]]:
-    """Index a ``list_components_with_configs`` payload for name resolution.
+@dataclass
+class ConfigNameIndex:
+    """Lookup tables for resolving a subscription's parent configuration name.
 
-    Returns ``(by_pair, names_by_config_id)`` where ``by_pair`` is keyed by
-    ``(component_id, config_id)`` and ``names_by_config_id`` collects every
-    name seen for a config ID -- the fallback path for subscriptions that
-    filter on ``job.configuration.id`` without a component filter.
+    ``by_pair`` is the authoritative index. ``names_by_config_id`` exists only
+    for the fallback path -- a subscription filtering on
+    ``job.configuration.id`` with no component filter -- and holds every name
+    seen for a config ID so an ambiguous match can be detected rather than
+    guessed at.
     """
-    by_pair: dict[tuple[str, str], str] = {}
-    names_by_config_id: dict[str, list[str]] = {}
+
+    by_pair: dict[tuple[str, str], str] = field(default_factory=dict)
+    names_by_config_id: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _build_config_indexes(components: list[dict[str, Any]]) -> ConfigNameIndex:
+    """Index a ``list_components_with_configs`` payload for name resolution."""
+    index = ConfigNameIndex()
 
     for comp in components:
         comp_id = str(comp.get("id", ""))
         for cfg in comp.get("configurations", []) or []:
             cfg_id = str(cfg.get("id", ""))
             name = str(cfg.get("name", "") or "")
-            by_pair[(comp_id, cfg_id)] = name
-            names_by_config_id.setdefault(cfg_id, []).append(name)
+            index.by_pair[(comp_id, cfg_id)] = name
+            index.names_by_config_id.setdefault(cfg_id, []).append(name)
 
-    return by_pair, names_by_config_id
+    return index
 
 
-def _resolve_config_name(
-    row: dict[str, Any],
-    by_pair: dict[tuple[str, str], str],
-    names_by_config_id: dict[str, list[str]],
-) -> str:
+def _resolve_config_name(row: dict[str, Any], index: ConfigNameIndex) -> str:
     """Resolve a row's parent configuration name, or "" when not determinable.
 
     Exact ``(component, config)`` match wins. When the subscription filters
@@ -159,9 +162,9 @@ def _resolve_config_name(
 
     component_id = row["component_id"]
     if component_id:
-        return by_pair.get((component_id, config_id), "")
+        return index.by_pair.get((component_id, config_id), "")
 
-    candidates = names_by_config_id.get(config_id, [])
+    candidates = index.names_by_config_id.get(config_id, [])
     return candidates[0] if len(candidates) == 1 else ""
 
 
@@ -174,6 +177,24 @@ def _matches_scope(
     if component_id is not None and row["component_id"] != component_id:
         return False
     return config_id is None or row["config_id"] == config_id
+
+
+def _could_also_fire(
+    row: dict[str, Any],
+    component_id: str | None,
+    config_id: str | None,
+) -> bool:
+    """Would a DROPPED row still fire for the scope being audited?
+
+    True only when the mismatch comes from an ABSENT constraint on the row --
+    that is the genuinely ambiguous case the exclusion counter warns about. A
+    subscription carrying its own explicit filter for a *different* component
+    can never fire for the audited one, so counting it would be noise in
+    exactly the incident-response workflow this command exists for.
+    """
+    if component_id is not None and row["component_id"] and row["component_id"] != component_id:
+        return False
+    return not (config_id is not None and row["config_id"] and row["config_id"] != config_id)
 
 
 class NotificationService(BaseService):
@@ -290,7 +311,14 @@ class NotificationService(BaseService):
         config_id: str | None,
         branch_id: int | None,
     ) -> tuple[Any, ...]:
-        """Fetch, filter and name-join subscriptions for a single project."""
+        """Fetch, filter and name-join subscriptions for a single project.
+
+        Returns one of TWO shapes, per the ``BaseService._run_parallel``
+        convention: ``(alias, rows, excluded, True)`` on success, or the
+        2-tuple ``(alias, error_dict)`` on failure. The arity difference IS
+        the discriminator -- ``_run_parallel`` sorts on ``len(result) == 2``
+        -- so neither shape may grow or shrink independently of the other.
+        """
         effective_branch = branch_id or project.active_branch_id
 
         client = self._client_factory(project.stack_url, project.token)
@@ -309,7 +337,9 @@ class NotificationService(BaseService):
                 for row in rows:
                     if _matches_scope(row, component_id, config_id):
                         kept.append(row)
-                    elif row["scope"] == SCOPE_PROJECT_WIDE:
+                    elif row["scope"] == SCOPE_PROJECT_WIDE and _could_also_fire(
+                        row, component_id, config_id
+                    ):
                         excluded += 1
                 rows = kept
 
@@ -317,8 +347,10 @@ class NotificationService(BaseService):
                 row["project_alias"] = alias
             self._stamp_config_names(client, rows, effective_branch)
 
+            # Success shape: 4-tuple. See the arity contract in the docstring.
             return (alias, rows, excluded, True)
         except KeboolaApiError as exc:
+            # Failure shape: 2-tuple, which is how _run_parallel detects it.
             return (
                 alias,
                 {
@@ -328,6 +360,7 @@ class NotificationService(BaseService):
                 },
             )
         except Exception as exc:
+            # Failure shape: 2-tuple, which is how _run_parallel detects it.
             return (
                 alias,
                 {
@@ -372,18 +405,16 @@ class NotificationService(BaseService):
         if not scoped:
             return
 
-        by_pair: dict[tuple[str, str], str] = {}
-        names_by_config_id: dict[str, list[str]] = {}
-
+        index = ConfigNameIndex()
         try:
             if any(not row["component_id"] for row in scoped):
-                by_pair, names_by_config_id = _build_config_indexes(
+                index = _build_config_indexes(
                     client.list_components_with_configs(branch_id=branch_id)
                 )
             else:
                 for component_id in sorted({row["component_id"] for row in scoped}):
                     for cfg in client.list_component_configs(component_id, branch_id=branch_id):
-                        by_pair[(component_id, str(cfg.get("id", "")))] = str(
+                        index.by_pair[(component_id, str(cfg.get("id", "")))] = str(
                             cfg.get("name", "") or ""
                         )
         except Exception as exc:
@@ -391,7 +422,7 @@ class NotificationService(BaseService):
             return
 
         for row in rows:
-            row["config_name"] = _resolve_config_name(row, by_pair, names_by_config_id)
+            row["config_name"] = _resolve_config_name(row, index)
 
 
 __all__ = [

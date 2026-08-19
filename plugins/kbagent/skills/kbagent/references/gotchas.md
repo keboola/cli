@@ -1239,8 +1239,12 @@ events and emits a final `done` SSE frame mirroring the same record.
   page for the config being audited, so the count of the ones actually
   **dropped** is reported as `project_wide_excluded` (and a warning in human
   mode). Note `scope` keys off the config filter alone, so a subscription
-  filtering only on `job.component.id` is labelled `project-wide` yet is
-  *kept* by a matching `--component-id`; kept rows are never counted.
+  filtering only on `job.component.id` is labelled `project-wide` even though
+  it is not truly global. Two consequences: a matching `--component-id` keeps
+  it (kept rows are never counted), and a dropped one that names a *different*
+  component is not counted either -- its own explicit filter proves it can
+  never fire for what you audited. Only genuinely ambiguous rows -- those
+  missing the constraint you filtered on -- are counted.
   **Never answer "who gets paged for this flow" from a filtered run alone**
   -- add the project-wide rows from an unfiltered run.
 - **Webhook recipients carry `url`, email recipients carry `address`.** Both

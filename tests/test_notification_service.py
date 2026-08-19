@@ -120,6 +120,13 @@ COMPONENT_ONLY_SUBSCRIPTION = {
     "recipient": {"channel": "email", "address": "flowops@example.com"},
 }
 
+OTHER_COMPONENT_SUBSCRIPTION = {
+    "id": "1239",
+    "event": "job-failed",
+    "filters": [{"field": "job.component.id", "value": "keboola.ex-db-snowflake"}],
+    "recipient": {"channel": "email", "address": "dba@example.com"},
+}
+
 BRANCHED_SUBSCRIPTION = {
     "id": "1237",
     "event": "phase-job-failed",
@@ -343,6 +350,8 @@ class TestListSubscriptions:
         result = _make_service(client).list_subscriptions(component_id="keboola.flow")
 
         assert [s["subscription_id"] for s in result["subscriptions"]] == ["1234"]
+        # The dropped row names a different component, so it cannot fire here.
+        assert result["project_wide_excluded"] == 0
 
     def test_config_filter_is_applied_client_side(self) -> None:
         client = MagicMock()
@@ -394,6 +403,23 @@ class TestListSubscriptions:
 
         assert result["subscriptions"] == []
         assert result["project_wide_excluded"] == 1
+
+    def test_subscription_naming_another_component_is_not_counted(self) -> None:
+        """An explicit, non-matching component filter proves irrelevance.
+
+        The counter exists to say "these also page for what you audited". A
+        subscription scoped to keboola.ex-db-snowflake can never fire for a
+        keboola.flow job, so counting it is noise in exactly the
+        incident-response workflow this command is for.
+        """
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [OTHER_COMPONENT_SUBSCRIPTION]
+        _wire_configs(client, [])
+
+        result = _make_service(client).list_subscriptions(component_id="keboola.flow")
+
+        assert result["subscriptions"] == []
+        assert result["project_wide_excluded"] == 0
 
     def test_no_exclusion_counter_without_a_scope_filter(self) -> None:
         client = MagicMock()
