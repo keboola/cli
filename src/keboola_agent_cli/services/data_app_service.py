@@ -71,13 +71,17 @@ DEFAULT_AUTO_SUSPEND_SECONDS = 900
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
 
 # Encrypted-secret prefixes produced by the Encryption API for project-scoped
-# (KMS) ciphertext. The platform emits both ``KBC::ProjectSecure`` (legacy)
-# and ``KBC::ProjectSecureGKMS`` (GCP); both are project-bound and decrypt
-# only with the originating project's KMS key.
+# ciphertext. The platform emits one variant per cloud -- ``KBC::ProjectSecure``
+# (AWS/legacy), ``KBC::ProjectSecureGKMS`` (GCP KMS) and ``KBC::ProjectSecureKV``
+# (Azure Key Vault). All are project-bound and decrypt only with the originating
+# project's key; the wider ``ComponentSecure`` / ``ConfigSecure`` scopes are
+# deliberately NOT accepted here. Keep in sync with
+# https://developers.keboola.com/overview/encryption/ (issue #607).
 ENCRYPTED_PASSWORD_PREFIXES: tuple[str, ...] = (
     "KBC::ProjectSecure::",
     "KBC::ProjectSecureGKMS::",
     "KBC::ProjectSecureKMS::",
+    "KBC::ProjectSecureKV::",
 )
 
 # Defence-in-depth caps for free-form user input. The platform may accept

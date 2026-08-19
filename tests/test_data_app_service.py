@@ -24,6 +24,7 @@ from keboola_agent_cli.services.data_app_service import (
     DataAppService,
     _redact_git_block,
     _redact_storage_config,
+    _secret_fingerprint,
 )
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -732,6 +733,176 @@ class TestDataAppCreate:
         storage_mock.update_config.assert_not_called()
         # Shell was cleaned up.
         ds_mock.delete_app.assert_called_once_with("999")
+
+
+# ---------------------------------------------------------------------------
+# Azure Key Vault ciphertext (issue #607)
+# ---------------------------------------------------------------------------
+
+
+class TestAzureKeyVaultCiphertext:
+    """Azure stacks return project-scoped ciphertext under a Key Vault prefix.
+
+    The Encryption API emits one project-scoped prefix per cloud:
+    ``KBC::ProjectSecure::`` (AWS), ``KBC::ProjectSecureGKMS::`` (GCP) and
+    ``KBC::ProjectSecureKV::`` (Azure Key Vault). Verified live against
+    ``connection.north-europe.azure.keboola.com``. Before issue #607 the
+    Azure prefix was missing from ``ENCRYPTED_PASSWORD_PREFIXES``, so every
+    fail-closed check rejected a legitimately encrypted value with
+    ``ENCRYPTION_FAILED`` -- private-repo data apps could not be created on
+    Azure at all.
+    """
+
+    AZURE_CIPHERTEXT: ClassVar[str] = "KBC::ProjectSecureKV::fake-azure-ciphertext-for-tests"
+
+    def test_create_accepts_azure_ciphertext(self, tmp_path: Path) -> None:
+        """A ``KBC::ProjectSecureKV::`` PAT reaches Storage instead of aborting."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "43661269", "configId": "ulid"}
+        storage_mock.update_config.return_value = {"version": "3"}
+        encrypt_mock.encrypt.return_value = {"#password": self.AZURE_CIPHERTEXT}
+
+        service.create_data_app(
+            alias="prod",
+            name="My App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=False,
+            git_username="user",
+            git_pat_plaintext="ghp_xxxxxxxxxxxxxxxxxxxx",
+            auth="password",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=False,
+            wait=False,
+            dry_run=False,
+        )
+
+        put_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = put_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block["#password"] == self.AZURE_CIPHERTEXT
+        ds_mock.delete_app.assert_not_called()
+
+    def test_pre_encrypted_azure_ciphertext_accepted(self, tmp_path: Path) -> None:
+        """``--git-pat-encrypted`` with an Azure ciphertext passes validation."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "1", "configId": "ulid"}
+        storage_mock.update_config.return_value = {"version": "2"}
+        # Mirror EncryptService: ``KBC::``-prefixed values short-circuit
+        # and are returned unchanged instead of being re-encrypted.
+        encrypt_mock.encrypt.side_effect = lambda **kwargs: dict(kwargs["input_data"])
+
+        service.create_data_app(
+            alias="prod",
+            name="My App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=False,
+            git_username="user",
+            git_pat_plaintext=None,
+            git_pat_encrypted=self.AZURE_CIPHERTEXT,
+            auth="password",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=False,
+            wait=False,
+            dry_run=False,
+        )
+
+        put_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = put_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block["#password"] == self.AZURE_CIPHERTEXT
+
+    def test_secrets_set_accepts_azure_ciphertext(self, tmp_path: Path) -> None:
+        """``data-app secrets-set`` shares the whitelist and was broken too."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid"}
+        storage_mock.get_config_detail.return_value = {
+            "version": "4",
+            "configuration": {"parameters": {"dataApp": {"secrets": {}}}},
+        }
+        storage_mock.update_config.return_value = {"version": "5"}
+        encrypt_mock.encrypt.return_value = {"#API_KEY": self.AZURE_CIPHERTEXT}
+
+        result = service.set_data_app_secrets(
+            alias="prod",
+            app_id="43661269",
+            secrets={"#API_KEY": "plaintext-value"},
+        )
+
+        assert result["plaintext_written"] == []
+        put_kwargs = storage_mock.update_config.call_args.kwargs
+        stored = put_kwargs["configuration"]["parameters"]["dataApp"]["secrets"]
+        assert stored["#API_KEY"] == self.AZURE_CIPHERTEXT
+
+    def test_lookalike_prefix_still_rejected(self, tmp_path: Path) -> None:
+        """Fail-closed preserved: only known project-scoped prefixes pass."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, encrypt_mock = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "999", "configId": "ulid"}
+        encrypt_mock.encrypt.return_value = {"#password": "KBC::ProjectSecureKVX::nope"}
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_data_app(
+                alias="prod",
+                name="App",
+                description="",
+                slug="my-app",
+                git_repo="https://github.com/o/r",
+                git_public=False,
+                git_username="user",
+                git_pat_plaintext="ghp_xxxxxxxxxxxxxxxxxxxx",
+                auth="password",
+                size="tiny",
+                auto_suspend_after_seconds=900,
+                type_="python-js",
+                deploy=False,
+                wait=False,
+                dry_run=False,
+            )
+
+        assert excinfo.value.error_code == ErrorCode.ENCRYPTION_FAILED
+        storage_mock.update_config.assert_not_called()
+        ds_mock.delete_app.assert_called_once_with("999")
+
+    def test_component_scoped_azure_ciphertext_still_rejected(self, tmp_path: Path) -> None:
+        """A component-scoped Azure ciphertext is not project-bound -- reject."""
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_data_app(
+                alias="prod",
+                name="App",
+                description="",
+                slug="my-app",
+                git_repo="https://github.com/o/r",
+                git_public=False,
+                git_username="user",
+                git_pat_plaintext=None,
+                git_pat_encrypted="KBC::ComponentSecureKV::not-project-scoped",
+                auth="password",
+                size="tiny",
+                auto_suspend_after_seconds=900,
+                type_="python-js",
+                deploy=False,
+                wait=False,
+                dry_run=True,
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_fingerprint_and_prefix_derived_for_azure(self, tmp_path: Path) -> None:
+        """Metadata helpers recognise the Azure prefix (empty before #607)."""
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        assert _secret_fingerprint(self.AZURE_CIPHERTEXT) == "fake-azu"
+        assert service._derive_encryption_prefix(self.AZURE_CIPHERTEXT) == "KBC::ProjectSecureKV"
 
 
 # ---------------------------------------------------------------------------

@@ -396,6 +396,32 @@ Versioning convention:
   `--set 'parameters.#password=...'` or a full `--configuration`. (Either way
   the value is now encrypted before write.)
 
+## Encryption ciphertext has a different prefix per cloud; Azure was rejected (fixed in v0.85.1, #607)
+
+- **One project-scoped prefix per cloud.** The Encryption API returns
+  `KBC::ProjectSecure::` on AWS, `KBC::ProjectSecureGKMS::` on GCP and
+  `KBC::ProjectSecureKV::` on Azure (Key Vault). All three mean the same
+  thing -- project-bound ciphertext -- and none of them is interchangeable
+  across stacks. Never assert on a single literal prefix when checking
+  whether a value is encrypted; match the whole family, or just `KBC::`.
+- **Before v0.85.1 the Azure variant was missing from the data-app
+  whitelist**, so on an Azure stack a *correctly* encrypted value was
+  rejected as "not project-scoped" and the write aborted with
+  `ENCRYPTION_FAILED` -- before anything reached Storage. Affected:
+  `data-app create --git-pat-env / --git-pat-file / --git-pat-encrypted`
+  (private repos were impossible on Azure) and `data-app secrets-set`.
+  `data-app secrets-list --show-fingerprint` / `secrets-get` also returned an
+  empty `fingerprint` + `encryption_prefix` for Azure ciphertext.
+- **Fail-closed is unchanged.** Only the three project-scoped prefixes pass;
+  look-alikes (`KBC::ProjectSecureKVX::`), the broader `KBC::ComponentSecure*`
+  / `KBC::ConfigSecure*` scopes and plaintext are still refused, and plaintext
+  is still never written to Storage.
+- **If you hit `ENCRYPTION_FAILED` on a data app, check the kbagent version
+  first** -- on Azure with <= 0.85.0 it is this bug, not a broken token or a
+  broken Encryption API. Upgrade rather than reaching for
+  `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
+  plaintext into Storage.
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`

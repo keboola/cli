@@ -24,6 +24,29 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.85.1": [
+        "Fix (#607): data apps with a private Git repository can be created on Azure "
+        "stacks again. The Encryption API returns project-scoped ciphertext under a "
+        "different prefix per cloud -- `KBC::ProjectSecure::` (AWS), "
+        "`KBC::ProjectSecureGKMS::` (GCP) and `KBC::ProjectSecureKV::` (Azure Key "
+        "Vault) -- but kbagent's fail-closed whitelist "
+        "(`ENCRYPTED_PASSWORD_PREFIXES` in `services/data_app_service.py`) was missing "
+        "the Azure variant. A legitimately encrypted value was therefore rejected as "
+        '"not project-scoped" and every affected write aborted with '
+        "`ENCRYPTION_FAILED` before anything reached Storage. The whitelist is shared, "
+        "so the same gap broke more than the reported path: `data-app create "
+        "--git-pat-env / --git-pat-file` (encrypt-then-validate), `data-app create "
+        "--git-pat-encrypted` (an Azure ciphertext was refused as a valid input), and "
+        "`data-app secrets-set` (same ENCRYPTION_FAILED abort) all failed on Azure, "
+        "while `data-app secrets-list --show-fingerprint` / `secrets-get` reported an "
+        "empty `fingerprint` and `encryption_prefix` for Azure ciphertext. Adding the "
+        "one prefix repairs all of them. The change is purely additive: unknown "
+        "prefixes, look-alikes (`KBC::ProjectSecureKVX::`), the broader "
+        "`ComponentSecure*` / `ConfigSecure*` scopes and plaintext are still rejected, "
+        "and plaintext is still never written to Storage. Verified live against "
+        "connection.north-europe.azure.keboola.com (create + secrets-set, A/B with and "
+        "without the fix).",
+    ],
     "0.85.0": [
         "BREAKING: the MCP passthrough is removed (epic #390 phase 3, deprecated since "
         "0.74.0). `kbagent tool list` and `kbagent tool call` are gone, `kbagent agent "
