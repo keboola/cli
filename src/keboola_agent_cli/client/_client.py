@@ -1,11 +1,12 @@
 """Composition of the Keboola API client from its endpoint-family mixins.
 
 ``KeboolaClient`` is assembled here from the per-family mixins (storage tables,
-storage files, configs, queue, tokens, branches, stream, query, workspaces,
-billing, misc) over the shared ``_CoreClient`` plumbing base. It stays a
-single class exposing every Storage/Queue method at its original signature,
-so ``keboola_agent_cli.Client`` and its ``.raw`` accessor are unaffected by
-the split of the former single-file ``client.py`` into a package (issue #520).
+storage files, configs, queue, tokens, branches, merge requests, stream,
+query, workspaces, billing, misc) over the shared ``_CoreClient`` plumbing
+base. It stays a single class exposing every Storage/Queue method at its
+original signature, so ``keboola_agent_cli.Client`` and its ``.raw`` accessor
+are unaffected by the split of the former single-file ``client.py`` into a
+package (issue #520).
 
 Inherits shared retry/error logic from BaseHttpClient (via _CoreClient).
 """
@@ -16,6 +17,7 @@ from ._core import _CoreClient
 from .billing import _BillingMixin
 from .branches import _BranchesMixin
 from .configs import _ConfigsMixin
+from .merge_requests import _MergeRequestsMixin
 from .misc import _MiscMixin
 from .query import _QueryMixin
 from .queue import _QueueMixin
@@ -33,6 +35,7 @@ class KeboolaClient(
     _QueueMixin,
     _TokensMixin,
     _BranchesMixin,
+    _MergeRequestsMixin,
     _StreamMixin,
     _QueryMixin,
     _WorkspacesMixin,

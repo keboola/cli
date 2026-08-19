@@ -108,6 +108,7 @@ MAX_RETRY_AFTER_SECONDS: int = 60
 STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
+MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
 # --- Queue Job Polling ---
 # Piecewise curve matching FIIA's existing Queue API polling contract
@@ -410,6 +411,16 @@ OTLP_SINK_COLUMNS: tuple[dict[str, str], ...] = (
 # projects so callers know the materialized bucket will be unused by the runner.
 # See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
 STORAGE_BRANCHES_FEATURE: str = "storage-branches"
+
+# --- Merge Requests (Branches 2.0) ---
+# Feature flag gating the non-SOX merge-request flow. Layer 3
+# (client/merge_requests.py) does no feature check itself -- a missing
+# feature is a 403 identical to a role denial -- so the Part 2 service layer
+# must call has_feature() with this constant before writes and word the error. It
+# also doubles as the SOX fence: server-side, `protected-default-branch`
+# passes the same gate, so checking for this flag specifically keeps SOX
+# projects out of a flow whose approvals semantics kbagent does not cover.
+FEATURE_BRANCHES_MERGE_REQUESTS: str = "branches-merge-requests"
 
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``
