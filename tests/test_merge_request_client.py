@@ -1,0 +1,515 @@
+"""Tests for the merge-request client family (client/merge_requests.py + configs.py).
+
+Pins the wire contract: path construction (MR paths never branch-prefixed,
+diff/rebase always), JSON encoding (the surrounding configs.py teaches form
+encoding -- the opposite), presence detection, the ``diff`` envelope, the
+empty-object delete resolution, implicit merge-job waiting,
+``include=activityLog``, and the namespace-never-touches-the-client seam.
+"""
+
+import inspect
+import json
+from typing import Any
+
+import httpx
+import pytest
+
+from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.client.merge_requests import MergeRequests, _optional_mr_fields
+from keboola_agent_cli.constants import MERGE_JOB_MAX_WAIT, STORAGE_JOB_MAX_WAIT
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+STACK_URL = "https://connection.keboola.com"
+TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+MR_BASE = f"{STACK_URL}/v2/storage/merge-request"
+
+SAMPLE_MR = {
+    "id": 42,
+    "title": "Promote revenue pipeline",
+    "state": "development",
+    "branches": {"branchFromId": 123, "branchIntoId": 1},
+}
+
+
+@pytest.fixture
+def client():
+    c = KeboolaClient(stack_url=STACK_URL, token=TOKEN)
+    yield c
+    c.close()
+
+
+def _sent_json(request: httpx.Request) -> Any:
+    """Decode a captured request body, asserting it is JSON-encoded."""
+    assert request.headers["Content-Type"] == "application/json"
+    return json.loads(request.content)
+
+
+class TestMergeRequestPaths:
+    """MR endpoints are project-level -- never branch-prefixed."""
+
+    def test_list_hits_bare_path(self, client, httpx_mock) -> None:
+        """list() hits /v2/storage/merge-request with no branch prefix and no params."""
+        httpx_mock.add_response(url=MR_BASE, json=[SAMPLE_MR])
+
+        result = client.merge_requests.list()
+
+        assert result == [SAMPLE_MR]
+        request = httpx_mock.get_requests()[0]
+        assert request.url.path == "/v2/storage/merge-request"
+        assert request.url.query == b""
+
+    def test_get_hits_id_path(self, client, httpx_mock) -> None:
+        """get() hits /merge-request/{id} without include by default."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42", json=SAMPLE_MR)
+
+        result = client.merge_requests.get(42)
+
+        assert result == SAMPLE_MR
+        request = httpx_mock.get_requests()[0]
+        assert request.url.path == "/v2/storage/merge-request/42"
+        assert request.url.query == b""
+
+    def test_get_include_activity_log_only_when_asked(self, client, httpx_mock) -> None:
+        """include=activityLog is present exactly when include_activity_log=True."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42?include=activityLog", json=SAMPLE_MR)
+
+        client.merge_requests.get(42, include_activity_log=True)
+
+        request = httpx_mock.get_requests()[0]
+        assert request.url.params["include"] == "activityLog"
+
+    def test_conflicts_path(self, client, httpx_mock) -> None:
+        """conflicts() hits /merge-request/{id}/conflicts."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42/conflicts", json=[])
+
+        result = client.merge_requests.conflicts(42)
+
+        assert result == []
+        assert httpx_mock.get_requests()[0].url.path == "/v2/storage/merge-request/42/conflicts"
+
+
+class TestCreateAndUpdateBodies:
+    """JSON encoding + presence detection on the two body-carrying writes."""
+
+    def test_create_sends_real_json_types(self, client, httpx_mock) -> None:
+        """Branch ids go as JSON numbers, reviewerIds as an int array, not strings."""
+        httpx_mock.add_response(url=MR_BASE, json=SAMPLE_MR, status_code=201)
+
+        client.merge_requests.create(
+            branch_from_id=123,
+            branch_into_id=1,
+            title="Promote revenue pipeline",
+            description="Q3 changes",
+            reviewer_ids=[7, 9],
+        )
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert body["branchFromId"] == 123
+        assert body["branchIntoId"] == 1
+        assert isinstance(body["branchFromId"], int)
+        assert isinstance(body["branchIntoId"], int)
+        assert body["title"] == "Promote revenue pipeline"
+        assert body["description"] == "Q3 changes"
+        assert body["reviewerIds"] == [7, 9]
+
+    def test_create_omits_unset_optionals(self, client, httpx_mock) -> None:
+        """Unset optionals are absent from the body, not sent as null."""
+        httpx_mock.add_response(url=MR_BASE, json=SAMPLE_MR, status_code=201)
+
+        client.merge_requests.create(branch_from_id=123, branch_into_id=1, title="T")
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert set(body) == {"branchFromId", "branchIntoId", "title"}
+
+    def test_create_sends_auto_merge_and_external_id(self, client, httpx_mock) -> None:
+        """autoMergeStrategy / autoMergeAt / externalId pass through verbatim."""
+        httpx_mock.add_response(url=MR_BASE, json=SAMPLE_MR, status_code=201)
+
+        client.merge_requests.create(
+            branch_from_id=123,
+            branch_into_id=1,
+            title="T",
+            auto_merge_strategy="scheduled",
+            auto_merge_at="2026-09-01T06:00:00+00:00",
+            external_id="DMD-1701",
+        )
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert body["autoMergeStrategy"] == "scheduled"
+        assert body["autoMergeAt"] == "2026-09-01T06:00:00+00:00"
+        assert body["externalId"] == "DMD-1701"
+
+    def test_update_sends_only_provided_fields(self, client, httpx_mock) -> None:
+        """update() omits unset fields; provided ones go as real JSON types."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42", json=SAMPLE_MR)
+
+        client.merge_requests.update(42, title="New title", reviewer_ids=[7])
+
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PUT"
+        body = _sent_json(request)
+        assert body == {"title": "New title", "reviewerIds": [7]}
+
+    def test_update_sends_every_optional_field(self, client, httpx_mock) -> None:
+        """All optionals reach the wire under their camelCase names (no create/update drift)."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42", json=SAMPLE_MR)
+
+        client.merge_requests.update(
+            42,
+            title="T",
+            description="D",
+            reviewer_ids=[7, 9],
+            auto_merge_strategy="scheduled",
+            auto_merge_at="2026-09-01T06:00:00+00:00",
+            external_id="DMD-1701",
+        )
+
+        assert _sent_json(httpx_mock.get_requests()[0]) == {
+            "title": "T",
+            "description": "D",
+            "reviewerIds": [7, 9],
+            "autoMergeStrategy": "scheduled",
+            "autoMergeAt": "2026-09-01T06:00:00+00:00",
+            "externalId": "DMD-1701",
+        }
+
+
+class TestStateTransitions:
+    """request-review / approve / request-changes."""
+
+    def test_request_review(self, client, httpx_mock) -> None:
+        """request_review() PUTs the request-review path with no body."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42/request-review", json=SAMPLE_MR)
+
+        result = client.merge_requests.request_review(42)
+
+        assert result == SAMPLE_MR
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PUT"
+        assert request.content == b""
+
+    def test_approve(self, client, httpx_mock) -> None:
+        """approve() PUTs the approve path with no body."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42/approve", json=SAMPLE_MR)
+
+        result = client.merge_requests.approve(42)
+
+        assert result == SAMPLE_MR
+        assert httpx_mock.get_requests()[0].method == "PUT"
+
+    def test_request_changes_with_reason(self, client, httpx_mock) -> None:
+        """request_changes() sends {"reason": ...} as JSON when given."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42/request-changes", json=SAMPLE_MR)
+
+        client.merge_requests.request_changes(42, reason="Please split the flow")
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert body == {"reason": "Please split the flow"}
+
+    def test_request_changes_without_reason_sends_empty_object(self, client, httpx_mock) -> None:
+        """request_changes() without a reason sends {} (reason omitted, not null)."""
+        httpx_mock.add_response(url=f"{MR_BASE}/42/request-changes", json=SAMPLE_MR)
+
+        client.merge_requests.request_changes(42)
+
+        assert _sent_json(httpx_mock.get_requests()[0]) == {}
+
+
+class TestMerge:
+    """merge() awaits the Storage job implicitly, like every job-backed client method."""
+
+    def test_merge_waits_for_job_and_returns_completed_job(
+        self, client, httpx_mock, monkeypatch
+    ) -> None:
+        """202's job is polled to success; the completed job dict is returned."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _: None)
+        httpx_mock.add_response(
+            url=f"{MR_BASE}/42/merge",
+            json={"id": 555, "status": "waiting"},
+            status_code=202,
+        )
+        completed = {"id": 555, "status": "success", "results": SAMPLE_MR}
+        httpx_mock.add_response(url=f"{STACK_URL}/v2/storage/jobs/555", json=completed)
+
+        result = client.merge_requests.merge(42)
+
+        assert result == completed
+        assert result["results"] == SAMPLE_MR
+        merge_request = httpx_mock.get_requests()[0]
+        assert merge_request.method == "PUT"
+        assert merge_request.url.path == "/v2/storage/merge-request/42/merge"
+
+    def test_merge_failed_job_raises_storage_job_failed(
+        self, client, httpx_mock, monkeypatch
+    ) -> None:
+        """A failed merge job surfaces STORAGE_JOB_FAILED from the shared helper."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _: None)
+        httpx_mock.add_response(
+            url=f"{MR_BASE}/42/merge",
+            json={"id": 555, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/jobs/555",
+            json={"id": 555, "status": "error", "error": {"message": "merge conflict"}},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.merge_requests.merge(42)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "merge conflict" in str(exc_info.value)
+
+    def test_merge_waits_with_the_merge_budget_not_the_default(self) -> None:
+        """merge() passes max_wait=MERGE_JOB_MAX_WAIT to the poller.
+
+        The kwarg is the whole point of the 600 s budget: if it is
+        dropped, every wire test stays green and merge silently falls back to
+        the 60 s STORAGE_JOB_MAX_WAIT -- a mid-merge STORAGE_JOB_TIMEOUT with
+        retryable=True on any many-config branch. Asserted through a stub
+        requester because httpx mocks never see the kwarg.
+        """
+        waits: list[float] = []
+        completed = {"id": 555, "status": "success", "results": SAMPLE_MR}
+
+        class StubRequester:
+            def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+                return httpx.Response(
+                    202,
+                    json={"id": 555, "status": "waiting"},
+                    request=httpx.Request(method, path),
+                )
+
+            def wait_for_storage_job(
+                self, job: dict[str, Any], max_wait: float = STORAGE_JOB_MAX_WAIT
+            ) -> dict[str, Any]:
+                waits.append(max_wait)
+                return completed
+
+        result = MergeRequests(StubRequester()).merge(42)
+
+        assert result == completed
+        assert waits == [MERGE_JOB_MAX_WAIT]
+        assert MERGE_JOB_MAX_WAIT > STORAGE_JOB_MAX_WAIT, (
+            "the dedicated budget must actually exceed the default it exists to replace"
+        )
+
+
+class TestConfigDiff:
+    """get_config_diff -- branch-prefixed, branch_id required (no production fallback)."""
+
+    def test_diff_path_is_branch_prefixed(self, client, httpx_mock) -> None:
+        """diff always hits /v2/storage/branch/{id}/... -- no production fallback."""
+        diff = {"base": None, "ours": {"version": 3}, "theirs": {"version": 7}}
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/branch/123/components/keboola.ex-http/configs/cfg-1/diff",
+            json=diff,
+        )
+
+        result = client.get_config_diff("keboola.ex-http", "cfg-1", branch_id=123)
+
+        assert result == diff
+
+    def test_diff_quotes_component_and_config_ids(self, client, httpx_mock) -> None:
+        """Component/config ids are percent-encoded like everywhere in configs.py."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/branch/123/components/vendor%2Fapp/configs/c%2F1/diff",
+            json={},
+        )
+
+        client.get_config_diff("vendor/app", "c/1", branch_id=123)
+
+        assert len(httpx_mock.get_requests()) == 1
+
+
+class TestRebaseEnvelope:
+    """The diff envelope -- version at the top level, content inside diff."""
+
+    REBASE_URL = (
+        f"{STACK_URL}/v2/storage/branch/123/components/keboola.ex-http/configs/cfg-1/rebase"
+    )
+
+    def test_keep_rebase_builds_the_envelope(self, client, httpx_mock) -> None:
+        """version stays top-level; name/rows/optionals live inside diff; JSON types."""
+        httpx_mock.add_response(url=self.REBASE_URL, json={"id": "cfg-1", "version": 8})
+
+        client.rebase_config(
+            "keboola.ex-http",
+            "cfg-1",
+            branch_id=123,
+            version=7,
+            name="My config",
+            rows=[{"id": "r1", "name": "Row 1"}],
+            configuration={"parameters": {"baseUrl": "https://example.com"}},
+            is_disabled=False,
+            description="resolved",
+            change_description="rebase onto v7",
+        )
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert body["version"] == 7
+        assert isinstance(body["version"], int)
+        assert set(body) == {"version", "diff"}, "nothing content-like at the top level"
+        diff = body["diff"]
+        assert diff["name"] == "My config"
+        assert diff["rows"] == [{"id": "r1", "name": "Row 1"}]
+        assert diff["configuration"] == {"parameters": {"baseUrl": "https://example.com"}}
+        assert isinstance(diff["configuration"], dict), "real nested JSON, not a dumped string"
+        assert diff["description"] == "resolved"
+        assert diff["changeDescription"] == "rebase onto v7"
+        assert diff["isDisabled"] is False, "is_disabled=False is sent, as a JSON boolean"
+
+    def test_keep_rebase_omits_unset_optionals_and_sends_empty_rows(
+        self, client, httpx_mock
+    ) -> None:
+        """description=None and an unset change_description are omitted; rows=[] is sent."""
+        httpx_mock.add_response(url=self.REBASE_URL, json={})
+
+        client.rebase_config(
+            "keboola.ex-http",
+            "cfg-1",
+            branch_id=123,
+            version=7,
+            name="My config",
+            rows=[],
+            configuration={},
+            is_disabled=False,
+            description=None,
+        )
+
+        body = _sent_json(httpx_mock.get_requests()[0])
+        assert body["diff"] == {
+            "name": "My config",
+            "rows": [],
+            "configuration": {},
+            "isDisabled": False,
+        }
+
+    def test_keep_rebase_always_sends_configuration_and_is_disabled(
+        self, client, httpx_mock
+    ) -> None:
+        """Rebase REPLACES, so no body field may be left to a server-side default.
+
+        A missing ``diff.configuration`` is substituted with ``{}`` and a missing
+        ``diff.isDisabled`` with ``false``, so omitting either would wipe the
+        configuration body and re-enable a disabled config. Both are required
+        parameters; this pins that they always reach the wire.
+        """
+        httpx_mock.add_response(url=self.REBASE_URL, json={})
+
+        client.rebase_config(
+            "keboola.ex-http",
+            "cfg-1",
+            branch_id=123,
+            version=7,
+            name="My config",
+            rows=[],
+            configuration={"parameters": {"keep": "me"}},
+            is_disabled=True,
+            description="kept",
+        )
+
+        diff = _sent_json(httpx_mock.get_requests()[0])["diff"]
+        assert diff["configuration"] == {"parameters": {"keep": "me"}}
+        assert diff["isDisabled"] is True
+        assert diff["description"] == "kept"
+
+    def test_keep_rebase_requires_every_replaced_body_field(self, client) -> None:
+        """Omitting any replaced body field is a TypeError, not silent loss on the wire.
+
+        ``name`` / ``description`` / ``configuration`` / ``isDisabled`` are the
+        tuple the backend calls "the complete 3-way diff result" and fully
+        replaces the resolved version's body with, so none of them may carry a
+        default here. ``change_description`` is not part of that tuple and stays
+        optional -- omitting it selects a default rebase message.
+        """
+        required = {
+            "name": "N",
+            "rows": [],
+            "configuration": {},
+            "is_disabled": False,
+            "description": None,
+        }
+        for omitted in required:
+            kwargs = {k: v for k, v in required.items() if k != omitted}
+            with pytest.raises(TypeError):
+                client.rebase_config("keboola.ex-http", "cfg-1", branch_id=123, version=7, **kwargs)
+
+    def test_delete_rebase_sends_empty_diff_object(self, client, httpx_mock) -> None:
+        """Delete resolution is exactly {"version": N, "diff": {}} -- diff a JSON object."""
+        httpx_mock.add_response(url=self.REBASE_URL, json={})
+
+        client.rebase_config_delete("keboola.ex-http", "cfg-1", branch_id=123, version=7)
+
+        # Dict equality distinguishes {} from null / "" / [] -- any of those
+        # would be a malformed-diff 400 (or a delete misread as keep) server-side.
+        assert _sent_json(httpx_mock.get_requests()[0]) == {"version": 7, "diff": {}}
+
+
+class TestRequesterSeam:
+    """The namespace depends on the StorageRequester Protocol, not the client."""
+
+    def test_namespace_works_against_a_stub_requester(self) -> None:
+        """A stub Protocol implementation is all MergeRequests needs -- no HTTP client."""
+        calls: list[tuple[str, str]] = []
+
+        class StubRequester:
+            def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+                calls.append((method, path))
+                return httpx.Response(200, json=[SAMPLE_MR], request=httpx.Request(method, path))
+
+            # Present only to satisfy the Protocol -- this test exercises
+            # list(). Returning the job unconditionally would violate the
+            # documented raise-on-failure contract; not a reference
+            # implementation to copy.
+            def wait_for_storage_job(
+                self, job: dict[str, Any], max_wait: float = 60.0
+            ) -> dict[str, Any]:
+                return job
+
+        namespace = MergeRequests(StubRequester())
+
+        assert namespace.list() == [SAMPLE_MR]
+        assert calls == [("GET", "/v2/storage/merge-request")]
+
+
+class TestOptionalFieldHelper:
+    """_optional_mr_fields is keyword-only, so create/update cannot transpose."""
+
+    def test_every_field_is_keyword_only(self) -> None:
+        """No parameter may be positional -- a transposition would type-check cleanly.
+
+        Asserted on the signature rather than by making a deliberately wrong
+        call: a positional call is a static error too (which is the point), so
+        writing one would just mean fighting ``ty`` to prove ``ty`` is right.
+        """
+        kinds = {
+            name: param.kind
+            for name, param in inspect.signature(_optional_mr_fields).parameters.items()
+        }
+        assert set(kinds) == {
+            "description",
+            "reviewer_ids",
+            "auto_merge_strategy",
+            "auto_merge_at",
+            "external_id",
+        }
+        assert all(kind is inspect.Parameter.KEYWORD_ONLY for kind in kinds.values()), kinds
+
+    def test_helper_omits_unset_fields(self) -> None:
+        """Only non-None fields are included, under their camelCase wire names."""
+        assert _optional_mr_fields(
+            description=None,
+            reviewer_ids=[7],
+            auto_merge_strategy=None,
+            auto_merge_at=None,
+            external_id="DMD-1701",
+        ) == {"reviewerIds": [7], "externalId": "DMD-1701"}
+
+    def test_namespace_is_cached_on_the_client(self) -> None:
+        """client.merge_requests returns the same namespace instance every time."""
+        client = KeboolaClient(stack_url=STACK_URL, token=TOKEN)
+        try:
+            assert client.merge_requests is client.merge_requests
+        finally:
+            client.close()

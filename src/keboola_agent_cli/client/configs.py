@@ -624,6 +624,171 @@ class _ConfigsMixin(_CoreClient):
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows/{quote(row_id)}",
         )
 
+    def get_config_diff(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int,
+    ) -> dict[str, Any]:
+        """Get the three-way diff of a configuration between branches.
+
+        GET /v2/storage/branch/{branch_id}/components/{c}/configs/{cfg}/diff
+
+        Unlike the other config methods, ``branch_id`` is required with no
+        production fallback: the endpoint is branch-only and answers 400 on
+        the default branch, so production is made unrepresentable in the
+        signature instead of a runtime error.
+
+        Returns:
+            Diff dict with ``base`` (dev branch v1), ``ours`` (dev head) and
+            ``theirs`` (default head); each side may be null when the config
+            does not exist there. Flattening the nested ``diff`` payload is
+            Layer 2's job.
+        """
+        resp = self._request(
+            "GET",
+            f"/v2/storage/branch/{branch_id}/components/"
+            f"{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/diff",
+        )
+        return resp.json()
+
+    def _rebase_request(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int,
+        version: int,
+        diff: dict[str, Any],
+    ) -> dict[str, Any]:
+        """POST the rebase envelope; shared by the keep and delete rebases.
+
+        The only place that knows the wire shape: ``version`` at the top
+        level, the resolved content (or ``{}`` for a delete) inside ``diff``.
+        Body MUST be JSON with real types (``json=``, no ``json.dumps``, no
+        ``"1"``/``"0"`` booleans), unlike this file's form-encoded idiom --
+        the backend validates ``version`` as a real integer and form-encoded
+        values stay strings and fail validation.
+        """
+        resp = self._request(
+            "POST",
+            f"/v2/storage/branch/{branch_id}/components/"
+            f"{quote(component_id, safe='')}/configs/{quote(config_id, safe='')}/rebase",
+            json={"version": version, "diff": diff},
+        )
+        return resp.json()
+
+    def rebase_config(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int,
+        version: int,
+        name: str,
+        rows: list[dict[str, Any]],
+        configuration: dict[str, Any],
+        is_disabled: bool,
+        description: str | None,
+        change_description: str | None = None,
+    ) -> dict[str, Any]:
+        """Rebase a dev-branch configuration onto a newer default-branch version.
+
+        POST /v2/storage/branch/{branch_id}/components/{c}/configs/{cfg}/rebase
+        (200 + the rebased configuration -- synchronous, no job). Body is
+        JSON, not this file's form idiom (see ``_rebase_request``).
+
+        The resolved content travels in a ``diff`` envelope mirroring the
+        shape ``get_config_diff`` returns each side in, so a resolved diff
+        side posts back nearly 1:1. Rebase REPLACES the configuration rather
+        than patching it: server-side, ``name`` / ``description`` /
+        ``configuration`` / ``isDisabled`` are "the complete 3-way diff
+        result" and "fully replace" the resolved version's body
+        (``ConfigurationRebaseService``). So all four are required here, not
+        optional -- an omitted key is not "leave unchanged" but "take the
+        server-side default", which for ``configuration`` is ``{}``, for
+        ``isDisabled`` is ``false`` and for ``description`` is null. ``rows``
+        is required too, because the backend rejects a keep rebase without
+        it (``rows=[]`` legitimately deletes all rows). Only
+        ``change_description`` is genuinely optional: it is not part of the
+        replaced body, and null selects a default rebase message. To resolve
+        a conflict by DELETING the config, use ``rebase_config_delete`` --
+        the two rebase kinds are separate methods on purpose, so no illegal
+        combination is expressible.
+
+        ``branch_id`` is required with no production fallback (see
+        ``get_config_diff``); the endpoint also requires the
+        ``branches-merge-requests`` feature.
+
+        Args:
+            component_id: Component ID.
+            config_id: Configuration ID.
+            branch_id: Dev branch ID (branch-only endpoint).
+            version: The DEFAULT-BRANCH version being re-anchored onto
+                (take it from the diff's ``theirs.version``) -- despite the
+                wire name, NOT the dev-branch config's version. A target
+                version that is not newer is a 400. Sent at the top level,
+                outside ``diff``.
+            name: Resolved configuration name (non-empty after trimming).
+            rows: Resolved row objects
+                (``{id?, name?, description?, isDisabled?, configuration?}``);
+                missing/null ``id`` means a new row, duplicates are rejected,
+                array order becomes sort order.
+            configuration: Resolved configuration body. Required: on a
+                missing key the backend substitutes ``{}``, wiping it.
+            is_disabled: Resolved disabled flag. Required: on a missing key
+                the backend substitutes ``false``, re-enabling a config that
+                was disabled. Not the tri-state of ``update_config`` --
+                that method patches, this one replaces.
+            description: Resolved description. Required, but ``None`` is a
+                legitimate resolved value -- it means the rebased config
+                ends up with no description. ``None`` omits the key rather
+                than sending an explicit null, which costs no expressiveness
+                because server-side the two are indistinguishable (``isset``
+                mapping). It has no default precisely because that default
+                would silently drop an existing description.
+            change_description: Change log message; when ``None``/omitted
+                the backend uses a default rebase message.
+
+        Returns:
+            The rebased configuration dict.
+        """
+        diff: dict[str, Any] = {
+            "name": name,
+            "rows": rows,
+            "configuration": configuration,
+            "isDisabled": is_disabled,
+        }
+        if description is not None:
+            diff["description"] = description
+        if change_description is not None:
+            diff["changeDescription"] = change_description
+        return self._rebase_request(component_id, config_id, branch_id, version, diff)
+
+    def rebase_config_delete(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int,
+        version: int,
+    ) -> dict[str, Any]:
+        """Rebase a dev-branch configuration by resolving it as DELETED.
+
+        POST /v2/storage/branch/{branch_id}/components/{c}/configs/{cfg}/rebase
+
+        Sends exactly ``{"version": N, "diff": {}}`` -- the empty ``diff``
+        envelope is how the backend distinguishes a delete resolution from a
+        keep (``rebase_config``). Body is JSON (see ``_rebase_request``);
+        ``branch_id`` is required with no production fallback (see
+        ``get_config_diff``).
+
+        Args:
+            component_id: Component ID.
+            config_id: Configuration ID.
+            branch_id: Dev branch ID (branch-only endpoint).
+            version: The DEFAULT-BRANCH version being re-anchored onto (from
+                the diff's ``theirs.version``) -- see ``rebase_config``.
+        """
+        return self._rebase_request(component_id, config_id, branch_id, version, diff={})
+
     def delete_config(
         self, component_id: str, config_id: str, branch_id: int | None = None
     ) -> None:
