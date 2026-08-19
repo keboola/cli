@@ -75,8 +75,10 @@ kbagent config variables-set --project prod \
 
 Behavior:
 
-- kbagent sends the plaintext to the Encryption API, receives `KBC::ComponentSecure::...`
-  back, and writes only the ciphertext into the row's `values` array.
+- kbagent sends the plaintext to the Encryption API, receives project-scoped
+  ciphertext back (`KBC::ProjectSecure::...` on AWS, `...SecureGKMS::` on GCP,
+  `...SecureKV::` on Azure), and writes only the ciphertext into the row's
+  `values` array.
 - **Fail-closed**: if the Encryption API is unreachable, the command aborts
   with `ENCRYPTION_FAILED` (exit non-zero). The plaintext never lands on Storage.
 - Escape hatch: `--allow-plaintext-on-encrypt-failure` falls back to plaintext

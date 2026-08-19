@@ -317,7 +317,7 @@ Requires the project to be added with its **master ('owner') Storage API token**
 - `sync branch-status [--directory DIR]` -- show current branch mapping
 
 ## Encryption
-- `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: ComponentSecure (project + component). Use when ciphertext must exist before a `config update` / `config new` / `config clone` write.
+- `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: project-scoped ProjectSecure cipher, bound to this project + component; the prefix is cloud-specific (`KBC::ProjectSecure::` AWS, `KBC::ProjectSecureGKMS::` GCP, `KBC::ProjectSecureKV::` Azure). Use when ciphertext must exist before a `config update` / `config new` / `config clone` write.
 
 ## Developer Portal (since v0.49.0; admin routing in v0.51.1)
 

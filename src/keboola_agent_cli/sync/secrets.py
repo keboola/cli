@@ -3,17 +3,56 @@
 Keboola stores secrets as encrypted markers (e.g.
 ``KBC::ProjectSecure::...``).  This module provides helpers to detect
 such values and locate them inside arbitrarily nested configuration dicts.
+
+Detection is deliberately *inclusive*: this is a detector, not an
+authorization gate.  A marker that goes unrecognised is read as plaintext
+and stops being redacted from diffs, so under-inclusion is the bug and
+over-inclusion is harmless.  (The fail-closed whitelist that decides which
+ciphertext kbagent will *write* is a separate, deliberately narrow one --
+``ENCRYPTED_PASSWORD_PREFIXES`` in ``services/data_app_service.py``.)
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+# Source of truth for the cipher families: the platform's own registry,
+# keboola/keboola-operator ``internal/encryptor/wrapper/registry.go`` (mirrored
+# by the wrappers in keboola/object-encryptor), plus
+# https://developers.keboola.com/overview/encryption/.
+#
+# Every scope exists once per cloud. The AWS/KMS form carries no suffix, Azure
+# Key Vault appends ``KV`` and Google KMS appends ``GKMS`` -- so one scope is
+# three prefixes: ``KBC::ProjectSecure::``, ``KBC::ProjectSecureKV::``,
+# ``KBC::ProjectSecureGKMS::``. Listing only the AWS forms (as this module did
+# until 0.85.1) made every GCP/Azure ciphertext read as plaintext here -- see
+# issue #612, and #607 for the same defect in the data-app write path.
+_CIPHER_SCOPES: tuple[str, ...] = (
+    "Secure",
+    "ComponentSecure",
+    "ConfigSecure",
+    "ProjectSecure",
+    "ProjectWideSecure",
+    "BranchTypeSecure",
+    "BranchTypeConfigSecure",
+    "ProjectWideBranchTypeSecure",
+)
+
+_CIPHER_CLOUD_SUFFIXES: tuple[str, ...] = ("", "KV", "GKMS")
+
+# Pre-2019 ciphers. Note the ``==`` terminator -- these are not ``::``-delimited
+# and have no per-cloud variants.
+_LEGACY_CIPHER_PREFIXES: tuple[str, ...] = (
+    "KBC::Encrypted==",
+    "KBC::ComponentEncrypted==",
+    "KBC::ComponentProjectEncrypted==",
+)
+
 ENCRYPTED_PREFIXES: tuple[str, ...] = (
-    "KBC::ProjectSecure::",
-    "KBC::ComponentSecure::",
-    "KBC::ConfigSecure::",
-    "KBC::ProjectWideSecure::",
+    tuple(
+        f"KBC::{scope}{suffix}::" for scope in _CIPHER_SCOPES for suffix in _CIPHER_CLOUD_SUFFIXES
+    )
+    + _LEGACY_CIPHER_PREFIXES
 )
 
 
