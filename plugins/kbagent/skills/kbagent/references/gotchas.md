@@ -416,6 +416,13 @@ Versioning convention:
   look-alikes (`KBC::ProjectSecureKVX::`), the broader `KBC::ComponentSecure*`
   / `KBC::ConfigSecure*` scopes and plaintext are still refused, and plaintext
   is still never written to Storage.
+- **The sync side had the same gap (#612).** `sync diff` / `sync status`
+  redact ciphertext so it never shows up as a diff; until 0.85.1 the detector
+  knew only the AWS-form prefixes, so on GCP/Azure an encrypted value stored
+  under a **non-`#` key** was treated as plaintext. It now derives the whole
+  family from the platform registry (8 scopes x 3 clouds + 3 legacy ciphers).
+  One-time effect: such a config hashes as changed on the first run after the
+  upgrade. `#`-prefixed keys were never affected.
 - **If you hit `ENCRYPTION_FAILED` on a data app, check the kbagent version
   first** -- on Azure with <= 0.85.0 it is this bug, not a broken token or a
   broken Encryption API. Upgrade rather than reaching for
