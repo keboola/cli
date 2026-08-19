@@ -1,7 +1,7 @@
 """Storage commands - buckets, tables, and direct access path resolution.
 
 Provides direct Storage API access including sharing/linked bucket metadata
-that is not available via MCP tools.
+(source project id and name) that the plain bucket listing does not surface.
 """
 
 from pathlib import Path
@@ -67,8 +67,7 @@ def storage_buckets(
     """List storage buckets with sharing/linked bucket information.
 
     Shows which buckets are linked from other projects, including the
-    source project ID and name. This information is not available via
-    MCP tools.
+    source project ID and name.
 
     Branch handling: this read command uses the production endpoint by
     default, even when a dev branch is active via `branch use`. The

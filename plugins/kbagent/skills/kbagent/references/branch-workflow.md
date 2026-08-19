@@ -11,8 +11,8 @@ kbagent --json branch create --project ALIAS --name "fix-transform-x"
 # Returns: branch_id, name, and confirms activation
 
 # 2. All subsequent commands on this project auto-use the active branch
-kbagent --json tool call get_configs --project ALIAS
-kbagent --json tool call update_configuration --project ALIAS --input '{...}'
+kbagent --json config list --project ALIAS
+kbagent --json config update --project ALIAS --component-id C --config-id ID --set '...'
 kbagent --json workspace create --project ALIAS --name "branch-debug"
 
 # 3. When done, get the merge URL (does NOT auto-merge!)
@@ -37,7 +37,6 @@ kbagent --json branch merge --project ALIAS
 - **Async operations**: `branch create` and `branch delete` are async on the API. kbagent waits for completion (typically 1-3s). No need to poll.
 - **Merge is manual**: `branch merge` returns a URL for the Keboola UI. It does NOT merge via API. This is intentional for safe review.
 - **Active branch persistence**: stored in kbagent config. Survives between sessions.
-- **MCP tools respect active branch**: tool calls automatically use the active branch without extra flags.
 - **Config commands respect active branch**: `config list`, `config detail`, and `config search` auto-scope to the active branch. Use `--branch ID` to override.
 - **Workspaces respect active branch**: `workspace create` and `workspace delete` operate in the active branch context.
 - **Sync respects active branch**: `sync pull` writes dev branch configs into a separate directory (e.g. `fix-etl/` instead of `main/`). `sync diff` and `sync push` also auto-scope to the active branch. See [sync-workflow.md](sync-workflow.md) for details.

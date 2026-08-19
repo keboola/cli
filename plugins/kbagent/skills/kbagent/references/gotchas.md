@@ -80,7 +80,7 @@ Versioning convention:
   `session_unsupported_features` (`auth status` does **not** carry it), so read
   it from there instead of reconstructing it from memory:
   `kai`; `semantic-layer` (Metastore); `data-app` (Data Science);
-  `stream` (Data Streams); `tool` (MCP subprocess); `sharing` unless a master
+  `stream` (Data Streams); `sharing` unless a master
   token is in the environment; the AI Service paths (`docs query`,
   `config examples`, `config new`, `component detail`/`search`,
   `flow new`/`update`/`validate`); the Scheduler Service paths
@@ -209,48 +209,41 @@ Versioning convention:
   care as any other long-lived secret, not as a lesser one than a scoped
   Storage token.
 
-## MCP passthrough is DEPRECATED; REMOVED in v0.85.0 (since v0.74.0)
+## MCP passthrough is REMOVED (since v0.85.0)
 
-- **`tool call` / `tool list` / `agent --type mcp_tool` are on a removal
-  track** (epic #390 phase 2). `tool call` warns with the exact native
-  replacement (stderr in human mode; additive `deprecation` key in the
-  `--json` envelope -- parse-safe, no existing key changed). `tool list`
-  gains a `cli_equivalent` column/field. Serve `/mcp/tools*` routes are
-  marked `deprecated` in OpenAPI (`/mcp/server-status` stays).
-- **The parity map is code**: `src/keboola_agent_cli/mcp_parity.py` --
-  one entry per upstream tool; offline tests pin every entry to a real
-  OPERATION_REGISTRY key, and the weekly `mcp-parity-canary` workflow
-  (also `make parity-check`) diffs the live keboola-mcp-server `TOOLS.md`
-  against it, so a new upstream tool turns the canary red instead of
-  silently widening the gap.
-- **Removal is scheduled: v0.85.0, end of August 2026** (epic #390 phase 3,
-  announced in 0.80.0). Before 0.80.0 the notice said only "a future
-  release"; it now names the version everywhere.
-- **`agent --type mcp_tool` tasks keep working** until then -- creation just
-  warns. Migrate to `--type cli_command` with the native command BEFORE
-  v0.85.0. These tasks are persisted in `<config_dir>/agents.json`, so
-  unlike an interactive `tool call` they get no warning at removal time: a
-  scheduled task simply starts failing on its next cron tick.
-- **There is NO migration command, by decision.** The parity map knows which
-  native command replaces a tool, but not how to map arguments: `mcp_tool`
-  params are the MCP tool's own `input` dict (`componentId`) while the CLI
-  takes flags (`--component-id`), and for several tools the shape differs too.
-  Guessing the argv of a scheduled WRITE task that then runs unattended is the
-  worst place to be wrong, so kbagent detects these tasks and leaves the
-  rewrite to you -- or to an AI agent, which can read `--help` and the task's
-  own input and does not have to guess.
-- **Find the affected tasks (since v0.81.0)**: `kbagent doctor` has an
-  `mcp_tool_tasks` check that warns with the task ids, the tool each one
-  calls and its native replacement (`details.tasks[]` in `--json`, each with
-  `native_command`). `kbagent agent list` marks those rows DEPRECATED and its
-  `--json` adds an additive per-task `deprecation` key -- present ONLY on
-  affected tasks, so every other consumer sees a byte-identical payload.
+- **`tool call` / `tool list` / `agent --type mcp_tool` / the `/mcp/*` serve
+  routes no longer exist** (epic #390 phase 3, deprecated since 0.74.0).
+  Proposing any of them produces a usage error, not a warning. Every tool the
+  catalog exposed has a native command: the full tool-to-command map is
+  `docs/mcp-migration.md` in the kbagent repo -- consult it whenever a user,
+  an old script or an old runbook names a tool (`update_config`, `get_configs`,
+  `query_data`, ...).
+- **`keboola-mcp-server` itself is unaffected** -- it is a separate
+  distribution that still works with Claude Desktop / Cursor. What changed is
+  that kbagent no longer installs or auto-updates it: keep it fresh with
+  `uv tool install --upgrade --prerelease=allow keboola-mcp-server` (the
+  pre-release flag is still required -- see #324). `kbagent version` reports
+  kbagent only (no `dependencies` key) and `kbagent doctor` has no `--fix`.
+- **Persisted `mcp_tool` agent tasks are tombstoned, not deleted.** They
+  survive an `agents.json` load/save round-trip untouched, the scheduler skips
+  them instead of firing them, a manual `agent run` records an error naming
+  the migration guide, `agent list` marks the row, and `kbagent doctor`
+  reports them as FAIL (`mcp_tool_tasks`; `details.tasks[]` in `--json` lists
+  the task ids -- the native command is NOT in the payload, look it up in
+  `docs/mcp-migration.md`).
+- **There is NO migration command, by decision.** The old parity map knew
+  which native command replaces a tool, but not how to map arguments:
+  `mcp_tool` params are the tool's own `input` dict (`componentId`) while the
+  CLI takes flags (`--component-id`), and for several tools the shape differs
+  too. Guessing the argv of a scheduled WRITE task that then runs unattended
+  is the worst place to be wrong.
 - **Recipe for migrating one task** (this is the whole procedure):
   1. `kbagent --json doctor` -> `checks[].details.tasks[]` for the affected
-     task ids and the `native_command` each one maps to.
+     task ids.
   2. Read that task's `action.params.input` from `<config_dir>/agents.json`
      (or `kbagent --json agent show <id>`) -- those are the values to carry over.
-  3. `kbagent <native_command> --help` -> map each input key to its flag. This
+  3. Look the tool up in `docs/mcp-migration.md`, then
+     `kbagent <native command> --help` -> map each input key to its flag. This
      is the step no tooling does for you; the naming differs per tool.
   4. `kbagent agent create --name ... --cron ... --type cli_command --argv ...`
      with the result, verify it once with `kbagent agent run <new-id>`, then
@@ -263,25 +256,21 @@ Versioning convention:
   `kbagent agent update <that-task> --trigger-task-id <new-id>` BEFORE deleting
   the old one, or the chain breaks silently. Check with
   `kbagent --json agent list` and grep the `trigger` blocks for the old id.
+- **`tool:read` / `tool:write` / `tool:destructive` permission patterns are
+  inert.** A persisted policy still LOADS with them, but they match nothing --
+  so a `mode="deny"` policy whose only read allowance was `tool:read` now
+  denies everything (fail-closed). Re-run `kbagent permissions set` with
+  `cli:read` if that was your setup.
 
-## MCP tool classification is FAIL-CLOSED; parity commands replace `tool call` (since v0.73.0)
+## Native parity commands (since v0.73.0)
 
-- **Unknown MCP tool names classify as `destructive`** -- blocked by BOTH
-  `--deny-writes` and `--deny-destructive`, and never fanned out multi-project.
-  Before 0.73.0 anything not matching a write prefix classified as `read`:
-  `run_job`, `run_sync_action`, `deploy_data_app`, `modify_*` passed
-  `--deny-writes` AND ran on every configured project in parallel. They are
-  writes now (single-project dispatch).
-- **`tool call` enforces the session firewall per tool name** -- a session-only
-  `--deny-destructive` now blocks `tool call delete_bucket` (previously only a
-  PERSISTED `permissions set` policy was checked at tool granularity; session
-  flags stopped at the coarse `tool.call` operation).
-- **Prefer the native parity commands over `tool call`** -- the MCP passthrough
-  is on a deprecation track (epic #390 / issue #478): `docs query`,
-  `config examples`, `semantic-layer schema`, `component sync-action`,
-  `transformation create|show|edit`, `flow examples`. `query_data`'s CLI
-  answer is `workspace query`.
-- **`component sync-action --row-id` merge is SHALLOW** (MCP parity): row
+- **These commands are the native answers to tools the removed passthrough
+  used to expose**: `docs query`, `config examples`, `semantic-layer schema`,
+  `component sync-action`, `transformation create|show|edit`, `flow examples`.
+  `query_data`'s CLI answer is `workspace query`. **VERSION GATE**: below
+  0.73.0 they do not exist. (The passthrough itself is gone since 0.85.0 --
+  see the removal section above; `tool:*` permission patterns are inert.)
+- **`component sync-action --row-id` merge is SHALLOW**: row
   `parameters`/`storage` top-level keys replace the root's wholesale -- a row
   that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
   deep-merge into it.
@@ -290,8 +279,8 @@ Versioning convention:
   (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
 - **`semantic-layer schema` resolves the default schema VERSION** -- the bare
   metastore endpoint returns only a `{versions: [...]}` listing (the upstream
-  MCP tool ships that listing as-is; the CLI fetches the real document and
-  reports `schema_version`).
+  keboola-mcp-server tool ships that listing as-is; the CLI fetches the real
+  document and reports `schema_version`).
 - **`docs query` vs `kai ask`**: `docs query` is documentation-only RAG (any
   token, no feature flag, no project data); `kai ask` sees project data but
   needs the master token + `agent-chat` feature.
@@ -393,8 +382,8 @@ Versioning convention:
   interactive config paths skipped it.) Verified live on projects 4214 + 10539.
 - **Since v0.54.0** these paths call the Encryption API first, so a read-back
   returns `KBC::ProjectSecure::...` (not the plaintext). Same service layer
-  (`ConfigService`) backs the CLI, the `serve` REST config routes, and the
-  `kbagent tool` MCP passthrough, so all three are covered.
+  (`ConfigService`) backs the CLI and the `serve` REST config routes, so both
+  are covered.
 - **Fail-closed by default.** If encryption fails (or the project scope cannot
   be resolved) the write is aborted with `ENCRYPTION_FAILED` rather than
   writing plaintext. Pass `--allow-plaintext-on-encrypt-failure` (named to
@@ -518,7 +507,7 @@ a `name_drift_warnings: [...]` array on the result envelope. The
 still runs, so a future operator who wants to audit can flip the flag off
 without losing data.
 
-## `semantic-layer search-context` + `get-context` cover the MCP `search_semantic_context` / `get_semantic_context` parity (since v0.47.0)
+## `semantic-layer search-context` + `get-context` cover the upstream `search_semantic_context` / `get_semantic_context` parity (since v0.47.0)
 
 `kbagent semantic-layer search-context --project P [--pattern G ...] [--type T] [--limit N]`
 is project-wide (not model-scoped). Patterns are **case-sensitive `fnmatch`** against
@@ -537,8 +526,8 @@ swallowed by the subsequent metric probe.
 
 These two subcommands cover the pre-flight pattern FIIA uses to verify a
 project's semantic model is populated before kicking off a downstream
-pipeline; the previous workaround (a `keboola-mcp-server` MCP server entry
-in `.mcp.json` solely for these two tools) can be dropped.
+pipeline; the previous workaround (a `keboola-mcp-server` entry in `.mcp.json`
+solely for these two tools) can be dropped.
 
 ## `semantic-layer reference-data` holds a whole dimension as ONE record; `set` is PUT-replace, not append (since v0.55.0)
 
@@ -1134,13 +1123,12 @@ events and emits a final `done` SSE frame mirroring the same record.
   no-ops without `--push` and exit 2 if set independently.
 - `--configuration` and `--configuration-file` are mutually exclusive;
   `--no-files` and `--output-dir` are mutually exclusive.
-- **MCP `create_config` quirk does NOT apply**: the raw MCP tool refuses
-  `keboola.snowflake-transformation` and routes you to
-  `tool call create_sql_transformation`. `kbagent config new --push` does
-  NOT refuse; the typed CLI wraps the raw Storage API directly. For
-  Snowflake transformations: one `config new --push` call works; the
-  MCP-typed `create_sql_transformation` shape is only needed if you
-  specifically want that envelope.
+- **`config new --push` accepts EVERY component type**, including
+  `keboola.snowflake-transformation` -- the typed CLI wraps the raw Storage
+  API directly. (The upstream `keboola-mcp-server` `create_config` tool
+  refuses that component and routes to `create_sql_transformation`; kbagent
+  never inherited that restriction, and `transformation create` is the
+  purpose-built path since 0.73.0.)
 - **Schema validation** runs by default whenever `--configuration` /
   `--configuration-file` provide an explicit body. On mismatch the create
   aborts with exit 5 and a list of error paths. If the AI Service has no
@@ -1274,45 +1262,29 @@ events and emits a final `done` SSE frame mirroring the same record.
   identical to the current alias, it's a no-op (matches "rename to same name"
   idempotency).
 
-## `keboola-mcp-server` is now auto-updated on kbagent startup (since v0.30.1)
+## kbagent no longer installs or updates `keboola-mcp-server` (since v0.85.0)
 
-- Pre-v0.30.1 trap: a user installs `keboola-mcp-server` once via
-  `uv tool install --prerelease=allow keboola-mcp-server`, then runs kbagent
-  for months while upstream MCP ships several minor versions. The cached
-  schema is missing fields (e.g. `configuration_row_ids` added in MCP v1.55.0)
-  and `kbagent --json tool list` reports the stale schema with no warning.
-  Reported in #243 -- a real user hit this with MCP v1.49.0 (six minors behind).
-- Since v0.30.1: `kbagent` startup runs a two-stage auto-update for kbagent
-  itself and `keboola-mcp-server`. The MCP stage detects the install method
-  (`uv_tool` / `pip_env` / `uvx`) and runs the matching upgrade command
-  (`uv tool upgrade` / `pip install -U` / `uvx --refresh`). No re-exec needed
-  for the MCP path -- the next `tool call` spawn picks up the new version.
-- Since v0.76.2 (#528/#530), both updates are fully planned before anything is
-  mutated. MCP is upgraded first; a pending kbagent self-update is the terminal
-  mutation and uses an exact-version full reinstall (`uv tool install --force
-  --reinstall` for uv tools), then immediately re-executes the original command.
-  A failed or timed-out reinstall prints a copy-paste recovery command. Do not
-  run discovery or another update stage after the kbagent reinstall starts.
-- Since v0.43.8: every MCP install/upgrade command carries `--prerelease=allow`
-  (uv) / `--pre` (pip). `keboola-mcp-server >= 1.55.0` pins a pre-release-only
-  transitive dep (`toon-format~=0.9.0b1`); without the opt-in uv backtracks to
-  the stale v1.32.0 and exits 0, so the auto-update silently no-ops while every
-  command prints a misleading stderr warning. Fixed in #324. Note:
-  `--prerelease=if-necessary` is insufficient -- a stable `toon-format` 0.1.0
-  exists but violates the pin, so only `--prerelease=allow` resolves it.
-- Critical invariant: **kbagent up-to-date does NOT short-circuit the MCP
-  stage**. Both stages always run, regardless of which side has updates.
-- `kbagent update` triggers the same two-stage flow explicitly. JSON output
-  contains separate `kbagent` and `mcp` blocks with per-stage `updated`,
-  `current_version`, `latest_version` fields plus a one-line `message`
-  summary.
-- Auto-install is intentionally NOT done on startup. If MCP is not installed
-  locally (`install_method == "none"`), the auto-update flow records the
-  latest version to the cache but does NOT run `uv tool install`. Use
-  `kbagent doctor --fix` for the explicit install path.
-- `kbagent version` now shows the locally installed MCP version next to the
-  latest -- previously only the latest was reported, leaving the user with
-  no signal whether their cache was stale.
+- From v0.30.1 to v0.84.x, `kbagent` startup and `kbagent update` ran a
+  two-stage upgrade: kbagent itself AND `keboola-mcp-server`. **Since v0.85.0
+  the MCP stage is gone.** `kbagent update` and the startup hook touch kbagent
+  only; `kbagent version` reports kbagent only (no `dependencies` key, no
+  Dependencies panel); `kbagent doctor` has no `--fix` (it only ever installed
+  the MCP server).
+- **If you use `keboola-mcp-server` with Claude Desktop / Cursor, keep it fresh
+  yourself**: `uv tool install --upgrade --prerelease=allow keboola-mcp-server`.
+  The `--prerelease=allow` opt-in is NOT optional (#324): `keboola-mcp-server
+  >= 1.55.0` pins a pre-release-only transitive dep (`toon-format~=0.9.0b1`),
+  and without it uv backtracks to a stale v1.32.0 and exits 0 -- a silent
+  no-op. `--prerelease=if-necessary` is insufficient: a stable `toon-format`
+  0.1.0 exists but violates the pin.
+- A stale MCP server used to be invisible from kbagent (#243: a user ran six
+  minor versions behind for months). It still is -- but kbagent no longer
+  claims to manage it, so check the version in your MCP client, not here.
+- **kbagent's own self-update is unchanged**: discovery is fully planned before
+  anything is mutated, the reinstall is an exact-version full reinstall
+  (`uv tool install --force --reinstall` for uv tools), and it re-executes the
+  original command immediately afterwards. A failed or timed-out reinstall
+  prints a copy-paste recovery command (#528/#530, v0.76.2).
 
 ## `storage swap-tables` is branch-scoped and aliases stay put (since v0.28.0)
 
@@ -1848,8 +1820,6 @@ Not all commands return data the same way. Key differences:
 | `config list` | `{"configs": [...]}` |
 | `job list` | `{"jobs": [...]}` |
 | `lineage show` | `{"lineage_links": [...], "errors": [...]}` |
-| `tool list` | `{"tools": [...]}` |
-| `tool call` | `{"results": [...]}` (one per project) |
 | `workspace list` | `{"workspaces": [...], "errors": [...]}` |
 | `branch list` | `{"branches": [...]}` |
 | `config search` | `{"matches": [...], "errors": [...], "stats": {...}}` |
@@ -1877,9 +1847,9 @@ One project failing does not block others. Check the `errors` array:
 ```
 
 **`error_code` survives the catch-all handler -- branch on it, never on the
-message (since v0.80.0).** In `data-app list`, `tool list`, `tool call` and
-`flow list`, a per-project failure that already carries a code keeps it instead
-of being relabelled `UNEXPECTED_ERROR` / `MCP_ERROR`. So a browser-login
+message (since v0.80.0).** In `data-app list`, `flow list` and the other
+multi-project readers, a per-project failure that already carries a code keeps
+it instead of being relabelled `UNEXPECTED_ERROR`. So a browser-login
 (session) project hitting an unsupported surface reports
 `error_code: "AUTH_NOT_SUPPORTED_ON_STACK"` for that one project while the
 others succeed, which is the hook for auto-remediating (register a static-token
@@ -2041,25 +2011,19 @@ type inventory and examples.
 - Manage API token (since v0.29.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.29.0)` entry at the top of this file.
 - Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
-## MCP tool call gotchas
+## Branch scope on reads
 
-- **Read tools** (multi_project=true): automatically query all projects. No `--project` needed.
-- **Write tools** (multi_project=false): require `--project` to specify the target.
-- **Auto-expand**: tools like `get_tables` that need `bucket_ids` auto-resolve them by calling `get_buckets` first.
-- **Input validation**: tool input is validated against the tool's `inputSchema` before dispatch.
-  Only pass parameters defined in the schema. Unexpected parameters cause Pydantic validation errors.
-- **Branch scope**: when active branch is set, MCP tools and config commands automatically scope to that branch.
-  `branch_id` is a **CLI flag** (`--branch`), NOT a tool input parameter -- do not pass it inside `--input`.
-  Config read commands (`config list`, `config detail`, `config search`) also support `--branch`.
-- **Storage read commands are the exception**: `storage buckets`, `storage bucket-detail`,
-  `storage tables`, `storage table-detail`, and `storage files` **ignore the implicit active
-  dev branch** and query production by default. The Storage API branch-scoped endpoint only
-  returns resources locally modified in the dev branch (empty for a fresh branch), so
-  auto-scoping would surprise users with "No tables found". Explicit `--branch ID` still
-  works. Storage **write** commands (create-*, upload-*, delete-*, file-*) stay branch-aware.
-- **Schema discovery**: use `kbagent --json tool list` to inspect each tool's `inputSchema` and find
-  accepted parameters. For example, `get_configs` takes `configs` (a list of `{component_id, configuration_id}`
-  objects), not a flat `config_id` string.
+- **Config commands follow the active branch**: `config list`, `config detail`,
+  `config search` scope to the active dev branch (and take an explicit
+  `--branch ID`).
+- **Storage read commands are the exception**: `storage buckets`, `storage
+  bucket-detail`, `storage tables`, `storage table-detail`, and `storage files`
+  **ignore the implicit active dev branch** and query production by default.
+  The Storage API branch-scoped endpoint only returns resources locally
+  modified in the dev branch (empty for a fresh branch), so auto-scoping would
+  surprise users with "No tables found". Explicit `--branch ID` still works.
+  Storage **write** commands (create-*, upload-*, delete-*, file-*) stay
+  branch-aware.
 
 ## Conversation ID
 
@@ -2122,24 +2086,21 @@ Lets callers override the default project for one shell/session without editing
   when the env var points to an unregistered alias, so you can diagnose
   precedence issues without reading the source.
 
-## config update vs MCP update_config
+## `config update` path semantics (paths start at the configuration ROOT)
 
-For updating configuration content, prefer `kbagent config update` over MCP's `update_config` tool:
+`kbagent config update` paths are relative to the configuration ROOT, not to
+`parameters`: write `--set 'parameters.db.host=...'`, never `--set 'db.host=...'`.
+(The removed MCP `update_config` tool used parameters-relative paths, so an old
+runbook that says `path: "db.host"` needs the `parameters.` prefix here, and one
+that says `path: "parameters.tables"` would double-nest if copied verbatim.)
 
-| Feature | CLI `config update` | MCP `update_config` |
-|---------|--------------------|--------------------|
-| Path reference | Configuration root (`parameters.db.host`) | Relative to `parameters` (`db.host`) |
-| Deep merge | `--merge` preserves all sibling keys | Must use correct path or risk data loss |
-| Dry-run preview | `--dry-run` shows diff without applying | Not available |
-| Performance | ~1s (direct API call) | ~3-4s (MCP subprocess overhead) |
-| Input source | Inline JSON, `@file.json`, stdin (`-`) | Inline JSON only |
-
-**Key difference**: CLI paths start from the configuration root. MCP paths are relative to
-the `parameters` object. Using `path: "parameters.tables"` in MCP actually resolves to
-`parameters.parameters.tables` (double nesting), which causes confusing failures.
-
-**When to use MCP's `update_config`**: Only for `str_replace` and `list_append` operations
-which are not available in the CLI command. For `set` operations, always prefer CLI.
+- `--merge` deep-merges and preserves sibling keys; `--set` implies merge.
+- `--dry-run` shows the diff without applying.
+- Input can be inline JSON, `@file.json`, or stdin (`-`).
+- There is no `str_replace` / `list_append` operation on `config update`. For
+  SQL transformation bodies use `transformation edit` (9 ops incl.
+  `str_replace`), which is the native replacement for the old
+  `update_sql_transformation` tool.
 
 **Examples:**
 ```bash
@@ -2160,19 +2121,21 @@ kbagent --json config update --project P --component-id C --config-id ID \
   --configuration-file updated-config.json --merge
 ```
 
-## Batch size limits for update_sql_transformation
+## Batch size limits for `str_replace` refactors
 
-When using `update_sql_transformation` with `str_replace` operations, **limit batches
-to 50 operations maximum**. Larger batches (150+) may trigger a Storage Events API
-size limit: the replacements are applied and a new version is created, but the MCP
-server fails to log the change event and returns `isError: true` with
-`400 Bad Request: Request too large`. This creates a confusing state where changes
-were saved but the tool reports failure.
+Keep a batch of `str_replace` operations to **50 maximum**. Larger batches
+(150+) can trip a Storage Events API size limit: the replacements are applied
+and a new config version is created, but logging the change event fails with
+`400 Bad Request: Request too large` -- a confusing state where the changes
+were saved but the call reports failure. (First observed against the old
+`update_sql_transformation` MCP tool; the limit is server-side, so
+`kbagent transformation edit` is subject to the same ceiling.)
 
 Workaround for large refactors (e.g. removing `AS` from 200 table aliases):
-1. Split operations into batches of 50
-2. Call `update_sql_transformation` once per batch
-3. Verify each batch succeeded before sending the next
+1. Split operations into batches of 50.
+2. Run one `kbagent transformation edit` per batch.
+3. `kbagent transformation show` between batches -- positional ids renumber
+   after structural ops -- and verify each batch before sending the next.
 
 ## SQL transformation file layout
 
@@ -2292,13 +2255,12 @@ Observability: every normalization is surfaced.
   post-normalize shape, so the preview matches what would actually land.
 
 **The trap still exists when bypassing kbagent.** Direct
-`PUT /v2/storage/components/{component}/configs/{config}` calls (curl,
-custom Python, the MCP `update_sql_transformation` / `create_sql_transformation`
-tools as of MCP v1.59.x) do NOT inherit this normalization. If an LLM agent
-is composing the configuration JSON itself, prefer
-`kbagent config update --configuration ...` over raw REST or MCP tool calls
-for SQL transformations -- that way the normalization fires regardless of
-upstream client behaviour.
+`PUT /v2/storage/components/{component}/configs/{config}` calls (curl, custom
+Python, any other client) do NOT inherit this normalization. If an LLM agent is
+composing the configuration JSON itself, prefer `kbagent config update
+--configuration ...` (or `kbagent transformation edit`) over raw REST for SQL
+transformations -- that way the normalization fires regardless of what the
+other client would have done.
 
 Bonus fix in 0.28.0: `kbagent sync push` previously did NOT split semicolons
 in BigQuery / DuckDB transformations because those component IDs were
@@ -3463,10 +3425,6 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   `sudo dnf upgrade keboola-cli2` · hand-unpacked archive -> re-download from
   the GitHub release page. Note the **package** is `keboola-cli2` while the
   **binary** is `kbagent`; the PyPI distribution is a third name, `keboola-cli`.
-- **keboola-mcp-server still auto-updates on a frozen build**, by design: it is
-  a separate Python distribution the binary only spawns as a subprocess. If the
-  user has no Python tooling, install-method detection returns `none` and the
-  stage does nothing.
 
 ## `--json` is written as UTF-8, independent of the console codepage (since v0.78.0)
 

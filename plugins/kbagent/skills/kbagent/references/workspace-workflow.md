@@ -38,10 +38,12 @@ kbagent --json workspace query \
 ```
 
 ```bash
-# Step 4: Once the fix works, update the transformation config via MCP
-kbagent --json tool call update_configuration \
+# Step 4: Once the fix works, update the transformation config
+kbagent --json transformation edit \
   --project ALIAS \
-  --input '{"component_id": "keboola.snowflake-transformation", "configuration_id": "CONFIG_ID", ...}'
+  --config-id CONFIG_ID \
+  --change-description "Fix the query validated in the workspace" \
+  --op '{"op": "set_code", "code_id": "b0.c0", "script": ["SELECT fixed_query ..."]}'
 ```
 
 ```bash

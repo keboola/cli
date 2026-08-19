@@ -6,7 +6,7 @@ Keboola Data App, a transformation, a hosted service -- run Query Service SQL an
 read/write Storage Files with **no CLI subprocess, no daemon, and no config-dir**.
 
 Use this when you are **already inside Python** and want fixed, typed operations.
-For AI-driven exploration across projects, use MCP tools instead; for one-off
+For ad-hoc exploration across projects, use the CLI instead; for one-off
 shell operations, use the `kbagent` CLI.
 
 ## Quick reference
@@ -180,7 +180,7 @@ buckets = client.list_buckets()
 
 | Situation | Use instead |
 |---|---|
-| AI-driven exploration across one or many projects | MCP tools (`kbagent tool call ...`) |
+| Ad-hoc exploration across one or many projects | the `kbagent` CLI (`config list`, `storage tables`, `search`, ...) |
 | One-off shell / scripted ops, CI steps | the `kbagent` CLI |
 | You need a long-lived HTTP API / Web UI | `kbagent serve` |
 | Shelling out to the `kbagent` binary from a Python process you control | import the library (this doc) |

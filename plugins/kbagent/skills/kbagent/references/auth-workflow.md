@@ -243,7 +243,6 @@ string as if it were a real credential:
 - `semantic-layer` (Metastore Service)
 - `data-app` (Data Science Service)
 - `stream` (Data Streams Service)
-- `tool` (MCP server subprocess), incl. `agent --type mcp_tool`
 - `sharing`, unless a master token is set in the environment
 - the AI Service paths: `docs query`, `config examples`, `config new`,
   `component detail` / `search`, `flow new` / `update` / `validate`
@@ -262,11 +261,11 @@ identity, never a project token, so a session changes nothing there; and
 work, while `flow new` / `update` / `validate --project` need the AI Service
 and fail.
 
-In a multi-project command (`data-app list`, `tool list`, `tool call`,
-`flow list`) that guard does not abort the whole run: the offending project
-gets an `errors[]` entry keeping the real `error_code`
-(`AUTH_NOT_SUPPORTED_ON_STACK`, not a generic `UNEXPECTED_ERROR` /
-`MCP_ERROR`) while the other projects succeed. Branch on that code rather
+In a multi-project command (`data-app list`, `flow list`, `storage tables`)
+that guard does not abort the whole run: the offending project gets an
+`errors[]` entry keeping the real `error_code`
+(`AUTH_NOT_SUPPORTED_ON_STACK`, not a generic `UNEXPECTED_ERROR`) while the
+other projects succeed. Branch on that code rather
 than on the message text.
 
 If your workflow needs one of those, register the same project again under

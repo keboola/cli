@@ -1,6 +1,6 @@
 # Kai (Keboola AI Assistant) Workflow
 
-Kai is Keboola's cloud AI assistant with MCP access to project data.
+Kai is Keboola's cloud AI assistant with server-side access to project data (Keboola runs its own MCP connection there; nothing MCP-related runs in kbagent).
 kbagent bridges Claude Code (local) to Kai (cloud) for Keboola-specific questions.
 
 > **BETA**: Kai commands require a project with the `agent-chat` feature enabled.

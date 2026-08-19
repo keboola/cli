@@ -191,9 +191,9 @@ kbagent config update ...               # after user confirms
 For SQL transformations, only update the specific `script` arrays inside
 `parameters.blocks[N].codes[M]`, not the whole config. Sending the whole
 config can wipe `storage.input.tables` / `storage.output.tables`. See
-[sql-migration-workflow](sql-migration-workflow.md) for the safe pattern,
-including the use of MCP `update_sql_transformation` with `str_replace`
-operations (one of the few cases where MCP beats the CLI).
+[sql-migration-workflow](sql-migration-workflow.md) for the safe pattern.
+For targeted edits prefer `kbagent transformation edit` (`str_replace` and
+8 other ops, applied against ids from a fresh `transformation show`).
 
 ## Multi-user / multi-session teams
 
@@ -211,15 +211,12 @@ When several people (or several Claude sessions) edit the same project:
 
 A few destructive operations don't (yet) have `--dry-run`:
 
-- `kbagent tool call` for MCP write tools (`update_config`,
-  `update_sql_transformation`, `create_config`, etc.)
 - some `branch` operations
 
 For these, **describe the intended change to the user in plain English
 first** and get confirmation before invoking. The verbal preview replaces
-`--dry-run`. Better still: when an equivalent CLI command exists (e.g.
-`kbagent config update` instead of MCP `update_config`), use the CLI for
-its built-in `--dry-run`.
+`--dry-run`. Better still: prefer a command that has `--dry-run` (e.g.
+`kbagent config update`) over a raw REST write.
 
 ## Workspace table conflicts in transformations
 

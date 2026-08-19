@@ -555,10 +555,11 @@ class TestWaiterScriptOnWindows:
 class TestInstallOutputBelongsToItsOwnRun:
     """`output` must be this run's transcript, not the shared log's tail.
 
-    The log is appended to by every update -- the MCP stage writes to it moments
-    before the kbagent stage in the very same `kbagent update`, and the Windows
-    helper appends to it too. Reporting the tail of the whole file attributed
-    someone else's output to this command.
+    The log is appended to by every update -- an earlier `kbagent update` run
+    writes to it, and the Windows deferred helper appends to it too. Reporting
+    the tail of the whole file attributed someone else's output to this
+    command. (Before v0.85.0 the keboola-mcp-server stage wrote to it moments
+    before the kbagent stage in the very same invocation.)
     """
 
     def test_second_run_output_excludes_the_first(self) -> None:

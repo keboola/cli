@@ -20,7 +20,7 @@ from .base import BaseService
 
 # Credential type of a config.json project entry, surfaced as ``auth_mode`` in
 # every query result. Both modes coexist per project, and which one applies
-# decides whether a command works at all (the AI/MCP/SDK paths are static-only),
+# decides whether a command works at all (the AI-service and SDK paths are static-only),
 # so it is a first-class field rather than something to infer from the token.
 AUTH_MODE_SESSION = "session"
 AUTH_MODE_STATIC = "static"

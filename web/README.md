@@ -66,7 +66,7 @@ The bearer token is still printed at startup so curl / scripts /
   kbagent serve  (Python, FastAPI + uvicorn)
       |
       v
-  Keboola APIs (Storage, Queue, Manage, AI, MCP)
+  Keboola APIs (Storage, Queue, Manage, AI, ...)
 ```
 
 The BFF is now optional -- it exists to enable the Vite dev workflow
@@ -146,9 +146,6 @@ PORT=8000 npm start
   receives them directly.
 - **SQL workspaces**: Monaco editor + `/api/workspaces/.../query`
   with CSV-rendering of statement results.
-- **MCP tools**: each tool's `inputSchema` is rendered as a generic
-  JSON input on the MCP page so you can call any tool the server
-  exposes without UI changes.
 - **Lineage**: cross-project bucket-sharing graph rendered as a
   Mermaid diagram + tabular edge list.
 

@@ -439,7 +439,7 @@ class VersionService:
         kbagent_up_to_date = _is_up_to_date(__version__, kbagent_latest)
 
         # Persist the freshly-fetched version to the auto-update cache so
-        # the next ``kbagent <anything>`` startup hook sees them instead of
+        # the next ``kbagent <anything>`` startup hook sees it instead of
         # a stale TTL'd entry. Before v0.41.1 this method bypassed the
         # cache entirely, which meant ``kbagent version`` would show
         # ``v0.41.0 available`` while a follow-up ``kbagent serve --ui`` on

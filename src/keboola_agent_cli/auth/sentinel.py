@@ -50,7 +50,7 @@ def require_static_token(token: str, *, feature: str, remedy: str = "") -> None:
     """Fail fast when ``token`` is a session sentinel on a static-token-only path.
 
     Raises SessionAuthUnsupportedError. Callers pass a human name for the code
-    path (e.g. "The MCP subprocess", "kbagent serve", "The importable SDK Client").
+    path (e.g. "The Keboola AI Service", "kbagent serve", "The importable SDK Client").
     """
     if is_session_token(token):
         raise SessionAuthUnsupportedError(feature, remedy=remedy)

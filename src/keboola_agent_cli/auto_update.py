@@ -432,7 +432,7 @@ def _notify_frozen_update_available(
 ) -> None:
     """Report a new release to a native-binary user instead of self-updating.
 
-    Replaces Stage 1 for frozen (PyInstaller) builds. Neither the inline
+    Replaces the self-update for frozen (PyInstaller) builds. Neither the inline
     reinstall nor the deferred Windows helper can upgrade a Chocolatey /
     Homebrew / apt / dnf install -- both would create an unrelated second copy
     that shadows the real binary on PATH (see
@@ -507,7 +507,7 @@ def maybe_auto_update() -> None:
         report_finished_deferred_update()
 
         # Wide gates (dev install / opt-out / update|version commands)
-        # skip BOTH stages -- there is nothing reasonable to do.
+        # skip the update entirely -- there is nothing reasonable to do.
         if _should_skip_all():
             return
 

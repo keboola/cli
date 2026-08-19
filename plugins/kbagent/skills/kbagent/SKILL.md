@@ -3,7 +3,7 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history and runs,
-  cross-project data lineage, Keboola MCP tools, dev branches, workspace SQL
+  cross-project data lineage, dev branches, workspace SQL
   debugging, GitOps config sync (pull/push/diff/clone), bucket sharing and
   linking, encrypting secrets, Storage tables, files, and snapshots
   (backup/restore), data apps (create/deploy/logs/secrets), flows and
@@ -38,7 +38,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
 7. **Always `--dry-run` first** for destructive operations (`config update`, `config delete`, `storage delete-*`, `branch delete`, `sync push`). Show the user the diff and get explicit confirmation before applying.
-8. **Prefer CLI commands over MCP tools** where both exist (`config update` over `update_config`, `config detail` over `get_configs`). Lower latency, native dry-run/diff support, consistent JSON shape, and fewer parameter-shape footguns. Use MCP only for operations the CLI does not cover (e.g. `str_replace`, `list_append`, `run_component`).
+8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
 
 ## Safe write workflow
@@ -384,9 +384,8 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Safe config write workflow** (fetch → dry-run → confirm → push) | [safe-write-workflow](references/safe-write-workflow.md) |
 | Creating new configurations | [scaffold-workflow](references/scaffold-workflow.md) |
 | **SQL transformations** (create / show / edit; the show-before-edit rule for positional block/code ids) | [transformation-workflow](references/transformation-workflow.md) |
-| MCP tools (multi-project read/write) | [mcp-workflow](references/mcp-workflow.md) |
 | Workspace SQL debugging | [workspace-workflow](references/workspace-workflow.md) |
-| **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; mcp_tool / cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
+| **Agent Tasks via CLI** (`kbagent agent` CRUD + run + cron-preview + prompt-improve; cron / manual / chained; cli_command / ai_agent action flavours) | [agent-tasks-cli-workflow](references/agent-tasks-cli-workflow.md) |
 | **Agent Tasks via REST** (`kbagent http <verb> /agents...` from inside scheduled subprocesses; SSE streaming) | [agent-tasks-rest-workflow](references/agent-tasks-rest-workflow.md) |
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
@@ -399,7 +398,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
-| Encrypting secrets for MCP tools | [encrypt-workflow](references/encrypt-workflow.md) |
+| Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
@@ -423,10 +422,7 @@ If kbagent is not yet installed:
 
 ```bash
 uv tool install git+https://github.com/keboola/cli
-# --prerelease=allow is required (issue #324): keboola-mcp-server pins a
-# pre-release-only transitive dep (toon-format), which uv refuses by default.
-uv tool install --prerelease=allow keboola-mcp-server
-kbagent doctor --fix
+kbagent doctor
 ```
 
 Then add projects:

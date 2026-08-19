@@ -251,9 +251,9 @@ class SessionAuthUnsupportedError(ConfigError):
     reaches a code path that only understands static Storage tokens.
 
     v1 wires bearer sessions through the Storage and Manage clients. Everything
-    outside those paths fails fast here -- the
-    AI/data-science/metastore/stream/Scheduler clients, the ``sharing``
-    master-token path, and the importable SDK; the authoritative list is
+    outside those paths fails fast here -- the AI / data-science / metastore /
+    stream / Scheduler clients, the ``sharing`` master-token path, and the
+    importable SDK; the authoritative list is
     ``SESSION_UNSUPPORTED_FEATURES`` in ``services/_auth_registration.py``. The
     Developer Portal client is absent from it because it authenticates with its
     own identity, never a project token. Failing fast beats sending the literal

@@ -220,7 +220,7 @@ def serve_command(
     os.environ[ENV_AUTH_TOKEN] = auth_token
 
     # Generate a stable conversation ID for this serve session and export it
-    # to env so child processes (MCP subprocess, AI agent CLI invocations,
+    # to env so child processes (AI agent CLI invocations,
     # scheduled `kbagent http` calls) inherit it and emit X-Conversation-ID
     # on every Keboola API request. Otherwise observability shows
     # "Conversation ID not set" in `kbagent doctor`.

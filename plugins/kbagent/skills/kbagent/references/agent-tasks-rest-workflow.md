@@ -1,9 +1,10 @@
 # Agent Tasks Workflow -- Schedule AI agents inside `kbagent serve`
 
 Cron-scheduled, manual, or chained tasks that run inside a long-lived
-`kbagent serve` process. Three action flavours: `mcp_tool`, `cli_command`,
-`ai_agent`. Persisted run history with cost/token accounting and live SSE
-replay. Available since v0.40.0.
+`kbagent serve` process. Two action flavours: `cli_command` and `ai_agent`
+(the third, `mcp_tool`, was removed in v0.85.0 -- see the end of this file).
+Persisted run history with cost/token accounting and live SSE replay.
+Available since v0.40.0.
 
 The Web UI (`kbagent serve --ui`, sidebar "Agent Tasks") is the primary
 authoring surface. Everything below is the REST API the UI talks to --
@@ -33,21 +34,11 @@ Two ways to call the REST API:
 All endpoints below are relative to the server URL. The bearer token is
 sent as `Authorization: Bearer <token>` by `kbagent http`.
 
-## The three action flavours
+## The two action flavours
 
 Every task has an `action` block with `type` + `params`:
 
 ```json
-// type: "mcp_tool" -- call any keboola-mcp-server tool
-{
-  "type": "mcp_tool",
-  "params": {
-    "tool": "get_jobs",
-    "project": "padak",
-    "input": {"status": "error", "limit": 50}
-  }
-}
-
 // type: "cli_command" -- spawn kbagent <argv>; subprocess inherits
 // KBAGENT_CONFIG_DIR + KBAGENT_SERVE_URL + KBAGENT_SERVE_TOKEN.
 {
@@ -162,7 +153,7 @@ kbagent http post /agents/<task_id>/run --body '{
 ```bash
 kbagent http get /agents/<task_id>/runs
 # Returns: most recent runs (id, started_at, ended_at, status, summary,
-# error). summary is null for cli_command/mcp_tool; populated for ai_agent.
+# error). summary is null for cli_command; populated for ai_agent.
 
 kbagent http get /agents/<task_id>/runs/<run_id>
 # Returns: full AgentRun including output payload.
@@ -245,3 +236,12 @@ documents the agent-tasks subset.
 - **Cost reporting needs an AI CLI that emits structured output.** Token
   totals + per-tool counts come from claude / codex / gemini stream-json;
   raw `cli_command` runs have `summary: null` (just stdout / stderr / exit).
+
+## The `mcp_tool` flavour was REMOVED in v0.85.0
+
+`POST /agents` rejects `"type": "mcp_tool"`, and the `/mcp/*` routes it relied
+on are gone from `kbagent serve` (epic #390 phase 3). Tasks already persisted
+with that type stay in `agents.json` as inert tombstones: the scheduler skips
+them, a run records an error, and `kbagent doctor` reports them as FAIL.
+Recreate each as `cli_command`, mapping the tool to its native command via
+`docs/mcp-migration.md`.

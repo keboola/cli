@@ -1,7 +1,9 @@
 # SQL Transformation Workflow (since v0.73.0)
 
-Native authoring/editing of SQL transformations -- the CLI port of the MCP
-`create_sql_transformation` / `update_sql_transformation` tools (#396).
+Native authoring/editing of SQL transformations -- the CLI port of the
+upstream `create_sql_transformation` / `update_sql_transformation` tools
+(#396). Since v0.85.0 this IS the way: the MCP passthrough that exposed those
+tools is gone.
 
 ## Create
 
@@ -18,7 +20,7 @@ kbagent transformation create --project prod \
   pass `--component-id` explicitly.
 - The SQL is split one statement per `script[]` element (same splitter the
   sync engine uses); everything lands in a single block `Blocks` with one
-  code `Code` -- identical to what the UI and the MCP tool produce.
+  code `Code` -- identical to what the UI produces.
 - Each `--created-table T` adds an output mapping
   `T -> out.c-<cleaned-transformation-name>.<T>`. The bucket name is derived
   from the transformation NAME at create time -- renaming the transformation
@@ -62,9 +64,9 @@ kbagent transformation edit --project prod --config-id 123456 \
 ## Gotchas
 
 - Show-before-edit is not optional: positional ids drift after every
-  structural change (same sharp edge as the MCP tool).
+  structural change (the same sharp edge the upstream tool had).
 - The output bucket is coupled to the create-time name; treat renames as a
   new-bucket event and update downstream input mappings accordingly.
 - `transformation edit` preserves non-`blocks` keys inside `parameters`
-  (variables links etc.) -- a deliberate improvement over the MCP tool, which
-  replaces `parameters` wholesale.
+  (variables links etc.) -- a deliberate improvement over the upstream tool,
+  which replaced `parameters` wholesale.

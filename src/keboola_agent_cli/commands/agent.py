@@ -866,7 +866,7 @@ def agent_test(
     """Execute an action ad-hoc (no persistence, no scheduling).
 
     Exact dispatch logic as the cron scheduler -- useful for sanity-checking
-    a prompt / tool / cli_command before saving a task.
+    a prompt / cli_command before saving a task.
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")

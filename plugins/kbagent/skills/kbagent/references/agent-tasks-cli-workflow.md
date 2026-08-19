@@ -34,16 +34,11 @@ uv tool install 'git+https://github.com/keboola/cli'
 kbagent serve --ui
 ```
 
-## Three action flavours
+## Two action flavours
 
 Every task carries an `action` envelope with `type` + `params`:
 
 ```jsonc
-// type: "mcp_tool" -- call any keboola-mcp-server tool
-{ "type": "mcp_tool",
-  "params": { "tool": "get_jobs", "project": "padak",
-              "input": {"status": "error", "limit": 50} } }
-
 // type: "cli_command" -- spawn `kbagent <argv>` subprocess
 { "type": "cli_command",
   "params": { "argv": ["job", "list", "--project", "padak", "--status", "error"],
@@ -121,7 +116,7 @@ kbagent agent run <task_id> --stream
 # Manual tasks accept ad-hoc runtime input merged with the persisted prompt.
 kbagent agent run <task_id> --runtime-prompt "Focus only on prod-snowflake-etl."
 
-# Or full JSON merge (mcp_tool / cli_command also supported).
+# Or full JSON merge (cli_command also supported).
 kbagent agent run <task_id> --runtime-input '{"prompt": "Today only."}'
 ```
 
@@ -220,8 +215,19 @@ kbagent agent create \
 - **One run per task at a time.** While a task is running, a second
   `agent run` errors out (the runner refuses concurrent dispatch).
 - **`--runtime-prompt` is ai_agent only.** For cli_command use
-  `--runtime-input '{"argv": ["--extra", "flag"]}'`; for mcp_tool use
-  `--runtime-input '{"key": "value"}'`. Merge semantics match the REST
-  endpoint exactly (`merge_runtime_input` is the shared helper).
+  `--runtime-input '{"argv": ["--extra", "flag"]}'`. Merge semantics match the
+  REST endpoint exactly (`merge_runtime_input` is the shared helper).
 - **Cron expressions are UTC.** No per-task timezone override (yet);
   use `cron-preview` to translate.
+
+## The `mcp_tool` flavour was REMOVED in v0.85.0
+
+There used to be a third flavour, `mcp_tool`, that called a
+`keboola-mcp-server` tool. It is gone (epic #390 phase 3). A task persisted
+with `"type": "mcp_tool"` is NOT deleted from `agents.json` -- it survives as
+an inert tombstone: the scheduler skips it, a manual `agent run` records an
+error, `agent list` flags the row, and `kbagent doctor` reports it as FAIL.
+Recreate each one as `--type cli_command`, mapping the tool to its native
+command via `docs/mcp-migration.md`. Note `agent update` cannot change a
+task's action, so migration is create-new + delete-old -- and the task id
+changes, so repoint any `--trigger-task-id` chain first.

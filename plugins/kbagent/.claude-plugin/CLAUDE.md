@@ -7,7 +7,7 @@ commands (`/keboola`, `/kbagent:review`), and two specialist subagents
 
 | Subagent | Use for | Slash command | Trigger phrases |
 |---|---|---|---|
-| `keboola-expert` | Operations on a Keboola Connection PROJECT (configs, flows, jobs, storage, branches, sync, MCP, migrations) | `/keboola <task>` | "update flow", "list configs", "run a job", "migrate", "debug a transformation" |
+| `keboola-expert` | Operations on a Keboola Connection PROJECT (configs, flows, jobs, storage, branches, sync, migrations) | `/keboola <task>` | "update flow", "list configs", "run a job", "migrate", "debug a transformation" |
 | `kbagent-pr-reviewer` | Code review of a `keboola-agent-cli` PULL REQUEST (this repo) | `/kbagent:review [PR_NUM]` | "review PR", "review this branch", "code review", "PR comments" |
 
 Mismatching the subagent to the domain wastes a fresh context window.
@@ -19,7 +19,7 @@ surfaces; `kbagent-pr-reviewer` does not know how to run a Keboola job.
 ### Path A: user wants Keboola Connection work done
 
 When the user's task touches Keboola Connection (configs, flows, jobs,
-storage, branches, sync, MCP tools, migrations):
+storage, branches, sync, migrations):
 
 **Default strategy: delegate to `kbagent:keboola-expert` via the
 `Task` tool.**
@@ -70,8 +70,8 @@ in the comment body is advice; the human author retains every veto.
 The keboola-expert subagent runs in a fresh context window with a
 system prompt that inlines:
 
-- 6 non-negotiable rules (fresh-fetch, dry-run, no chaining, CLI-over-
-  MCP, CLI-over-REST, version gate)
+- 6 non-negotiable rules (fresh-fetch, dry-run, no chaining, no MCP
+  passthrough, CLI-over-REST, version gate)
 - A tool-selection matrix covering every common Keboola intent
 - Inline gotchas from past failure modes observed in internal sessions
 - An output contract with a verification payload the parent can parse

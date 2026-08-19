@@ -89,17 +89,17 @@ src/keboola_agent_cli/
   dev_portal_client.py  # Developer Portal API
   stream_client.py      # Stream / Data Streams API    (OTLP/HTTP sources)
 
-  commands/             # LAYER 1 -- thin Typer commands, one file per group (32 modules):
+  commands/             # LAYER 1 -- thin Typer commands, one file per group (31 modules):
                         #   project config job storage flow branch workspace data_app
                         #   sync semantic_layer agent stream feature dev_portal kai
-                        #   sharing lineage schedule search org tool component encrypt
+                        #   sharing lineage schedule search org component encrypt
                         #   permissions serve http_client repl init doctor version
                         #   changelog context
                         # _helpers.py = formatter/service-factory/error-mapping; _*.py = private helpers
   services/             # LAYER 2 -- business logic, one <group>_service.py per command group
                         #   (DI: receives ConfigStore + client_factory; base.py = parallel infra;
                         #    member_service, variables_service, repo_validate_service,
-                        #    mcp_service, mcp_transport, deep_lineage_service are extra non-1:1 services)
+                        #    deep_lineage_service are extra non-1:1 services)
   server/               # FastAPI app behind `kbagent serve` (REST API + Web UI mount + SSE)
   sync/                 # GitOps sync engine (manifest v3, pull/push/diff, branch-linking)
   _ui_dist/             # bundled React SPA served by `kbagent serve --ui`
@@ -135,15 +135,15 @@ Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides s
 - **DeveloperPortalClient** (`dev_portal_client.py`): Developer Portal API (component publishing)
 - **StreamClient** (`stream_client.py`): Stream / Data Streams API (OTLP/HTTP sources)
 
-### MCP Integration
+### No MCP passthrough (removed in 0.85.0)
 
-`McpService` wraps `keboola-mcp-server` as a subprocess via MCP SDK (`mcp` package).
-- Read tools run across ALL projects in parallel (one MCP session per project)
-- Write tools target a single project (default or `--project`)
-- **Auto-expand**: tools like `get_tables` that require `bucket_ids` automatically
-  resolve them by calling `get_buckets` first (configured in `AUTO_EXPAND_TOOLS` dict)
-- Upfront parameter validation against tool's `inputSchema` before multi-project dispatch
-- **Branch support**: `--branch ID` passes `KBC_BRANCH_ID` env var to MCP subprocess, forces single-project mode
+kbagent used to proxy `keboola-mcp-server` tools through a `tool` command group. That
+passthrough -- the group, `McpService`, the `/mcp/*` routes, the `--type mcp_tool` agent
+flavour and the MCP server install/auto-update -- was removed in 0.85.0 (epic #390 phase 3).
+Every tool the catalog exposed has a native command; the historical tool-to-command map is
+`docs/mcp-migration.md`. Do not reintroduce an MCP client here: add a native command instead.
+`keboola-mcp-server` itself is unaffected and still works with Claude Desktop / Cursor -- it
+is simply a separate distribution kbagent no longer manages.
 
 ## Versioning
 
@@ -217,7 +217,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 9. **Tests**: use `typer.testing.CliRunner` for CLI tests, `unittest.mock` for mocking services and clients, `pytest` fixtures from `conftest.py`.
 
-10. **Dependencies**: typer, rich, httpx, pydantic, platformdirs, mcp, jsonschema, pyyaml. Dev: pytest, pytest-httpx, pytest-asyncio, ruff.
+10. **Dependencies**: typer, rich, httpx, pydantic, platformdirs, jsonschema, pyyaml. Dev: pytest, pytest-httpx, pytest-asyncio, ruff.
 
 11. **Error accumulation**: multi-project operations collect per-project errors without stopping. One project failing doesn't block others (see `lineage_service.py`, `org_service.py`).
 
@@ -527,15 +527,11 @@ kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN 
 kbagent permissions reset
 kbagent permissions check OPERATION
 
-kbagent tool list [--project NAME] [--branch ID]
-kbagent tool call TOOL_NAME [--project NAME] [--input JSON|@file|-] [--branch ID]
-# tool group DEPRECATED (0.74.0+, epic #390): every catalog tool has a native command -- tool list
-#   prints a cli_equivalent column, tool call warns with the exact replacement (stderr; --json adds
-#   an additive "deprecation" key). Parity map = src/keboola_agent_cli/mcp_parity.py; weekly
-#   mcp-parity-canary workflow (make parity-check) diffs it against upstream TOOLS.md. The group
-#   (and `agent --type mcp_tool`) is REMOVED in v0.85.0, scheduled for the end of August 2026
-#   -- epic #390 phase 3. `agent --type mcp_tool` tasks persist in agents.json, so they need
-#   migrating to `--type cli_command` before that release or they fail on their next cron tick.
+# The `tool` group is GONE (removed in 0.85.0, epic #390 phase 3) -- so are `agent --type
+#   mcp_tool` and the `/mcp/*` serve routes. Every catalog tool has a native command; the
+#   historical tool-to-command map is docs/mcp-migration.md. Persisted `mcp_tool` agent tasks
+#   are kept as inert tombstones (never run, flagged by `agent list`, FAIL in `doctor`) --
+#   recreate them as `--type cli_command`.
 
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
@@ -688,20 +684,20 @@ kbagent http delete PATH [--timeout SECONDS]
 
 kbagent agent list
 kbagent agent show TASK_ID
-kbagent agent create --name NAME [--description D] [--cron CRON] [--manual] [--enabled/--disabled] (--type ai_agent --cli CLI --prompt P [--extra-arg ARG ...] [--timeout SECONDS] | --type cli_command --argv ARG [--argv ARG ...] [--timeout SECONDS] | --type mcp_tool --tool TOOL [--mcp-project ALIAS] [--mcp-branch ID] [--input JSON|@file|-] [--timeout SECONDS] | --from-file PATH|@path|-) [--trigger-task-id ID --trigger-on success|error|always]
+kbagent agent create --name NAME [--description D] [--cron CRON] [--manual] [--enabled/--disabled] (--type ai_agent --cli CLI --prompt P [--extra-arg ARG ...] [--timeout SECONDS] | --type cli_command --argv ARG [--argv ARG ...] [--timeout SECONDS] | --from-file PATH|@path|-) [--trigger-task-id ID --trigger-on success|error|always]
 kbagent agent update TASK_ID [--name N] [--description D] [--cron C] [--enabled/--disabled] [--manual/--auto] [--clear-trigger] [--trigger-task-id ID --trigger-on success|error|always]
 kbagent agent delete TASK_ID [--yes]
 kbagent agent run TASK_ID [--stream] [--runtime-prompt TEXT | --runtime-input JSON|@file|-]
 kbagent agent runs TASK_ID [--limit N]
 kbagent agent run-detail TASK_ID RUN_ID
 kbagent agent run-events TASK_ID RUN_ID
-kbagent agent test (--type ai_agent --cli CLI --prompt P | --type cli_command --argv ARG ... | --type mcp_tool --tool T ... | --from-file PATH) [--name N] [--stream] [--timeout SECONDS]
+kbagent agent test (--type ai_agent --cli CLI --prompt P | --type cli_command --argv ARG ... | --from-file PATH) [--name N] [--stream] [--timeout SECONDS]
 kbagent agent cron-preview --cron "0 6 * * 1" [--count N]
 kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|gemini] [--project ALIAS] [--extra-arg X ...] [--stream/--no-stream]
 # `agent` reads/writes <config_dir>/agents.json directly (offline-first, no
 # serve required for CRUD + ad-hoc run). The cron loop that fires scheduled
-# tasks still requires `kbagent serve` running. Three action flavours
-# (ai_agent / cli_command / mcp_tool) mirror the /agents REST surface
+# tasks still requires `kbagent serve` running. Two action flavours
+# (ai_agent / cli_command) mirror the /agents REST surface
 # byte-for-byte. Every subcommand taking TASK_ID / RUN_ID accepts it
 # positionally OR via flag (--id / --task-id; --run-id for run-detail /
 # run-events) -- the flag form matches the rest of the CLI (--job-id, ...).
@@ -764,10 +760,12 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 kbagent context
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
-kbagent doctor [--fix]
-# `doctor` includes an `mcp_tool_tasks` check (0.81.0+): warns about scheduled agent tasks
-# still using `--type mcp_tool` (removed in v0.85.0); they run unattended and get no warning
-# at removal. `agent list` marks those rows and adds a per-task `deprecation` key in --json.
+kbagent doctor
+# `doctor` includes an `mcp_tool_tasks` check: it FAILs on scheduled agent tasks still
+# using the removed `--type mcp_tool` (they are inert tombstones that never run again).
+# `agent list` marks those rows and adds a per-task `deprecation` key in --json. Recreate
+# each as `--type cli_command` using the map in docs/mcp-migration.md.
+# `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
 kbagent version [--beta]
 kbagent update [--beta]
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
@@ -781,10 +779,11 @@ kbagent update [--beta]
 # the kbagent self-update stage and reports that channel's own command instead -- a uv/pip
 # reinstall would install a SECOND, unrelated kbagent that shadows it on PATH. `version
 # --json` gains additive `install_channel` + `upgrade_hint`; `upgrade_command` is empty for
-# a hand-unpacked archive. The keboola-mcp-server stage still runs (separate distribution).
-# Since 0.76.2 self-update completes discovery first, updates MCP before the terminal
-# exact-version full kbagent reinstall, then immediately re-executes; failures print a
-# copy-paste recovery command.
+# a hand-unpacked archive. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
+# is no longer installed or refreshed by kbagent (see docs/mcp-migration.md for the manual
+# `uv tool install --upgrade --prerelease=allow keboola-mcp-server` command). Self-update
+# completes discovery first, then does the terminal exact-version reinstall and immediately
+# re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]

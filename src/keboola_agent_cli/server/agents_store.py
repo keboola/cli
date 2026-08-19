@@ -240,9 +240,9 @@ class AgentStore:
         self._ensure_dirs()
         path = self._events_path(task_id, run_id)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # 0600: events can leak Storage tokens via tool inputs (e.g. MCP
-        # tool calls dump full project context); same security posture as
-        # the rest of config_dir.
+        # 0600: events can leak Storage tokens (an AI agent's own tool calls
+        # and a cli_command's output both dump project context); same security
+        # posture as the rest of config_dir.
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             for evt in events:

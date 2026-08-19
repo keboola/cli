@@ -31,7 +31,7 @@ def init_command(
     read_only: bool = typer.Option(
         False,
         "--read-only",
-        help="Set read-only permission policy (blocks all write CLI commands and MCP tools).",
+        help="Set read-only permission policy (blocks all write CLI commands).",
     ),
 ) -> None:
     """Initialize a local .kbagent/ workspace in the current directory."""

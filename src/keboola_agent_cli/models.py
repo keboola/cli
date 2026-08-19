@@ -192,7 +192,7 @@ class DeveloperPortalIdentity(BaseModel):
 
 
 class PermissionPolicy(BaseModel):
-    """Firewall-style permission policy for CLI and MCP operations.
+    """Firewall-style permission policy for CLI operations.
 
     Controls which operations are allowed/blocked:
     - mode='allow' (default-allow): everything allowed unless in deny list
