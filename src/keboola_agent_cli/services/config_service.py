@@ -18,6 +18,7 @@ from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import (
     CONFIG_STATE_MAX_BYTES,
+    ROOT_LEVEL_CONFIG_COMPONENTS,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, set_nested_value
@@ -2000,10 +2001,14 @@ class ConfigService(BaseService):
         The schema describes the contents of the body's ``parameters`` key, so
         that section is what gets validated; sibling keys (``storage``,
         ``runtime``, ``authorization``) are not covered by it and are left
-        alone. A body with no ``parameters`` key is validated as a whole
-        (keboola.flow-style configurations). Reported error paths are prefixed
-        with ``parameters.`` so they point at the section the caller must fix.
-        Unwrapping affects validation only -- the POSTed body is never altered.
+        alone. A body with no ``parameters`` key is validated as an EMPTY
+        parameters section, which is what makes a forgotten wrapper fail loudly
+        instead of creating a broken configuration. Components whose schema
+        describes the configuration root (``ROOT_LEVEL_CONFIG_COMPONENTS``,
+        i.e. flows) are validated whole instead. Reported error paths are
+        prefixed with ``parameters.`` so they point at the section the caller
+        must fix. Unwrapping affects validation only -- the POSTed body is
+        never altered.
 
         Returns:
             ``("ok", [])`` when the body matches the schema.
@@ -2043,12 +2048,13 @@ class ConfigService(BaseService):
         # ("<root>: 'db' is a required property") while a body missing the
         # ``parameters`` wrapper validated clean.
         #
-        # Two shapes are validated WHOLE instead, and both are decided before
-        # unwrapping:
+        # Two shapes are validated WHOLE instead, and both are decided on the
+        # COMPONENT and the SCHEMA -- never on the body, which is the very thing
+        # under test (issue #605):
         #
-        # 1. The body carries no ``parameters`` key. For keboola.flow,
-        #    ``phases`` / ``tasks`` ARE the configuration root and the schema
-        #    describes that root, so there is nothing to unwrap.
+        # 1. The component's configuration root is what the schema describes.
+        #    For keboola.flow, ``phases`` / ``tasks`` ARE that root, so there is
+        #    nothing to unwrap.
         # 2. The schema itself declares a top-level ``parameters`` property,
         #    which means it describes the whole configuration object. Deciding
         #    on the body alone would regress such a component: every body used
@@ -2057,9 +2063,17 @@ class ConfigService(BaseService):
         #    include one named ``parameters`` -- is misvalidated today too, so
         #    preferring the schema signal here never trades a working case for
         #    a broken one.
-        schema_is_whole_body = "parameters" in (schema.get("properties") or {})
-        unwrapped = "parameters" in body and not schema_is_whole_body
-        target = body["parameters"] if unwrapped else body
+        schema_is_whole_body = component_id in ROOT_LEVEL_CONFIG_COMPONENTS or "parameters" in (
+            schema.get("properties") or {}
+        )
+        unwrapped = not schema_is_whole_body
+        # A body with no ``parameters`` key has an EMPTY parameters section --
+        # it is not a licence to validate the body whole. Reading it the other
+        # way let a flattened body (the component's own fields sitting at the
+        # configuration root) match the parameters-level schema, pass, and be
+        # POSTed verbatim into a configuration the UI and the runtime both read
+        # as empty, with ``--push`` reporting success (issue #605).
+        target = body.get("parameters", {}) if unwrapped else body
 
         try:
             validator = jsonschema.Draft7Validator(schema)
@@ -2085,6 +2099,14 @@ class ConfigService(BaseService):
             return ("skipped", [])
 
         if errors:
+            if unwrapped and "parameters" not in body:
+                # Otherwise the report reads "'db' is a required property" to a
+                # caller who DID supply ``db`` -- one level too high.
+                errors.append(
+                    "hint: the body has no 'parameters' key -- this component's schema "
+                    "describes the CONTENTS of configuration.parameters, so wrap it as "
+                    '{"parameters": {...}} (or pass --no-validate to skip this check)'
+                )
             return ("failed", errors)
         return ("ok", [])
 

@@ -2259,6 +2259,31 @@ class TestFullE2E:
         # which pointed the reader at the wrong level of their own config.
         assert all(e.startswith("parameters") for e in invalid["validation_errors"]), invalid
 
+        # A body that FORGOT the `parameters` wrapper must fail too (issue
+        # #605). It used to validate clean -- the flattened body matched the
+        # parameters-level schema, so `--push` created a configuration with no
+        # `parameters` key at all, which the UI and the runtime read as empty
+        # while reporting success. Same `db` payload as `valid_body`, one level
+        # too high.
+        flattened = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-db-mysql",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID} validation-flat (dry)",
+            "--push",
+            "--no-files",
+            "--configuration",
+            json.dumps({"db": {"host": "mysql.example.com", "database": "e2e"}}),
+            "--dry-run",
+        )["data"]
+
+        assert flattened["validation_status"] == "failed", flattened
+        assert any("no 'parameters' key" in e for e in flattened["validation_errors"]), flattened
+
     def _test_config_clone(self) -> None:
         """Test ``config clone`` -- whole-configuration duplicate (0.84.2+, #587).
 

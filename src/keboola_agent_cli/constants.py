@@ -811,3 +811,18 @@ AUTH_PKCE_STATE_BYTES: int = 32
 # Token value prefixes, used only for masking/validation -- never for auth logic.
 AUTH_ACCESS_TOKEN_PREFIX: str = "kbc_at_"
 AUTH_REFRESH_TOKEN_PREFIX: str = "kbc_rt_"
+
+# --- Components whose configurationSchema describes the configuration ROOT ---
+# For almost every component the AI Service `configurationSchema` describes the
+# CONTENTS of `configuration.parameters` (issue #587). Conditional flows are the
+# exception: `phases` / `tasks` ARE the configuration root and the schema
+# describes that root, so their body must be validated whole. Keying that
+# exemption on the component -- rather than on "the body happens to carry no
+# `parameters` key" -- is what stops a body that merely FORGOT the wrapper from
+# validating clean and being created broken (issue #605).
+ROOT_LEVEL_CONFIG_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "keboola.flow",
+        "keboola.orchestrator",  # legacy flows; kbagent cannot write them, but reads share this path
+    }
+)

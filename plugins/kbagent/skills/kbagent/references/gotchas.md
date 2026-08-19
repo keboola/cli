@@ -1160,11 +1160,17 @@ events and emits a final `done` SSE frame mirroring the same record.
   `<root>:` error on a body you know is correct, the config is fine and the
   validator is wrong -- upgrade rather than reaching for `--no-validate`,
   which switches off the checking that still works.
-- **A body with no `parameters` key is validated whole** -- that is the
-  keboola.flow shape (`phases` / `tasks` sit at the configuration root).
-  Consequence: a parameters-level body posted by mistake as the whole
-  configuration still validates `ok`, because it is indistinguishable from a
-  flow-style config. Always POST the full object.
+- **A body with no `parameters` key is validated as an EMPTY `parameters`
+  section (since v0.85.1, issue #605).** So a body that forgot the wrapper --
+  the component's own fields sitting at the configuration root -- now fails
+  with the schema's required-field errors plus a `hint:` line naming the
+  missing wrapper. **Before v0.85.1 it validated `ok` and was POSTed
+  verbatim**, producing a live configuration with no `parameters` key, which
+  the UI and the component runtime both read as empty (blank boilerplate) even
+  though `--push` reported success. The whole-body exemption is now keyed on
+  the component (`keboola.flow` / `keboola.orchestrator`, whose `phases` /
+  `tasks` genuinely ARE the configuration root), not on the body's shape.
+  Always POST the full object: `{"storage": ..., "parameters": {...}}`.
 
 ## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.84.2)
 
