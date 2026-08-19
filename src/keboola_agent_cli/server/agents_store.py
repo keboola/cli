@@ -28,7 +28,7 @@ ActionType = Literal["mcp_tool", "cli_command", "ai_agent"]
 #: disk on the next unrelated write. Round-trip must survive; execution must not.
 REMOVED_ACTION_TYPES: frozenset[str] = frozenset({"mcp_tool"})
 REMOVED_IN_VERSION: str = "0.85.0"
-REMOVED_ACTION_MESSAGE = (
+REMOVED_ACTION_MESSAGE: str = (
     f"agent action type 'mcp_tool' was REMOVED in kbagent v{REMOVED_IN_VERSION} "
     "(epic #390). This task no longer runs. Recreate it with --type cli_command "
     "using the native kbagent command -- see docs/mcp-migration.md for the "
@@ -36,7 +36,7 @@ REMOVED_ACTION_MESSAGE = (
 )
 
 
-def annotate_removed_action(task: dict) -> dict:
+def annotate_removed_action(task: dict[str, Any]) -> dict[str, Any]:
     """Add an additive ``deprecation`` key to a task using a removed action type.
 
     Additive and only on affected tasks, so every existing consumer sees a

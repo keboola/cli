@@ -529,7 +529,7 @@ def agent_show(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.NOT_FOUND)
         raise typer.Exit(code=1) from None
-    formatter.output(task.model_dump(mode="json"), _render_task_detail)
+    formatter.output(annotate_removed_action(task.model_dump(mode="json")), _render_task_detail)
 
 
 @agent_app.command("create")

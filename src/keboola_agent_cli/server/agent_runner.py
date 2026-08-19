@@ -1157,7 +1157,16 @@ async def run_task_once(
         else:
             raise ValueError(f"Unknown action type: {task.action.type}")
     except Exception as exc:
-        logger.exception("Agent task %s failed", task.id)
+        if task.action.type in REMOVED_ACTION_TYPES:
+            # Designed refusal, not a crash: a traceback here reads as a bug
+            # to whoever ran `kbagent agent run <id>` on a tombstone task.
+            logger.warning(
+                "Agent task %s uses the removed %r action; refusing",
+                task.id,
+                task.action.type,
+            )
+        else:
+            logger.exception("Agent task %s failed", task.id)
         run.status = "error"
         run.error = str(exc)
     finally:

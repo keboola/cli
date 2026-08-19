@@ -33,7 +33,9 @@ CHANGELOG: dict[str, list[str]] = {
         "tasks in `agents.json` are NOT deleted: they survive load/save round-trips as "
         "inert tombstones, the scheduler skips them instead of firing them, a manual "
         "`agent run` records an error naming the migration guide, `agent list` flags them, "
-        "and `kbagent doctor` reports them as FAIL. Recreate each one as `--type "
+        "and `kbagent doctor` reports them as FAIL -- which flips `doctor --json` "
+        "`summary.healthy` to false (the check was a WARN before), so any CI step gating "
+        "on that flag surfaces them on upgrade. Recreate each one as `--type "
         "cli_command` with the native command from the guide.",
         "BREAKING: kbagent no longer installs or auto-updates `keboola-mcp-server`. "
         "`kbagent update` and the startup auto-update hook update kbagent only, and "

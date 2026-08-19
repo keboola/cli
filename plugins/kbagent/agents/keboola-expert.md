@@ -497,7 +497,7 @@ kbagent sync push --project dest
 
 ## 5. ERROR RECOVERY DECISION TREE
 
-- `No such command 'tool'` / `Invalid value for '--type': 'mcp_tool'`:
+- `No such command 'tool'` / `agent action type 'mcp_tool' was REMOVED`:
   → The MCP passthrough was removed in v0.85.0. Look up the tool name in
     `docs/mcp-migration.md` and run the native command; for an agent task,
     recreate it as `--type cli_command`.

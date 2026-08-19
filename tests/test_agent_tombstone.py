@@ -7,6 +7,7 @@ execution and creation path must nevertheless refuse it.
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -59,6 +60,39 @@ class TestExecutionRefusal:
         assert run.error is not None and "REMOVED" in run.error
         # persisted, not just returned
         assert store.list_runs(task.id)[0].status == "error"
+
+
+class TestRefusalLogging:
+    """A designed refusal must not look like a crash in the CLI user's console.
+
+    ``kbagent agent run <id>`` surfaces logger output directly, so
+    ``logger.exception`` on a tombstone dumped a full Python traceback for
+    behaviour the release notes call expected.
+    """
+
+    def test_tombstone_refusal_logs_warning_without_traceback(self, tmp_path, caplog) -> None:
+        store = AgentStore(config_dir=tmp_path)
+        task = store.upsert_task(_mcp_task())
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.server.agent_runner"):
+            run = asyncio.run(run_task_once(task, SimpleNamespace(), store))
+        assert run.status == "error"
+        records = [r for r in caplog.records if "mcp_tool" in r.getMessage()]
+        assert records, "refusal must still be logged"
+        assert all(r.levelno == logging.WARNING for r in records)
+        assert all(r.exc_info is None for r in records)
+
+    def test_real_failure_still_logs_the_traceback(self, tmp_path, caplog) -> None:
+        store = AgentStore(config_dir=tmp_path)
+        task = store.upsert_task(
+            AgentTask(name="broken", action=AgentAction(type="cli_command", params={"argv": []}))
+        )
+        with caplog.at_level(logging.ERROR, logger="keboola_agent_cli.server.agent_runner"):
+            run = asyncio.run(run_task_once(task, SimpleNamespace(), store))
+        assert run.status == "error"
+        records = [r for r in caplog.records if "failed" in r.getMessage()]
+        assert records, "a genuine failure must still be logged"
+        assert all(r.levelno == logging.ERROR for r in records)
+        assert any(r.exc_info is not None for r in records)
 
 
 class TestSchedulerSkip:
@@ -241,6 +275,19 @@ class TestBroadcasterRefusal:
         # persisted, not just broadcast
         assert store.list_runs(task.id)[0].status == "error"
 
+    def test_ui_run_logs_a_warning_without_traceback(self, tmp_path, caplog) -> None:
+        from keboola_agent_cli.server.run_broadcaster import _ActiveRun
+
+        store = AgentStore(config_dir=tmp_path)
+        task = store.upsert_task(_mcp_task())
+        active = _ActiveRun(task, SimpleNamespace(), store)
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.server.run_broadcaster"):
+            asyncio.run(active._run())
+        records = [r for r in caplog.records if "mcp_tool" in r.getMessage()]
+        assert records, "refusal must still be logged"
+        assert all(r.levelno == logging.WARNING for r in records)
+        assert all(r.exc_info is None for r in records)
+
 
 class TestCreationRefusal:
     def test_agent_create_mcp_tool_exits_2(self, tmp_config_dir) -> None:
@@ -309,3 +356,35 @@ class TestCreationRefusal:
         options = {opt for param in create.params for opt in param.opts}
         for flag in ("--tool", "--mcp-project", "--mcp-branch", "--input"):
             assert flag not in options
+
+
+class TestAgentShowDeprecation:
+    """`agent show` is where docs/mcp-migration.md step 1 sends the reader."""
+
+    def test_show_payload_carries_deprecation(self, tmp_config_dir) -> None:
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app
+
+        task = AgentStore(config_dir=tmp_config_dir).upsert_task(_mcp_task())
+        result = CliRunner().invoke(
+            app, ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", task.id]
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["deprecation"] == REMOVED_ACTION_MESSAGE
+
+    def test_show_payload_clean_for_live_types(self, tmp_config_dir) -> None:
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app
+
+        task = AgentStore(config_dir=tmp_config_dir).upsert_task(
+            AgentTask(
+                name="live", action=AgentAction(type="cli_command", params={"argv": ["version"]})
+            )
+        )
+        result = CliRunner().invoke(
+            app, ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", task.id]
+        )
+        assert result.exit_code == 0, result.output
+        assert "deprecation" not in json.loads(result.output)["data"]
