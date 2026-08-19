@@ -897,6 +897,38 @@ class TestAzureKeyVaultCiphertext:
             )
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
 
+    def test_nonexistent_kms_prefix_rejected(self, tmp_path: Path) -> None:
+        """``KBC::ProjectSecureKMS::`` is not a real cipher and must not pass.
+
+        It sat in the whitelist from 0.27.0 until 0.85.1. The platform's cipher
+        registry (keboola/keboola-operator
+        ``internal/encryptor/wrapper/registry.go``) has no such prefix -- the
+        AWS wrapper is *named* ``PrefixProjectKMS`` but emits plain
+        ``KBC::ProjectSecure::``.
+        """
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_data_app(
+                alias="prod",
+                name="App",
+                description="",
+                slug="my-app",
+                git_repo="https://github.com/o/r",
+                git_public=False,
+                git_username="user",
+                git_pat_plaintext=None,
+                git_pat_encrypted="KBC::ProjectSecureKMS::does-not-exist",
+                auth="password",
+                size="tiny",
+                auto_suspend_after_seconds=900,
+                type_="python-js",
+                deploy=False,
+                wait=False,
+                dry_run=True,
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
     def test_fingerprint_and_prefix_derived_for_azure(self, tmp_path: Path) -> None:
         """Metadata helpers recognise the Azure prefix (empty before #607)."""
         store = _make_store(tmp_path)

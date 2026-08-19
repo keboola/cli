@@ -18,13 +18,25 @@ no decrypt endpoint.
 
 ## Encryption scope
 
-All encryption uses **ComponentSecure** scope (project + component). This means:
+All encryption is **project-scoped**: kbagent sends both `projectId` and
+`componentId` to the API, which returns a **ProjectSecure** cipher bound to
+THIS project and THAT component. This means:
 - Encrypted values work in ANY config of that component within the project
-- You can clone configs freely -- secrets still decrypt
+- You can clone configs freely *within the project* -- secrets still decrypt
 - You can merge dev branches to main -- secrets still decrypt
+- The ciphertext does NOT decrypt in another project (which is why
+  `config clone --target-project` refuses to carry secrets and asks for
+  `--secret PATH=VALUE` instead)
 
 Do NOT try to narrow the scope (e.g. per-config or per-branch) -- it breaks
 config cloning and branch merging.
+
+**The prefix is cloud-specific, so never match on one literal.** The API
+returns `KBC::ProjectSecure::` on AWS, `KBC::ProjectSecureGKMS::` on GCP and
+`KBC::ProjectSecureKV::` on Azure. To test "is this encrypted", match the
+family or just `KBC::`. (This is *not* `KBC::ComponentSecure::` -- that cipher
+is component-only and would decrypt in any project; kbagent never requests
+it.)
 
 ## Basic usage
 

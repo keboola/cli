@@ -46,6 +46,24 @@ CHANGELOG: dict[str, list[str]] = {
         "and plaintext is still never written to Storage. Verified live against "
         "connection.north-europe.azure.keboola.com (create + secrets-set, A/B with and "
         "without the fix).",
+        "Fix (#613): the docs described `kbagent encrypt values` as producing "
+        "**ComponentSecure** ciphertext; it does not. The client sends `projectId` AND "
+        "`componentId`, so the API returns a project-scoped **ProjectSecure** cipher -- "
+        "bound to this project as well as the component. The described behaviour (works "
+        "in any config of that component, survives config clone and branch merge) was "
+        "right; only the cipher name was wrong, and that name is what an agent "
+        "pattern-matches on. Corrected in `encrypt-workflow.md`, `variables-workflow.md` "
+        "(which printed a literal `KBC::ComponentSecure::...` as the value kbagent "
+        "receives), `commands-reference.md` and the `kbagent context` AGENT_CONTEXT, all "
+        "now naming the per-cloud prefixes instead of a single literal.",
+        "Change: `KBC::ProjectSecureKMS::` is no longer accepted as a data-app secret "
+        "prefix. It had been in `ENCRYPTED_PASSWORD_PREFIXES` since 0.27.0 but is not a "
+        "real cipher -- the platform registry (keboola/keboola-operator "
+        "`internal/encryptor/wrapper/registry.go`, mirrored by keboola/object-encryptor) "
+        "has no such prefix; the AWS wrapper is *named* `PrefixProjectKMS` while the "
+        "prefix it emits is plain `KBC::ProjectSecure::`. No stack can produce such a "
+        "value, so nothing that worked before stops working; the whitelist just no "
+        "longer accepts a ciphertext shape that could never decrypt.",
     ],
     "0.85.0": [
         "BREAKING: the MCP passthrough is removed (epic #390 phase 3, deprecated since "

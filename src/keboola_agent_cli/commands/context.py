@@ -1304,8 +1304,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|-  [--output-file PATH]
     Encrypt #-prefixed secret values via Keboola Encryption API (one-way, no decrypt).
-    Scope: ComponentSecure (project + component). Use when ciphertext must exist
-    before a `config update` / `config new` / `config clone` write.
+    Scope: project-scoped ProjectSecure cipher, bound to this project + component.
+    The prefix is cloud-specific: KBC::ProjectSecure:: (AWS), ::ProjectSecureGKMS::
+    (GCP), ::ProjectSecureKV:: (Azure) -- match the family, never one literal.
+    Use when ciphertext must exist before a `config update` / `config new` /
+    `config clone` write.
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 

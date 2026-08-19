@@ -396,7 +396,7 @@ Versioning convention:
   `--set 'parameters.#password=...'` or a full `--configuration`. (Either way
   the value is now encrypted before write.)
 
-## Encryption ciphertext has a different prefix per cloud; Azure was rejected (fixed in v0.85.1, #607)
+## Encryption ciphertext has a different prefix per cloud; Azure was rejected (since v0.85.1, #607)
 
 - **One project-scoped prefix per cloud.** The Encryption API returns
   `KBC::ProjectSecure::` on AWS, `KBC::ProjectSecureGKMS::` on GCP and
