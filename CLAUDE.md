@@ -765,6 +765,24 @@ kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
 kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
 kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
 
+kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
+kbagent notification detail --project NAME --subscription-id ID
+# notification (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
+#   recipients behind the Flow Builder's Notifications tab (bell icon). They live in a SEPARATE
+#   platform service (notification.{stack}, plain Storage token, no elevated scope), NOT in the
+#   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow
+#   `type: "notification"` TASK is a different mechanism and stays visible there.
+#   Event names are kebab-case (job-failed, job-succeeded, job-succeeded-with-warning,
+#   job-processing-long + phase-job-* variants); --event is forwarded verbatim and NOT validated
+#   (the API declares EventName as an open string). Filter fields are dotted paths into the event
+#   payload (job.component.id, job.configuration.id, branch.id, phase.id) -- --component-id /
+#   --config-id match those CLIENT-SIDE, since the API supports only ?event=. A subscription with
+#   NO filters is project-wide and fires for EVERY job; those are dropped by --component-id/
+#   --config-id and counted in `project_wide_excluded` (plus a warning) so "who gets paged for
+#   this flow" is never silently under-reported. Webhook recipients carry `url`, email carries
+#   `address` -- both render in the single `address` column. Subscriptions are project-level, not
+#   branch-scoped; a branch-specific one carries a branch.id filter shown in the Branch column.
+
 kbagent context
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.

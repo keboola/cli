@@ -1205,6 +1205,65 @@ events and emits a final `done` SSE frame mirroring the same record.
   `tasks` genuinely ARE the configuration root), not on the body's shape.
   Always POST the full object: `{"storage": ..., "parameters": {...}}`.
 
+## Flow "Notifications tab" recipients are NOT in the flow config (since v0.86.0)
+
+- **Two different notification mechanisms share the word "notification".** A
+  task node of `type: "notification"` lives *inside* the flow's
+  `configuration` JSON and has always been visible via `flow detail` /
+  `config detail`. The Flow Builder's **Notifications tab** (the bell icon --
+  Success / Error / Processing-delay / Warning cards) is backed by a separate
+  platform service and is **not** in the configuration at all. Auditing "who
+  gets paged when this flow breaks" by reading flow configs answers only half
+  the question; `kbagent notification list` answers the other half.
+- **Event names are kebab-case, and the field is an open string.**
+  `job-failed`, `job-succeeded`, `job-succeeded-with-warning`,
+  `job-processing-long`, plus the `phase-job-*` variants -- *not* the
+  camelCase `jobFailed` spelling. `--event` is forwarded verbatim as
+  `?event=` and deliberately not validated against a fixed list, because the
+  API declares `EventName` as `type: string` with no enum. A misspelled event
+  therefore returns an empty list, not an error -- if a query comes back
+  empty, re-check the spelling before concluding nobody is subscribed.
+- **Filter fields are dotted paths into the event payload.**
+  `job.component.id`, `job.configuration.id`, `branch.id`, `phase.id`,
+  `durationOvertimePercentage` -- *not* flat keys like `configurationId` or
+  `component`. Only the first four have dedicated output columns; everything
+  else rides along in the raw `filters` list (`notification detail` prints it
+  verbatim).
+- **`--component-id` / `--config-id` filter client-side.** The API's only
+  server-side filter is `?event=`; everything else is applied by kbagent after
+  fetching the project's full subscription list.
+- **A subscription with NO filters is project-wide and fires for every job.**
+  `filters` is optional in the schema (only `event` and `recipient` are
+  required), so a catch-all "page me on any failure" subscription is legal and
+  common. `--component-id`/`--config-id` exclude those rows -- but they also
+  page for the config being audited, so the count of the ones actually
+  **dropped** is reported as `project_wide_excluded` (and a warning in human
+  mode). Note `scope` keys off the config filter alone, so a subscription
+  filtering only on `job.component.id` is labelled `project-wide` even though
+  it is not truly global. Two consequences: a matching `--component-id` keeps
+  it (kept rows are never counted), and a dropped one that names a *different*
+  component is not counted either -- its own explicit filter proves it can
+  never fire for what you audited. Only genuinely ambiguous rows -- those
+  missing the constraint you filtered on -- are counted.
+  **Never answer "who gets paged for this flow" from a filtered run alone**
+  -- add the project-wide rows from an unfiltered run.
+- **Webhook recipients carry `url`, email recipients carry `address`.** Both
+  render in the single `address` column; a `--json` consumer reading the raw
+  API would need to handle both keys.
+- **Subscriptions are project-level, not branch-scoped.** There is no branch
+  query parameter. A branch-specific subscription carries a `branch.id`
+  filter, surfaced in the `branch_id` column. Configuration *names* are
+  resolved against the project's active branch, so a flow that exists only in
+  production shows a blank `config_name` while a dev branch is active.
+- **`config_name` is best-effort.** It is resolved by an exact
+  `(component_id, config_id)` match, falling back to a config-ID lookup when
+  the subscription has no component filter -- but only when unambiguous. Two
+  components sharing a config ID, a deleted parent config, or a failed lookup
+  all yield `""` rather than a guess. A blank name never means the
+  subscription is inactive.
+- Read-only in this release: creating and deleting subscriptions is not
+  exposed by the CLI.
+
 ## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.84.2)
 
 - **Use it instead of rebuilding a body.** Reading `config detail` and

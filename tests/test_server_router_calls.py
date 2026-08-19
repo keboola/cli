@@ -1949,3 +1949,73 @@ def test_config_state_set_forwards_row_id_branch_id_and_dry_run(tmp_path: Path) 
         branch_id=456,
         dry_run=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# notifications.py  GET /notifications  +  GET /{p}/{subscription_id}
+# Service: notification.list_subscriptions(aliases=..., event=...,
+#          component_id=..., config_id=...)
+#          notification.get_subscription_detail(alias=..., subscription_id=...)
+# ---------------------------------------------------------------------------
+
+
+def test_notifications_list_passes_filters(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.list_subscriptions.return_value = {
+        "subscriptions": [],
+        "errors": [],
+        "project_wide_excluded": 0,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/notifications",
+            headers=AUTH,
+            params={
+                "project": [PROJECT],
+                "event": "job-failed",
+                "component_id": "keboola.flow",
+                "config_id": CONFIG_ID,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.list_subscriptions.assert_called_once_with(
+        aliases=[PROJECT],
+        event="job-failed",
+        component_id="keboola.flow",
+        config_id=CONFIG_ID,
+    )
+
+
+def test_notifications_list_defaults_to_every_project(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.list_subscriptions.return_value = {
+        "subscriptions": [],
+        "errors": [],
+        "project_wide_excluded": 0,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/notifications", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    notification_svc.list_subscriptions.assert_called_once_with(
+        aliases=None, event=None, component_id=None, config_id=None
+    )
+
+
+def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.get_subscription_detail.return_value = {"subscription_id": "1234"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/notifications/{PROJECT}/1234", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    notification_svc.get_subscription_detail.assert_called_once_with(
+        alias=PROJECT, subscription_id="1234"
+    )

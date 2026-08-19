@@ -994,6 +994,37 @@ remain branch-aware because modifying a dev branch is the expected intent.
     cells as positive match signals. Queue API is not branch-aware:
     --branch + --not-run-since still compares against production jobs.
 
+### Notification Subscriptions (Flow Notifications Tab)
+
+  kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
+    Fleet-wide list of Notification Service subscriptions -- the recipients
+    behind the Flow Builder's Notifications tab (bell icon: Success / Error /
+    Processing-delay / Warning cards). These live in a SEPARATE platform
+    service, not in the flow's configuration JSON, so flow detail and
+    config detail never show them. The in-flow task of type "notification"
+    IS in the configuration and stays visible there -- different mechanism.
+    Columns: project_alias, subscription_id, event, component_id, config_id,
+    config_name (resolved), branch_id, phase_id, channel, address, expires_at,
+    scope, filters.
+    Event names are kebab-case: job-failed, job-succeeded,
+    job-succeeded-with-warning, job-processing-long, and the phase-job-*
+    variants. --event is NOT validated against that list (the API declares
+    EventName as an open string), it is forwarded verbatim as ?event=.
+    --component-id / --config-id filter CLIENT-SIDE on the subscription's
+    own job.component.id / job.configuration.id filter values; the API
+    supports only ?event=. A subscription with NO filters is project-wide
+    (scope="project-wide") and fires for every job -- those are excluded by
+    --component-id/--config-id and reported as project_wide_excluded so the
+    "who gets paged for this flow" answer is never silently incomplete.
+    Subscriptions are project-level, not branch-scoped; a branch-specific one
+    carries a branch.id filter, surfaced in the branch_id column.
+
+  kbagent notification detail --project NAME --subscription-id ID
+    One subscription with every filter printed verbatim, including threshold
+    filters like durationOvertimePercentage that have no dedicated column.
+
+  Read-only in this release; creating/deleting subscriptions is not exposed.
+
 ### Development Branches
 
   kbagent branch list [--project NAME]

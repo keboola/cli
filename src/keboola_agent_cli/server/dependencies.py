@@ -32,6 +32,7 @@ from ..services.job_service import JobService
 from ..services.kai_service import KaiService
 from ..services.lineage_service import LineageService
 from ..services.member_service import MemberService
+from ..services.notification_service import NotificationService
 from ..services.org_service import OrgService
 from ..services.project_service import ProjectService
 from ..services.repo_validate_service import RepoValidateService
@@ -106,6 +107,7 @@ class ServiceRegistry:
     workspace: WorkspaceService = field(init=False)
     flow: FlowService = field(init=False)
     schedule: ScheduleService = field(init=False)
+    notification: NotificationService = field(init=False)
     lineage: LineageService = field(init=False)
     deep_lineage: DeepLineageService = field(init=False)
     sharing: SharingService = field(init=False)
@@ -142,6 +144,7 @@ class ServiceRegistry:
         self.workspace = WorkspaceService(config_store=cs)
         self.flow = FlowService(config_store=cs)
         self.schedule = ScheduleService(config_store=cs)
+        self.notification = NotificationService(config_store=cs)
         self.lineage = LineageService(config_store=cs)
         self.deep_lineage = DeepLineageService(config_store=cs)
         self.sharing = SharingService(config_store=cs)

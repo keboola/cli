@@ -49,6 +49,7 @@ from .routers import (
     kai,
     lineage,
     members,
+    notifications,
     org,
     projects,
     schedules,
@@ -236,6 +237,15 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "**Execution.** "
             "Cron-style schedules attached to flows / configurations. "
             "Mirrors `kbagent schedule list|detail|find`."
+        ),
+    },
+    {
+        "name": "notifications",
+        "description": (
+            "**Execution.** "
+            "Flow Notifications-tab recipients (Notification Service "
+            "subscriptions) -- read-only audit across projects. "
+            "Mirrors `kbagent notification list|detail`."
         ),
     },
     {
@@ -684,6 +694,7 @@ def create_app(
     app.include_router(workspaces.router)
     app.include_router(flows.router)
     app.include_router(schedules.router)
+    app.include_router(notifications.router)
     app.include_router(lineage.router)
     app.include_router(sharing.router)
     app.include_router(data_apps.router)
