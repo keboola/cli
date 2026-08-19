@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import platform
+import re
 import time
 from typing import Any, Self
 from urllib.parse import urlparse, urlunparse
@@ -20,6 +21,7 @@ from .constants import (
     BACKOFF_BASE,
     ENV_CONVERSATION_ID,
     MAX_API_ERROR_LENGTH,
+    MAX_EXCEPTION_ID_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
     RETRY_SAFE_METHODS,
@@ -28,6 +30,12 @@ from .constants import (
 from .errors import ErrorCode, KeboolaApiError, mask_token
 
 logger = logging.getLogger(__name__)
+
+# Everything a real Keboola `exceptionId` is made of. Anything else in that
+# server-supplied field -- Rich markup brackets, newlines that would forge an
+# extra log line (CWE-117), control characters -- is dropped before the id is
+# interpolated into an error message.
+_EXCEPTION_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9._:-]+")
 
 
 def build_user_agent() -> str:
@@ -177,6 +185,10 @@ class BaseHttpClient:
         url_label = base_url or self._base_url
         last_response: httpx.Response | None = None
         retry_safe = method.upper() in RETRY_SAFE_METHODS
+        # Counted separately from `attempt`: a 429 burns an attempt without
+        # being a server error, so using the attempt index would report "the
+        # same 5xx came back on N attempts" after seeing exactly one.
+        server_error_attempts = 0
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -185,6 +197,8 @@ class BaseHttpClient:
                 if response.status_code < 400:
                     return response
 
+                if response.status_code >= 500:
+                    server_error_attempts += 1
                 # 429 is repeatable on any method; a 5xx only on an idempotent one.
                 may_repeat = retry_safe or response.status_code == 429
                 if (
@@ -216,7 +230,7 @@ class BaseHttpClient:
                     last_response = response
                     continue
 
-                hint = self._server_error_hint(method, response.status_code, attempt + 1)
+                hint = self._server_error_hint(method, response.status_code, server_error_attempts)
                 self._raise_api_error(
                     response,
                     url_label,
@@ -279,7 +293,9 @@ class BaseHttpClient:
             self._raise_api_error(
                 last_response,
                 url_label,
-                hint=self._server_error_hint(method, last_response.status_code, MAX_RETRIES),
+                hint=self._server_error_hint(
+                    method, last_response.status_code, server_error_attempts
+                ),
             )
 
         raise KeboolaApiError(
@@ -288,6 +304,22 @@ class BaseHttpClient:
             error_code=ErrorCode.RETRY_EXHAUSTED,
             retryable=True,
         )
+
+    @staticmethod
+    def _safe_exception_id(raw: object) -> str:
+        """Bound and de-fang the server-supplied ``exceptionId``.
+
+        The id is untrusted input that ends up in a message rendered through
+        Rich with markup enabled (``OutputFormatter.error``), so it gets the
+        same "bounded before it reaches a terminal" treatment the API's own
+        error text gets from MAX_API_ERROR_LENGTH. Disallowed characters are
+        dropped rather than escaped: a real Keboola id contains none of them,
+        so this is lossless in practice, and support still gets a handle out
+        of a partially mangled value instead of nothing.
+        """
+        if not isinstance(raw, str):
+            return ""
+        return _EXCEPTION_ID_DISALLOWED.sub("", raw)[:MAX_EXCEPTION_ID_LENGTH]
 
     @staticmethod
     def _non_idempotent_note(method: str) -> str:
@@ -299,26 +331,32 @@ class BaseHttpClient:
         )
 
     @classmethod
-    def _server_error_hint(cls, method: str, status: int, attempts: int) -> str | None:
+    def _server_error_hint(cls, method: str, status: int, server_error_attempts: int) -> str | None:
         """Return the actionable next step for a 5xx, or None if there isn't one.
 
-        Two situations need two different answers (issue #599). A 5xx that
-        survived every retry is an upstream incident nobody on this side can
-        fix, and the operator's next step is to escalate with the exceptionId.
-        A 5xx on the single attempt of a non-idempotent write is the opposite:
-        the server may already have done the work, so the next step is to check
-        before repeating. A generic "API error 500" said neither.
+        Two situations need two different answers (issue #599). A 5xx on a
+        non-idempotent write means the server may already have done the work,
+        so the next step is to check before repeating. A 5xx that survived
+        every retry is the opposite: an upstream incident nobody on this side
+        can fix, and the next step is to escalate with the exceptionId. A
+        generic "API error 500" said neither.
+
+        The method gate is checked FIRST and `server_error_attempts` counts
+        only 5xx responses, because a POST can reach a second attempt via a
+        429. Ordering it the other way round told the operator to escalate on
+        exactly the request where they most needed to go and check what had
+        already landed.
         """
         if status < 500:
             return None
-        if attempts > 1:
-            return (
-                f"The same 5xx came back on all {attempts} attempts, which points at an "
-                "upstream Keboola incident rather than a caller mistake -- check "
-                "status.keboola.com and contact Keboola support, quoting the exceptionId above."
-            )
         if method.upper() not in RETRY_SAFE_METHODS:
             return cls._non_idempotent_note(method)
+        if server_error_attempts > 1:
+            return (
+                f"The same 5xx came back on all {server_error_attempts} attempts, which points "
+                "at an upstream Keboola incident rather than a caller mistake -- check "
+                "status.keboola.com and contact Keboola support, quoting the exceptionId above."
+            )
         return None
 
     def _raise_api_error(
@@ -359,9 +397,7 @@ class BaseHttpClient:
             # can trace the incident by. Dropping it, as this parser used to,
             # left the operator with nothing to escalate (issue #599).
             if isinstance(body, dict):
-                raw_exception_id = body.get("exceptionId")
-                if isinstance(raw_exception_id, str) and raw_exception_id:
-                    exception_id = raw_exception_id
+                exception_id = self._safe_exception_id(body.get("exceptionId"))
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
@@ -417,9 +453,12 @@ class BaseHttpClient:
                 retryable=False,
             )
 
-        # Truncation above guards the API's own text; the id and the hint are
-        # kbagent-authored and short, so they are appended after it and always
-        # survive into the message the operator actually reads.
+        # Appended AFTER the truncation above so they always survive into the
+        # message the operator actually reads. That is safe only because each
+        # is bounded on its own: the hint is a kbagent-authored constant, and
+        # the id went through `_safe_exception_id`. Never append raw
+        # server-supplied text here -- the truncation is what keeps the
+        # console (Rich, markup enabled) from rendering it as markup.
         suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
         if hint:
             suffix += f" {hint}"

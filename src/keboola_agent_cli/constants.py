@@ -63,6 +63,13 @@ BACKOFF_BASE: float = 1.0  # seconds; delays: 1s, 2s, 4s
 # request, so repeating it is safe regardless of method.
 RETRY_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
+# Cap on the server-supplied `exceptionId` echoed into a 5xx error message.
+# The value is untrusted input rendered into a Rich-markup console, so it gets
+# the same "bounded before it reaches a terminal" treatment as the API's own
+# error text (MAX_API_ERROR_LENGTH). Real Keboola ids run ~70 chars
+# ("com-keboola-gcp-europe-west3-connection-<32 hex>"), so this is generous.
+MAX_EXCEPTION_ID_LENGTH: int = 128
+
 # --- HTTP Timeout ---
 DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 

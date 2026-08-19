@@ -7,7 +7,12 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from keboola_agent_cli.constants import APP_NAME, MAX_API_ERROR_LENGTH, MAX_RETRIES
+from keboola_agent_cli.constants import (
+    APP_NAME,
+    MAX_API_ERROR_LENGTH,
+    MAX_EXCEPTION_ID_LENGTH,
+    MAX_RETRIES,
+)
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.http_base import BaseHttpClient, build_user_agent
 
@@ -436,6 +441,120 @@ class TestServerErrorGuidance:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("POST", "/test-path")
             assert "kbc-eu-central-1-connection-abc123" in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_rate_limited_then_500_on_a_post_warns_about_partial_effect(self, httpx_mock) -> None:
+        """A POST can reach attempt 2 via a 429 -- the 5xx there is still its first.
+
+        The hint must be the partial-effect warning, not "upstream incident":
+        telling an operator to escalate instead of checking what already
+        landed is exactly how the duplicate this PR prevents gets created.
+        """
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=429, text="slow down")
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path", status_code=500, json={"error": "Application error."}
+        )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            message = exc_info.value.message
+            assert "may already have taken effect" in message
+            assert "upstream Keboola incident" not in message
+            assert exc_info.value.retryable is False
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_exhausted_hint_counts_server_errors_not_total_attempts(self, httpx_mock) -> None:
+        """A 429 burned an attempt but was not a 5xx -- do not count it as one."""
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=429, text="slow down")
+        for _ in range(MAX_RETRIES - 1):
+            httpx_mock.add_response(
+                url=f"{STACK_URL}/test-path", status_code=500, json={"error": "boom"}
+            )
+
+        client = self._client()
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            message = exc_info.value.message
+            assert "upstream Keboola incident" in message
+            assert f"{MAX_RETRIES - 1} attempts" in message
+            assert f"{MAX_RETRIES} attempts" not in message
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+
+    def test_exception_id_is_length_capped(self, httpx_mock) -> None:
+        """An untrusted id must not reach the terminal unbounded."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=500,
+            json={"error": "Application error.", "exceptionId": "a" * 5000},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            assert "a" * MAX_EXCEPTION_ID_LENGTH in exc_info.value.message
+            assert "a" * (MAX_EXCEPTION_ID_LENGTH + 1) not in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_exception_id_markup_and_newlines_stripped(self, httpx_mock) -> None:
+        """Human-mode errors render through Rich with markup ON (output.py).
+
+        A server-supplied id carrying brackets would be interpreted as markup,
+        and newlines would let it forge extra log lines (CWE-117). Neither may
+        survive into the message.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=500,
+            json={
+                "error": "Application error.",
+                "exceptionId": "kbc-1[bold red]spoof[/bold red]\nError: fake\x07",
+            },
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            message = exc_info.value.message
+            assert "[bold red]" not in message
+            assert "\n" not in message
+            assert "\x07" not in message
+            # the legitimate characters survive so support still gets a handle
+            assert "kbc-1" in message
+        finally:
+            client.close()
+
+    def test_non_string_exception_id_ignored(self, httpx_mock) -> None:
+        """A numeric/object `exceptionId` is not an id -- drop it silently."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=500,
+            json={"error": "Application error.", "exceptionId": {"nested": 1}},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("POST", "/test-path")
+            assert "exceptionId" not in exc_info.value.message
         finally:
             client.close()
 
