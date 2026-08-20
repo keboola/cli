@@ -1009,15 +1009,22 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Event names are kebab-case: job-failed, job-succeeded,
     job-succeeded-with-warning, job-processing-long, and the phase-job-*
     variants. --event is NOT validated against that list (the API declares
-    EventName as an open string), it is forwarded verbatim as ?event=.
-    --component-id / --config-id filter CLIENT-SIDE on the subscription's
-    own job.component.id / job.configuration.id filter values; the API
-    supports only ?event=. A subscription with NO filters is project-wide
-    (scope="project-wide") and fires for every job -- those are excluded by
-    --component-id/--config-id and reported as project_wide_excluded so the
-    "who gets paged for this flow" answer is never silently incomplete.
-    Subscriptions are project-level, not branch-scoped; a branch-specific one
-    carries a branch.id filter, surfaced in the branch_id column.
+    EventName as an open string).
+    ALL filtering is CLIENT-SIDE, --event included: the service accepts
+    ?event= and then IGNORES it, answering 200 with the project's full
+    subscription list (verified live). kbagent still sends the parameter and
+    narrows the rows itself, so --event is correct from the CLI -- anything
+    calling the service directly must narrow too, or it gets a superset.
+    --component-id / --config-id match the subscription's own
+    job.component.id / job.configuration.id filter values.
+    A subscription with NO filters is project-wide (scope="project-wide") and
+    fires for every job -- those are excluded by --component-id/--config-id
+    and reported as project_wide_excluded so the "who gets paged for this
+    flow" answer is never silently incomplete.
+    branch_id is populated on EVERY row, production included: the Flow
+    Builder always writes a branch.id filter and uses the DEFAULT branch's
+    numeric id for production. A filled Branch column does NOT mean
+    "dev-branch only" -- cross-check `branch list` to tell them apart.
 
   kbagent notification detail --project NAME --subscription-id ID
     One subscription with every filter printed verbatim, including threshold

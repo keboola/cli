@@ -48,6 +48,11 @@ CHANGELOG: dict[str, list[str]] = {
         "declares `EventName` as an open string.",
         "`kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
         "`GET /notifications/{project}/{subscription_id}`.",
+        'A filled Branch column on `notification list` does not mean "dev-branch only". '
+        "The Flow Builder writes a `branch.id` filter on EVERY subscription, and for a "
+        "production one that value is the default branch's own numeric id -- so `branch_id` "
+        "is populated on every row, production included. Cross-check `kbagent branch list` "
+        "for the project to tell a production alert from a dev-branch one.",
     ],
     "0.85.1": [
         "Fix: `kbagent config new --push` no longer creates a broken configuration from a "

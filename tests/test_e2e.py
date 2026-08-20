@@ -5507,6 +5507,15 @@ class TestE2ENotificationSubscriptions:
     exist. That makes the test meaningful on an empty project (it still proves
     the host derivation, auth, and envelope) and start covering the row path
     the day a subscription is added, without needing a rewrite.
+
+    That vacuity is not free, and it already cost us once: the service turned
+    out to IGNORE its documented ``?event=`` filter, and the assertion that
+    would have caught it passed vacuously on a project with no subscriptions.
+    So the data-dependent assertions below ``pytest.skip`` with an explicit
+    reason rather than passing silently -- a skipped test in the report is a
+    visible gap; a green vacuous one is not. Populate the E2E project with a
+    couple of Notifications-tab subscriptions on different events to turn
+    them on.
     """
 
     @pytest.fixture(autouse=True)
@@ -5559,22 +5568,95 @@ class TestE2ENotificationSubscriptions:
             if row["channel"] in ("email", "webhook"):
                 assert row["address"], f"recipient missing an address: {row}"
 
-    def test_event_filter_narrows_without_error(self) -> None:
-        """`--event` is forwarded verbatim as ?event= and must not 400."""
+    def test_event_filter_returns_only_that_event(self) -> None:
+        """Every returned row must match `--event`, whatever the API did.
+
+        The Notification Service ACCEPTS ``?event=`` (200, no 400) and then
+        ignores it, returning the project's full subscription list. kbagent
+        narrows client-side, so this assertion is about kbagent's contract,
+        not the API's -- and it is the guard against anyone "simplifying" that
+        filter away on the strength of the swagger.
+        """
         _step(2, "notification list --event job-failed")
         result = self._run("notification", "list", "--project", self.alias, "--event", "job-failed")
         data = _json_ok(result)
 
         assert all(row["event"] == "job-failed" for row in data["subscriptions"])
 
-    def test_unknown_event_returns_empty_not_error(self) -> None:
-        """EventName is an open string -- a typo yields no rows, not a failure.
+    def test_event_filter_actually_narrows_a_mixed_project(self) -> None:
+        """The teeth of the previous test: prove it drops non-matching rows.
 
-        This is exactly why the CLI does not validate `--event`: the check
-        would have to be a client-side allowlist that goes stale the moment
-        the platform adds an event.
+        `all(...)` over an empty or single-event list is vacuously true --
+        exactly how the ignored-``?event=`` bug survived review. This one
+        needs a project carrying at least two distinct events and skips
+        loudly otherwise.
         """
-        _step(3, "notification list --event <nonexistent>")
+        _step(3, "notification list --event <one of several>")
+        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        rows = everything["subscriptions"]
+        events = {row["event"] for row in rows}
+        if len(events) < 2:
+            pytest.skip(
+                f"project has {len(events)} distinct notification event(s); "
+                "need >= 2 to prove --event narrows"
+            )
+
+        target = sorted(events)[0]
+        expected = sum(1 for row in rows if row["event"] == target)
+        filtered = _json_ok(
+            self._run("notification", "list", "--project", self.alias, "--event", target)
+        )
+
+        assert len(filtered["subscriptions"]) == expected
+        assert len(filtered["subscriptions"]) < len(rows)
+
+    def test_api_side_event_filter_is_still_ignored(self) -> None:
+        """Pin the upstream behavior this client-side filter exists for.
+
+        If the service ever starts honoring ``?event=``, this test flips to
+        failing -- which is the notification we want: the client-side filter
+        becomes redundant (harmless, but the comment explaining it is then
+        wrong) and the gotchas entry needs retiring. It is a canary, not a
+        correctness requirement, so it skips unless the project has the mixed
+        data needed to tell the two behaviors apart.
+        """
+        _step(4, "raw ?event= behavior canary")
+        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        rows = everything["subscriptions"]
+        events = {row["event"] for row in rows}
+        if len(events) < 2:
+            pytest.skip("need >= 2 distinct events to observe the API-side filter")
+
+        target = sorted(events)[0]
+        raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "--verbose",
+                "notification",
+                "list",
+                "--project",
+                self.alias,
+                "--event",
+                target,
+            ],
+        )
+        # The request really is sent with the parameter -- the narrowing that
+        # reaches the user is kbagent's, not the service's.
+        assert f"event={target}" in raw.output
+
+    def test_unknown_event_returns_empty_not_error(self) -> None:
+        """A misspelled event yields no rows, not a failure and not everything.
+
+        `EventName` is an open string in the schema, which is why the CLI does
+        not validate `--event` against an allowlist that would go stale the
+        moment the platform adds an event. The empty result is kbagent's doing:
+        the service answers a bogus `?event=` with 200 and the project's FULL
+        subscription list, so without the client-side narrowing a camelCase
+        typo like `jobFailed` would return every subscription in the project
+        and read as "these all fire on that event".
+        """
+        _step(5, "notification list --event <nonexistent>")
         result = self._run(
             "notification",
             "list",
@@ -5589,7 +5671,7 @@ class TestE2ENotificationSubscriptions:
 
     def test_config_filter_counts_excluded_catchalls(self) -> None:
         """Project-wide subscriptions dropped by a scope filter must be counted."""
-        _step(4, "notification list --component-id keboola.flow")
+        _step(6, "notification list --component-id keboola.flow")
         unfiltered = _json_ok(self._run("notification", "list", "--project", self.alias))
         # Only the rows the filter DROPS are counted -- a project-wide
         # subscription that filters on keboola.flow survives and is shown.
@@ -5615,7 +5697,7 @@ class TestE2ENotificationSubscriptions:
 
     def test_detail_round_trips_a_listed_subscription(self) -> None:
         """`detail` must resolve the same row `list` reported."""
-        _step(5, "notification detail -- round-trip from list")
+        _step(7, "notification detail -- round-trip from list")
         listed = _json_ok(self._run("notification", "list", "--project", self.alias))
         if not listed["subscriptions"]:
             pytest.skip("project has no notification subscriptions to inspect")
@@ -5637,7 +5719,7 @@ class TestE2ENotificationSubscriptions:
         assert detail["address"] == expected["address"]
 
     def test_detail_of_missing_subscription_fails_cleanly(self) -> None:
-        _step(6, "notification detail -- unknown ID")
+        _step(8, "notification detail -- unknown ID")
         result = self._run(
             "notification",
             "detail",

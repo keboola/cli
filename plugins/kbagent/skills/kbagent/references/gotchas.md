@@ -1218,11 +1218,21 @@ events and emits a final `done` SSE frame mirroring the same record.
 - **Event names are kebab-case, and the field is an open string.**
   `job-failed`, `job-succeeded`, `job-succeeded-with-warning`,
   `job-processing-long`, plus the `phase-job-*` variants -- *not* the
-  camelCase `jobFailed` spelling. `--event` is forwarded verbatim as
-  `?event=` and deliberately not validated against a fixed list, because the
-  API declares `EventName` as `type: string` with no enum. A misspelled event
-  therefore returns an empty list, not an error -- if a query comes back
-  empty, re-check the spelling before concluding nobody is subscribed.
+  camelCase `jobFailed` spelling. `--event` is deliberately not validated
+  against a fixed list, because the API declares `EventName` as
+  `type: string` with no enum. A misspelled event therefore returns an empty
+  list, not an error -- if a query comes back empty, re-check the spelling
+  before concluding nobody is subscribed.
+- **The service IGNORES `?event=`; kbagent narrows client-side**
+  (verified live, not from the swagger). A filtered request answers `200` with
+  the project's FULL subscription list -- the documented query parameter has
+  no effect. kbagent still sends it (so a server-side fix would cost nothing)
+  and then filters the rows itself, which is why `--event` behaves correctly
+  from the CLI. **Anything talking to the service directly must do the same
+  narrowing**, or "who gets paged on failure" silently answers with a superset
+  that includes success and processing-delay recipients. Same lesson as
+  Storage's `list_files`: a documented query parameter is a statement of
+  intent, not of behavior -- check what comes back.
 - **Filter fields are dotted paths into the event payload.**
   `job.component.id`, `job.configuration.id`, `branch.id`, `phase.id`,
   `durationOvertimePercentage` -- *not* flat keys like `configurationId` or
@@ -1250,11 +1260,16 @@ events and emits a final `done` SSE frame mirroring the same record.
 - **Webhook recipients carry `url`, email recipients carry `address`.** Both
   render in the single `address` column; a `--json` consumer reading the raw
   API would need to handle both keys.
-- **Subscriptions are project-level, not branch-scoped.** There is no branch
-  query parameter. A branch-specific subscription carries a `branch.id`
-  filter, surfaced in the `branch_id` column. Configuration *names* are
-  resolved against the project's active branch, so a flow that exists only in
-  production shows a blank `config_name` while a dev branch is active.
+- **`branch_id` is populated on EVERY subscription, production included** --
+  a filled Branch column does NOT mean "dev-branch only" (verified live).
+  There is no branch query parameter, but the Flow Builder always writes a
+  `branch.id` filter, and for a production subscription that value is the
+  **default branch's numeric id** (e.g. `390737` for a project whose `Main`
+  branch has that id). To tell a production alert from a dev-branch one you
+  must compare against `kbagent branch list` for that project -- presence
+  alone tells you nothing. Configuration *names* are resolved against the
+  project's active branch, so a flow that exists only in production shows a
+  blank `config_name` while a dev branch is active.
 - **`config_name` is best-effort.** It is resolved by an exact
   `(component_id, config_id)` match, falling back to a config-ID lookup when
   the subscription has no component filter -- but only when unambiguous. Two
