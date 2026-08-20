@@ -125,14 +125,21 @@ class TestClientRunSyncAction:
 def _root_config_response(
     parameters: dict[str, Any] | None = None,
     storage: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
+    authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    configuration: dict[str, Any] = {
+        "parameters": parameters if parameters is not None else {},
+        "storage": storage if storage is not None else {},
+    }
+    if runtime is not None:
+        configuration["runtime"] = runtime
+    if authorization is not None:
+        configuration["authorization"] = authorization
     return {
         "id": CONFIG_ID,
         "name": "MySQL extractor",
-        "configuration": {
-            "parameters": parameters if parameters is not None else {},
-            "storage": storage if storage is not None else {},
-        },
+        "configuration": configuration,
     }
 
 
@@ -258,6 +265,57 @@ class TestRunSyncActionService:
         assert sent_config_data["parameters"]["rootOnly"] == "kept"
         # storage merged independently with the same semantics:
         assert sent_config_data["storage"] == {"input": {"tables": [{"source": "in.c-main.row"}]}}
+
+    def test_authorization_and_runtime_forwarded_from_root(self, tmp_config_dir: Path) -> None:
+        """OAuth/Service-Account components need root authorization+runtime forwarded (AI-3757).
+
+        Without this, e.g. keboola.ex-linkedin-ads never receives its OAuth
+        broker reference and crashes before its own error handling runs,
+        surfacing as an opaque empty-body 400.
+        """
+        client = MagicMock()
+        client.get_config_detail.return_value = _root_config_response(
+            parameters={"ad_account_id": "123"},
+            runtime={"parallelism": "5"},
+            authorization={"oauth_api": {"id": "linkedin-ads"}},
+        )
+        client.get_config_row.return_value = _row_config_response(
+            parameters={"ad_account_id": "456"}
+        )
+        client.run_sync_action.return_value = {"accounts": []}
+        service = _make_service(tmp_config_dir, client)
+
+        service.run_sync_action(
+            alias="prod",
+            component_id="keboola.ex-linkedin-ads",
+            action="list_accounts",
+            config_id=CONFIG_ID,
+            row_id=ROW_ID,
+        )
+
+        sent_config_data = client.run_sync_action.call_args.args[2]
+        assert sent_config_data["runtime"] == {"parallelism": "5"}
+        assert sent_config_data["authorization"] == {"oauth_api": {"id": "linkedin-ads"}}
+
+    def test_authorization_and_runtime_omitted_when_absent(self, tmp_config_dir: Path) -> None:
+        """No authorization/runtime key at all when the root config has none."""
+        client = MagicMock()
+        client.get_config_detail.return_value = _root_config_response(
+            parameters={"host": "example.com"}
+        )
+        client.run_sync_action.return_value = {"status": "success"}
+        service = _make_service(tmp_config_dir, client)
+
+        service.run_sync_action(
+            alias="prod",
+            component_id=COMPONENT_ID,
+            action="testConnection",
+            config_id=CONFIG_ID,
+        )
+
+        sent_config_data = client.run_sync_action.call_args.args[2]
+        assert "runtime" not in sent_config_data
+        assert "authorization" not in sent_config_data
 
     def test_branch_pass_through(self, tmp_config_dir: Path) -> None:
         """branch_id flows to config fetch, row fetch, and the action call."""

@@ -488,6 +488,15 @@ class ComponentService(BaseService):
         ``storage`` key REPLACES the root key wholesale (never deep-merged),
         so e.g. a row ``storage.input`` replaces the root ``storage.input``.
 
+        ``runtime`` and ``authorization`` are taken from the ROOT configuration
+        only (rows never override them, per the docker-runner contract) and are
+        forwarded only when non-empty. ``authorization.oauth_api.id`` is a
+        broker reference the sync-actions service resolves and decrypts before
+        invoking the component; omitting it made OAuth/Service-Account
+        components (e.g. ``keboola.ex-linkedin-ads``) crash before their own
+        error handling could run, surfacing as an opaque empty-body 400
+        (AI-3757 / SUPPORT-17393).
+
         Args:
             alias: Project alias (resolves stack URL + token).
             component_id: Component identifier (e.g. 'keboola.ex-db-mysql').
@@ -531,7 +540,7 @@ class ComponentService(BaseService):
                     row_configuration = row.get("configuration") or {}
                 # SHALLOW top-level merge (MCP parity): row keys replace root
                 # keys wholesale; do NOT deep-merge.
-                config_data = {
+                config_data: dict[str, Any] = {
                     "parameters": {
                         **root_configuration.get("parameters", {}),
                         **row_configuration.get("parameters", {}),
@@ -541,6 +550,12 @@ class ComponentService(BaseService):
                         **row_configuration.get("storage", {}),
                     },
                 }
+                runtime = root_configuration.get("runtime") or {}
+                authorization = root_configuration.get("authorization") or {}
+                if runtime:
+                    config_data["runtime"] = runtime
+                if authorization:
+                    config_data["authorization"] = authorization
             result = client.run_sync_action(
                 component_id,
                 action,
