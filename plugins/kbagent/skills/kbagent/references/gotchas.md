@@ -3899,6 +3899,12 @@ from the same admin could therefore both clear the guard -- and
 requiring two approvals could reach `approved` on one human. kbagent can only
 produce that overlap through a read-timeout retry (30 s read timeout, 1 s
 backoff) racing a much shorter transaction, so the window is very narrow.
+**Read this as reported, not proven:** the missing constraint and the
+row-counting come off the schema and the source, but no duplicate row was
+reproduced and the transaction isolation level was not checked -- it may be
+latent rather than live. It is tracked upstream as
+[keboola/connection#8209](https://github.com/keboola/connection/issues/8209);
+check there before relying on any of it.
 Nothing was changed in kbagent for it, and there is deliberately no
 per-call-site retry opt-out: one auditable method rule beats a flag anyone can
 flip on the wrong endpoint.
