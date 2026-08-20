@@ -12,14 +12,22 @@ The two bugs are reproduced *without a Windows machine*:
   any OS.
 - **Bug 2** -- an early ``return`` left ``_ui_dist/`` missing, and hatchling's
   ``force-include`` then failed the whole build. We assert every code path
-  leaves ``_ui_dist/`` existing on disk. (The force-include interaction itself
-  is OS-independent and is additionally exercised end-to-end by the CI wheel
-  build.)
+  leaves ``_ui_dist/`` existing on disk.
+
+Also covers issue AI-3750: the CI wheel build always runs inside a real `git`
+checkout, so it never exercised the no-``.git`` case (a VCS-url install that
+hands hatchling a plain exported source tree). Without a ``.git`` dir,
+hatchling's gitignore-based default-exclusion can't run, so the (gitignored)
+``_ui_dist/`` the hook just populated got picked up by BOTH the default
+package globbing and ``force-include``, and the wheel build aborted with "A
+second file is being added to the wheel archive at the same path". See
+``TestForceIncludeNoDuplicate`` below for the end-to-end regression test.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -289,3 +297,50 @@ class TestCheckWheelUiHelper:
 
     def test_missing_wheel_is_an_error(self, tmp_path: Path) -> None:
         assert check_wheel_ui.main(["--expect-ui", "--dist", str(tmp_path)]) == 1
+
+
+class TestForceIncludeNoDuplicate:
+    """AI-3750: building without a ``.git`` dir must not duplicate ``_ui_dist/``.
+
+    Reproduces the real failure end-to-end (not mocked): a minimal project
+    laid out with the actual ``pyproject.toml`` / ``hatch_build.py``, a
+    prebuilt SPA dist on disk (so the hook populates ``_ui_dist/`` with a real
+    file), and deliberately NO ``.git`` directory -- the exact shape of a
+    VCS-url install where the build backend never sees repo history.
+    """
+
+    def test_wheel_builds_without_git_directory(self, tmp_path: Path) -> None:
+        if shutil.which("uv") is None:
+            pytest.skip("uv not on PATH")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        project = tmp_path / "project"
+        (project / "src" / "keboola_agent_cli").mkdir(parents=True)
+        (project / "src" / "keboola_agent_cli" / "__init__.py").write_text("", encoding="utf-8")
+        (project / "src" / "keboola_agent_cli" / "py.typed").write_text("", encoding="utf-8")
+        (project / "scripts").mkdir()
+        shutil.copy(
+            repo_root / "scripts" / "hatch_build.py", project / "scripts" / "hatch_build.py"
+        )
+        shutil.copy(repo_root / "pyproject.toml", project / "pyproject.toml")
+        (project / "README.md").write_text("test project", encoding="utf-8")
+
+        dist = project / "web" / "frontend" / "dist"
+        dist.mkdir(parents=True)
+        (dist / "index.html").write_text("<html>app</html>", encoding="utf-8")
+
+        assert not (project / ".git").exists()
+
+        result = subprocess.run(
+            ["uv", "build", "--wheel", "-o", str(tmp_path / "out")],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stderr
+
+        (wheel,) = list((tmp_path / "out").glob("*.whl"))
+        with zipfile.ZipFile(wheel) as zf:
+            ui_entries = [n for n in zf.namelist() if n.endswith("_ui_dist/index.html")]
+        assert ui_entries == ["keboola_agent_cli/_ui_dist/index.html"]

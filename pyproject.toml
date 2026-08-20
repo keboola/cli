@@ -47,9 +47,17 @@ packages = ["src/keboola_agent_cli"]
 # ``uv tool install git+...`` or ``pip install`` from PyPI without the
 # user needing the ``web/`` source tree.
 #
-# ``force-include`` overrides the default ``.gitignore`` exclusion so the
-# generated dist actually lands in the wheel. Key on the LHS is the path
-# on disk; value on the RHS is the path inside the wheel.
+# ``force-include`` (below) is meant to be the ONLY way ``_ui_dist/`` enters
+# the wheel. Hatchling normally also skips it via .gitignore-based exclusion,
+# but that exclusion depends on a ``.git`` directory being present to run
+# `git check-ignore` against -- absent one (e.g. a VCS-url install that hands
+# hatchling a plain exported source tree, no `.git`), the default package
+# globbing is not excluded and picks up `_ui_dist/` too, colliding with
+# force-include and aborting the build with "A second file is being added to
+# the wheel archive at the same path" (issue AI-3750). `exclude` here is a
+# plain glob, evaluated unconditionally regardless of VCS state, so the
+# duplicate can't happen either way.
+exclude = ["src/keboola_agent_cli/_ui_dist"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/keboola_agent_cli/_ui_dist" = "keboola_agent_cli/_ui_dist"
