@@ -25,7 +25,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.86.0": [
-        "New read-only `kbagent notification` command group audits Flow "
+        "New: read-only `kbagent notification` command group audits Flow "
         "Notifications-tab recipients across projects. Subcommands: `notification list` "
         "and `notification detail`. Those recipients (the bell icon -- Success / Error / "
         "Processing-delay / Warning cards) are stored in a separate platform service, not "
@@ -35,7 +35,8 @@ CHANGELOG: dict[str, list[str]] = {
         'in-flow `type: "notification"` TASK is a different mechanism and stays visible '
         "via `flow detail`. Authenticates with the plain project Storage token every "
         "registered alias already holds -- no elevated scope, no manage token.",
-        "`notification list` counts the project-wide subscriptions its scope filters hide, "
+        "Note: `notification list` counts the project-wide subscriptions its scope filters "
+        "hide, "
         'so "who gets paged" is never under-reported. `--component-id` / `--config-id` '
         "filter client-side -- as does `--event`: the service accepts its documented "
         "`?event=` parameter and then ignores it, answering 200 with the project's full "
@@ -48,15 +49,65 @@ CHANGELOG: dict[str, list[str]] = {
         "`job-processing-long` and the `phase-job-*` variants); `--event` is forwarded "
         "verbatim and deliberately not validated against that list, because the API "
         "declares `EventName` as an open string.",
-        "`kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
+        "New: `kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
         "`GET /notifications/{project}/{subscription_id}`.",
-        'A filled Branch column on `notification list` does not mean "dev-branch only". '
+        'Note: a filled Branch column on `notification list` does not mean "dev-branch only". '
         "The Flow Builder writes a `branch.id` filter on EVERY subscription, and for a "
         "production one that value is the default branch's own numeric id -- so `branch_id` "
         "is populated on every row, production included. Cross-check `kbagent branch list` "
         "for the project to tell a production alert from a dev-branch one.",
-    ],
-    "0.85.1": [
+        "New: `kbagent token list --project NAME` lists a project's Storage tokens "
+        "without opening the web UI (issue #599). Each row carries id, description, "
+        "created, expires (with an expired marker), the master flag and which token "
+        "minted it -- and that id is the `--token-id` that `token delete` / `token "
+        "refresh` need, which nothing in the CLI could previously tell you. Secret "
+        "values are STRIPPED from every row before output, including under `--json`: a "
+        "project carrying the `force-decrypted-token` feature has the API embed live "
+        "secrets in the listing, and echoing those would break the group's "
+        '"revealed once, at mint" contract for every token at once. Wired through all '
+        "layers -- client, service, CLI, `kbagent serve` (`GET /token/{project}/list`), the "
+        "permission registry (`cli:read`) and the importable SDK facade "
+        "(`Client.list_tokens()` -> `TokenListEntryResult`).",
+        "Change: a 5xx response (and a read/write timeout) is now retried ONLY on the "
+        "RFC 9110 idempotent methods -- GET, PUT, DELETE, HEAD, OPTIONS, TRACE. It is no "
+        "longer retried on POST or PATCH. Keboola's token mint persists the token row "
+        "before the step that can throw and wraps none of it in a transaction, so a "
+        "retried `POST /v2/storage/tokens` could leave live credentials behind that the "
+        "caller never sees -- a silent secret leak dressed as a failed command. The fix "
+        "covers all 29 POST call sites, not just the token mint. A 429 stays retryable on "
+        "every method (the server states it did not process the request), as do a refused "
+        "connection and a connect/pool timeout. A 500 on an unretried write now reports "
+        "`retryable=false`. After such a failure, verify with a read (`token list`, "
+        "`config detail`, `job list`) before repeating the command -- the write may well "
+        "have landed.",
+        "Change: a 5xx that reports only `Application error.` now surfaces its "
+        "`exceptionId` too. That id is the only handle Keboola support can trace an "
+        "incident by, and the generic body used to swallow it. The id is bounded and "
+        "character-filtered before being echoed (it "
+        "is untrusted input reaching a Rich-markup console) and carries one of two hints: "
+        "the request was not retried because its method is not idempotent (verify before "
+        "repeating), or the same 5xx survived every attempt (upstream incident -- escalate "
+        "with the id).",
+        "Internal: the Layer 3 client gains a `merge_requests` namespace (DMD-1701 / "
+        "DMD-1833). It covers the nine dev-branch merge-request endpoints: `list`, `get`, "
+        "`conflicts`, `create`, `update`, `request_review`, `approve`, `request_changes` "
+        "and `merge`. "
+        "No CLI command or `serve` route is exposed yet; this is the client groundwork a "
+        "later release builds on. Two invariants deliberately break the surrounding "
+        "idioms and are documented in the docstrings: merge-request paths are NEVER "
+        "branch-prefixed (every MR endpoint is project-level), and bodies are sent as JSON "
+        "with real types (the backend asserts `branchFromId` as an int, and a "
+        "form-encoded string fails its validation). `merge()` awaits the Storage job with "
+        "a dedicated 600 s budget, because merging a many-config branch outlives the "
+        "default 60 s.",
+        "Note: the `winget` job is disabled in the release pipeline until the package is "
+        "bootstrapped in microsoft/winget-pkgs (#610). `wingetcreate update` cannot bump a "
+        "manifest that was never first submitted, so the job failed on every stable tag "
+        "and left the whole pipeline permanently red -- masking real release failures. The "
+        "job body and its bootstrap NOTE are kept, and the original `if:` condition "
+        "survives as a comment for one-line re-enablement. WinGet users stay on the last "
+        "published version until the manifest is submitted; every other channel "
+        "(uv/pip, Homebrew, Chocolatey, apt, dnf, zip) is unaffected.",
         "Fix: `kbagent config new --push` no longer creates a broken configuration from a "
         "body that forgot the `parameters` wrapper (#605). A component's "
         "`configurationSchema` describes the CONTENTS of `configuration.parameters`, so a "
