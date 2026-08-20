@@ -25,7 +25,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.86.0": [
-        "New read-only `kbagent notification` command group audits Flow "
+        "New: read-only `kbagent notification` command group audits Flow "
         "Notifications-tab recipients across projects. Subcommands: `notification list` "
         "and `notification detail`. Those recipients (the bell icon -- Success / Error / "
         "Processing-delay / Warning cards) are stored in a separate platform service, not "
@@ -35,7 +35,8 @@ CHANGELOG: dict[str, list[str]] = {
         'in-flow `type: "notification"` TASK is a different mechanism and stays visible '
         "via `flow detail`. Authenticates with the plain project Storage token every "
         "registered alias already holds -- no elevated scope, no manage token.",
-        "`notification list` counts the project-wide subscriptions its scope filters hide, "
+        "Note: `notification list` counts the project-wide subscriptions its scope filters "
+        "hide, "
         'so "who gets paged" is never under-reported. `--component-id` / `--config-id` '
         "filter client-side -- as does `--event`: the service accepts its documented "
         "`?event=` parameter and then ignores it, answering 200 with the project's full "
@@ -48,9 +49,9 @@ CHANGELOG: dict[str, list[str]] = {
         "`job-processing-long` and the `phase-job-*` variants); `--event` is forwarded "
         "verbatim and deliberately not validated against that list, because the API "
         "declares `EventName` as an open string.",
-        "`kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
+        "New: `kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
         "`GET /notifications/{project}/{subscription_id}`.",
-        'A filled Branch column on `notification list` does not mean "dev-branch only". '
+        'Note: a filled Branch column on `notification list` does not mean "dev-branch only". '
         "The Flow Builder writes a `branch.id` filter on EVERY subscription, and for a "
         "production one that value is the default branch's own numeric id -- so `branch_id` "
         "is populated on every row, production included. Cross-check `kbagent branch list` "
@@ -64,7 +65,7 @@ CHANGELOG: dict[str, list[str]] = {
         "project carrying the `force-decrypted-token` feature has the API embed live "
         "secrets in the listing, and echoing those would break the group's "
         '"revealed once, at mint" contract for every token at once. Wired through all '
-        "layers -- client, service, CLI, `kbagent serve` (`GET /tokens/{project}`), the "
+        "layers -- client, service, CLI, `kbagent serve` (`GET /token/{project}/list`), the "
         "permission registry (`cli:read`) and the importable SDK facade "
         "(`Client.list_tokens()` -> `TokenListEntryResult`).",
         "Change: a 5xx response (and a read/write timeout) is now retried ONLY on the "
@@ -99,7 +100,7 @@ CHANGELOG: dict[str, list[str]] = {
         "form-encoded string fails its validation). `merge()` awaits the Storage job with "
         "a dedicated 600 s budget, because merging a many-config branch outlives the "
         "default 60 s.",
-        "CI: the `winget` job is disabled in the release pipeline until the package is "
+        "Note: the `winget` job is disabled in the release pipeline until the package is "
         "bootstrapped in microsoft/winget-pkgs (#610). `wingetcreate update` cannot bump a "
         "manifest that was never first submitted, so the job failed on every stable tag "
         "and left the whole pipeline permanently red -- masking real release failures. The "
