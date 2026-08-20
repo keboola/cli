@@ -3849,6 +3849,70 @@ Two consequences for an agent reading an error:
    `exceptionId` when escalating to Keboola support -- it is the only handle
    that traces back to the actual server-side exception.
 
+## Retrying a merge-request `PUT` cannot double-apply the transition -- but it can mask a success as a 4xx (since v0.86.0)
+
+`RETRY_SAFE_METHODS` treats every `PUT` as repeatable on a 5xx, and
+`client/merge_requests.py` uses `PUT` for four action-style transitions
+(`/request-review`, `/approve`, `/request-changes`, `/merge`). Those read as
+commands rather than replacements, so the obvious worry is that a 500 raised
+*after* the transition already committed would be retried and fire the
+transition -- and its notifications -- a second time. Verified against the
+`keboola/connection` source: it cannot.
+
+**The second call is refused structurally, not incidentally.** The MR
+lifecycle is a Symfony Workflow `state_machine`
+(`MergeRequestLifecycleStateMachine`), and a `state_machine` transition is
+enabled only from its declared `from` places:
+
+| Retried call | State after attempt 1 | What attempt 2 gets |
+|---|---|---|
+| `/request-review` | `in_review` (or `approved` via `skip_review`) | `request_review` is enabled only from `development` -> **422** |
+| `/request-changes` | `development` | enabled only from `in_review` / `approved` -> **422** |
+| `/merge` | `in_merge` | `MergeProcessor` checks `can(MERGE)` (enabled only from `approved`) behind a per-project MySQL table lock -> **409** `storage.mergeRequests.notReadyToMerge` |
+| `/approve` | `in_review` (self-loop) or `approved` | `AddApprovalGuard` blocks: "This reviewer has already approved this request." -> **422** |
+
+`approve` is the only self-loop (`in_review -> in_review`), which is exactly
+why it carries a dedicated guard instead of relying on the place structure.
+
+**Notifications cannot double-fire either.** Emails, audit-log entries and
+storage events are emitted by `TransitionListener` on
+`workflow.merge_request_lifecycle.completed` -- that is, from inside
+`apply()`, inside `MergeRequestService`'s `transactional()`. The side effects
+are welded to the transition: no transition, no notification.
+
+**What the retry does cost you: the error you see is attempt 2's.** The retry
+loop surfaces the last response, so an operation that *succeeded* on attempt 1
+and merely lost its response (a 500 after commit, or a read timeout) is
+reported as `422 Cannot approve in current state` or `409 not ready to merge`.
+Read a 4xx state conflict on a merge-request transition as "check the MR, this
+may already be done", never as "it failed": fetch the MR and read its `state`
+before repeating anything. The same reasoning applies to every retried
+`PUT`/`DELETE` in kbagent, not only to merge requests.
+
+**One residual race, server-side and not kbagent's to fix.**
+`AddApprovalGuard` reads the approvals list, and
+`MergeRequestService::approve()` inserts the row later in the same
+transaction; `bi_rMergeRequestsApprovals` carries indexes but no unique
+constraint on `(mergeRequestId, idAdmin)`. Two *overlapping* approve requests
+from the same admin could therefore both clear the guard -- and
+`hasEnoughApprovals()` counts rows, not distinct admins, so a project
+requiring two approvals could reach `approved` on one human. kbagent can only
+produce that overlap through a read-timeout retry (30 s read timeout, 1 s
+backoff) racing a much shorter transaction, so the window is very narrow.
+**Read this as reported, not proven:** the missing constraint and the
+row-counting come off the schema and the source, but no duplicate row was
+reproduced and the transaction isolation level was not checked -- it may be
+latent rather than live. It is tracked upstream as
+[keboola/connection#8209](https://github.com/keboola/connection/issues/8209);
+check there before relying on any of it.
+Nothing was changed in kbagent for it, and there is deliberately no
+per-call-site retry opt-out: one auditable method rule beats a flag anyone can
+flip on the wrong endpoint.
+
+Note that the merge-request namespace is Layer 3 only today -- no
+`services/` entry and no CLI command group -- so it is reachable from the SDK
+client, not from a `kbagent <group>` command.
+
 ## `token list` is the only way to see what exists -- and it never shows secrets (since v0.86.0)
 
 `kbagent token list --project P` (`GET /v2/storage/tokens`) closes the gap where
