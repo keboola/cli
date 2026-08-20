@@ -1239,9 +1239,10 @@ events and emits a final `done` SSE frame mirroring the same record.
   `component`. Only the first four have dedicated output columns; everything
   else rides along in the raw `filters` list (`notification detail` prints it
   verbatim).
-- **`--component-id` / `--config-id` filter client-side.** The API's only
-  server-side filter is `?event=`; everything else is applied by kbagent after
-  fetching the project's full subscription list.
+- **`--component-id` / `--config-id` filter client-side** -- as does
+  `--event` (see above). The endpoint has no server-side filter that works at
+  all: kbagent always fetches the project's full subscription list and narrows
+  it locally.
 - **A subscription with NO filters is project-wide and fires for every job.**
   `filters` is optional in the schema (only `event` and `recipient` are
   required), so a catch-all "page me on any failure" subscription is legal and

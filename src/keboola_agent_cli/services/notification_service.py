@@ -217,7 +217,9 @@ class NotificationService(BaseService):
         Args:
             aliases: Project aliases to query. ``None`` / empty means every
                 registered project.
-            event: Event-name filter, applied server-side via ``?event=``.
+            event: Event-name filter. Sent as ``?event=`` AND applied
+                client-side, because the service ignores the parameter -- see
+                the comment in :meth:`_fetch_project_subscriptions`.
             component_id: Client-side filter on the subscription's
                 ``job.component.id`` filter value (the API has no such filter).
             config_id: Client-side filter on ``job.configuration.id``.

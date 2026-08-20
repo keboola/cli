@@ -5543,6 +5543,12 @@ class TestE2ENotificationSubscriptions:
         )
         assert result.exit_code == 0, f"project add failed: {result.output}"
 
+        # L3 client for the canary below: it has to see the service's RAW
+        # answer, and every CLI path narrows before the caller sees anything.
+        from keboola_agent_cli.client import KeboolaClient
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+
     def _run(self, *args: str) -> Any:
         return _invoke(self.config_dir, ["--json", *args])
 
@@ -5611,39 +5617,38 @@ class TestE2ENotificationSubscriptions:
         assert len(filtered["subscriptions"]) < len(rows)
 
     def test_api_side_event_filter_is_still_ignored(self) -> None:
-        """Pin the upstream behavior this client-side filter exists for.
+        """Pin the upstream behavior the client-side narrowing exists for.
 
-        If the service ever starts honoring ``?event=``, this test flips to
-        failing -- which is the notification we want: the client-side filter
-        becomes redundant (harmless, but the comment explaining it is then
-        wrong) and the gotchas entry needs retiring. It is a canary, not a
-        correctness requirement, so it skips unless the project has the mixed
-        data needed to tell the two behaviors apart.
+        This has to observe the service's RAW answer, so it calls the L3
+        client directly -- every CLI path narrows before the caller sees
+        anything, and asserting that kbagent *sent* ``?event=`` would stay
+        true whether or not the service honors it, i.e. would be no canary
+        at all.
+
+        If the service ever starts honoring the parameter, the assertion
+        below fails, which is the notification we want: the narrowing in
+        ``NotificationService`` becomes redundant and the ``gotchas.md``
+        entry needs retiring. It is a canary, not a correctness requirement,
+        so it skips unless the project carries the mixed data needed to tell
+        the two behaviors apart.
         """
         _step(4, "raw ?event= behavior canary")
         everything = _json_ok(self._run("notification", "list", "--project", self.alias))
-        rows = everything["subscriptions"]
-        events = {row["event"] for row in rows}
+        events = {row["event"] for row in everything["subscriptions"]}
         if len(events) < 2:
             pytest.skip("need >= 2 distinct events to observe the API-side filter")
 
         target = sorted(events)[0]
-        raw = _invoke(
-            self.config_dir,
-            [
-                "--json",
-                "--verbose",
-                "notification",
-                "list",
-                "--project",
-                self.alias,
-                "--event",
-                target,
-            ],
+        raw = self.client.list_project_subscriptions(event=target)
+        raw_events = {str(sub.get("event", "")) for sub in raw}
+
+        assert any(event != target for event in raw_events), (
+            f"GET /project-subscriptions?event={target} came back containing only "
+            f"{target!r}: the Notification Service now HONORS the parameter. The "
+            "client-side narrowing in NotificationService is redundant, and the "
+            "gotchas.md / CLAUDE.md / context.py notes saying it is ignored are "
+            "now wrong -- retire them."
         )
-        # The request really is sent with the parameter -- the narrowing that
-        # reaches the user is kbagent's, not the service's.
-        assert f"event={target}" in raw.output
 
     def test_unknown_event_returns_empty_not_error(self) -> None:
         """A misspelled event yields no rows, not a failure and not everything.

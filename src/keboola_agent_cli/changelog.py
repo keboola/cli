@@ -37,7 +37,9 @@ CHANGELOG: dict[str, list[str]] = {
         "registered alias already holds -- no elevated scope, no manage token.",
         "`notification list` counts the project-wide subscriptions its scope filters hide, "
         'so "who gets paged" is never under-reported. `--component-id` / `--config-id` '
-        "filter client-side (the API's only server-side filter is `?event=`) and match the "
+        "filter client-side -- as does `--event`: the service accepts its documented "
+        "`?event=` parameter and then ignores it, answering 200 with the project's full "
+        "list (verified live), so kbagent sends it and narrows the rows itself. They match the "
         "subscription's own `job.component.id` / `job.configuration.id` filter values. A "
         "subscription with NO filters is project-wide and fires for every job in the "
         "project; those rows are excluded by those two flags but counted in "
