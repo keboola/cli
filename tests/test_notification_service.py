@@ -325,13 +325,51 @@ class TestListSubscriptions:
         client.list_component_configs.assert_not_called()
         assert result["subscriptions"][0]["config_name"] == ""
 
-    def test_event_filter_is_forwarded_to_the_api(self) -> None:
+    def test_event_filter_is_applied_client_side(self) -> None:
+        """The live service IGNORES ``?event=`` and returns everything.
+
+        Verified against a real stack: ``GET /project-subscriptions?event=
+        job-failed`` answers 200 with every subscription in the project,
+        including ``job-succeeded`` ones. The swagger documents the parameter,
+        so it is still sent -- but the rows must be narrowed here too, or
+        ``--event job-failed`` silently answers "who gets paged on failure"
+        with a superset that includes success recipients.
+        """
+        client = MagicMock()
+        # The mock ignores the kwarg exactly like the live service does.
+        client.list_project_subscriptions.return_value = [
+            FLOW_SUBSCRIPTION,
+            {
+                "id": "1240",
+                "event": "job-succeeded",
+                "filters": [{"field": "job.configuration.id", "value": "98765"}],
+                "recipient": {"channel": "email", "address": "ok@example.com"},
+            },
+        ]
+        _wire_configs(client, [])
+
+        result = _make_service(client).list_subscriptions(event="job-failed")
+
+        assert [s["event"] for s in result["subscriptions"]] == ["job-failed"]
+
+    def test_event_filter_is_still_sent_to_the_api(self) -> None:
+        """Keep sending it: harmless today, correct for free if it is fixed."""
         client = MagicMock()
         client.list_project_subscriptions.return_value = []
 
         _make_service(client).list_subscriptions(event="job-failed")
 
         client.list_project_subscriptions.assert_called_once_with(event="job-failed")
+
+    def test_unknown_event_narrows_to_nothing(self) -> None:
+        """A typo must not silently return the whole project."""
+        client = MagicMock()
+        client.list_project_subscriptions.return_value = [FLOW_SUBSCRIPTION]
+        _wire_configs(client, [])
+
+        result = _make_service(client).list_subscriptions(event="jobFailed")
+
+        assert result["subscriptions"] == []
 
     def test_component_filter_is_applied_client_side(self) -> None:
         """The API has no component filter -- only ``?event=``."""

@@ -773,15 +773,19 @@ kbagent notification detail --project NAME --subscription-id ID
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow
 #   `type: "notification"` TASK is a different mechanism and stays visible there.
 #   Event names are kebab-case (job-failed, job-succeeded, job-succeeded-with-warning,
-#   job-processing-long + phase-job-* variants); --event is forwarded verbatim and NOT validated
-#   (the API declares EventName as an open string). Filter fields are dotted paths into the event
+#   job-processing-long + phase-job-* variants); --event is NOT validated (the API declares
+#   EventName as an open string). The service ACCEPTS ?event= and then IGNORES it (200 + the
+#   full list, verified live), so kbagent sends it AND narrows client-side -- a direct API
+#   caller must do the same or get a superset. Filter fields are dotted paths into the event
 #   payload (job.component.id, job.configuration.id, branch.id, phase.id) -- --component-id /
-#   --config-id match those CLIENT-SIDE, since the API supports only ?event=. A subscription with
+#   --config-id likewise match CLIENT-SIDE. A subscription with
 #   NO filters is project-wide and fires for EVERY job; those are dropped by --component-id/
 #   --config-id and counted in `project_wide_excluded` (plus a warning) so "who gets paged for
 #   this flow" is never silently under-reported. Webhook recipients carry `url`, email carries
-#   `address` -- both render in the single `address` column. Subscriptions are project-level, not
-#   branch-scoped; a branch-specific one carries a branch.id filter shown in the Branch column.
+#   `address` -- both render in the single `address` column. The Branch column is populated on
+#   EVERY row, production included: the UI always writes a branch.id filter, and for production
+#   that value is the DEFAULT branch's numeric id -- compare against `branch list` to tell a
+#   production alert from a dev-branch one; presence alone means nothing.
 
 kbagent context
 kbagent init [--from-global] [--project ALIAS ...]

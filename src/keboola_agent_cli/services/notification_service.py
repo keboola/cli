@@ -217,7 +217,9 @@ class NotificationService(BaseService):
         Args:
             aliases: Project aliases to query. ``None`` / empty means every
                 registered project.
-            event: Event-name filter, applied server-side via ``?event=``.
+            event: Event-name filter. Sent as ``?event=`` AND applied
+                client-side, because the service ignores the parameter -- see
+                the comment in :meth:`_fetch_project_subscriptions`.
             component_id: Client-side filter on the subscription's
                 ``job.component.id`` filter value (the API has no such filter).
             config_id: Client-side filter on ``job.configuration.id``.
@@ -325,6 +327,16 @@ class NotificationService(BaseService):
         try:
             raw = client.list_project_subscriptions(event=event)
             rows = [_extract_subscription_fields(sub) for sub in raw]
+
+            # The live service IGNORES ``?event=`` -- verified against a real
+            # stack, where a filtered request answers 200 with every
+            # subscription in the project. The parameter is still sent (the
+            # swagger documents it, and a server-side fix would then cost
+            # nothing), but the narrowing has to happen here or --event
+            # answers "who gets paged on failure" with a superset that
+            # includes success recipients.
+            if event:
+                rows = [row for row in rows if row["event"] == event]
 
             # Count only rows the filter actually DROPPED. A subscription
             # filtering on job.component.id alone is labelled project-wide

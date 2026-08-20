@@ -37,7 +37,9 @@ CHANGELOG: dict[str, list[str]] = {
         "registered alias already holds -- no elevated scope, no manage token.",
         "`notification list` counts the project-wide subscriptions its scope filters hide, "
         'so "who gets paged" is never under-reported. `--component-id` / `--config-id` '
-        "filter client-side (the API's only server-side filter is `?event=`) and match the "
+        "filter client-side -- as does `--event`: the service accepts its documented "
+        "`?event=` parameter and then ignores it, answering 200 with the project's full "
+        "list (verified live), so kbagent sends it and narrows the rows itself. They match the "
         "subscription's own `job.component.id` / `job.configuration.id` filter values. A "
         "subscription with NO filters is project-wide and fires for every job in the "
         "project; those rows are excluded by those two flags but counted in "
@@ -48,6 +50,11 @@ CHANGELOG: dict[str, list[str]] = {
         "declares `EventName` as an open string.",
         "`kbagent serve` mirrors the new group 1:1: `GET /notifications` and "
         "`GET /notifications/{project}/{subscription_id}`.",
+        'A filled Branch column on `notification list` does not mean "dev-branch only". '
+        "The Flow Builder writes a `branch.id` filter on EVERY subscription, and for a "
+        "production one that value is the default branch's own numeric id -- so `branch_id` "
+        "is populated on every row, production included. Cross-check `kbagent branch list` "
+        "for the project to tell a production alert from a dev-branch one.",
     ],
     "0.85.1": [
         "Fix: `kbagent config new --push` no longer creates a broken configuration from a "

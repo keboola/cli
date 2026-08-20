@@ -38,10 +38,19 @@ class _NotificationsMixin(_CoreClient):
     def list_project_subscriptions(self, event: str | None = None) -> list[dict[str, Any]]:
         """List every notification subscription for the token's project.
 
+        .. warning::
+           **The service IGNORES ``event``** -- verified against a live stack,
+           where a filtered request answers 200 with every subscription in the
+           project. The parameter is still sent because the swagger documents
+           it and a server-side fix would then cost nothing, but THIS METHOD
+           DOES NOT NARROW. Callers that need narrowing must filter the
+           returned list themselves; ``NotificationService`` does exactly that.
+
         Args:
-            event: Optional event-name filter (e.g. ``job-failed``). Passed
-                through to the API as ``?event=``; a falsy value is omitted
-                entirely rather than sent as an empty parameter.
+            event: Optional event-name filter (e.g. ``job-failed``). Sent as
+                ``?event=``; a falsy value is omitted entirely rather than sent
+                as an empty parameter. See the warning above -- passing it does
+                not reduce the result.
 
         Returns:
             List of subscription dicts verbatim from the API.
