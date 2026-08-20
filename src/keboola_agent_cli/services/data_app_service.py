@@ -84,7 +84,7 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
 # https://developers.keboola.com/overview/encryption/. A fourth entry,
 # ``KBC::ProjectSecureKMS::``, was carried here from 0.27.0 but appears nowhere
 # in the platform -- the AWS wrapper is *named* ``PrefixProjectKMS`` while the
-# prefix it emits is plain ``KBC::ProjectSecure::``. Dropped in 0.85.1 (#607).
+# prefix it emits is plain ``KBC::ProjectSecure::``. Dropped in 0.86.0 (#607).
 ENCRYPTED_PASSWORD_PREFIXES: tuple[str, ...] = (
     "KBC::ProjectSecure::",
     "KBC::ProjectSecureGKMS::",

@@ -396,7 +396,7 @@ Versioning convention:
   `--set 'parameters.#password=...'` or a full `--configuration`. (Either way
   the value is now encrypted before write.)
 
-## Encryption ciphertext has a different prefix per cloud; Azure was rejected (since v0.85.1, #607)
+## Encryption ciphertext has a different prefix per cloud; Azure was rejected (since v0.86.0, #607)
 
 - **One project-scoped prefix per cloud.** The Encryption API returns
   `KBC::ProjectSecure::` on AWS, `KBC::ProjectSecureGKMS::` on GCP and
@@ -404,7 +404,7 @@ Versioning convention:
   thing -- project-bound ciphertext -- and none of them is interchangeable
   across stacks. Never assert on a single literal prefix when checking
   whether a value is encrypted; match the whole family, or just `KBC::`.
-- **Before v0.85.1 the Azure variant was missing from the data-app
+- **Before v0.86.0 the Azure variant was missing from the data-app
   whitelist**, so on an Azure stack a *correctly* encrypted value was
   rejected as "not project-scoped" and the write aborted with
   `ENCRYPTION_FAILED` -- before anything reached Storage. Affected:
@@ -417,7 +417,7 @@ Versioning convention:
   / `KBC::ConfigSecure*` scopes and plaintext are still refused, and plaintext
   is still never written to Storage.
 - **The sync side had the same gap (#612).** `sync diff` / `sync status`
-  redact ciphertext so it never shows up as a diff; until 0.85.1 the detector
+  redact ciphertext so it never shows up as a diff; until 0.86.0 the detector
   knew only the AWS-form prefixes, so on GCP/Azure an encrypted value stored
   under a **non-`#` key** was treated as plaintext. It now derives the whole
   family from the platform registry (8 scopes x 3 clouds + 3 legacy ciphers).
@@ -1194,10 +1194,10 @@ events and emits a final `done` SSE frame mirroring the same record.
   validator is wrong -- upgrade rather than reaching for `--no-validate`,
   which switches off the checking that still works.
 - **A body with no `parameters` key is validated as an EMPTY `parameters`
-  section (since v0.85.1, issue #605).** So a body that forgot the wrapper --
+  section (since v0.86.0, issue #605).** So a body that forgot the wrapper --
   the component's own fields sitting at the configuration root -- now fails
   with the schema's required-field errors plus a `hint:` line naming the
-  missing wrapper. **Before v0.85.1 it validated `ok` and was POSTed
+  missing wrapper. **Before v0.86.0 it validated `ok` and was POSTed
   verbatim**, producing a live configuration with no `parameters` key, which
   the UI and the component runtime both read as empty (blank boilerplate) even
   though `--push` reported success. The whole-body exemption is now keyed on

@@ -300,7 +300,7 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   KMS -- ciphertext does NOT cross projects.
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
-  `create` and `secrets-set` could not work there at all. Upgrade to 0.85.1+; do
+  `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do
   NOT reach for `--allow-plaintext-on-encrypt-failure` (it writes the PAT in
   clear). gotchas.md § Encryption ciphertext.
 - **`validate-repo`** (0.29.0+): GitHub-only, `--type python-js` only, <=5 API

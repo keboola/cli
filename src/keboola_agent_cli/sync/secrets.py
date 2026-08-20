@@ -25,7 +25,7 @@ from typing import Any
 # Key Vault appends ``KV`` and Google KMS appends ``GKMS`` -- so one scope is
 # three prefixes: ``KBC::ProjectSecure::``, ``KBC::ProjectSecureKV::``,
 # ``KBC::ProjectSecureGKMS::``. Listing only the AWS forms (as this module did
-# until 0.85.1) made every GCP/Azure ciphertext read as plaintext here -- see
+# until 0.86.0) made every GCP/Azure ciphertext read as plaintext here -- see
 # issue #612, and #607 for the same defect in the data-app write path.
 _CIPHER_SCOPES: tuple[str, ...] = (
     "Secure",
