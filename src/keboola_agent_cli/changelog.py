@@ -53,11 +53,11 @@ CHANGELOG: dict[str, list[str]] = {
         "invisible to this feed (the endpoint always resolves to the default branch), so "
         "a branch-only token reads as dormant -- check `branch list` before revoking on a "
         "project that uses branches.",
-        "New: `kbagent token list --columns` selects and orders the human-mode table "
-        "(repeatable, e.g. `--columns description --columns last_used`), and `Refreshed` "
-        "joins the default columns -- `--json` already returned it but the fixed 6-column "
-        "table had no way to show it. `--json` is deliberately unaffected by `--columns`: "
-        "the machine contract stays whole.",
+        "New: `kbagent token list --columns` selects and orders the human-mode table. "
+        "It is repeatable, e.g. `--columns description --columns last_used`. `Refreshed` "
+        "also joins the default columns -- `--json` already returned it but the fixed "
+        "6-column table had no way to show it. `--json` is deliberately unaffected by "
+        "`--columns`: the machine contract stays whole.",
         "SDK: `Client.list_tokens(with_last_used=True)` exposes the same derivation; "
         "`TokenListEntryResult` gains `last_used`, `last_used_event` and "
         "`last_used_status`. REST: `GET /token/{project}/list` gains a matching "
