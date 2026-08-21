@@ -433,6 +433,11 @@ kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
 kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
+# table-detail (0.87.1+, #621): also returns `definition` -- the typed-table layout (primaryKeysNames
+#   plus, on BigQuery, timePartitioning/rangePartitioning/clustering; null when untyped). The read half
+#   of the repartition flow: after `create-table --source-table-id ...` + `swap-tables` the table id is
+#   the same either way, so only the layout says whether the swap took. `storage tables` (LIST) does not
+#   return it. Human mode prints Partitioning/Clustering rows only when a layout is present.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).

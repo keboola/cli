@@ -592,6 +592,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage table-detail --project NAME --table-id TABLE_ID [--branch ID]
     Show detailed table info: columns (with types if available), primary key, row count, size, last import date.
+    Also returns `definition` -- the typed-table layout (primaryKeysNames plus, on BigQuery,
+    timePartitioning / rangePartitioning / clustering), null for an untyped table. This is how you
+    VERIFY a `create-table` + `swap-tables` repartition actually took effect: the table id is
+    unchanged either way, so only the layout tells the two apart. Human mode prints Partitioning /
+    Clustering rows when present. The LIST endpoint does not return it, so `storage tables` has no
+    equivalent field.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]

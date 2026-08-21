@@ -668,8 +668,7 @@ class StorageService(BaseService):
         column_details = []
         for col in columns:
             col_info: dict[str, Any] = {"name": col}
-            meta = column_metadata.get(col, [])
-            for m in meta:
+            for m in column_metadata.get(col, []):
                 key = m.get("key", "")
                 value = m.get("value", "")
                 if key == "KBC.datatype.basetype":
@@ -708,6 +707,14 @@ class StorageService(BaseService):
             "rows_count": table.get("rowsCount") or 0,
             "data_size_bytes": table.get("dataSizeBytes") or 0,
             "is_alias": table.get("isAlias", False),
+            # Typed-table layout: primaryKeysNames plus, on BigQuery,
+            # timePartitioning / rangePartitioning / clustering. None for an
+            # untyped table. This is the only view of the registered layout
+            # reachable without BigQuery metadata access, and the only field
+            # that tells a completed `swap-tables` repartition from a failed
+            # one -- the table id is unchanged either way (#621). The LIST
+            # endpoint does not return it, so this stays detail-only.
+            "definition": table.get("definition"),
             "last_import_date": table.get("lastImportDate", ""),
             "last_change_date": table.get("lastChangeDate", ""),
             "created": table.get("created", ""),

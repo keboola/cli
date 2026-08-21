@@ -24,6 +24,26 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.87.1": [
+        "New (#621): `storage table-detail` now returns the table's `definition`, so a "
+        "BigQuery repartition can finally be verified from kbagent. The field carries "
+        "`primaryKeysNames` plus, on BigQuery, `timePartitioning`, `rangePartitioning` and "
+        "`clustering`; `null` for an untyped table. kbagent could "
+        "already WRITE that layout (`storage create-table --source-table-id "
+        "--time-partitioning-field --clustering-field`, promoted with `storage swap-tables`) "
+        "but had no way to read it back: the service built its response from a field allowlist "
+        "that dropped `definition`, so the write half of the repartition flow was supported and "
+        "the verify half was not. It matters because the table ID is unchanged whether the swap "
+        "happened or not -- the layout is the only field that tells a completed repartition "
+        "from a failed one, and on a Keboola-managed BigQuery project where you hold no "
+        "`bigquery.jobs.create`, the Storage `definition` is the only view of the registered "
+        "layout you can reach at all. Human mode adds `Partitioning:` / `Clustering:` rows "
+        "between the primary key and last-import lines, and only when a layout exists, so "
+        "Snowflake and untyped-table output is byte-identical. Additive in `--json` too. The "
+        "`GET /storage/table-detail/...` route picks it up for free. `storage tables` is "
+        "unchanged: the LIST endpoint genuinely does not return `definition`, and fetching it "
+        "per table would be a different change with a different cost profile.",
+    ],
     "0.87.0": [
         "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
         "Storage access BY DEFAULT. The flag writes `runtime.workspace.enabled: true`, which "

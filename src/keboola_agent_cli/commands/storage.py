@@ -20,6 +20,7 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_branch,
 )
+from ._storage_format import render_table_detail
 
 storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
 
@@ -408,34 +409,7 @@ def storage_table_detail(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.console.print(f"[bold]Table:[/bold] {result['table_id']}")
-        formatter.console.print(f"  Name: {escape(result['display_name'] or result['name'])}")
-        formatter.console.print(f"  Bucket: {result['bucket_id']}")
-        formatter.console.print(f"  Rows: {result['rows_count']:,}")
-        size_mb = result["data_size_bytes"] / (1024 * 1024)
-        formatter.console.print(f"  Size: {size_mb:.2f} MB")
-        if result["primary_key"]:
-            formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
-        if result["last_import_date"]:
-            formatter.console.print(f"  Last import: {result['last_import_date']}")
-
-        if result["column_details"]:
-            formatter.console.print()
-            from rich.table import Table
-
-            table = Table(title="Columns")
-            table.add_column("Name", style="bold cyan")
-            table.add_column("Type", style="dim")
-            table.add_column("Nullable", style="dim")
-
-            for col in result["column_details"]:
-                table.add_row(
-                    col["name"],
-                    col.get("type", ""),
-                    "yes" if col.get("nullable") else "",
-                )
-
-            formatter.console.print(table)
+        render_table_detail(formatter, result)
 
 
 @storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
