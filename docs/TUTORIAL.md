@@ -309,10 +309,20 @@ In Claude Code, run:
 ```
 /plugin marketplace add keboola/cli
 /plugin install kbagent@keboola-agent-cli
+/kbagent:setup
 ```
 
 Claude Code clones the marketplace and drops the plugin into
 `~/.claude/plugins/cache/keboola-agent-cli/kbagent/<version>/`.
+
+`/kbagent:setup` then does everything else in one command: installs the
+`kbagent` CLI if it is missing (handling the installer's PATH caveat),
+connects a project via `kbagent auth login --register-projects` (browser
+login -- nothing to paste; a `kbagent project add` static-token path
+covers headless hosts and the surfaces a browser session does not serve),
+and finishes with `kbagent doctor`, interpreting the result for you. Each
+step runs only if its check fails, so it is safe to re-run at any point
+-- including if you already followed §1-§4 by hand.
 
 ### Verify
 
@@ -337,6 +347,7 @@ you to run `/plugin update kbagent` in Claude Code.
 | Component | What it does |
 |---|---|
 | `kbagent` skill | Loaded into the main agent when it recognises Keboola-related prompts. 10 rules + a decision table mapping goals to commands. |
+| `/kbagent:setup` slash command | One-command first-run setup: install the CLI, connect a project, verify with `doctor`. Idempotent. |
 | `/keboola <task>` slash command | Explicitly delegates a Keboola task to the specialist subagent (see §6). |
 | `kbagent:keboola-expert` subagent | Fresh-context specialist with non-negotiable rules, tool matrix, inline gotchas, and a JSON verification payload output contract. |
 | Plugin-level `CLAUDE.md` | Instructs the main agent *when* to delegate vs. handle inline. |

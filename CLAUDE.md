@@ -253,7 +253,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 ## Claude Code Plugin (Marketplace)
 
-This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
+This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes: a CLI (`kbagent`), skills (`kbagent` + siblings), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
 
 **Update rules** -- see `CONTRIBUTING.md` > "Documentation changes (mandatory!)", "Plugin synchronization map", and "Releasing a new version" for the binding checklists. Coding convention #17 above is the short version. Do **not** maintain a parallel update list here -- it always drifts.
 
@@ -266,8 +266,11 @@ plugins/kbagent/
     CLAUDE.md                                          # Operational guidance for Claude Code main agents
   agents/
     keboola-expert.md                                  # Specialist subagent system prompt (HIGHEST silent-drift risk)
+    kbagent-pr-reviewer.md                             # Read-only PR-review subagent system prompt
   commands/
+    setup.md                                           # /kbagent:setup slash command (one-command first-run setup)
     keboola.md                                         # /keboola slash command
+    review.md                                          # /kbagent:review slash command
   skills/kbagent/
     SKILL.md                                           # Trigger rules + auto-generated decision table
     references/

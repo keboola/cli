@@ -421,10 +421,22 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 
 ## First-time setup
 
+**In Claude Code with this plugin installed, run `/kbagent:setup`.** It is
+the one-command path: it installs the CLI if missing, connects a project
+(browser login via `auth login --register-projects`, static-token fallback),
+and verifies with `kbagent doctor`. Every step is conditional, so it is safe
+to re-run on a half-finished setup. See
+`plugins/kbagent/commands/setup.md`.
+
+Everything below is the manual equivalent -- for a plain shell, or another
+agent, or when you want to drive the steps yourself.
+
 If kbagent is not yet installed:
 
 ```bash
-uv tool install git+https://github.com/keboola/cli
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
+# the installer puts kbagent on PATH for its own process only --
+# 'source $HOME/.local/bin/env' or open a new shell
 kbagent doctor
 ```
 
