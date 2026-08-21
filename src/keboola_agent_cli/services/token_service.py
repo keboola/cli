@@ -22,11 +22,11 @@ from collections.abc import Callable
 from typing import Any
 
 from ..client import KeboolaClient
-from ..config_store import ConfigStore
+from ._token_last_used import dormancy_rank, enrich_tokens
 from .base import (
+    BaseService,
     ResolvedProjectCredentials,
     default_client_factory,
-    make_client_factory,
     resolve_project_credentials,
 )
 
@@ -47,16 +47,14 @@ def default_token_client_factory(stack_url: str, token: str) -> KeboolaClient:
     return default_client_factory(stack_url, token)
 
 
-class TokenService:
-    """Business logic for scoped Storage token create / delete / refresh."""
+class TokenService(BaseService):
+    """Business logic for scoped Storage token create / delete / refresh.
 
-    def __init__(
-        self,
-        config_store: ConfigStore,
-        client_factory: KeboolaClientFactory | None = None,
-    ) -> None:
-        self._config_store = config_store
-        self._client_factory = client_factory or make_client_factory(config_store)
+    Extends :class:`BaseService` for its worker-pool sizing
+    (``_resolve_max_workers``: env var > config.json > 10), which the
+    ``--with-last-used`` fan-out shares with every other parallel operation in
+    the CLI rather than inventing its own limit.
+    """
 
     def create_scoped_token(
         self,
@@ -96,7 +94,7 @@ class TokenService:
         finally:
             client.close()
 
-    def list_tokens(self, *, alias: str) -> dict[str, Any]:
+    def list_tokens(self, *, alias: str, with_last_used: bool = False) -> dict[str, Any]:
         """List every Storage token in ``alias``'s project.
 
         Returns ``{"alias", "count", "tokens"}``. Each entry is the raw API
@@ -105,6 +103,14 @@ class TokenService:
         values in the listing, and echoing those would break the group's
         "the secret is revealed once, at mint" contract for every token at
         once. Everything else is passed through untouched.
+
+        With ``with_last_used`` every entry additionally carries ``lastUsed``,
+        ``lastUsedEvent`` and ``lastUsedStatus``, and the result grows an
+        ``errors`` list; the rows are re-ordered dormant-first so reading order
+        is cleanup order. See :meth:`_enrich_with_last_used`. The flag is
+        opt-in because it costs one extra request per token -- a plain listing
+        that only wants an id to hand to ``token delete`` must not pay for it,
+        and machine consumers keep the exact response shape they parse today.
 
         The acting token needs ``canManageTokens``, same as create/refresh.
         """
@@ -115,9 +121,25 @@ class TokenService:
                 {key: value for key, value in token.items() if key != "token"}
                 for token in client.list_tokens()
             ]
-            return {"alias": alias, "count": len(tokens), "tokens": tokens}
+            result: dict[str, Any] = {"alias": alias, "count": len(tokens), "tokens": tokens}
+            if with_last_used:
+                errors = self._enrich_with_last_used(client, tokens)
+                tokens.sort(key=dormancy_rank)
+                result["errors"] = errors
+            return result
         finally:
             client.close()
+
+    def _enrich_with_last_used(
+        self, client: KeboolaClient, tokens: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Fan out the last-used lookup over the shared worker pool.
+
+        Sizing comes from :meth:`BaseService._resolve_max_workers` (env var >
+        config.json > 10) so this obeys the same concurrency ceiling as every
+        other parallel operation in the CLI instead of inventing its own.
+        """
+        return enrich_tokens(client, tokens, max_workers=self._resolve_max_workers())
 
     def delete_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Revoke a token immediately in ``alias``'s project."""

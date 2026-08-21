@@ -13141,14 +13141,44 @@ class TestE2EDeviceEnrollmentPrimitives:
         assert all("token" not in row for row in rows.values()), (
             "token list must never carry a secret value"
         )
+        # The default shape must stay exactly what machine consumers parse today.
+        assert all("lastUsed" not in row for row in rows.values()), (
+            "the last-used fields must be absent without --with-last-used"
+        )
 
-        _step(3, "token refresh", "rotate the secret; id is stable, old value dies")
+        _step(
+            3,
+            "token list --with-last-used",
+            "a token minted seconds ago must read as never used, not 'used today'",
+        )
+        audited = self._run_ok("token", "list", "--project", self.alias, "--with-last-used")["data"]
+        audited_rows = {str(row.get("id")): row for row in audited.get("tokens") or []}
+        assert token_id in audited_rows, "the minted token must survive the enrichment"
+        minted = audited_rows[token_id]
+        # This is the regression this feature exists for. The token's own event
+        # feed is NOT empty -- it holds the `storage.tokenCreated` the ACTING
+        # token performed on it -- so a naive `events[0]` read reports it as
+        # active. Narrowing to events the token itself performed is what makes
+        # the answer "never", and the answer is provable here because the token
+        # was minted well inside the event-retention window.
+        assert minted.get("lastUsedStatus") == "never", (
+            f"a just-minted token must read as never used, got {minted.get('lastUsedStatus')!r} "
+            f"(lastUsed={minted.get('lastUsed')!r}, event={minted.get('lastUsedEvent')!r})"
+        )
+        assert minted.get("lastUsed") is None
+        assert all(
+            row.get("lastUsedStatus") in {"used", "never", "unknown", "error"}
+            for row in audited_rows.values()
+        ), "every row must carry a known last-used status"
+        assert isinstance(audited.get("errors"), list)
+
+        _step(4, "token refresh", "rotate the secret; id is stable, old value dies")
         refreshed = self._run_ok(
             "token", "refresh", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]
         assert bool(refreshed.get("token")), "rotated token must reveal a new non-empty secret"
 
-        _step(4, "token delete", "revoke immediately -- no live credential left behind")
+        _step(5, "token delete", "revoke immediately -- no live credential left behind")
         deleted = self._run_ok(
             "token", "delete", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]

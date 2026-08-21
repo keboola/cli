@@ -4068,3 +4068,64 @@ the web UI.
   and the human output prints the Storage-access state on every create --
   loudly when it is off. The REST surface mirrors the flag as
   `"workspace": true` in the `POST /data-apps/{project}` body.
+
+## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.89.0)
+
+`--with-last-used` derives each token's most recent activity so you can tell
+dormant tokens from live ones before revoking anything. Storage token payloads
+carry no `lastUsed` field (only the Manage API's PAT response does), so the
+value comes from each token's own event feed -- **one extra API call per
+token**, which is why the flag is opt-in. Never add it to a `token list` whose
+only purpose is finding a `--token-id`.
+
+- **Read `lastUsedStatus`, never bare `lastUsed`.** Four values:
+  - `used` -- `lastUsed` is a real timestamp.
+  - `never` -- **proven** never used: minted inside the ~6-month event-retention
+    window with no activity of its own. This is the finding worth surfacing; it
+    usually means a mis-provisioning or an onboarding step that failed silently.
+  - `unknown` -- older than retention, so the API genuinely cannot say. Do NOT
+    report this as "never used"; it is exactly the population someone is about
+    to revoke.
+  - `error` -- that token's lookup failed. The row degrades and the error lands
+    in the top-level `errors`; the rest of the audit still completes.
+- **Dev-branch activity is invisible.** `GET /v2/storage/tokens/{id}/events` is
+  not branch-addressable and always resolves to the default branch, narrowing to
+  `idBranch == <production> OR NOT EXISTS idBranch`. A token used only inside a
+  development branch therefore reads as dormant. On a project that uses branches,
+  check `branch list` before recommending a revocation.
+- **Do not hand-roll this against the raw endpoint.** The feed mixes events the
+  token *performed* with events performed *on* it, so a fresh token's newest raw
+  event is its own `storage.tokenCreated` and `events[0]` reports a never-used
+  token as "used today" -- backwards. kbagent narrows server-side with
+  `q=token.id:{id}`. Filtering client-side is not equivalent: right after a
+  rotation the single event a `limit=1` fetch returns is that rotation, leaving
+  the filter with nothing and calling an active token unused.
+- `lastUsedEvent` distinguishes human traffic (`storage.tablesListed`,
+  `storage.tableDetail`) from agent traffic
+  (`ext.keboola.mcp-server-tool.*`) -- useful when deciding whether a token
+  belongs to a person who left or to an automation still running.
+- The default `token list` shape is unchanged: without the flag none of these
+  keys appear and no `errors` list is added.
+- SDK parity: `Client.list_tokens(with_last_used=True)`; the fields land on
+  `TokenListEntryResult` as `last_used`, `last_used_event`, `last_used_status`.
+
+## `token list --columns` is human-output only (since v0.89.0)
+
+`--columns` (repeatable, e.g. `--columns description --columns last_used`)
+selects *and orders* the Rich table. `Refreshed` is now part of the default
+column set -- `--json` always returned it, the fixed table just had no way to
+show it.
+
+- **`--json` is deliberately unaffected.** The machine contract stays whole no
+  matter what the human view is narrowed to, so never use `--columns` to shape
+  data you are about to parse.
+- Valid names: `id`, `description`, `created`, `refreshed`, `expires`, `master`,
+  `created_by`, `last_used`, `last_used_event`. An unknown name exits 2 and
+  prints the valid list.
+- An explicit `--columns` is taken literally -- combining it with
+  `--with-last-used` does *not* silently append the derived columns. Name
+  `last_used` yourself if you want it.
+- **`last_used` / `last_used_event` REQUIRE `--with-last-used`** and exit 2
+  without it. They are derived per token, so with no derivation there is
+  nothing honest to render -- and the alternative (a blank or a default
+  label) would state something about data nobody fetched.

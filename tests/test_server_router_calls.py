@@ -2060,3 +2060,39 @@ def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -
     notification_svc.get_subscription_detail.assert_called_once_with(
         alias=PROJECT, subscription_id="1234"
     )
+
+
+# ---------------------------------------------------------------------------
+# token.py  GET /{p}/list?with_last_used=
+# Service: token.list_tokens(alias=..., with_last_used=...)
+# The enrichment is one extra Storage call PER TOKEN, so a router that dropped
+# the query param would silently make every REST listing pay for it -- or,
+# worse, silently never deliver it.
+# ---------------------------------------------------------------------------
+
+
+def test_token_list_forwards_with_last_used_kwarg(tmp_path: Path) -> None:
+    """`?with_last_used=true` must reach TokenService.list_tokens."""
+    token_svc = MagicMock()
+    token_svc.list_tokens.return_value = {"alias": PROJECT, "count": 0, "tokens": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/token/{PROJECT}/list", params={"with_last_used": "true"}, headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    kwargs = token_svc.list_tokens.call_args.kwargs
+    assert kwargs.get("with_last_used") is True, f"got kwargs={kwargs}"
+
+
+def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
+    """Omitting the param must NOT opt the caller into the N+1 enrichment."""
+    token_svc = MagicMock()
+    token_svc.list_tokens.return_value = {"alias": PROJECT, "count": 0, "tokens": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/token/{PROJECT}/list", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False

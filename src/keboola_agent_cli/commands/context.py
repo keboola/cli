@@ -797,10 +797,28 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Scoped Storage Tokens
 
-  kbagent token list --project NAME
-    List the project's Storage API tokens (id, description, created, expires, master flag,
-    creating token). Secrets are never listed -- `token create` is the only reveal. This is where
-    the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
+  kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
+    List the project's Storage API tokens (id, description, created, refreshed, expires, master
+    flag, creating token). Secrets are never listed -- `token create` is the only reveal. This is
+    where the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
+    --with-last-used (0.89.0+) answers "which of these are still in use": it derives each token's
+    most recent activity from its own event feed and sorts dormant-first, so reading order is
+    cleanup order. Opt-in -- it is ONE EXTRA API CALL PER TOKEN (fanned out in parallel).
+    Adds lastUsed / lastUsedEvent / lastUsedStatus per token plus a top-level `errors` list;
+    without the flag the response shape is byte-for-byte what it was before.
+    lastUsedStatus is used | never | unknown | error -- and the distinction MATTERS:
+      never   = provably never used (minted inside the ~6-month event-retention window, no activity)
+      unknown = older than retention, so the API genuinely cannot say -- do NOT read as "never"
+      error   = that token's lookup failed; the row degrades, the audit still completes
+    lastUsedEvent tells human traffic (storage.*) from agent traffic (ext.keboola.mcp-server-tool.*).
+    CAVEAT: activity inside a DEVELOPMENT BRANCH is invisible to this feed (the endpoint always
+    resolves to the default branch), so a branch-only token reads as dormant. Check `branch list`
+    before revoking on a project that uses branches.
+    --columns (repeatable, human output only -- --json is unaffected) selects and orders the table.
+    Names: id, description, created, refreshed, expires, master, created_by, last_used,
+    last_used_event. An unknown name exits 2 and lists the valid ones. last_used /
+    last_used_event REQUIRE --with-last-used (exit 2 otherwise) -- they are derived, so without
+    the derivation there is no honest value to show.
   kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
     Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
     --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.

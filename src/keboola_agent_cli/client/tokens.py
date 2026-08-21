@@ -181,6 +181,61 @@ class _TokensMixin(_CoreClient):
         payload = response.json()
         return payload if isinstance(payload, list) else []
 
+    def list_token_events(self, token_id: str, *, limit: int = 1) -> list[dict[str, Any]]:
+        """List the events a token PERFORMED (``GET /v2/storage/tokens/{id}/events``).
+
+        The newest entry is an effective "last used" timestamp -- the Storage
+        API's token payloads carry no ``lastUsed`` field of their own (only the
+        Manage API's PAT response does), so recency has to be derived from this
+        feed.
+
+        **The raw feed is not that answer.** Server-side it ORs two groups
+        (``Storage\\Events\\EventsSearchQueryGenerator::getTokenEventsSearchQuery``)::
+
+            (objectId == {id} AND objectType == 'token')   -- events ABOUT the token
+            OR token.id == {id}                            -- events BY the token
+
+        Only the second group is evidence of use. A freshly minted token's
+        newest raw event is its own ``storage.tokenCreated``, so reading
+        ``events[0]`` reports a never-used token as "used today" -- exactly
+        backwards from what an audit wants. This method therefore narrows to
+        the performed-by group **server-side** via ``q=token.id:{id}`` (the
+        query form Connection's own E2E suite uses), which also avoids the
+        subtler failure of filtering client-side: right after an admin rotates
+        a token, the one event a ``limit=1`` fetch returns is the rotation --
+        an event about the token -- leaving a client-side filter with nothing
+        and reporting an actively-used token as never used.
+
+        Two limits the caller must account for, neither fixable here:
+
+        * **Dev-branch events are invisible.** The route is
+          ``isAvailableInBranch: false`` and always resolves to the default
+          branch, so the query narrows to ``idBranch == <production> OR NOT
+          EXISTS idBranch``. A token used only inside a development branch
+          comes back with an empty feed.
+        * **Retention is ~6 months.** "Never used" and "unused for longer than
+          retention" are the same empty array here; disambiguating them needs
+          the token's ``created`` date (``TokenService`` does this).
+
+        Args:
+            token_id: ID of the token whose activity to read.
+            limit: Number of events to return, newest first (the feed's default
+                sort order is ``desc``). One is enough to derive last-used.
+
+        Returns:
+            The API's event array. Each entry carries ``uuid`` (the numeric
+            ``id`` is stripped server-side), ``created`` and ``event``.
+            Anything past the documented array shape degrades to an empty list
+            rather than raising inside a caller's parallel fan-out.
+        """
+        response = self._request(
+            "GET",
+            f"/v2/storage/tokens/{quote(str(token_id), safe='')}/events",
+            params={"limit": limit, "q": f"token.id:{token_id}"},
+        )
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+
     def delete_token(self, token_id: str) -> None:
         """Revoke a Storage API token immediately (``DELETE /v2/storage/tokens/{id}``).
 

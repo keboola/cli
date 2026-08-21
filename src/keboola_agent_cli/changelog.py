@@ -24,6 +24,49 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.89.0": [
+        "New: `kbagent token list --with-last-used` answers which of a project's tokens "
+        "are still in use. `token list` could only say what EXISTS -- a shared project "
+        "with 25 tokens (per-user master tokens, MCP tokens, device tokens, `[_internal]` "
+        "orchestration tokens) gave no way to tell one used four minutes ago from one "
+        "last used five months ago, so nothing could be revoked responsibly and the "
+        "whole set accumulated (issue #622). The Storage API's token payloads carry no "
+        "`lastUsed` field -- only the Manage API's PAT response does -- so recency is "
+        "DERIVED per token from `GET /v2/storage/tokens/{id}/events`, fanned out in "
+        "parallel over the existing `max_parallel_workers` pool. Opt-in: it is one extra "
+        "request per token, and plain `token list` must stay cheap. Rows sort "
+        "dormant-first, so reading order is cleanup order.",
+        "Note: the derivation narrows to events the token PERFORMED, server-side, via "
+        "`q=token.id:{id}`. The raw feed also carries events performed ON the token, so a "
+        "freshly minted token's newest raw event is its own `storage.tokenCreated` -- "
+        'reading `events[0]` reports a never-used token as "used today", exactly '
+        "backwards from what an audit wants. Filtering client-side instead has its own "
+        "failure: right after an admin rotates a token, the single event a `limit=1` "
+        "fetch returns is that rotation, leaving the filter with nothing and reporting an "
+        "actively-used token as never used.",
+        "Note: `lastUsedStatus` separates `never` from `unknown` rather than collapsing "
+        "both empty feeds into one blank. Events are retained ~6 months, so an empty feed "
+        'means "never used" only when the token was minted INSIDE that window; an older '
+        "token reports `unknown` because the API genuinely cannot say. `error` marks a "
+        "per-token lookup that failed -- it degrades that row and is collected into "
+        "`errors` rather than aborting the audit. Activity inside a DEVELOPMENT BRANCH is "
+        "invisible to this feed (the endpoint always resolves to the default branch), so "
+        "a branch-only token reads as dormant -- check `branch list` before revoking on a "
+        "project that uses branches.",
+        "New: `kbagent token list --columns` selects and orders the human-mode table. "
+        "It is repeatable, e.g. `--columns description --columns last_used`. `Refreshed` "
+        "also joins the default columns -- `--json` already returned it but the fixed "
+        "6-column table had no way to show it. `--json` is deliberately unaffected by "
+        "`--columns`: the machine contract stays whole.",
+        "Note: `--columns last_used` / `last_used_event` REQUIRE `--with-last-used` and exit 2 "
+        "without it. Those values are derived per token, so with no derivation there is nothing "
+        "honest to put in the cell -- rendering one anyway would state something about data that "
+        "was never fetched.",
+        "SDK: `Client.list_tokens(with_last_used=True)` exposes the same derivation; "
+        "`TokenListEntryResult` gains `last_used`, `last_used_event` and "
+        "`last_used_status`. REST: `GET /token/{project}/list` gains a matching "
+        "`with_last_used` query parameter.",
+    ],
     "0.88.0": [
         "Fix (#621): `storage table-detail` now returns the Storage API's `definition` "
         "object. On BigQuery that is the only readable record of a table's registered "

@@ -291,3 +291,33 @@ class TestListTokens:
         mock_kc = MagicMock()
         mock_kc.list_tokens.return_value = []
         assert _make_client(mock_kc).list_tokens() == []
+
+
+class TestListTokensWithLastUsed:
+    """The SDK exposes the same derived recency the CLI's --with-last-used does."""
+
+    def test_typed_fields_are_populated(self) -> None:
+        mock_kc = MagicMock()
+        mock_kc.list_tokens.return_value = [
+            {"id": "1", "description": "mcp", "created": "2026-08-01T10:00:00+0200"}
+        ]
+        mock_kc.list_token_events.return_value = [
+            {"created": "2026-08-20T09:13:33+0200", "event": "storage.tablesListed"}
+        ]
+
+        entry = _make_client(mock_kc).list_tokens(with_last_used=True)[0]
+
+        assert entry.last_used == "2026-08-20T09:13:33+0200"
+        assert entry.last_used_event == "storage.tablesListed"
+        assert entry.last_used_status == "used"
+
+    def test_default_costs_nothing_extra(self) -> None:
+        """Opt-in in the SDK too -- the enrichment is one request per token."""
+        mock_kc = MagicMock()
+        mock_kc.list_tokens.return_value = [{"id": "1", "description": "a"}]
+
+        entry = _make_client(mock_kc).list_tokens()[0]
+
+        mock_kc.list_token_events.assert_not_called()
+        assert entry.last_used is None
+        assert entry.last_used_status is None
