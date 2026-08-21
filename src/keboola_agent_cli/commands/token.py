@@ -14,6 +14,8 @@ kbagent never persists it. Store it immediately; it cannot be retrieved again.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import partial
 from typing import Any, NoReturn
 
 import typer
@@ -72,7 +74,81 @@ def _format_created_token(console: Console, data: dict[str, Any]) -> None:
     console.print(Panel("\n".join(lines), title="Scoped token created", expand=False))
 
 
-def _format_token_list(console: Console, data: dict[str, Any]) -> None:
+def _expires_cell(token: dict[str, Any]) -> str:
+    expires = token.get("expires")
+    if not expires:
+        return "never"
+    if token.get("isExpired"):
+        return f"[red]{expires} (expired)[/red]"
+    return str(expires)
+
+
+def _last_used_cell(token: dict[str, Any]) -> str:
+    """Render the derived recency, keeping its three states visually apart.
+
+    "never used" and "unknown" both have an empty ``lastUsed``, but they mean
+    opposite things for a revocation decision -- one is proof, the other is the
+    absence of it -- so they must never render as the same blank cell.
+    """
+    status = token.get("lastUsedStatus")
+    if status == "used":
+        return str(token.get("lastUsed") or "")
+    if status == "never":
+        return "[yellow]never used[/yellow]"
+    if status == "error":
+        return "[red]lookup failed[/red]"
+    return "[dim]unknown (older than event retention)[/dim]"
+
+
+# Column name -> (header, cell renderer, Rich column kwargs). The name is what
+# `--columns` accepts; keep it lowercase and stable, it is a user-facing token.
+_COLUMNS: dict[str, tuple[str, Callable[[dict[str, Any]], str], dict[str, Any]]] = {
+    "id": ("ID", lambda t: str(t.get("id", "")), {"style": "bold cyan"}),
+    "description": ("Description", lambda t: str(t.get("description", "")), {}),
+    "created": ("Created", lambda t: str(t.get("created") or ""), {"style": "dim"}),
+    "refreshed": ("Refreshed", lambda t: str(t.get("refreshed") or ""), {"style": "dim"}),
+    "expires": ("Expires", _expires_cell, {"style": "dim"}),
+    "master": ("Master", lambda t: "yes" if t.get("isMasterToken") else "", {"justify": "center"}),
+    "created_by": (
+        "Created by",
+        lambda t: str((t.get("creatorToken") or {}).get("description") or ""),
+        {"style": "dim"},
+    ),
+    "last_used": ("Last used", _last_used_cell, {}),
+    "last_used_event": (
+        "Last event",
+        lambda t: str(t.get("lastUsedEvent") or ""),
+        {"style": "dim"},
+    ),
+}
+
+_DEFAULT_COLUMNS: tuple[str, ...] = (
+    "id",
+    "description",
+    "created",
+    "refreshed",
+    "expires",
+    "master",
+    "created_by",
+)
+
+
+def _resolve_columns(selected: list[str] | None, with_last_used: bool) -> list[str]:
+    """Pick the table's columns: explicit selection, else the default set.
+
+    ``--with-last-used`` appends the derived columns to the DEFAULT set only.
+    An explicit ``--columns`` is taken literally -- someone who names their
+    columns means those columns, and silently appending to their choice would
+    make the flag unpredictable.
+    """
+    if selected:
+        return list(selected)
+    if with_last_used:
+        return [*_DEFAULT_COLUMNS, "last_used", "last_used_event"]
+    return list(_DEFAULT_COLUMNS)
+
+
+def _format_token_list(console: Console, data: dict[str, Any], columns: list[str]) -> None:
     """Render the project's tokens as a table -- never their secret values."""
     tokens = data.get("tokens") or []
     alias = data.get("alias", "")
@@ -83,30 +159,17 @@ def _format_token_list(console: Console, data: dict[str, Any]) -> None:
         )
         return
     table = Table(title=f"Storage API tokens -- {alias} ({len(tokens)})")
-    table.add_column("ID", style="bold cyan")
-    table.add_column("Description")
-    table.add_column("Created", style="dim")
-    table.add_column("Expires", style="dim")
-    table.add_column("Master", justify="center")
-    table.add_column("Created by", style="dim")
+    for name in columns:
+        header, _renderer, column_kwargs = _COLUMNS[name]
+        table.add_column(header, **column_kwargs)
     for token in tokens:
-        expires = token.get("expires")
-        if not expires:
-            expires_label = "never"
-        elif token.get("isExpired"):
-            expires_label = f"[red]{expires} (expired)[/red]"
-        else:
-            expires_label = str(expires)
-        creator = token.get("creatorToken") or {}
-        table.add_row(
-            str(token.get("id", "")),
-            str(token.get("description", "")),
-            str(token.get("created") or ""),
-            expires_label,
-            "yes" if token.get("isMasterToken") else "",
-            str(creator.get("description") or ""),
-        )
+        table.add_row(*(_COLUMNS[name][1](token) for name in columns))
     console.print(table)
+    for error in data.get("errors") or []:
+        console.print(
+            f"[red]Last-used lookup failed[/red] for token "
+            f"[bold]{error.get('token_id', '')}[/bold]: {error.get('message', '')}"
+        )
 
 
 def _format_deleted_token(console: Console, data: dict[str, Any]) -> None:
@@ -187,20 +250,52 @@ def token_create(
 def token_list(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    with_last_used: bool = typer.Option(
+        False,
+        "--with-last-used",
+        help="Derive each token's last activity (one extra API call PER TOKEN) and sort dormant-first",
+    ),
+    columns: list[str] | None = typer.Option(
+        None,
+        "--columns",
+        help=(
+            "Table columns to show, in order (repeat for multiple). "
+            f"Available: {', '.join(_COLUMNS)}. Human output only -- --json is unaffected."
+        ),
+    ),
 ) -> None:
     """List the project's Storage API tokens (no secrets -- those are mint-only).
 
     Answers "what already exists" and hands you the token id that `token delete`
     and `token refresh` require, without a detour through the web UI. The acting
     project token must carry canManageTokens, same as `token create`.
+
+    --with-last-used answers the follow-up question -- which of them are still
+    in use -- by deriving each token's most recent activity from its event
+    feed, and orders the table so reading order is cleanup order. It is opt-in
+    because it costs one extra request per token. Two caveats it cannot work
+    around: activity inside a development branch is invisible to that feed, and
+    events are only retained ~6 months, so a token older than that with no
+    activity reports "unknown" rather than claiming it was never used.
     """
     formatter = get_formatter(ctx)
+    unknown = [name for name in columns or [] if name not in _COLUMNS]
+    if unknown:
+        formatter.error(
+            message=(
+                f"Unknown --columns value(s): {', '.join(unknown)}. "
+                f"Available: {', '.join(_COLUMNS)}"
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
     service = get_service(ctx, "token_service")
     try:
-        result = service.list_tokens(alias=project)
+        result = service.list_tokens(alias=project, with_last_used=with_last_used)
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
-    formatter.output(result, _format_token_list)
+    selected = _resolve_columns(columns, with_last_used)
+    formatter.output(result, partial(_format_token_list, columns=selected))
 
 
 @token_app.command("delete")

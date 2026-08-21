@@ -35,12 +35,18 @@ class TokenIdBody(BaseModel):
 @router.get("/{project}/list", summary="List the project's Storage tokens")
 def list_tokens(
     project: str,
+    with_last_used: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List the project's tokens without their secrets. Mirrors
     `kbagent token list`. The acting project token must have canManageTokens.
+
+    `with_last_used` mirrors `--with-last-used`: it adds `lastUsed`,
+    `lastUsedEvent` and `lastUsedStatus` per token plus an `errors` list, and
+    sorts dormant tokens first. Off by default -- it costs one extra Storage
+    API call per token.
     """
-    return registry.token.list_tokens(alias=project)
+    return registry.token.list_tokens(alias=project, with_last_used=with_last_used)
 
 
 @router.post("/{project}/create", summary="Mint a scoped Storage token")

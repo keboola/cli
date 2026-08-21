@@ -28,9 +28,17 @@ def _seed(config_dir: Path) -> None:
     )
 
 
-def _invoke(config_dir: Path, svc: MagicMock, args: list[str], input_text: str | None = None):
+def _invoke(
+    config_dir: Path,
+    svc: MagicMock,
+    args: list[str],
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+):
     with patch("keboola_agent_cli.cli.TokenService", return_value=svc):
-        return runner.invoke(app, ["--config-dir", str(config_dir), *args], input=input_text)
+        return runner.invoke(
+            app, ["--config-dir", str(config_dir), *args], input=input_text, env=env
+        )
 
 
 class TestCreate:
@@ -221,7 +229,7 @@ class TestList:
         payload = json.loads(result.stdout)
         assert payload["data"]["count"] == 1
         assert payload["data"]["tokens"][0]["id"] == "12345"
-        svc.list_tokens.assert_called_once_with(alias=ALIAS)
+        svc.list_tokens.assert_called_once_with(alias=ALIAS, with_last_used=False)
 
     def test_list_human_renders_rows(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
@@ -261,3 +269,197 @@ class TestList:
         payload = json.loads(result.output)
         assert payload["status"] == "error"
         assert payload["error"]["code"] == "ACCESS_DENIED"
+
+
+class TestListWithLastUsed:
+    """`--with-last-used` turns the listing into a revocation worklist."""
+
+    def _svc_with(self, tokens: list[dict], errors: list[dict] | None = None) -> MagicMock:
+        svc = MagicMock()
+        svc.list_tokens.return_value = {
+            "alias": ALIAS,
+            "count": len(tokens),
+            "tokens": tokens,
+            "errors": errors or [],
+        }
+        return svc
+
+    def test_flag_is_forwarded_to_the_service(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with([])
+        result = _invoke(config_dir, svc, ["token", "list", "--project", ALIAS, "--with-last-used"])
+        assert result.exit_code == 0
+        svc.list_tokens.assert_called_once_with(alias=ALIAS, with_last_used=True)
+
+    def test_json_carries_the_derived_fields(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with(
+            [
+                {
+                    "id": "1",
+                    "description": "dead",
+                    "lastUsed": None,
+                    "lastUsedEvent": None,
+                    "lastUsedStatus": "never",
+                }
+            ]
+        )
+        result = _invoke(
+            config_dir, svc, ["--json", "token", "list", "--project", ALIAS, "--with-last-used"]
+        )
+        assert result.exit_code == 0
+        token = json.loads(result.stdout)["data"]["tokens"][0]
+        assert token["lastUsedStatus"] == "never"
+        assert token["lastUsed"] is None
+
+    def test_human_mode_shows_the_last_used_column(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with(
+            [
+                {
+                    "id": "1",
+                    "description": "mcp",
+                    "lastUsed": "2026-08-20T09:13:33+0200",
+                    "lastUsedEvent": "storage.tablesListed",
+                    "lastUsedStatus": "used",
+                }
+            ]
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["token", "list", "--project", ALIAS, "--with-last-used"],
+            env={"COLUMNS": "250"},
+        )
+        assert result.exit_code == 0
+        assert "Last used" in result.stdout
+        assert "2026-08-20T09:13:33+0200" in result.stdout
+
+    def test_human_mode_labels_never_and_unknown_distinctly(self, tmp_path: Path) -> None:
+        """The two empty-feed states must not read the same on screen.
+
+        They lead to different actions -- "never" is safe to revoke, "unknown"
+        needs a human -- so collapsing them into one blank cell would defeat
+        the point of deriving them apart.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with(
+            [
+                {"id": "1", "description": "a", "lastUsed": None, "lastUsedStatus": "never"},
+                {"id": "2", "description": "b", "lastUsed": None, "lastUsedStatus": "unknown"},
+            ]
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["token", "list", "--project", ALIAS, "--with-last-used"],
+            env={"COLUMNS": "250"},
+        )
+        assert result.exit_code == 0
+        assert "never used" in result.stdout
+        assert "unknown" in result.stdout
+
+    def test_last_used_column_absent_without_the_flag(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc_with([{"id": "1", "description": "a"}])
+        result = _invoke(
+            config_dir, svc, ["token", "list", "--project", ALIAS], env={"COLUMNS": "250"}
+        )
+        assert result.exit_code == 0
+        assert "Last used" not in result.stdout
+
+
+class TestListColumns:
+    """`--columns` selects and orders the human-mode table."""
+
+    def _svc(self) -> MagicMock:
+        svc = MagicMock()
+        svc.list_tokens.return_value = {
+            "alias": ALIAS,
+            "count": 1,
+            "tokens": [
+                {
+                    "id": "12345",
+                    "description": "device enrollment",
+                    "created": "2026-08-01T10:00:00+0200",
+                    "refreshed": "2026-08-15T10:00:00+0200",
+                    "expires": None,
+                    "isMasterToken": False,
+                }
+            ],
+        }
+        return svc
+
+    def test_refreshed_is_in_the_default_table(self, tmp_path: Path) -> None:
+        """`--json` already returned `refreshed`; human mode had no way to see it."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir, self._svc(), ["token", "list", "--project", ALIAS], env={"COLUMNS": "250"}
+        )
+        assert result.exit_code == 0
+        assert "Refreshed" in result.stdout
+        assert "2026-08-15T10:00:00+0200" in result.stdout
+
+    def test_selects_a_subset_in_the_requested_order(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir,
+            self._svc(),
+            [
+                "token",
+                "list",
+                "--project",
+                ALIAS,
+                "--columns",
+                "description",
+                "--columns",
+                "id",
+            ],
+            env={"COLUMNS": "250"},
+        )
+        assert result.exit_code == 0
+        assert result.stdout.index("Description") < result.stdout.index("ID")
+        assert "Created" not in result.stdout
+
+    def test_unknown_column_is_a_usage_error_listing_valid_names(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir,
+            self._svc(),
+            ["token", "list", "--project", ALIAS, "--columns", "nonsense"],
+        )
+        assert result.exit_code == 2
+        # Human-mode errors go to stderr, like every other usage error in the CLI.
+        assert "nonsense" in result.stderr
+        assert "description" in result.stderr
+
+    def test_does_not_affect_json(self, tmp_path: Path) -> None:
+        """--columns is a view concern; the machine contract stays whole."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir,
+            self._svc(),
+            ["--json", "token", "list", "--project", ALIAS, "--columns", "id"],
+        )
+        assert result.exit_code == 0
+        token = json.loads(result.stdout)["data"]["tokens"][0]
+        assert token["description"] == "device enrollment"
+        assert token["created"] == "2026-08-01T10:00:00+0200"

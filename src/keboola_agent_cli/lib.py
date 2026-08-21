@@ -46,6 +46,7 @@ from .client import KeboolaClient, _collect_inline_results
 from .constants import (
     DEFAULT_JOB_MODE,
     DEFAULT_JOB_RUN_TIMEOUT,
+    DEFAULT_MAX_PARALLEL_WORKERS,
     DEFAULT_POLL_STRATEGY,
     QUERY_RESULTS_DEFAULT_LIMIT,
     STREAM_DEFAULT_BRANCH,
@@ -60,6 +61,7 @@ from .result_models import (
     TokenListEntryResult,
     UploadTableResult,
 )
+from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
@@ -568,7 +570,7 @@ class Client:
             )
         )
 
-    def list_tokens(self) -> list[TokenListEntryResult]:
+    def list_tokens(self, *, with_last_used: bool = False) -> list[TokenListEntryResult]:
         """List the project's Storage API tokens as typed entries.
 
         The counterpart to :meth:`create_scoped_token`: it answers "what did I
@@ -576,13 +578,25 @@ class Client:
         :meth:`refresh_token` need. Secrets are stripped before validation --
         the mint is the only reveal (see :class:`TokenListEntryResult`). The
         acting token must carry ``canManageTokens``.
+
+        ``with_last_used`` additionally derives each token's most recent
+        activity from its event feed, populating ``last_used``,
+        ``last_used_event`` and ``last_used_status``, and returns the entries
+        dormant-first. It is opt-in because it costs one extra Storage API
+        request **per token**. Two limits it cannot work around: activity
+        inside a development branch is invisible to that feed, and events are
+        retained only ~6 months, so a token older than that with no activity
+        reports ``"unknown"`` rather than claiming it was never used. A token
+        whose lookup fails reports ``"error"`` instead of failing the call.
         """
-        return [
-            TokenListEntryResult.model_validate(
-                {key: value for key, value in token.items() if key != "token"}
-            )
+        tokens = [
+            {key: value for key, value in token.items() if key != "token"}
             for token in self._client.list_tokens()
         ]
+        if with_last_used:
+            enrich_tokens(self._client, tokens, max_workers=DEFAULT_MAX_PARALLEL_WORKERS)
+            tokens.sort(key=dormancy_rank)
+        return [TokenListEntryResult.model_validate(token) for token in tokens]
 
     def delete_token(self, token_id: str) -> None:
         """Revoke a Storage API token immediately (active per-device revocation)."""

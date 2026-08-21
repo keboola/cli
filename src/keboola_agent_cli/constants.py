@@ -110,6 +110,21 @@ PROJECT_ROLES: tuple[str, ...] = ("admin", "guest", "readOnly", "share")
 # --- Bulk Invite Defaults ---
 DEFAULT_INVITE_WORKERS: int = 8
 
+# --- Storage token last-used derivation (issue #622) ---
+# How far back the Storage API keeps events. Past this horizon a token's event
+# feed is empty whether it was never used or merely dormant for longer, so the
+# two are only separable by comparing against the token's own creation date:
+# created INSIDE the window + empty feed proves "never used"; created BEFORE it
+# leaves the question genuinely unanswerable ("unknown"). Reporting the latter
+# as "never used" would be a confident lie about exactly the tokens someone is
+# most likely to go and revoke.
+TOKEN_EVENTS_RETENTION_DAYS: int = 180
+
+# Worker count for the last-used fan-out when there is no config.json to read
+# one from -- i.e. the importable SDK, which is deliberately config-dir-free.
+# Mirrors the `max_parallel_workers` default in `models.py`.
+DEFAULT_MAX_PARALLEL_WORKERS: int = 10
+
 # --- Job Limits ---
 DEFAULT_JOB_LIMIT: int = 50
 DEFAULT_JOBS_PER_CONFIG: int = 5

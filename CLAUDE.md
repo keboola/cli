@@ -523,7 +523,7 @@ kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
 # token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
-kbagent token list --project NAME
+kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
 kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
 kbagent token delete --project NAME --token-id ID [--yes]
 kbagent token refresh --project NAME --token-id ID [--yes]
@@ -531,6 +531,23 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   get the id `delete`/`refresh` need, without the web UI. Secrets are STRIPPED from every row: a
 #   project with the `force-decrypted-token` feature has the API embed live values in the listing, and
 #   echoing those would break the group's "revealed once, at mint" contract for every token at once.
+# `--with-last-used` (0.89.0+, issue #622): answers which tokens are still IN USE -- the Storage API
+#   carries no `lastUsed` (only the Manage API's PAT response does), so it is DERIVED per token from
+#   GET /v2/storage/tokens/{id}/events, fanned out over max_parallel_workers. Opt-in: ONE EXTRA CALL
+#   PER TOKEN. Adds lastUsed / lastUsedEvent / lastUsedStatus + a top-level `errors`; the default
+#   shape is unchanged. Sorts dormant-first (reading order = cleanup order).
+#   The feed is narrowed SERVER-SIDE to `q=token.id:{id}` -- events the token PERFORMED. The raw feed
+#   also carries events performed ON the token, so a fresh token's newest raw event is its own
+#   storage.tokenCreated: `events[0]` reports never-used as "used today", exactly backwards. Filtering
+#   client-side instead breaks differently -- right after a rotation the one event a limit=1 fetch
+#   returns is that rotation, so the filter is left with nothing and calls an active token unused.
+#   lastUsedStatus separates `never` (minted INSIDE the ~6-month retention window, no activity =>
+#   proven) from `unknown` (older than retention => the API cannot say) from `error` (per-token lookup
+#   failed; row degrades, audit completes). Do not collapse never/unknown -- they lead to opposite
+#   decisions. DEV-BRANCH ACTIVITY IS INVISIBLE (the endpoint always resolves to the default branch:
+#   `idBranch == <production> OR NOT EXISTS idBranch`), so a branch-only token reads as dormant.
+# `--columns` (0.89.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
+#   column (--json always returned it). --json is deliberately NOT affected by --columns.
 # SDK (importable Client(url,token)) now exposes create_scoped_token / list_tokens / delete_token /
 # refresh_token / create_stream_source / get_stream_source / list_stream_sources /
 # delete_stream_source: dicts on .raw, typed ScopedTokenResult / TokenListEntryResult /
