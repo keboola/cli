@@ -733,12 +733,25 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
 
   kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
-    Set per-column descriptions stored as KBC.column.{{name}}.description in table metadata (upsert).
+    Set per-column descriptions via the native PUT .../tables/{{id}}/definition endpoint (0.88.0+, upsert,
+    async storage job). Writes isDescriptionSystemManaged=false so the next component run's Output Mapping
+    cannot overwrite the text; the backend mirrors the value into columnMetadata KBC.description, so the
+    Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
+    any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
+    (conflict/orphan entries skipped) and the migrated flat keys deleted.
     Readable via table-detail --json .data.column_details[].description.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
     Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).
+    Columns go through the same native write as describe-column.
     Failures collected; one error does not abort remaining items.
+
+  kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+    Bulk-convert legacy pre-0.88.0 flat KBC.column.*.description metadata to the native endpoint.
+    Scope: explicit --table-id (repeatable), one --bucket-id, or the whole project. Scans and prints a
+    summary, then asks for confirmation (--dry-run reports only; --yes skips the prompt). A column whose
+    visible description already differs is skipped as "conflict"; an entry for a dropped column is skipped
+    as "orphan" unless --prune-orphans. Per-table errors are accumulated, never abort the run.
 
 ### Storage Files
 

@@ -2648,15 +2648,34 @@ so setting a branch's description will **not** update the dashboard.
 `kbagent storage describe-bucket / describe-table / describe-column / describe-batch`
 write descriptive metadata onto storage objects. Three behaviors are easy to miss:
 
-- **Column descriptions use a metadata-key convention, not a column endpoint.**
-  The Keboola Storage API has no user-writable column-level metadata endpoint,
-  so `describe-column` stores each description as a `KBC.column.{name}.description`
-  entry on the **table's** metadata (upsert). `storage table-detail` reads them
-  back via the same key and surfaces them under `column_details[].description`.
-  Renaming or deleting a column does NOT automatically clean these entries up
-  (they remain on the table's metadata under the old name). Same convention for
-  table and bucket descriptions: stored as `KBC.description` (provider=user) on
-  the object's metadata.
+- **Column descriptions go through the native definition endpoint** *(since
+  v0.88.0)*. `describe-column` / `describe-batch` write via
+  `PUT /v2/storage/branch/{branch}/tables/{id}/definition` -- the endpoint the
+  web UI uses (async `tableDefinitionUpdate` storage job) -- with
+  `isDescriptionSystemManaged: false`, which is what stops the next component
+  run's Output Mapping from overwriting a hand-authored description. The backend
+  mirrors the written value into `columnMetadata` `KBC.description` for typed AND
+  untyped tables, so one write is visible to the Keboola UI, to the MCP server
+  (`get_tables`), and in the Snowflake `COMMENT` / BigQuery column description.
+  *Pre-0.88.0 behaviour:* kbagent stored each description as a flat
+  `KBC.column.{name}.description` entry on the **table's** metadata. Nothing but
+  kbagent itself ever read that key -- columns documented that way look blank in
+  the UI, are invisible to the MCP server, and never reach the warehouse. That
+  mirroring is one-way: a `POST .../metadata` write never reaches the native
+  field. Convert leftovers with `kbagent storage describe-migrate` (bulk,
+  scan-then-confirm, `--dry-run` first); `describe-column` / `describe-batch`
+  also migrate remaining legacy entries on whatever table they touch. A column
+  whose visible description already differs is skipped as `conflict` (newer value
+  wins), an entry for a dropped column is skipped as `orphan` unless
+  `--prune-orphans`. **Migrated flat entries are DELETED** -- that is deliberate:
+  leaving them would let the read fallback resurrect an old description after
+  someone clears the column's text. `table-detail` reads with the precedence
+  native definition -> `columnMetadata` `KBC.description` -> legacy flat key,
+  always returns `legacy_column_descriptions`, and warns in human mode when
+  legacy keys remain (it never writes -- safe under a read-only token or
+  `--deny-writes`). Unknown column names now fail fast BEFORE any write; the old
+  flat write accepted typos silently. Table and bucket descriptions are
+  unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
