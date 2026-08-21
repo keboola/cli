@@ -49,14 +49,17 @@ packages = ["src/keboola_agent_cli"]
 #
 # ``force-include`` (below) is meant to be the ONLY way ``_ui_dist/`` enters
 # the wheel. Hatchling normally also skips it via .gitignore-based exclusion,
-# but that exclusion depends on a ``.git`` directory being present to run
-# `git check-ignore` against -- absent one (e.g. a VCS-url install that hands
-# hatchling a plain exported source tree, no `.git`), the default package
-# globbing is not excluded and picks up `_ui_dist/` too, colliding with
-# force-include and aborting the build with "A second file is being added to
-# the wheel archive at the same path". `exclude` here is a
-# plain glob, evaluated unconditionally regardless of VCS state, so the
-# duplicate can't happen either way.
+# but that exclusion has to FIND a ``.gitignore`` first: it parses the file
+# located by ``locate_file(root, ".gitignore", boundary=".git")`` and hands the
+# patterns to pathspec. It never shells out to `git check-ignore`, and a `.git`
+# directory is the boundary that STOPS that upward search rather than a
+# prerequisite for it. So when no ``.gitignore`` is reachable -- notably an
+# sdist build, because ``[tool.hatch.build.targets.sdist].include`` below does
+# not ship ``.gitignore`` -- nothing excludes ``_ui_dist/``, the default
+# package globbing picks it up alongside force-include, and the build aborts
+# with "A second file is being added to the wheel archive at the same path".
+# `exclude` here is a plain glob, evaluated unconditionally regardless of VCS
+# state, so the duplicate can't happen either way.
 exclude = ["src/keboola_agent_cli/_ui_dist"]
 
 [tool.hatch.build.targets.wheel.force-include]

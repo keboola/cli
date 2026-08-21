@@ -14,11 +14,13 @@ The two bugs are reproduced *without a Windows machine*:
   ``force-include`` then failed the whole build. We assert every code path
   leaves ``_ui_dist/`` existing on disk.
 
-Also covers a gap where the CI wheel build always runs inside a real `git`
-checkout, so it never exercised the no-``.git`` case (a VCS-url install that
-hands hatchling a plain exported source tree). Without a ``.git`` dir,
-hatchling's gitignore-based default-exclusion can't run, so the (gitignored)
-``_ui_dist/`` the hook just populated got picked up by BOTH the default
+Also covers a gap where the CI wheel build always runs inside a checkout that
+has a ``.gitignore``, so it never exercised the case where hatchling cannot
+reach one -- notably an sdist build, since the sdist ``include`` list does not
+ship ``.gitignore``. Hatchling's default exclusion parses the ``.gitignore``
+*file* it locates by walking up from the project root (stopping at a ``.git``
+boundary); with no such file in reach, nothing excludes the (gitignored)
+``_ui_dist/`` the hook just populated, so it got picked up by BOTH the default
 package globbing and ``force-include``, and the wheel build aborted with "A
 second file is being added to the wheel archive at the same path". See
 ``TestForceIncludeNoDuplicate`` below for the end-to-end regression test.
@@ -47,6 +49,21 @@ assert _spec is not None and _spec.loader is not None
 hatch_build = importlib.util.module_from_spec(_spec)
 sys.modules["hatch_build"] = hatch_build
 _spec.loader.exec_module(hatch_build)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_skip_ui_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the ambient ``KBAGENT_SKIP_UI_BUILD`` knob for every test here.
+
+    It is a documented flag exported by parts of CI (see
+    ``.github/workflows/ci.yml``). Left set, ``_bundle_ui`` ships an EMPTY
+    ``_ui_dist/``, so every test that asserts real bundle contents -- including
+    the end-to-end wheel build, which inherits this environment through
+    ``uv build`` -- fails for a reason unrelated to what it covers. Tests that
+    exercise the skip path opt in explicitly with ``monkeypatch.setenv``.
+    """
+    monkeypatch.delenv(hatch_build.SKIP_UI_BUILD_ENV, raising=False)
+
 
 # The CI wheel-content assertion helper lives in ``scripts/`` -- load it the
 # same way so its logic is regression-tested in normal (ubuntu) CI, not only by
@@ -300,13 +317,13 @@ class TestCheckWheelUiHelper:
 
 
 class TestForceIncludeNoDuplicate:
-    """Building without a ``.git`` dir must not duplicate ``_ui_dist/``.
+    """Building with no reachable ``.gitignore`` must not duplicate ``_ui_dist/``.
 
     Reproduces the real failure end-to-end (not mocked): a minimal project
     laid out with the actual ``pyproject.toml`` / ``hatch_build.py``, a
     prebuilt SPA dist on disk (so the hook populates ``_ui_dist/`` with a real
-    file), and deliberately NO ``.git`` directory -- the exact shape of a
-    VCS-url install where the build backend never sees repo history.
+    file), and deliberately no ``.gitignore`` for hatchling to find -- the
+    shape of an sdist build, whose ``include`` list omits ``.gitignore``.
     """
 
     def test_wheel_builds_without_git_directory(self, tmp_path: Path) -> None:
@@ -329,14 +346,20 @@ class TestForceIncludeNoDuplicate:
         dist.mkdir(parents=True)
         (dist / "index.html").write_text("<html>app</html>", encoding="utf-8")
 
-        assert not (project / ".git").exists()
+        # An empty ``.git`` dir is the boundary that halts hatchling's upward
+        # ``.gitignore`` search, pinning the no-exclusion state regardless of
+        # what sits above ``tmp_path``. Without it, a ``TMPDIR`` located inside
+        # any checkout lets an ancestor ``.gitignore`` supply the exclusion and
+        # this test passes even with the ``exclude`` fix reverted.
+        (project / ".git").mkdir()
+        assert not (project / ".gitignore").exists()
 
         result = subprocess.run(
             ["uv", "build", "--wheel", "-o", str(tmp_path / "out")],
             cwd=project,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
         assert result.returncode == 0, result.stderr
 
