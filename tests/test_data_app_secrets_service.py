@@ -323,6 +323,36 @@ class TestSetSecretsReservedNames:
         assert "KBC_TOKEN" in result["shadowed_by_runtime"]
         storage_mock.update_config.assert_called_once()
 
+    def test_workspace_env_collision_emits_shadowed_field(self, tmp_path: Path) -> None:
+        """The workspace trio is platform-injected once Storage access is on.
+
+        Since 0.87.0 ``data-app create`` enables it by default, so someone
+        migrating an app off the older ``parameters.dataApp.secrets.WORKSPACE_ID``
+        convention must be told the platform value wins -- otherwise the secret
+        looks accepted and silently does nothing.
+        """
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _ = _make_service(store)
+        ds_mock.get_app.return_value = _ds_app_record()
+        storage_mock.get_config_detail.return_value = _baseline_config_envelope("7")
+        storage_mock.update_config.return_value = {"version": "8"}
+
+        result = service.set_data_app_secrets(
+            alias="prod",
+            app_id="12345",
+            secrets={
+                "#WORKSPACE_ID": "1234567",
+                "#QUERY_SERVICE_URL": "https://example.invalid",
+                "#KBC_WORKSPACE_MANIFEST_PATH": "/data/manifest.json",
+            },
+        )
+        shadowed = result["shadowed_by_runtime"]
+        assert "WORKSPACE_ID" in shadowed
+        assert "QUERY_SERVICE_URL" in shadowed
+        assert "KBC_WORKSPACE_MANIFEST_PATH" in shadowed
+        # Advisory only -- the secrets are still written.
+        storage_mock.update_config.assert_called_once()
+
 
 class TestSetSecretsDryRun:
     def test_dry_run_skips_api_calls(self, tmp_path: Path) -> None:

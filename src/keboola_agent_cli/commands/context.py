@@ -1142,9 +1142,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
     Any app that reads Storage needs it. Before 0.87.0 kbagent never wrote it,
     so apps deployed, reported state=running, passed the health probe, and then
-    served no data -- the only symptom was `Missing env vars: WORKSPACE_ID` in
-    the container log. Pass --no-workspace only for an app that never touches
-    Storage. Retrofit an existing app with:
+    served no data, with NO platform-side diagnostic: verify by reading
+    `config detail` -> `configuration.runtime`, not by grepping `data-app logs`
+    (a `Missing env vars: WORKSPACE_ID` line comes from the app's own code, so
+    its absence rules nothing out). Pass --no-workspace only for an app that
+    never touches Storage. Retrofit an existing app with:
       kbagent config update --project P --component-id keboola.data-apps
         --config-id ID --merge --set 'runtime.workspace.enabled=true'
     then redeploy (deploy pins the LATEST version, so the change takes effect).

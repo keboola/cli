@@ -3973,20 +3973,39 @@ the web UI.
 
 - **The failure is silent and every platform-level signal is green.** The
   deploy succeeds, `setup_sh` completes, `state=running`,
-  `desiredState=running`, the health probe passes. The only diagnostic is one
-  line in the container log:
+  `desiredState=running`, the health probe passes. **The platform emits no
+  diagnostic at all** -- so do not read "the app is running" as "the app can
+  read data".
+- **The authoritative check is the config, not the log.** The platform gives
+  you nothing to grep for, so read the flag directly:
+
+  ```bash
+  kbagent --json config detail --project P --component-id keboola.data-apps \
+    --config-id <cfg> | jq '.data.configuration.runtime'
+  # no "workspace": {"enabled": true}  ->  this is your bug
+  ```
+
+- **Any log line about the missing env var comes from the APP, not the
+  platform.** An app that checks its own environment may say something like:
 
   ```
   [startup] initial cache load failed: Missing env vars: WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)
   ```
 
-  An app that catches that failure serves an empty dashboard -- all zeros, no
+  That exact wording is the ai-kit DuckDB-cache template's. An app built from
+  anything else may log a different message, a generic query error, or
+  **nothing at all** -- so a `data-app logs` grep that comes back empty
+  proves nothing, and must NOT be read as ruling the workspace flag out.
+  Check the config (above) before believing a quiet log.
+- **Which of the two bad outcomes you get depends on the app's own code.** An
+  app that catches the failure serves an empty dashboard -- all zeros, no
   error banner. An app that does not crash-loops behind the health probe,
-  which is *more* visible and therefore the better of the two outcomes. Do
-  not read "the app is running" as "the app can read data".
-- **Reach for `data-app logs` when a data app returns empty results**, not
-  just when it fails to start. `Missing env vars: WORKSPACE_ID` never
-  surfaces through `data-app detail`, `data-app runs`, or the job status.
+  which is *more* visible and therefore the better of the two. Defensive
+  coding is currently punished.
+- **Still worth reading `data-app logs` when a data app returns empty
+  results**, not just when it fails to start -- but as a *possible* clue, with
+  the config check as the decider. Nothing about this surfaces through
+  `data-app detail`, `data-app runs`, or the job status.
 - **`--no-workspace` omits the key rather than writing `enabled: false`.**
   The request body is byte-identical to 0.86.0, so an app deliberately
   created without Storage access carries no new config noise. Use it only for

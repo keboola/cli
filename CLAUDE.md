@@ -573,9 +573,10 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
 #   0.87.0 kbagent never wrote it and offered no way to: such an app deploys, reports state=running and
-#   passes its health probe while being unable to read a row -- the only symptom is `Missing env vars:
-#   WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)` buried in the container log (an app that does not
-#   catch it crash-loops behind the probe instead). It defaults ON because the opposite mistake -- an
+#   passes its health probe while being unable to read a row, and the PLATFORM reports nothing -- verify
+#   via `config detail` -> `configuration.runtime`, not by grepping `data-app logs` (a `Missing env vars:
+#   WORKSPACE_ID` line is the app's own output, so its absence rules nothing out; an app that does not
+#   check crash-loops behind the probe instead). It defaults ON because the opposite mistake -- an
 #   unused workspace on an app that never reads Storage -- is the cheap one; pass --no-workspace there.
 #   Omitting the flag writes NO `enabled: false` key: the body is byte-identical to pre-0.87.0.
 #   Not gated on any project feature -- the config option is the sole control. Retrofit an existing app:

@@ -429,8 +429,11 @@ def data_app_create(
                 repo_id = result.get("managed_git_repo_id") or "(provisioning)"
                 formatter.console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
             if result.get("workspace"):
+                # Report what we WROTE, not what the platform will do with it.
+                # kbagent sets the key; whether the runtime honours it is the
+                # platform's call, so "requested" is the honest verb here.
                 formatter.console.print(
-                    "  [bold]Storage access:[/bold] enabled (runtime.workspace.enabled=true)"
+                    "  [bold]Storage access:[/bold] requested (runtime.workspace.enabled=true)"
                 )
             else:
                 # --no-workspace is the footgun shape: say it out loud

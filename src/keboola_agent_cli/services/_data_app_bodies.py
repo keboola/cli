@@ -34,6 +34,53 @@ ENCRYPTED_PASSWORD_PREFIXES: tuple[str, ...] = (
 )
 
 
+# Env vars the data-app runtime auto-injects. Setting a secret whose
+# derived env-var name collides with one of these is silently shadowed
+# at runtime by the platform value. See storage-access canon at
+# https://help.keboola.com/data-apps/storage-access/.
+#
+# The workspace trio was added in 0.87.0, when `data-app create` started
+# writing ``runtime.workspace.enabled: true`` by default: the platform now
+# injects these on a new app unless ``--no-workspace`` was passed, so a
+# secret whose derived name collides is silently shadowed in the DEFAULT
+# case rather than an exotic one. Concretely, someone migrating an app off
+# the older `parameters.dataApp.secrets.WORKSPACE_ID` convention would set
+# `#WORKSPACE_ID` and get no warning that the platform value wins.
+#
+# A shadowing WARN is advisory (stderr, never blocking), so a false positive
+# on an app that turned the workspace off costs a line of noise, whereas a
+# false negative costs a secret that silently does nothing.
+#
+# TODO: still not verified exhaustively against a running data-app env --
+# the runtime may inject more (BRANCH_ID and others). KBC_TOKEN + KBC_URL
+# are the canon-documented floor; the workspace trio is documented at
+# help.keboola.com/data-apps/storage-access/.
+RESERVED_RUNTIME_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "KBC_TOKEN",
+        "KBC_URL",
+        # Injected when runtime.workspace.enabled is true (0.87.0+ default).
+        "WORKSPACE_ID",
+        "QUERY_SERVICE_URL",
+        "KBC_WORKSPACE_MANIFEST_PATH",
+    }
+)
+
+
+def _derive_runtime_env_var_name(secret_key: str) -> str:
+    """Translate a ``#``-prefixed secret key into the runtime env-var name.
+
+    Rule from help.keboola.com/data-apps/python-js/: strip the leading
+    ``#``, replace ``-`` with ``_``, uppercase. Examples (verbatim from
+    the help canon):
+
+    - ``#KBC_TOKEN`` -> ``KBC_TOKEN``
+    - ``#my-custom-var`` -> ``MY_CUSTOM_VAR``
+    """
+    stripped = secret_key.lstrip("#")
+    return stripped.replace("-", "_").upper()
+
+
 def _secret_fingerprint(ciphertext: str) -> str:
     """First 8 chars of the ciphertext payload after the ``KBC::*::`` prefix.
 
@@ -133,11 +180,11 @@ def _build_runtime_block(*, size: str, workspace: bool) -> dict[str, Any]:
 
     It defaults ON because omitting it fails *silently*: the app
     deploys, reports ``state=running``, passes its health probe, and then
-    either serves empty results or crash-loops behind the probe, with the only
-    diagnostic buried in the container log as
-    ``Missing env vars: WORKSPACE_ID``. An unused workspace on an app that
-    never reads Storage is the far cheaper mistake, so ``--no-workspace`` is
-    the opt-out rather than ``--workspace`` the opt-in.
+    either serves empty results or crash-loops behind the probe -- which of
+    the two depends on whether the app checks its own environment, and the
+    platform reports neither. An unused workspace on an app that never reads
+    Storage is the far cheaper mistake, so ``--no-workspace`` is the opt-out
+    rather than ``--workspace`` the opt-in.
 
     The block is a SIBLING of ``backend`` -- both live under ``runtime`` (the
     shape the UI and ``modify_python_js_data_app`` both write). When disabled

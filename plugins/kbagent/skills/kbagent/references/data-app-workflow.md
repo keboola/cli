@@ -38,17 +38,24 @@ what makes the platform provision the app's ephemeral workspace and inject:
 **Why this has its own section:** before 0.87.0 kbagent never wrote the flag
 and offered no option to. An app missing it **deploys successfully** --
 `state=running`, `desiredState=running`, health probe green, `setup_sh`
-completed -- and cannot read a row. The only diagnostic is one line in the
-container log:
+completed -- and cannot read a row. **The platform emits no diagnostic**, so
+the only reliable check is the config itself:
 
-```
-[startup] initial cache load failed: Missing env vars: WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)
+```bash
+kbagent --json config detail --project P --component-id keboola.data-apps \
+  --config-id <cfg> | jq '.data.configuration.runtime'
 ```
 
-An app that does *not* catch that failure crash-loops behind the health
-probe instead, which is at least visible. Silently serving zeros is the
-dangerous outcome, and it is the one you get from the DuckDB-cached
-read-only dashboard pattern -- the `dataapp-developer` skill's default.
+An app that checks its own env may log something like `Missing env vars:
+WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)` -- that phrasing is the ai-kit
+DuckDB-cache template's, and an app built from anything else may log something
+different or nothing at all. An empty `data-app logs` grep therefore does not
+rule this out.
+
+An app that does *not* catch the failure crash-loops behind the health probe
+instead, which is at least visible. Silently serving zeros is the dangerous
+outcome, and it is the one you get from the DuckDB-cached read-only dashboard
+pattern -- the `dataapp-developer` skill's default.
 
 **Retrofitting an app created before 0.87.0** (or by any other path):
 

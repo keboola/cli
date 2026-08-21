@@ -35,9 +35,11 @@ from ..models import ProjectConfig
 # (tests included) keep resolving after the split into _data_app_bodies.py.
 from ._data_app_bodies import (
     ENCRYPTED_PASSWORD_PREFIXES,
+    RESERVED_RUNTIME_ENV_VARS,
     _auth_block_for,
     _build_runtime_block,
     _coerce_config_dict,
+    _derive_runtime_env_var_name,
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
@@ -137,38 +139,6 @@ SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # operations must accept either, since ``secrets-list`` enumerates both. Only
 # the write path (``secrets-set``) keeps requiring ``#`` -- it encrypts.
 SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
-
-# Env vars the data-app runtime auto-injects. Setting a secret whose
-# derived env-var name collides with one of these is silently shadowed
-# at runtime by the platform value. See storage-access canon at
-# https://help.keboola.com/data-apps/storage-access/.
-#
-# TODO(0.28.x): verify exhaustive list against running data-app env in
-# follow-up. The runtime almost certainly injects more (BRANCH_ID,
-# QUERY_SERVICE_URL, KBC_WORKSPACE_MANIFEST_PATH appear in the
-# storage-access page; others may exist) but the canon-documented floor
-# is KBC_TOKEN + KBC_URL. Expanding this set adds WARNs that are less
-# likely to be false positives once verified live.
-RESERVED_RUNTIME_ENV_VARS: frozenset[str] = frozenset(
-    {
-        "KBC_TOKEN",
-        "KBC_URL",
-    }
-)
-
-
-def _derive_runtime_env_var_name(secret_key: str) -> str:
-    """Translate a ``#``-prefixed secret key into the runtime env-var name.
-
-    Rule from help.keboola.com/data-apps/python-js/: strip the leading
-    ``#``, replace ``-`` with ``_``, uppercase. Examples (verbatim from
-    the help canon):
-
-    - ``#KBC_TOKEN`` -> ``KBC_TOKEN``
-    - ``#my-custom-var`` -> ``MY_CUSTOM_VAR``
-    """
-    stripped = secret_key.lstrip("#")
-    return stripped.replace("-", "_").upper()
 
 
 class DataAppService(BaseService):

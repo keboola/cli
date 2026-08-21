@@ -304,9 +304,10 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   NOT reach for `--allow-plaintext-on-encrypt-failure` (it writes the PAT in
   clear). gotchas.md § Encryption ciphertext.
 - **Data app Storage access fails SILENTLY**: no `runtime.workspace.enabled`
-  -> deploys green, reads nothing (only `Missing env vars: WORKSPACE_ID` in
-  `data-app logs`). `create` sets it by default on **0.87.0+**; <= 0.86.0 must
-  patch + redeploy. Empty results -> check `runtime` before the code.
+  -> deploys green, reads nothing, platform logs nothing. Empty results -> read
+  `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
+  grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
+  patch + redeploy.
 - **`validate-repo`** (0.29.0+): GitHub-only, `--type python-js` only, <=5 API
   calls; run BEFORE `data-app create`.
 - **`git-repo`** (0.63.3+): clone-URL introspection + `is_managed_git_repo`.
