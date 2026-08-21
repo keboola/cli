@@ -167,10 +167,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Swap two storage tables (any branch, including the default/production branch) | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Clone (pull) a production table into a development branch | `kbagent storage clone-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
-| Set the description on a storage bucket | `kbagent storage describe-bucket --project PROJECT --bucket-id BUCKET-ID` |
-| Set the description on a storage table | `kbagent storage describe-table --project PROJECT --table-id TABLE-ID` |
-| Set descriptions on one or more columns of a storage table | `kbagent storage describe-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
-| Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --from-file FROM-FILE` |
 | List Storage Files with optional tag filtering | `kbagent storage files --project PROJECT` |
 | Show Storage File metadata (without downloading) | `kbagent storage file-detail --project PROJECT --file-id FILE-ID` |
 | Upload a local file to Storage Files | `kbagent storage file-upload --project PROJECT --file FILE` |
@@ -184,6 +180,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show one snapshot's detail (source table, creation time, description) | `kbagent storage snapshot-detail --project PROJECT --snapshot-id SNAPSHOT-ID` |
 | Delete one or more table snapshots (the source tables are untouched) | `kbagent storage snapshot-delete --project PROJECT --snapshot-id SNAPSHOT-ID` |
 | Create a NEW table from an existing snapshot (snapshot restore) | `kbagent storage table-from-snapshot --project PROJECT --snapshot-id SNAPSHOT-ID --bucket-id BUCKET-ID --name NAME` |
+| Set the description on a storage bucket | `kbagent storage describe-bucket --project PROJECT --bucket-id BUCKET-ID` |
+| Set the description on a storage table | `kbagent storage describe-table --project PROJECT --table-id TABLE-ID` |
+| Set descriptions on one or more columns of a storage table | `kbagent storage describe-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
+| Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --from-file FROM-FILE` |
+| Convert legacy KBC.column.* descriptions to the native definition endpoint | `kbagent storage describe-migrate --project PROJECT` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |

@@ -469,6 +469,23 @@ kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --fi
 kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
 kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
+kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+# Column descriptions (0.88.0+, #624): describe-column/describe-batch write through the native
+#   `PUT .../tables/{id}/definition` endpoint (async job) with `isDescriptionSystemManaged: false`
+#   (stops the next Output Mapping run from overwriting the text). The backend mirrors the value into
+#   `columnMetadata` `KBC.description`, so the UI, the MCP server and the Snowflake COMMENT /
+#   BigQuery description all see it. Before 0.88.0 kbagent wrote a flat `KBC.column.{name}.description`
+#   key on the TABLE's metadata -- read by nothing but kbagent, so documented columns looked blank
+#   everywhere else. Unknown column names now FAIL FAST before any write (behavior change; the flat
+#   write accepted typos silently). `table-detail` reads with precedence native definition ->
+#   columnMetadata KBC.description -> legacy flat key, always returns `legacy_column_descriptions`
+#   and warns in human mode when legacy keys remain; it never writes. `describe-migrate` converts
+#   legacy keys in bulk (scope: --table-id / --bucket-id / whole project; scan-then-confirm,
+#   --dry-run reports only; per-table errors accumulate). describe-column/describe-batch also migrate
+#   leftovers on the table they touch. Rules: a column whose visible description already differs is
+#   skipped as `conflict` (newer value wins), an entry for a dropped column is skipped as `orphan`
+#   unless --prune-orphans. Migrated flat entries are DELETED so a later clear cannot be resurrected
+#   by the read fallback.
 kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
 kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
 kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]

@@ -3,9 +3,10 @@
 `kbagent storage describe-*` attaches human-readable descriptions to storage
 buckets, tables, and columns so that downstream consumers (dashboards, the
 Keboola UI, `kbagent storage buckets`/`tables`, AI agents) can surface
-meaningful documentation rather than raw IDs. Descriptions are stored as metadata on
-the storage object and round-trip via `storage bucket-detail` / `storage
-table-detail`.
+meaningful documentation rather than raw IDs. Bucket and table descriptions are
+stored as metadata on the storage object; column descriptions are written to the
+table's native definition *(since v0.88.0)*. All of them round-trip via
+`storage bucket-detail` / `storage table-detail`.
 
 ## Quick reference
 
@@ -15,6 +16,7 @@ table-detail`.
 | `storage describe-table` | Set a table description |
 | `storage describe-column` | Set descriptions on one or more columns |
 | `storage describe-batch` | Apply bucket/table/column descriptions from a YAML file |
+| `storage describe-migrate` | Convert legacy pre-0.88.0 `KBC.column.*` metadata to the native endpoint |
 | `storage bucket-detail` | Read back the bucket description |
 | `storage table-detail` | Read back the table description and `column_details[].description` |
 
@@ -31,17 +33,57 @@ table-detail`.
 
 ## Storage model (what actually gets written)
 
-Descriptions are stored as metadata entries on the object:
+Bucket and table descriptions are metadata entries on the object; column
+descriptions are a native field on the table definition:
 
 - **Bucket description** -- `KBC.description` (provider=user) on bucket metadata
 - **Table description** -- `KBC.description` (provider=user) on table metadata
-- **Column description** -- `KBC.column.{column_name}.description` on the
-  **table's** metadata. Keboola has no user-writable column-metadata endpoint,
-  so this key convention is the storage layer for column descriptions. Read
-  them back via `storage table-detail` (`column_details[].description`).
+- **Column description** *(since v0.88.0)* -- written through
+  `PUT /v2/storage/branch/{branch}/tables/{table_id}/definition`, the same
+  endpoint the Keboola web UI uses. The call is asynchronous (a
+  `tableDefinitionUpdate` storage job; kbagent polls it to completion) and always
+  carries `isDescriptionSystemManaged: false`, which is what prevents the next
+  component run's Output Mapping from overwriting a hand-authored description.
+  The backend mirrors the value into `columnMetadata[{column}]`
+  `KBC.description` for typed AND untyped tables, so a single write is visible
+  to the UI, to the MCP server, and in the Snowflake `COMMENT` / BigQuery column
+  description. Read them back via `storage table-detail`
+  (`column_details[].description`).
 
 Descriptions are `upsert`: calling `describe-*` with a new text replaces
 whatever was there before. There is no append mode.
+
+### Legacy convention (pre-0.88.0) and how to get rid of it
+
+Before 0.88.0 kbagent stored each column description as a flat
+`KBC.column.{column_name}.description` entry on the **table's** metadata. That
+key was read by nothing except kbagent itself -- columns documented that way
+appear blank in the Keboola UI, are invisible to the MCP server, and never reach
+the warehouse. The mirroring is one-way, so a metadata write can never reach the
+native field.
+
+Existing entries are not lost. `storage table-detail` still reads them (last in
+the precedence chain below) and reports them in `legacy_column_descriptions`;
+`storage describe-migrate` converts them in bulk, and `describe-column` /
+`describe-batch` convert whatever is left on the table they touch as part of the
+same write. Migrated flat entries are **deleted** after a successful write --
+otherwise clearing a column description later would be silently undone by the
+read fallback resurrecting the old value.
+
+### Read precedence (`storage table-detail`)
+
+For each column, the description is resolved in this order:
+
+1. the native `definition.columns[].definition.description` field
+2. `columnMetadata[{column}]` entry with key `KBC.description` (for an alias
+   table, the source table's `columnMetadata` is consulted when the alias itself
+   has none -- parity with the MCP server)
+3. the legacy flat `KBC.column.{column}.description` table-metadata entry
+
+`table-detail` always returns `legacy_column_descriptions` (the columns still
+backed by convention 3; an empty list when there are none) and prints a warning
+in human mode when it is non-empty. Reading never writes, so it is safe with a
+read-only token or under `--deny-writes`.
 
 ## Single-item: bucket
 
@@ -106,10 +148,16 @@ kbagent --json storage describe-column \
   --column "created_at=Server-side creation timestamp (UTC)"
 ```
 
-Column descriptions live under `KBC.column.{name}.description` on the
-**table's** metadata -- they are NOT attached to the column record itself.
-If you rename or delete a column, the old key lingers until you manually
-clean it up (there is no `--delete-column-description` command today).
+All requested column names are validated against the table BEFORE anything is
+written *(since v0.88.0)*: a name that is not on the table aborts the command
+with a usage error naming it. Pre-0.88.0 a typo was accepted and produced a
+metadata entry nothing could ever read, which looked like a success.
+
+The write is one asynchronous storage job per call, so a `describe-column` with
+several `--column` flags is still a single roundtrip. If the table still carries
+legacy `KBC.column.*` entries for OTHER columns, they are folded into the same
+write and their flat keys deleted afterwards (conflicting and orphaned entries
+are reported as skipped instead -- see `describe-migrate` below).
 
 Read back via `storage table-detail`:
 
@@ -214,6 +262,53 @@ The CLI exits **1** when `error_count > 0`. In scripts, always inspect the
 without issues (it means there were no partial failures). A non-zero exit
 means *some* items failed; the successful items still landed.
 
+## Migrating legacy column descriptions (since v0.88.0)
+
+A project that was documented with kbagent 0.87.0 or older still has its column
+descriptions in the invisible flat convention. Find them with `table-detail`:
+
+```bash
+kbagent --json storage table-detail --project ALIAS --table-id in.c-sales.orders \
+  | jq '.data.legacy_column_descriptions'
+```
+
+Convert them with `storage describe-migrate`. Always scan first:
+
+```bash
+# 1. What would change? (no writes at all)
+kbagent --json storage describe-migrate --project ALIAS --dry-run
+
+# 2. Narrow the scope if you want to go table by table or bucket by bucket
+kbagent --json storage describe-migrate --project ALIAS --bucket-id in.c-sales --dry-run
+kbagent --json storage describe-migrate --project ALIAS \
+  --table-id in.c-sales.orders --table-id in.c-sales.customers --dry-run
+
+# 3. Apply (interactive confirm unless --yes)
+kbagent --json storage describe-migrate --project ALIAS --bucket-id in.c-sales --yes
+```
+
+`--table-id` (repeatable) and `--bucket-id` are mutually exclusive; with neither,
+every table in the project is scanned. Tables without legacy keys are skipped
+silently and only counted.
+
+Per-column rules:
+
+- **conflict** -- the column already has a *different* visible description
+  (native field or `columnMetadata`). The legacy value is NOT written and its
+  flat key is NOT deleted; the entry is reported in `skipped[]` with both values
+  so you can decide. The newer, visible value wins by default.
+- **orphan** -- the flat key names a column that no longer exists on the table.
+  Skipped and left in place unless you pass `--prune-orphans`, which deletes it.
+- **identical** -- the visible description already matches the legacy value.
+  Nothing is written; the redundant flat key is deleted.
+- otherwise the value is migrated, and the flat key is deleted after the write
+  succeeds. A failed cleanup is reported (`reason: "delete_failed"`) but never
+  fails the command -- the description is already durable.
+
+Per-table failures are collected into `errors[]` and never abort the run
+(convention #11), so one inaccessible table does not stop a project-wide sweep.
+Re-running is safe: a table with no legacy keys left is a no-op.
+
 ## End-to-end example: onboarding a new bucket
 
 ```bash
@@ -232,7 +327,10 @@ kbagent --json storage table-detail --project ALIAS --table-id in.c-sales.orders
   | jq '{description: .data.description, columns: .data.column_details}'
 ```
 
-## Precedence vs the native description field
+## Precedence vs the native description field (buckets and tables)
+
+Columns follow their own chain -- see "Read precedence" above; this section is
+about the bucket-level and table-level description only.
 
 The Storage API has a native `description` field on buckets and tables, but
 it is only settable at creation time. Anything you set with `describe-*`
@@ -246,8 +344,15 @@ entries with `provider="user"` are considered the canonical description.
 ## Key behaviors
 
 - `describe-*` is **upsert** -- no append mode; re-running replaces the value.
-- Column descriptions piggy-back on table metadata via the
-  `KBC.column.{name}.description` key convention.
+- Column descriptions go through the native `.../tables/{id}/definition`
+  endpoint *(since v0.88.0)* with `isDescriptionSystemManaged: false`; the
+  backend mirrors them into `columnMetadata` `KBC.description`, so the UI, the
+  MCP server and the warehouse all see them. Legacy flat
+  `KBC.column.{name}.description` keys are read as a last-resort fallback,
+  reported in `legacy_column_descriptions`, and converted by
+  `storage describe-migrate`.
+- Unknown column names abort `describe-column` / `describe-batch` before any
+  write *(since v0.88.0)*.
 - `describe-batch` is **partial-failure-tolerant** -- check `errors[]` even
   on exit code 0.
 - All commands support `--branch ID` to target a dev branch.

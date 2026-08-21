@@ -250,6 +250,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `--name` (the API rejects empty) and fails on an existing table name --
   restore under a new name, verify, then `swap-tables`. `snapshot-delete` only
   forecloses restores; the source table is untouched.
+- **Column descriptions** (0.88.0+, #624): native endpoint; legacy
+  `KBC.column.*` invisible to UI/MCP; `describe-migrate`. gotchas.md.
 - **`bucket-detail` is dialect-aware**: read `sql_dialect` + per-table
   `sql_path` (already correctly quoted) -- don't branch on the backend yourself.
 

@@ -290,6 +290,53 @@ def test_storage_describe_columns_passes_columns_kwarg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# storage.py  POST /columns/{p}/describe-migrate
+# Service: storage.describe_migrate(...)  -- the 1:1 mirror of the CLI command
+# ---------------------------------------------------------------------------
+
+
+def test_storage_describe_migrate_forwards_scope_and_flags(tmp_path: Path) -> None:
+    """Router must forward every scope/flag kwarg to StorageService.describe_migrate."""
+    storage_svc = MagicMock()
+    storage_svc.describe_migrate.return_value = {"tables_migrated": 1}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/columns/{PROJECT}/describe-migrate",
+            headers=AUTH,
+            json={"table_ids": [TABLE_ID], "prune_orphans": True, "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = storage_svc.describe_migrate.call_args.kwargs
+    assert kwargs["alias"] == PROJECT
+    assert kwargs["table_ids"] == [TABLE_ID]
+    assert kwargs["bucket_id"] is None
+    assert kwargs["prune_orphans"] is True
+    assert kwargs["dry_run"] is True
+
+
+def test_storage_describe_migrate_defaults_to_whole_project_write(tmp_path: Path) -> None:
+    """An empty body means whole-project scope and a real (non-dry-run) write."""
+    storage_svc = MagicMock()
+    storage_svc.describe_migrate.return_value = {"tables_migrated": 0}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(f"/storage/columns/{PROJECT}/describe-migrate", headers=AUTH, json={})
+
+    assert res.status_code == 200, res.text
+    kwargs = storage_svc.describe_migrate.call_args.kwargs
+    assert kwargs["table_ids"] is None
+    assert kwargs["bucket_id"] is None
+    assert kwargs["dry_run"] is False
+    assert kwargs["prune_orphans"] is False
+
+
+# ---------------------------------------------------------------------------
 # storage.py  POST /{p}  (create table)
 # Service: storage.create_table(source_table_id=..., time_partitioning_*=...,
 #          clustering_fields=...) -- the source-copy + BigQuery layout params

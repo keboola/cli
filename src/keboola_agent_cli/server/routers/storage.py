@@ -80,6 +80,19 @@ class DescribeColumns(BaseModel):
     branch_id: int | None = None
 
 
+class DescribeMigrate(BaseModel):
+    # Scope: explicit tables, one bucket, or (both unset) the whole project.
+    # Mutually exclusive -- the service raises on both being set.
+    table_ids: list[str] | None = None
+    bucket_id: str | None = None
+    prune_orphans: bool = False
+    # No `yes` field: the CLI's confirm prompt is a terminal affordance, and a
+    # REST caller opting into the write IS the confirmation. `dry_run` is the
+    # preview both surfaces share.
+    dry_run: bool = False
+    branch_id: int | None = None
+
+
 class TagFile(BaseModel):
     add: list[str] | None = None
     remove: list[str] | None = None
@@ -553,6 +566,23 @@ def describe_columns(
         alias=project,
         table_id=table_id,
         columns=body.columns,
+        branch_id=body.branch_id,
+    )
+
+
+@router.post("/columns/{project}/describe-migrate", summary="Migrate legacy column descriptions")
+def describe_migrate(
+    project: str,
+    body: DescribeMigrate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Convert legacy `KBC.column.*` descriptions. Mirrors `kbagent storage describe-migrate`."""
+    return registry.storage.describe_migrate(
+        alias=project,
+        table_ids=body.table_ids,
+        bucket_id=body.bucket_id,
+        prune_orphans=body.prune_orphans,
+        dry_run=body.dry_run,
         branch_id=body.branch_id,
     )
 

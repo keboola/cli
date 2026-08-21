@@ -944,3 +944,305 @@ class TestStorageBucketDetailHumanRender:
         # Helper hint is for the empty-project case only -- must not appear
         # when project IS populated.
         assert "not exposed by Storage API" not in output
+
+
+_MIGRATE_RESULT = {
+    "project_alias": "prod",
+    "dry_run": True,
+    "tables_scanned": 2,
+    "tables_migrated": 0,
+    "migrated": [{"table_id": "in.c-bucket.orders", "columns": {"order_id": "Unique id"}}],
+    "skipped": [],
+    "pruned_orphans": [],
+    "errors": [],
+    "message": "Would migrate 1 table(s) of 2 scanned in project 'prod'.",
+}
+
+
+class TestStorageDescribeMigrate:
+    """Tests for `kbagent storage describe-migrate`."""
+
+    def _invoke(
+        self,
+        tmp_path: Path,
+        args: list[str],
+        mock_storage: MagicMock,
+        stdin: str | None = None,
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockStorageService.return_value = mock_storage
+            return runner.invoke(app, args, input=stdin)
+
+    def test_describe_migrate_dry_run_json(self, tmp_path: Path) -> None:
+        """--dry-run --json emits the scan report and performs no write."""
+        mock_storage = MagicMock()
+        mock_storage.describe_migrate.return_value = _MIGRATE_RESULT
+
+        result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "storage",
+                "describe-migrate",
+                "--project",
+                "prod",
+                "--dry-run",
+            ],
+            mock_storage,
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "ok"
+        assert output["data"]["dry_run"] is True
+        assert output["data"]["migrated"][0]["table_id"] == "in.c-bucket.orders"
+        mock_storage.describe_migrate.assert_called_once_with(
+            alias="prod",
+            table_ids=None,
+            bucket_id=None,
+            prune_orphans=False,
+            dry_run=True,
+            branch_id=None,
+        )
+
+    def test_describe_migrate_scope_conflict_exits_2(self, tmp_path: Path) -> None:
+        """--table-id together with --bucket-id is a usage error."""
+        mock_storage = MagicMock()
+
+        result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "storage",
+                "describe-migrate",
+                "--project",
+                "prod",
+                "--table-id",
+                "in.c-bucket.orders",
+                "--bucket-id",
+                "in.c-bucket",
+            ],
+            mock_storage,
+        )
+
+        assert result.exit_code == 2, f"Expected 2, got {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "INVALID_ARGUMENT"
+        mock_storage.describe_migrate.assert_not_called()
+
+    def test_describe_migrate_confirm_abort_makes_no_writes(self, tmp_path: Path) -> None:
+        """Answering 'n' at the confirm prompt leaves the scan as the only call."""
+        mock_storage = MagicMock()
+        mock_storage.describe_migrate.return_value = _MIGRATE_RESULT
+
+        result = self._invoke(
+            tmp_path,
+            ["storage", "describe-migrate", "--project", "prod"],
+            mock_storage,
+            stdin="n\n",
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Aborted" in result.output
+        assert mock_storage.describe_migrate.call_count == 1
+        assert mock_storage.describe_migrate.call_args.kwargs["dry_run"] is True
+
+    def test_describe_migrate_yes_skips_confirm(self, tmp_path: Path) -> None:
+        """--yes applies straight away (single, non-dry-run call)."""
+        mock_storage = MagicMock()
+        applied = dict(_MIGRATE_RESULT, dry_run=False, tables_migrated=1)
+        mock_storage.describe_migrate.return_value = applied
+
+        result = self._invoke(
+            tmp_path,
+            [
+                "storage",
+                "describe-migrate",
+                "--project",
+                "prod",
+                "--bucket-id",
+                "in.c-bucket",
+                "--prune-orphans",
+                "--yes",
+            ],
+            mock_storage,
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        mock_storage.describe_migrate.assert_called_once_with(
+            alias="prod",
+            table_ids=None,
+            bucket_id="in.c-bucket",
+            prune_orphans=True,
+            dry_run=False,
+            branch_id=None,
+        )
+        assert "in.c-bucket.orders" in result.output
+
+    def test_describe_migrate_table_ids_repeatable(self, tmp_path: Path) -> None:
+        mock_storage = MagicMock()
+        mock_storage.describe_migrate.return_value = dict(_MIGRATE_RESULT, dry_run=False)
+
+        result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "storage",
+                "describe-migrate",
+                "--project",
+                "prod",
+                "--table-id",
+                "in.c-bucket.a",
+                "--table-id",
+                "in.c-bucket.b",
+                "--yes",
+            ],
+            mock_storage,
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        mock_storage.describe_migrate.assert_called_once_with(
+            alias="prod",
+            table_ids=["in.c-bucket.a", "in.c-bucket.b"],
+            bucket_id=None,
+            prune_orphans=False,
+            dry_run=False,
+            branch_id=None,
+        )
+
+    def test_describe_migrate_api_error_maps_exit_code(self, tmp_path: Path) -> None:
+        mock_storage = MagicMock()
+        mock_storage.describe_migrate.side_effect = KeboolaApiError(
+            message="Bucket not found",
+            status_code=404,
+            error_code="NOT_FOUND",
+            retryable=False,
+        )
+
+        result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "storage",
+                "describe-migrate",
+                "--project",
+                "prod",
+                "--dry-run",
+            ],
+            mock_storage,
+        )
+
+        assert result.exit_code == 1, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "NOT_FOUND"
+
+    def test_describe_migrate_is_a_write_operation(self) -> None:
+        """The permission firewall must classify the command as a write."""
+        from keboola_agent_cli.permissions import OPERATION_REGISTRY
+
+        assert OPERATION_REGISTRY["storage.describe-migrate"] == "write"
+
+
+class TestStorageTableDetailLegacyWarning:
+    """table-detail surfaces legacy column-description keys (#624)."""
+
+    def _invoke(self, tmp_path: Path, args: list[str], payload: dict):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_storage = MagicMock()
+        mock_storage.get_table_detail.return_value = payload
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockStorageService.return_value = mock_storage
+            return runner.invoke(app, args)
+
+    @staticmethod
+    def _payload(legacy: list[str]) -> dict:
+        return {
+            "project_alias": "prod",
+            "table_id": "in.c-bucket.orders",
+            "name": "orders",
+            "display_name": "orders",
+            "bucket_id": "in.c-bucket",
+            "backend": "snowflake",
+            "description": "",
+            "columns": ["order_id"],
+            "column_details": [{"name": "order_id", "type": "STRING"}],
+            "primary_key": [],
+            "rows_count": 0,
+            "data_size_bytes": 0,
+            "is_alias": False,
+            "last_import_date": "",
+            "last_change_date": "",
+            "created": "",
+            "metadata": [],
+            "legacy_column_descriptions": legacy,
+        }
+
+    def test_table_detail_human_warns_on_legacy(self, tmp_path: Path) -> None:
+        result = self._invoke(
+            tmp_path,
+            ["storage", "table-detail", "--project", "prod", "--table-id", "in.c-bucket.orders"],
+            self._payload(["order_id"]),
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "legacy" in result.output.lower()
+        assert "describe-migrate" in result.output
+
+    def test_table_detail_human_silent_without_legacy(self, tmp_path: Path) -> None:
+        result = self._invoke(
+            tmp_path,
+            ["storage", "table-detail", "--project", "prod", "--table-id", "in.c-bucket.orders"],
+            self._payload([]),
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "describe-migrate" not in result.output
+
+    def test_table_detail_json_exposes_legacy_key(self, tmp_path: Path) -> None:
+        result = self._invoke(
+            tmp_path,
+            [
+                "--json",
+                "storage",
+                "table-detail",
+                "--project",
+                "prod",
+                "--table-id",
+                "in.c-bucket.orders",
+            ],
+            self._payload(["order_id"]),
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["legacy_column_descriptions"] == ["order_id"]

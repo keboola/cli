@@ -7,6 +7,7 @@ Also covers the read-back side: extraction of ``KBC.description`` and
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -178,34 +179,93 @@ class TestDescribeTableService:
         mock_client.close.assert_called_once()
 
 
-class TestDescribeColumnsService:
-    """Tests for StorageService.describe_columns()."""
+def _table_detail(
+    columns: list[str] | None = None,
+    metadata: list[dict[str, Any]] | None = None,
+    column_metadata: dict[str, list[dict[str, Any]]] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build a Storage API table-detail payload for describe/migrate tests."""
+    table: dict[str, Any] = {
+        "id": "in.c-sales.orders",
+        "name": "orders",
+        "displayName": "orders",
+        "bucket": {"id": "in.c-sales"},
+        "columns": columns if columns is not None else ["c1", "c2"],
+        "primaryKey": [],
+        "columnMetadata": column_metadata or {},
+        "metadata": metadata or [],
+    }
+    table.update(extra)
+    return table
 
-    def test_success_namespaced_keys(self, tmp_path: Path) -> None:
+
+_JOB_OK = {"id": 4242, "status": "success", "operationName": "tableDefinitionUpdate"}
+
+
+def _legacy_entry(entry_id: int, column: str, value: str) -> dict[str, Any]:
+    return {
+        "id": entry_id,
+        "key": f"KBC.column.{column}.description",
+        "value": value,
+        "provider": "user",
+        "timestamp": "2026-08-21T10:00:00Z",
+    }
+
+
+class TestDescribeColumnsService:
+    """Tests for StorageService.describe_columns() (native definition endpoint)."""
+
+    def test_describe_columns_uses_native_endpoint(self, tmp_path: Path) -> None:
+        """The write goes through PUT .../definition, never the flat metadata key."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.return_value = []
+        mock_client.get_table_detail.return_value = _table_detail(columns=["c1"])
+        mock_client.update_table_definition.return_value = _JOB_OK
         service = _make_service(store, mock_client)
 
         result = service.describe_columns(
             alias="prod",
             table_id="in.c-sales.orders",
-            columns={"order_id": "Unique order identifier", "total": "Order total in USD"},
+            columns={"c1": "d1"},
         )
 
-        assert result["project_alias"] == "prod"
-        assert result["table_id"] == "in.c-sales.orders"
-        assert result["columns"]["order_id"] == "Unique order identifier"
-        assert result["columns"]["total"] == "Order total in USD"
-        mock_client.set_table_metadata.assert_called_once_with(
+        mock_client.update_table_definition.assert_called_once_with(
             table_id="in.c-sales.orders",
-            entries=[
-                ("KBC.column.order_id.description", "Unique order identifier"),
-                ("KBC.column.total.description", "Order total in USD"),
-            ],
+            columns=[{"name": "c1", "description": "d1"}],
+            is_description_system_managed=False,
             branch_id=None,
         )
+        mock_client.set_table_metadata.assert_not_called()
+        assert result["project_alias"] == "prod"
+        assert result["table_id"] == "in.c-sales.orders"
+        assert result["columns"] == {"c1": "d1"}
+        assert result["migrated"] == {}
+        assert result["skipped"] == []
+        assert result["result"] == _JOB_OK
         mock_client.close.assert_called_once()
+
+    def test_describe_columns_with_branch(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(columns=["c1"])
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "First column"},
+            branch_id=77,
+        )
+
+        mock_client.get_table_detail.assert_called_once_with("in.c-sales.orders", branch_id=77)
+        mock_client.update_table_definition.assert_called_once_with(
+            table_id="in.c-sales.orders",
+            columns=[{"name": "c1", "description": "First column"}],
+            is_description_system_managed=False,
+            branch_id=77,
+        )
 
     def test_empty_columns_raises_value_error(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -215,26 +275,173 @@ class TestDescribeColumnsService:
         with pytest.raises(ValueError, match="At least one column"):
             service.describe_columns(alias="prod", table_id="in.c-sales.orders", columns={})
 
-        mock_client.set_table_metadata.assert_not_called()
+        mock_client.update_table_definition.assert_not_called()
 
-    def test_with_branch(self, tmp_path: Path) -> None:
+    def test_describe_columns_unknown_column_fails_fast(self, tmp_path: Path) -> None:
+        """Unknown column names abort BEFORE any write (old flat write accepted anything)."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.return_value = []
+        mock_client.get_table_detail.return_value = _table_detail(columns=["c1", "c2"])
         service = _make_service(store, mock_client)
 
-        service.describe_columns(
+        with pytest.raises(ValueError, match="nope"):
+            service.describe_columns(
+                alias="prod",
+                table_id="in.c-sales.orders",
+                columns={"c1": "ok", "nope": "bad"},
+            )
+
+        mock_client.update_table_definition.assert_not_called()
+
+    def test_describe_columns_migrates_legacy_sibling(self, tmp_path: Path) -> None:
+        """A sibling legacy flat key rides along in the same native write, then is deleted."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1", "c2"],
+            metadata=[_legacy_entry(7, "c2", "old")],
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
             alias="prod",
             table_id="in.c-sales.orders",
-            columns={"col1": "First column"},
-            branch_id=77,
+            columns={"c1": "new"},
         )
 
-        mock_client.set_table_metadata.assert_called_once_with(
-            table_id="in.c-sales.orders",
-            entries=[("KBC.column.col1.description", "First column")],
-            branch_id=77,
+        payload = mock_client.update_table_definition.call_args.kwargs["columns"]
+        assert {"name": "c1", "description": "new"} in payload
+        assert {"name": "c2", "description": "old"} in payload
+        mock_client.delete_table_metadata.assert_called_once_with(
+            "in.c-sales.orders", 7, branch_id=None
         )
+        assert result["migrated"] == {"c2": "old"}
+        assert result["skipped"] == []
+
+    def test_describe_columns_migration_conflict_skipped(self, tmp_path: Path) -> None:
+        """A legacy value that clashes with the visible description is skipped, not deleted."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1", "c2"],
+            metadata=[_legacy_entry(7, "c2", "old")],
+            column_metadata={"c2": [{"key": "KBC.description", "value": "newer"}]},
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "new"},
+        )
+
+        payload = mock_client.update_table_definition.call_args.kwargs["columns"]
+        assert payload == [{"name": "c1", "description": "new"}]
+        mock_client.delete_table_metadata.assert_not_called()
+        assert result["migrated"] == {}
+        assert result["skipped"] == [
+            {"column": "c2", "reason": "conflict", "legacy": "old", "current": "newer"}
+        ]
+
+    def test_describe_columns_migration_identical_deletes_only(self, tmp_path: Path) -> None:
+        """Identical legacy + visible value: nothing to write, the stale entry still goes."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1", "c2"],
+            metadata=[_legacy_entry(7, "c2", "same")],
+            column_metadata={"c2": [{"key": "KBC.description", "value": "same"}]},
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "new"},
+        )
+
+        payload = mock_client.update_table_definition.call_args.kwargs["columns"]
+        assert payload == [{"name": "c1", "description": "new"}]
+        mock_client.delete_table_metadata.assert_called_once_with(
+            "in.c-sales.orders", 7, branch_id=None
+        )
+        assert result["migrated"] == {}
+
+    def test_describe_columns_orphan_skipped(self, tmp_path: Path) -> None:
+        """A legacy key for a dropped column is reported, never deleted implicitly."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            metadata=[_legacy_entry(9, "ghost", "gone")],
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "new"},
+        )
+
+        mock_client.delete_table_metadata.assert_not_called()
+        assert result["skipped"] == [{"column": "ghost", "reason": "orphan", "legacy": "gone"}]
+
+    def test_describe_columns_user_value_wins_over_legacy(self, tmp_path: Path) -> None:
+        """A legacy key on a column the user is describing loses -- and is cleaned up."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            metadata=[_legacy_entry(5, "c1", "old")],
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "new"},
+        )
+
+        payload = mock_client.update_table_definition.call_args.kwargs["columns"]
+        assert payload == [{"name": "c1", "description": "new"}]
+        mock_client.delete_table_metadata.assert_called_once_with(
+            "in.c-sales.orders", 5, branch_id=None
+        )
+        assert result["migrated"] == {}
+        assert result["skipped"] == []
+
+    def test_describe_columns_delete_failure_does_not_fail(self, tmp_path: Path) -> None:
+        """The native write is durable; a failed legacy cleanup is reported, not raised."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1", "c2"],
+            metadata=[_legacy_entry(7, "c2", "old")],
+        )
+        mock_client.update_table_definition.return_value = _JOB_OK
+        mock_client.delete_table_metadata.side_effect = KeboolaApiError(
+            message="boom",
+            status_code=500,
+            error_code="SERVER_ERROR",
+            retryable=False,
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod",
+            table_id="in.c-sales.orders",
+            columns={"c1": "new"},
+        )
+
+        assert result["result"] == _JOB_OK
+        assert result["migrated"] == {"c2": "old"}
+        assert [s["reason"] for s in result["skipped"]] == ["delete_failed"]
+        assert result["skipped"][0]["column"] == "c2"
 
 
 class TestDescribeBatchService:
@@ -245,6 +452,8 @@ class TestDescribeBatchService:
         mock_client = MagicMock()
         mock_client.set_bucket_metadata.return_value = []
         mock_client.set_table_metadata.return_value = []
+        mock_client.get_table_detail.return_value = _table_detail(columns=["order_id"])
+        mock_client.update_table_definition.return_value = _JOB_OK
         service = _make_service(store, mock_client)
 
         batch_file = tmp_path / "batch.yaml"
@@ -268,10 +477,12 @@ class TestDescribeBatchService:
         assert "bucket" in applied_types
         assert "table" in applied_types
         assert "columns" in applied_types
-        # Bucket metadata called once (for the bucket), table metadata called twice
-        # (once for table description, once for column descriptions)
+        # Bucket metadata called once (for the bucket); the table description
+        # still goes through table metadata, column descriptions now go through
+        # the native definition endpoint.
         assert mock_client.set_bucket_metadata.call_count == 1
-        assert mock_client.set_table_metadata.call_count == 2
+        assert mock_client.set_table_metadata.call_count == 1
+        assert mock_client.update_table_definition.call_count == 1
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -812,3 +1023,277 @@ class TestGetTableDetailDescriptionExtraction:
         result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
 
         assert result["backend"] == ""
+
+
+def _listing_row(table_id: str, metadata: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Row as returned by ``list_tables(include="metadata")``."""
+    return {"id": table_id, "name": table_id.split(".")[-1], "metadata": metadata or []}
+
+
+class TestDescribeMigrateService:
+    """Tests for StorageService.describe_migrate() (bulk legacy conversion)."""
+
+    def _client(
+        self, listing: list[dict[str, Any]], details: dict[str, dict[str, Any]]
+    ) -> MagicMock:
+        mock_client = MagicMock()
+        mock_client.list_tables.return_value = listing
+        mock_client.get_table_detail.side_effect = lambda tid, branch_id=None: details[tid]
+        mock_client.update_table_definition.return_value = _JOB_OK
+        return mock_client
+
+    def test_describe_migrate_dry_run_reports_no_writes(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [_listing_row("in.c-x.t1", legacy), _listing_row("in.c-x.t2")],
+            {
+                "in.c-x.t1": _table_detail(columns=["c1", "c2"], metadata=legacy),
+                "in.c-x.t2": _table_detail(columns=["c1"]),
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_migrate(alias="prod", dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["tables_scanned"] == 2
+        assert result["tables_migrated"] == 0
+        assert result["migrated"] == [{"table_id": "in.c-x.t1", "columns": {"c2": "old"}}]
+        mock_client.update_table_definition.assert_not_called()
+        mock_client.delete_table_metadata.assert_not_called()
+
+    def test_describe_migrate_applies_and_deletes(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [_listing_row("in.c-x.t1", legacy), _listing_row("in.c-x.t2")],
+            {
+                "in.c-x.t1": _table_detail(columns=["c1", "c2"], metadata=legacy),
+                "in.c-x.t2": _table_detail(columns=["c1"]),
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_migrate(alias="prod")
+
+        mock_client.update_table_definition.assert_called_once_with(
+            table_id="in.c-x.t1",
+            columns=[{"name": "c2", "description": "old"}],
+            is_description_system_managed=False,
+            branch_id=None,
+        )
+        mock_client.delete_table_metadata.assert_called_once_with("in.c-x.t1", 7, branch_id=None)
+        assert result["tables_migrated"] == 1
+        assert result["errors"] == []
+
+    def test_describe_migrate_scope_bucket(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [_listing_row("in.c-x.t1", legacy), _listing_row("in.c-y.t9", legacy)],
+            {
+                "in.c-x.t1": _table_detail(columns=["c1", "c2"], metadata=legacy),
+                "in.c-y.t9": _table_detail(columns=["c1", "c2"], metadata=legacy),
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_migrate(alias="prod", bucket_id="in.c-x", dry_run=True)
+
+        assert result["tables_scanned"] == 1
+        assert [m["table_id"] for m in result["migrated"]] == ["in.c-x.t1"]
+
+    def test_describe_migrate_scope_table_ids(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [], {"in.c-x.t1": _table_detail(columns=["c1", "c2"], metadata=legacy)}
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_migrate(alias="prod", table_ids=["in.c-x.t1"], dry_run=True)
+
+        mock_client.list_tables.assert_not_called()
+        assert result["tables_scanned"] == 1
+        assert result["migrated"] == [{"table_id": "in.c-x.t1", "columns": {"c2": "old"}}]
+
+    def test_describe_migrate_both_scopes_raises(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            service.describe_migrate(alias="prod", table_ids=["in.c-x.t1"], bucket_id="in.c-x")
+
+    def test_describe_migrate_prune_orphans(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(11, "ghost", "gone")]
+        details = {"in.c-x.t1": _table_detail(columns=["c1"], metadata=legacy)}
+
+        store_client = self._client([_listing_row("in.c-x.t1", legacy)], details)
+        service = _make_service(store, store_client)
+        result = service.describe_migrate(alias="prod")
+        store_client.delete_table_metadata.assert_not_called()
+        assert result["skipped"] == [
+            {"table_id": "in.c-x.t1", "column": "ghost", "reason": "orphan", "legacy": "gone"}
+        ]
+        assert result["pruned_orphans"] == []
+
+        prune_client = self._client([_listing_row("in.c-x.t1", legacy)], details)
+        service = _make_service(store, prune_client)
+        result = service.describe_migrate(alias="prod", prune_orphans=True)
+        prune_client.delete_table_metadata.assert_called_once_with("in.c-x.t1", 11, branch_id=None)
+        assert result["pruned_orphans"] == [{"table_id": "in.c-x.t1", "column": "ghost"}]
+
+    def test_describe_migrate_error_accumulation(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [_listing_row("in.c-x.a", legacy), _listing_row("in.c-x.b", legacy)],
+            {
+                "in.c-x.a": _table_detail(columns=["c1", "c2"], metadata=legacy),
+                "in.c-x.b": _table_detail(columns=["c1", "c2"], metadata=legacy),
+            },
+        )
+        mock_client.update_table_definition.side_effect = [
+            KeboolaApiError(
+                message="boom", status_code=500, error_code="SERVER_ERROR", retryable=False
+            ),
+            _JOB_OK,
+        ]
+        service = _make_service(store, mock_client)
+
+        result = service.describe_migrate(alias="prod")
+
+        assert result["tables_migrated"] == 1
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["table_id"] == "in.c-x.a"
+        assert "boom" in result["errors"][0]["error"]
+        assert [m["table_id"] for m in result["migrated"]] == ["in.c-x.b"]
+
+    def test_describe_migrate_progress_callback(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        legacy = [_legacy_entry(7, "c2", "old")]
+        mock_client = self._client(
+            [_listing_row("in.c-x.t1", legacy), _listing_row("in.c-x.t2")],
+            {
+                "in.c-x.t1": _table_detail(columns=["c1", "c2"], metadata=legacy),
+                "in.c-x.t2": _table_detail(columns=["c1"]),
+            },
+        )
+        service = _make_service(store, mock_client)
+        seen: list[tuple[str, int, int]] = []
+
+        service.describe_migrate(
+            alias="prod",
+            dry_run=True,
+            progress_callback=lambda tid, cur, total: seen.append((tid, cur, total)),
+        )
+
+        assert seen == [("in.c-x.t1", 1, 2), ("in.c-x.t2", 2, 2)]
+
+
+class TestGetTableDetailDescriptionPrecedence:
+    """Read path: native definition -> columnMetadata KBC.description -> legacy flat key."""
+
+    def test_table_detail_native_definition_wins(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            metadata=[_legacy_entry(1, "c1", "legacy")],
+            column_metadata={"c1": [{"key": "KBC.description", "value": "meta"}]},
+            definition={"columns": [{"name": "c1", "definition": {"description": "native"}}]},
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["c1"]["description"] == "native"
+        # The stale flat key is still present on the table -> flagged for migration.
+        assert result["legacy_column_descriptions"] == ["c1"]
+
+    def test_table_detail_column_metadata_fallback(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            column_metadata={"c1": [{"key": "KBC.description", "value": "meta"}]},
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["c1"]["description"] == "meta"
+        assert result["legacy_column_descriptions"] == []
+
+    def test_table_detail_legacy_fallback_and_warning_key(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            metadata=[_legacy_entry(1, "c1", "legacy only")],
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["c1"]["description"] == "legacy only"
+        assert result["legacy_column_descriptions"] == ["c1"]
+
+    def test_table_detail_alias_source_metadata(self, tmp_path: Path) -> None:
+        """Alias tables inherit the source table's columnMetadata (MCP-server parity)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            isAlias=True,
+            sourceTable={
+                "id": "in.c-src.orders",
+                "columnMetadata": {"c1": [{"key": "KBC.description", "value": "from source"}]},
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["c1"]["description"] == "from source"
+        assert result["legacy_column_descriptions"] == []
+
+    def test_table_detail_alias_source_definition(self, tmp_path: Path) -> None:
+        """Alias tables without their own definition read the source table's."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            isAlias=True,
+            sourceTable={
+                "id": "in.c-src.orders",
+                "definition": {
+                    "columns": [{"name": "c1", "definition": {"description": "src native"}}]
+                },
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["c1"]["description"] == "src native"
+
+    def test_table_detail_no_descriptions_empty_legacy_list(self, tmp_path: Path) -> None:
+        """The key is always present so callers never need a .get() guard."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(columns=["c1"])
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["legacy_column_descriptions"] == []
+        assert "description" not in result["column_details"][0]
