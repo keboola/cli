@@ -4007,6 +4007,75 @@ class TestFullE2E:
         assert data["data"]["description"] == "Batch table desc"
         col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
         assert col_descs.get("id") == "Batch column id desc"
+        # The native write leaves no legacy flat keys behind (#624).
+        assert data["data"]["legacy_column_descriptions"] == []
+
+        self._test_storage_describe_migrate(table_id)
+
+    def _test_storage_describe_migrate(self, table_id: str) -> None:
+        """Seed a pre-0.88.0 flat metadata key and migrate it (#624).
+
+        The flat ``KBC.column.{name}.description`` convention is what kbagent
+        wrote before the native definition endpoint; nothing but kbagent ever
+        read it. Seeding goes through the raw client on purpose -- no CLI
+        command writes that shape any more.
+        """
+        self.api.set_table_metadata(
+            table_id=table_id,
+            entries=[("KBC.column.name.description", "Legacy column description")],
+        )
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["legacy_column_descriptions"] == ["name"]
+
+        # Dry run reports the table and writes nothing.
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert data["data"]["tables_migrated"] == 0
+        migrated = {item["table_id"]: item["columns"] for item in data["data"]["migrated"]}
+        assert migrated[table_id]["name"] == "Legacy column description"
+
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["tables_migrated"] == 1
+        assert data["data"]["errors"] == []
+
+        # The description survives where everyone reads it, the legacy key is gone.
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["legacy_column_descriptions"] == []
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("name") == "Legacy column description"
+
+        # Re-running is a no-op: nothing left to migrate.
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["migrated"] == []
 
     def _test_semantic_layer_roundtrip(self) -> None:
         """Live roundtrip of the semantic-layer command group against ``self.alias``.

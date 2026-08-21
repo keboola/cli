@@ -250,6 +250,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.describe-table": "write",
     "storage.describe-column": "write",
     "storage.describe-batch": "write",
+    "storage.describe-migrate": "write",
     # Encryption
     "encrypt.values": "write",
     # Semantic layer (metastore) — new in 0.41.0

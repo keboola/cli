@@ -5,7 +5,6 @@ Provides direct Storage API access including sharing/linked bucket metadata
 """
 
 from pathlib import Path
-from typing import Any
 
 import typer
 from rich.markup import escape
@@ -422,6 +421,17 @@ def storage_table_detail(
         formatter.output(result)
     else:
         render_table_detail(formatter, result)
+
+        # Legacy flat KBC.column.*.description keys are readable here but
+        # invisible everywhere else (#624) -- point at the migration command.
+        # JSON mode needs no warning: the key itself is the signal.
+        legacy_columns = result.get("legacy_column_descriptions") or []
+        if legacy_columns:
+            formatter.console.print(
+                f"\n[yellow]Warning:[/yellow] {len(legacy_columns)} column description(s) "
+                "use the legacy KBC.column.* convention -- invisible to the Keboola UI "
+                "and MCP server. Run 'kbagent storage describe-migrate' to convert."
+            )
 
 
 @storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
@@ -1665,385 +1675,6 @@ def storage_delete_bucket(
 
 
 # ------------------------------------------------------------------
-# Describe (metadata write) commands
-# ------------------------------------------------------------------
-
-_DESCRIBE = "Descriptions"
-
-
-@storage_app.command("describe-bucket", rich_help_panel=_DESCRIBE)
-def storage_describe_bucket(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    bucket_id: str = typer.Option(
-        ...,
-        "--bucket-id",
-        help="Bucket ID (e.g. 'in.c-my-bucket')",
-    ),
-    text: str | None = typer.Option(
-        None,
-        "--text",
-        help="Description text (inline)",
-    ),
-    file: Path | None = typer.Option(
-        None,
-        "--file",
-        help="Path to a file containing the description",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set the description on a storage bucket.
-
-    Stores the description as KBC.description in bucket metadata (upsert).
-    Provide the text via --text, --file, or --stdin (exactly one required).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    from ._metadata_input import resolve_text_input
-
-    try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-
-    try:
-        result = service.describe_bucket(
-            alias=project,
-            bucket_id=bucket_id,
-            description=description,
-            branch_id=effective_branch,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(f"[bold green]Description set:[/bold green] {bucket_id}")
-        formatter.console.print(f"  {escape(description[:120])}")
-
-
-@storage_app.command("describe-table", rich_help_panel=_DESCRIBE)
-def storage_describe_table(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    table_id: str = typer.Option(
-        ...,
-        "--table-id",
-        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
-    ),
-    text: str | None = typer.Option(
-        None,
-        "--text",
-        help="Description text (inline)",
-    ),
-    file: Path | None = typer.Option(
-        None,
-        "--file",
-        help="Path to a file containing the description",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set the description on a storage table.
-
-    Stores the description as KBC.description in table metadata (upsert).
-    Provide the text via --text, --file, or --stdin (exactly one required).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    from ._metadata_input import resolve_text_input
-
-    try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-
-    try:
-        result = service.describe_table(
-            alias=project,
-            table_id=table_id,
-            description=description,
-            branch_id=effective_branch,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
-        formatter.console.print(f"  {escape(description[:120])}")
-
-
-@storage_app.command("describe-column", rich_help_panel=_DESCRIBE)
-def storage_describe_column(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    table_id: str = typer.Option(
-        ...,
-        "--table-id",
-        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
-    ),
-    column: list[str] = typer.Option(
-        ...,
-        "--column",
-        help="Column description as 'NAME=DESCRIPTION' (can be repeated)",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set descriptions on one or more columns of a storage table.
-
-    Descriptions are stored as KBC.column.{name}.description keys in table
-    metadata (upsert).  Keboola Storage does not expose a user-writable
-    column-level metadata endpoint; this convention lets you annotate columns
-    and read them back via 'storage table-detail'.
-
-    Example:
-
-        kbagent storage describe-column \\
-            --project myproj \\
-            --table-id in.c-bucket.orders \\
-            --column order_id="Unique order identifier" \\
-            --column total="Order total in USD"
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    parsed: dict[str, str] = {}
-    for entry in column:
-        if "=" not in entry:
-            formatter.error(
-                message=f"--column must be NAME=DESCRIPTION, got: {entry!r}",
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-            raise typer.Exit(code=2) from None
-        name, _, desc = entry.partition("=")
-        name = name.strip()
-        if not name:
-            formatter.error(
-                message=f"Column name cannot be empty in: {entry!r}",
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-            raise typer.Exit(code=2) from None
-        parsed[name] = desc
-
-    try:
-        result = service.describe_columns(
-            alias=project,
-            table_id=table_id,
-            columns=parsed,
-            branch_id=effective_branch,
-        )
-    except ValueError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(
-            f"[bold green]Column descriptions set:[/bold green] {table_id} "
-            f"({len(parsed)} column(s))"
-        )
-        for name, desc in parsed.items():
-            formatter.console.print(f"  {name}: {escape(desc[:80])}")
-
-
-@storage_app.command("describe-batch", rich_help_panel=_DESCRIBE)
-def storage_describe_batch(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    from_file: Path = typer.Option(
-        ...,
-        "--from-file",
-        help="Path to a YAML file with bucket/table/column descriptions",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Apply descriptions to buckets, tables, and columns from a YAML file.
-
-    YAML schema:
-
-        buckets:
-          in.c-my-bucket: "Bucket description"
-
-        tables:
-          in.c-my-bucket.my-table: "Table description"
-
-        columns:
-          in.c-my-bucket.my-table:
-            col1: "Column 1 description"
-            col2: "Column 2 description"
-
-    All sections are optional.  A failure in one item does not abort the
-    rest -- all results are collected and reported.
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    # In human mode, show a live progress indicator so that large batches
-    # (100+ items) do not look frozen. JSON mode must remain silent on stderr
-    # so structured output is the only thing on stdout.
-    progress_cm: Any = None
-    progress_task: Any = None
-    progress_callback = None
-    if not formatter.json_mode:
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TextColumn,
-            TimeElapsedColumn,
-        )
-
-        progress_cm = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            console=formatter.console,
-            transient=True,
-        )
-
-        def _on_item(obj_type: str, obj_id: str, current: int, total: int) -> None:
-            # Guard against progress_task/progress_cm not being ready yet.
-            if progress_task is None or progress_cm is None:
-                return
-            # total is known up-front (passed the first time), but re-setting
-            # is a no-op after the first call.
-            progress_cm.update(
-                progress_task,
-                total=total,
-                completed=max(current - 1, 0),
-                description=f"Describing {obj_type} {obj_id}",
-            )
-
-        progress_callback = _on_item
-
-    try:
-        if progress_cm is not None:
-            progress_cm.start()
-            progress_task = progress_cm.add_task("Applying descriptions...", total=None)
-        result = service.describe_batch(
-            alias=project,
-            from_file=from_file,
-            branch_id=effective_branch,
-            progress_callback=progress_callback,
-        )
-        if progress_cm is not None and progress_task is not None:
-            # Mark the task complete so the final render shows N / N.
-            progress_cm.update(
-                progress_task,
-                completed=result["applied_count"] + result["error_count"],
-            )
-    except ValueError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-    finally:
-        if progress_cm is not None:
-            # .stop() is idempotent; safe for both happy and error paths.
-            progress_cm.stop()
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        applied = result["applied_count"]
-        errors = result["error_count"]
-        formatter.console.print(
-            f"[bold green]Batch complete:[/bold green] {applied} applied, {errors} error(s)"
-        )
-        for item in result["applied"]:
-            obj_type = item["type"]
-            obj_id = item["id"]
-            if obj_type == "columns":
-                n = len(item.get("columns", {}))
-                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols)")
-            else:
-                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
-        for item in result["errors"]:
-            formatter.console.print(f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}")
-        if errors:
-            raise typer.Exit(code=1) from None
-
-
-# ------------------------------------------------------------------
 # File operations
 # ------------------------------------------------------------------
 
@@ -2712,3 +2343,10 @@ def storage_unload_table(
 from ._storage_snapshots import register as _register_snapshot_commands  # noqa: E402
 
 _register_snapshot_commands(storage_app)
+
+
+# Description commands (issue #624 grew them past the file's size ceiling) live
+# in a private module for the same reason, mounted the same way.
+from ._storage_describe import register as _register_describe_commands  # noqa: E402
+
+_register_describe_commands(storage_app)

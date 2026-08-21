@@ -14,8 +14,8 @@ from typing import Any
 from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from ._column_descriptions import ColumnDescriptionsMixin
 from ._table_detail import build_table_detail
-from .base import BaseService
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
     tmp_path.replace(p)
 
 
-class StorageService(BaseService):
+class StorageService(ColumnDescriptionsMixin):
     """Business logic for storage bucket and table operations.
 
     Supports multi-project parallel queries for listing operations.
@@ -2459,56 +2459,6 @@ class StorageService(BaseService):
             "description": description,
             "result": result,
             "message": f"Description set on table '{table_id}' in project '{alias}'.",
-        }
-
-    def describe_columns(
-        self,
-        alias: str,
-        table_id: str,
-        columns: dict[str, str],
-        branch_id: int | None = None,
-    ) -> dict[str, Any]:
-        """Set per-column descriptions on a storage table.
-
-        Column descriptions are stored as namespaced table metadata using the
-        key convention ``KBC.column.{colname}.description``.  Keboola's
-        Storage API does not provide a user-writable column-level metadata
-        endpoint (``columnMetadata`` is populated exclusively by processing
-        components); this convention is the supported alternative for
-        annotating columns from the CLI.
-
-        Args:
-            alias: Project alias.
-            table_id: Full table ID.
-            columns: Mapping of column name -> description text.
-            branch_id: If set, target a specific dev branch.
-
-        Returns:
-            Dict with project_alias, table_id, columns dict, result, message.
-        """
-        if not columns:
-            raise ValueError("At least one column description must be provided.")
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        entries = [(f"KBC.column.{name}.description", desc) for name, desc in columns.items()]
-        client = self._client_factory(project.stack_url, project.token)
-        try:
-            result = client.set_table_metadata(
-                table_id=table_id,
-                entries=entries,
-                branch_id=branch_id,
-            )
-        finally:
-            client.close()
-        return {
-            "project_alias": alias,
-            "table_id": table_id,
-            "columns": columns,
-            "result": result,
-            "message": (
-                f"Descriptions set for {len(columns)} column(s) on table '{table_id}' "
-                f"in project '{alias}'."
-            ),
         }
 
     def describe_batch(
