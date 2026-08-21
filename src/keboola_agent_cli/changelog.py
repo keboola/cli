@@ -25,7 +25,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.87.0": [
-        "New (AI-3753): `data-app create` gains `--workspace / --no-workspace` and grants "
+        "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
         "Storage access BY DEFAULT. The flag writes `runtime.workspace.enabled: true`, which "
         "is the single switch that makes the platform provision the app's ephemeral workspace "
         "and inject `WORKSPACE_ID`, `QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`. "

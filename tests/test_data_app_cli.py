@@ -262,7 +262,7 @@ class TestDataAppCreateValidation:
         assert result.exit_code == 2
 
     def test_workspace_defaults_on_and_can_be_disabled(self, tmp_path: Path) -> None:
-        """AI-3753: Storage access is on by default; --no-workspace opts out."""
+        """Storage access is on by default; --no-workspace opts out."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
@@ -302,7 +302,7 @@ class TestDataAppCreateValidation:
         assert mock.create_data_app.call_args.kwargs["workspace"] is False
 
     def test_disabled_storage_access_is_called_out_in_human_output(self, tmp_path: Path) -> None:
-        """A dead data path must never be a silent outcome (AI-3753)."""
+        """A dead data path must never be a silent outcome."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})

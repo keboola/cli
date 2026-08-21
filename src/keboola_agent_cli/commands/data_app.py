@@ -433,7 +433,7 @@ def data_app_create(
                     "  [bold]Storage access:[/bold] enabled (runtime.workspace.enabled=true)"
                 )
             else:
-                # --no-workspace is the footgun shape (AI-3753): say it out loud
+                # --no-workspace is the footgun shape: say it out loud
                 # so a dead data path is never a silent surprise at runtime.
                 formatter.console.print(
                     "  [bold yellow]Storage access:[/bold yellow] DISABLED "

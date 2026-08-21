@@ -438,7 +438,7 @@ class TestDataAppCreate:
         encrypt_mock.encrypt.assert_not_called()
 
     def test_workspace_enabled_by_default(self, tmp_path: Path) -> None:
-        """AI-3753: Storage access needs ``runtime.workspace.enabled: true``.
+        """Storage access needs ``runtime.workspace.enabled: true``.
 
         Without it the app deploys, reports ``state=running`` and passes its
         health probe while ``WORKSPACE_ID`` / ``QUERY_SERVICE_URL`` are never

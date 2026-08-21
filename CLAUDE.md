@@ -569,7 +569,7 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
 kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
-# --workspace / --no-workspace (0.87.0+, AI-3753): DEFAULT ON. Writes runtime.workspace.enabled=true --
+# --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
 #   0.87.0 kbagent never wrote it and offered no way to: such an app deploys, reports state=running and

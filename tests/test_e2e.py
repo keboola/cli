@@ -8961,7 +8961,7 @@ class TestE2EDataAppLifecycle:
             "Storage config version should be populated after PUT"
         )
 
-        _step(4, "Storage access is granted by default (AI-3753)")
+        _step(4, "Storage access is granted by default")
         assert body["data"]["workspace"] is True, (
             "create must report Storage access enabled by default"
         )
@@ -8985,7 +8985,7 @@ class TestE2EDataAppLifecycle:
         runtime = record["configuration"]["runtime"]
         # This is the switch that makes the platform inject WORKSPACE_ID /
         # QUERY_SERVICE_URL. Without it the app deploys and reports running
-        # while being unable to read a single row (AI-3753).
+        # while being unable to read a single row.
         assert runtime.get("workspace") == {"enabled": True}, (
             f"expected runtime.workspace.enabled=true in the live config, got {runtime!r}"
         )
@@ -8995,7 +8995,7 @@ class TestE2EDataAppLifecycle:
         )
 
     def test_data_app_no_workspace_omits_the_block(self) -> None:
-        """``--no-workspace`` renders the pre-0.87.0 runtime body (AI-3753).
+        """``--no-workspace`` renders the pre-0.87.0 runtime body.
 
         Dry run: proves the opt-out reaches the request body without
         provisioning an app on the stack.

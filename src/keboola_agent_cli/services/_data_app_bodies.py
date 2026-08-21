@@ -131,7 +131,7 @@ def _build_runtime_block(*, size: str, workspace: bool) -> dict[str, Any]:
     single switch that decides whether the app can read Storage at all
     (help.keboola.com/data-apps/storage-access/).
 
-    It defaults ON because omitting it fails *silently* (AI-3753): the app
+    It defaults ON because omitting it fails *silently*: the app
     deploys, reports ``state=running``, passes its health probe, and then
     either serves empty results or crash-loops behind the probe, with the only
     diagnostic buried in the container log as

@@ -1000,7 +1000,7 @@ def test_data_app_create_passes_use_managed_git_repo(tmp_path: Path) -> None:
 
 
 def test_data_app_create_workspace_defaults_on_over_rest(tmp_path: Path) -> None:
-    """AI-3753: the REST surface must default Storage access ON, like the CLI."""
+    """The REST surface must default Storage access ON, like the CLI."""
     data_app_svc = MagicMock()
     data_app_svc.create_data_app.return_value = {"app_id": "9", "workspace": True}
     registry = _mock_registry(data_app=data_app_svc)
