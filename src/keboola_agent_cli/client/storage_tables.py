@@ -123,10 +123,14 @@ class _StorageTablesMixin(_CoreClient):
         POST /v2/storage/tables/{id}/metadata
 
         Provider is always ``"user"`` for CLI-originated descriptions.
-        Column-level descriptions use the namespaced key convention
-        ``KBC.column.{colname}.description`` stored at table-metadata level
-        (Keboola Storage API does not expose a user-writable column-metadata
-        endpoint; ``columnMetadata`` is populated exclusively by components).
+
+        The flat ``KBC.column.{colname}.description`` table-metadata key this
+        method used to carry column descriptions is LEGACY (pre-0.88.0, issue
+        #624): nothing reads it except this CLI -- neither the Keboola UI nor
+        the MCP server -- and a metadata write never reaches the native column
+        description field. ``update_table_definition`` supersedes it. The key
+        convention survives only so ``describe_migrate`` and the table-detail
+        read fallback can still find entries written by older versions.
 
         Args:
             table_id: Full table ID (e.g. "in.c-bucket.table").
@@ -144,6 +148,90 @@ class _StorageTablesMixin(_CoreClient):
             form[f"metadata[{i}][value]"] = value
         response = self._request("POST", f"{prefix}/tables/{safe_id}/metadata", data=form)
         return response.json()
+
+    def update_table_definition(
+        self,
+        table_id: str,
+        columns: list[dict[str, Any]] | None = None,
+        description: str | None = None,
+        description_set: bool = False,
+        is_description_system_managed: bool | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Update a table's native definition (async, waits for the storage job).
+
+        PUT /v2/storage/branch/{branch}/tables/{id}/definition
+
+        This is the endpoint the web UI writes column descriptions with, and
+        the only one whose values the backend mirrors into ``columnMetadata``
+        (``KBC.description``) -- so a single write here is visible to the UI,
+        to the MCP server and to the underlying backend (Snowflake COMMENT /
+        BigQuery description). The mirroring is one-way: a metadata POST never
+        travels back into the native field (issue #624).
+
+        The definition endpoint is branch-scoped only; production uses the
+        literal branch ref ``"default"`` (matching the web UI's client).
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            columns: Column entries ``{"name": str, "description": str | None}``;
+                a ``None`` description clears that column's description. Omitted
+                from the body entirely when ``None``.
+            description: New table-level description. Only sent when
+                ``description_set`` is True.
+            description_set: Distinguishes "clear the table description"
+                (``description=None`` + this flag) from "don't touch it"
+                (flag False), which a bare ``None`` cannot express.
+            is_description_system_managed: When False, marks the descriptions
+                as user-authored so the next component run's Output Mapping
+                does not overwrite them. Omitted from the body when ``None``.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Completed storage job dict.
+
+        Raises:
+            KeboolaApiError: If the storage job fails or times out.
+        """
+        branch_ref = str(branch_id) if branch_id else "default"
+        safe_id = quote(table_id, safe="")
+        body: dict[str, Any] = {}
+        if columns is not None:
+            body["columns"] = columns
+        if description_set:
+            body["description"] = description
+        if is_description_system_managed is not None:
+            body["isDescriptionSystemManaged"] = is_description_system_managed
+        response = self._request(
+            "PUT",
+            f"/v2/storage/branch/{branch_ref}/tables/{safe_id}/definition",
+            json=body,
+        )
+        return self._wait_for_storage_job(response.json())
+
+    def delete_table_metadata(
+        self,
+        table_id: str,
+        metadata_id: int | str,
+        branch_id: int | None = None,
+    ) -> None:
+        """Delete a single metadata entry on a storage table by its numeric ID.
+
+        DELETE /v2/storage/[branch/{b}/]tables/{id}/metadata/{metadataId}
+
+        Synchronous (204). Used to retire legacy flat
+        ``KBC.column.{colname}.description`` entries once their value has been
+        written through ``update_table_definition`` -- leaving them behind
+        would resurrect a description the user later cleared (issue #624).
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            metadata_id: ID of the metadata entry (from the table detail).
+            branch_id: If set, target a specific dev branch.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        self._request("DELETE", f"{prefix}/tables/{safe_id}/metadata/{metadata_id}")
 
     def get_bucket_detail(
         self,

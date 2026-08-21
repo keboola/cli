@@ -1,6 +1,7 @@
 """Tests for storage tables multi-project listing (issue #198).
 
 Covers:
+- KeboolaClient.update_table_definition() / delete_table_metadata() (issue #624)
 - StorageService.list_tables() multi-project parallel execution
 - CLI storage tables without --project (all projects)
 - CLI storage tables with multiple --project flags
@@ -17,8 +18,9 @@ import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
@@ -460,3 +462,153 @@ class TestStorageTablesCli:
             )
 
         assert result.exit_code == 5
+
+
+# ------------------------------------------------------------------
+# Client-layer tests: native column descriptions (issue #624)
+# ------------------------------------------------------------------
+
+
+def _make_client() -> KeboolaClient:
+    return KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+
+
+class TestUpdateTableDefinitionClient:
+    """KeboolaClient.update_table_definition() - HTTP layer."""
+
+    def test_sends_native_payload(self, httpx_mock) -> None:
+        """PUTs the native definition body to the production 'default' branch ref."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/default/tables/in.c-b.t/definition",
+            method="PUT",
+            json={"id": 1, "status": "success", "operationName": "tableDefinitionUpdate"},
+            status_code=200,
+        )
+
+        client = _make_client()
+        result = client.update_table_definition(
+            table_id="in.c-b.t",
+            columns=[{"name": "c1", "description": "d"}],
+            is_description_system_managed=False,
+        )
+
+        assert result["status"] == "success"
+        body = json.loads(httpx_mock.get_request().content.decode("utf-8"))
+        assert body == {
+            "columns": [{"name": "c1", "description": "d"}],
+            "isDescriptionSystemManaged": False,
+        }
+        client.close()
+
+    def test_branch_scoped_url(self, httpx_mock) -> None:
+        """A numeric branch_id replaces the literal 'default' branch ref."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/tables/in.c-b.t/definition",
+            method="PUT",
+            json={"id": 2, "status": "success"},
+            status_code=200,
+        )
+
+        client = _make_client()
+        client.update_table_definition(
+            table_id="in.c-b.t",
+            columns=[{"name": "c1", "description": "d"}],
+            branch_id=123,
+        )
+
+        assert "/v2/storage/branch/123/tables/in.c-b.t/definition" in str(
+            httpx_mock.get_request().url
+        )
+        client.close()
+
+    def test_description_set_none_clears(self, httpx_mock) -> None:
+        """description_set=True sends an explicit null; the flag is what clears."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/default/tables/in.c-b.t/definition",
+            method="PUT",
+            json={"id": 3, "status": "success"},
+            status_code=200,
+        )
+
+        client = _make_client()
+        client.update_table_definition(
+            table_id="in.c-b.t",
+            description=None,
+            description_set=True,
+        )
+
+        body = json.loads(httpx_mock.get_request().content.decode("utf-8"))
+        assert body == {"description": None}
+        client.close()
+
+    def test_description_omitted_without_flag(self, httpx_mock) -> None:
+        """description_set=False leaves the table description untouched (key absent)."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/default/tables/in.c-b.t/definition",
+            method="PUT",
+            json={"id": 4, "status": "success"},
+            status_code=200,
+        )
+
+        client = _make_client()
+        client.update_table_definition(
+            table_id="in.c-b.t",
+            columns=[{"name": "c1", "description": None}],
+        )
+
+        body = json.loads(httpx_mock.get_request().content.decode("utf-8"))
+        assert body == {"columns": [{"name": "c1", "description": None}]}
+        assert "description" not in body
+        assert "isDescriptionSystemManaged" not in body
+        client.close()
+
+    def test_job_error_raises(self, httpx_mock) -> None:
+        """A failed storage job surfaces as STORAGE_JOB_FAILED, not a silent success."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/default/tables/in.c-b.t/definition",
+            method="PUT",
+            json={"id": 5, "status": "error", "error": {"message": "boom"}},
+            status_code=200,
+        )
+
+        client = _make_client()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.update_table_definition(
+                table_id="in.c-b.t",
+                columns=[{"name": "c1", "description": "d"}],
+            )
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        client.close()
+
+
+class TestDeleteTableMetadataClient:
+    """KeboolaClient.delete_table_metadata() - HTTP layer."""
+
+    def test_production_url(self, httpx_mock) -> None:
+        """Production path has no branch segment and the call returns None."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/tables/in.c-b.t/metadata/42",
+            method="DELETE",
+            status_code=204,
+        )
+
+        client = _make_client()
+        assert client.delete_table_metadata(table_id="in.c-b.t", metadata_id=42) is None
+        client.close()
+
+    def test_branch_url(self, httpx_mock) -> None:
+        """branch_id switches to the branch-prefixed metadata path."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/5/tables/in.c-b.t/metadata/42",
+            method="DELETE",
+            status_code=204,
+        )
+
+        client = _make_client()
+        client.delete_table_metadata(table_id="in.c-b.t", metadata_id=42, branch_id=5)
+
+        assert "/v2/storage/branch/5/tables/in.c-b.t/metadata/42" in str(
+            httpx_mock.get_request().url
+        )
+        client.close()
