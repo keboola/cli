@@ -173,6 +173,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   sync-action`, `transformation create|show|edit`, `flow examples`,
   `workspace query` (was `query_data`).
 
+**Reading job logs / table usage / narrow config search (0.89.0+)**
+- `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
+  logs (`job run` tails only the run it started). `job list --offset/--sort-by/
+  --sort-order`. `storage tables --include-usage` -- storage input/output
+  mappings ONLY, never SQL text. `search --scope PATH` -- config-based only.
+  `sharing link --stage in|out` -- default stays `in`, NOT derived from the
+  source bucket (MCP derives it). All five are on `kbagent serve` too. gotchas.md.
+
 **A write that failed with a 5xx**
 - `POST`/`PATCH` is NOT retried on 5xx any more (0.86.0+); `retryable: false`
   there is deliberate -- never wrap it in your own retry loop. The work may have

@@ -504,7 +504,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Cross-Project Search
 
-  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
     Search for items across one or more projects. Textual mode (default) searches item names
     via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
     --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
@@ -517,10 +517,10 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Job History
 
-  kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]
+  kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
 
-  kbagent job detail --project NAME --job-id ID
+  kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
     Full job detail including result message and timing.
 
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
@@ -580,7 +580,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Prefer sql_path/sql_dialect in agent code instead of branching on backend yourself.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
-  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID]
+  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID] [--include-usage]
     List storage tables from one or more projects (in parallel). Omit --project
     to query all connected projects. Repeat --project for a specific subset.
     Multi-project by default, matching `storage buckets`, `config list`, `job list`.
@@ -857,7 +857,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent sharing unshare --project ALIAS --bucket-id ID
     Disable sharing. Fails if linked buckets exist. Requires master token.
 
-  kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+  kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
     Link a shared bucket into a project (read-only). Uses regular token.
 
   kbagent sharing unlink --project ALIAS --bucket-id ID

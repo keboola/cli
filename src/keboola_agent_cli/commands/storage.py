@@ -24,6 +24,7 @@ from ._storage_table_detail import (
     format_time_partitioning,
     render_table_detail,
 )
+from ._storage_tables_render import render_tables
 
 storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
 
@@ -275,6 +276,16 @@ def storage_tables(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    include_usage: bool = typer.Option(
+        False,
+        "--include-usage",
+        help=(
+            "Also report which configurations read or write each table, from "
+            "their storage input/output mapping. Costs one extra component "
+            "listing per project (not per table), but that listing carries "
+            "every configuration body -- expect it to be slow in a big project."
+        ),
+    ),
 ) -> None:
     """List storage tables from one or more projects.
 
@@ -318,6 +329,7 @@ def storage_tables(
             aliases=project,
             bucket_id=bucket_id,
             branch_id=effective_branch,
+            include_usage=include_usage,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -329,42 +341,11 @@ def storage_tables(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        from rich.table import Table
-
         tables = result["tables"]
         if not tables:
             formatter.console.print("[dim]No tables found.[/dim]")
-            emit_project_warnings(formatter, result)
-            return
-
-        # Group by project so multi-project output stays readable.
-        by_project: dict[str, list[dict]] = {}
-        for t in tables:
-            alias = t["project_alias"]
-            by_project.setdefault(alias, []).append(t)
-
-        for alias, proj_tables in by_project.items():
-            table = Table(title=f"Tables - {alias}")
-            table.add_column("Table ID", style="bold cyan")
-            table.add_column("Rows", justify="right")
-            table.add_column("Size", justify="right", style="dim")
-            table.add_column("Last Import", style="dim")
-
-            for t in proj_tables:
-                size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
-                last_import = t.get("last_import_date", "")
-                if last_import and "T" in last_import:
-                    last_import = last_import.split("T")[0]
-                table.add_row(
-                    t["id"],
-                    str(t["rows_count"]),
-                    f"{size_mb:.1f} MB",
-                    last_import,
-                )
-
-            formatter.console.print(table)
-            formatter.console.print()
-
+        else:
+            render_tables(formatter.console, tables, include_usage)
         emit_project_warnings(formatter, result)
 
 

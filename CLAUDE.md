@@ -414,7 +414,7 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
 #   (`sync clone` is the command that remaps).
 
-kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
 #   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
 #   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
@@ -424,14 +424,14 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   "is this referenced anywhere" miss a table spelled DCFAmount in one config and DCFAMOUNT in
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
-kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
-kbagent job detail --project NAME --job-id ID
+kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
+kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 
 kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
-kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]
+kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID] [--include-usage]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 # table-detail (0.88.0+, #621): also returns the raw Storage API `definition`. On BigQuery
 #   that object (timePartitioning / rangePartitioning / clustering / requirePartitionFilter /
@@ -513,7 +513,7 @@ kbagent lineage server --load PATH [--port N] [--host HOST]
 kbagent sharing list [--project NAME]
 kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
 kbagent sharing unshare --project ALIAS --bucket-id ID
-kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
 kbagent sharing unlink --project ALIAS --bucket-id ID
 kbagent sharing edges [--project NAME]
 

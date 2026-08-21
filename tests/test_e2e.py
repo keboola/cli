@@ -10704,6 +10704,108 @@ class TestE2EMcpParityCommands:
         assert result.exit_code == 2
 
     # ------------------------------------------------------------------
+    # 0.89.0 MCP-parity flags
+    # ------------------------------------------------------------------
+
+    def test_search_scope_narrows_config_based_results(self) -> None:
+        """`--scope` must be accepted and can only shrink the result set."""
+        wide = self._run_ok(
+            "search", "in.c", "--search-type", "config-based", "--project", self.alias
+        )["data"]
+        scoped = self._run_ok(
+            "search",
+            "in.c",
+            "--search-type",
+            "config-based",
+            "--scope",
+            "storage.input",
+            "--project",
+            self.alias,
+        )["data"]
+
+        assert len(scoped["results"]) <= len(wide["results"])
+        for row in scoped["results"]:
+            assert row["match_count"] >= 1
+
+    def test_search_scope_with_textual_is_usage_error(self) -> None:
+        """`--scope` + textual search fails fast (exit 2), like `--regex` inverted."""
+        result = self._run("search", "data", "--scope", "parameters", "--project", self.alias)
+        assert result.exit_code == 2
+
+    def test_job_list_offset_and_sort_are_accepted(self) -> None:
+        """The Queue API must accept sortBy/sortOrder/offset as kbagent sends them."""
+        first = self._run_ok("job", "list", "--project", self.alias, "--limit", "2")["data"]
+        oldest = self._run_ok(
+            "job",
+            "list",
+            "--project",
+            self.alias,
+            "--limit",
+            "2",
+            "--sort-by",
+            "startTime",
+            "--sort-order",
+            "asc",
+        )["data"]
+        paged = self._run_ok(
+            "job", "list", "--project", self.alias, "--limit", "2", "--offset", "1"
+        )["data"]
+
+        for data in (first, oldest, paged):
+            assert "jobs" in data and "errors" in data
+
+    def test_job_list_rejects_unknown_sort_field(self) -> None:
+        result = self._run("job", "list", "--project", self.alias, "--sort-by", "whenever")
+        assert result.exit_code == 2
+
+    def test_job_detail_log_tail_lines(self) -> None:
+        """`--log-tail-lines` must attach `logTail` for a real, finished job."""
+        listing = self._run_ok("job", "list", "--project", self.alias, "--limit", "1")["data"]
+        if not listing["jobs"]:
+            pytest.skip("project has no job history")
+        job_id = str(listing["jobs"][0]["id"])
+
+        plain = self._run_ok("job", "detail", "--project", self.alias, "--job-id", job_id)["data"]
+        assert "logTail" not in plain
+
+        tailed = self._run_ok(
+            "job", "detail", "--project", self.alias, "--job-id", job_id, "--log-tail-lines", "5"
+        )["data"]
+        assert isinstance(tailed["logTail"], list)
+        assert len(tailed["logTail"]) <= 5
+
+    def test_storage_tables_include_usage(self) -> None:
+        """`--include-usage` must attach `used_by` to every row against a live project."""
+        data = self._run_ok("storage", "tables", "--project", self.alias, "--include-usage")["data"]
+
+        for row in data["tables"]:
+            assert isinstance(row["used_by"], list)
+            for ref in row["used_by"]:
+                assert ref["scope"] in ("storage.input", "storage.output")
+                assert ref["component_id"]
+
+    def test_storage_tables_without_usage_omits_used_by(self) -> None:
+        data = self._run_ok("storage", "tables", "--project", self.alias)["data"]
+        for row in data["tables"]:
+            assert "used_by" not in row
+
+    def test_sharing_link_rejects_unknown_stage(self) -> None:
+        """Stage validation happens before any API call (exit 2)."""
+        result = self._run(
+            "sharing",
+            "link",
+            "--project",
+            self.alias,
+            "--source-project-id",
+            "1",
+            "--bucket-id",
+            "out.c-nonexistent",
+            "--stage",
+            "staging",
+        )
+        assert result.exit_code == 2
+
+    # ------------------------------------------------------------------
     # config oauth-url (master-token gate)
     # ------------------------------------------------------------------
 

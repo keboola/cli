@@ -10,6 +10,8 @@ from urllib.parse import quote
 from ..constants import (
     DEFAULT_GROUPED_JOBS_LIMIT,
     DEFAULT_JOB_LIMIT,
+    DEFAULT_JOB_SORT_BY,
+    DEFAULT_JOB_SORT_ORDER,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_POLL_STRATEGY,
     STORAGE_JOB_MAX_WAIT,
@@ -30,6 +32,8 @@ class _QueueMixin(_CoreClient):
         status: str | None = None,
         limit: int = DEFAULT_JOB_LIMIT,
         offset: int = 0,
+        sort_by: str = DEFAULT_JOB_SORT_BY,
+        sort_order: str = DEFAULT_JOB_SORT_ORDER,
     ) -> list[dict[str, Any]]:
         """List jobs from the Queue API.
 
@@ -39,11 +43,18 @@ class _QueueMixin(_CoreClient):
             status: Optional filter by job status.
             limit: Max number of jobs to return (1-500).
             offset: Offset for pagination.
+            sort_by: Field to sort by (see JOB_SORT_FIELDS).
+            sort_order: "asc" or "desc".
 
         Returns:
             List of job dicts from the Queue API.
         """
-        params: dict[str, str | int] = {"limit": limit, "offset": offset}
+        params: dict[str, str | int] = {
+            "limit": limit,
+            "offset": offset,
+            "sortBy": sort_by,
+            "sortOrder": sort_order,
+        }
         if component_id:
             params["component"] = component_id
         if config_id:

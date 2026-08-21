@@ -12,6 +12,7 @@ here for a unified ``search`` command surface.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..constants import GLOBAL_SEARCH_FEATURE
@@ -69,6 +70,7 @@ class SearchService(BaseService):
         search_type: str = "textual",
         limit: int = 50,
         regex: bool = False,
+        scopes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Search for items across one or more projects.
 
@@ -88,6 +90,13 @@ class SearchService(BaseService):
             regex: When True (textual only), the query is run as a
                    case-insensitive whole-term regular expression over entity
                    names (Storage API ``mode=regex``).
+            scopes: Dot-notation prefixes (config-based only) that narrow a hit
+                    to parts of the configuration body, e.g. ``parameters`` or
+                    ``storage.input``. Written relative to the configuration
+                    itself; the ``configuration.`` / ``rows[N].configuration.``
+                    wrapper is normalised away. Multiple scopes are OR-ed. A
+                    configuration whose every match falls outside all scopes
+                    drops out of the results entirely.
 
         Returns:
             Dict with keys:
@@ -98,8 +107,10 @@ class SearchService(BaseService):
         Raises:
             ConfigError: When ``regex=True`` is combined with
                          ``search_type="config-based"`` (regex exists only on
-                         the global-search endpoint). Validated here so every
-                         caller (CLI, REST ``/search``) inherits the check.
+                         the global-search endpoint), or when ``scopes`` is
+                         combined with textual search (there is no config body
+                         to scope into). Validated here so every caller (CLI,
+                         REST ``/search``) inherits the checks.
         """
         if regex and search_type == "config-based":
             raise ConfigError(
@@ -107,10 +118,16 @@ class SearchService(BaseService):
                 "(config-based search does not support regex)."
             )
 
+        if scopes and search_type != "config-based":
+            raise ConfigError(
+                "Scopes are only supported with config-based search "
+                "(textual search matches entity names, not configuration bodies)."
+            )
+
         projects = self.resolve_projects(aliases)
 
         if search_type == "config-based":
-            return self._search_config_based(query, projects, item_types)
+            return self._search_config_based(query, projects, item_types, scopes)
 
         return self._search_textual(query, projects, item_types, limit, regex=regex)
 
@@ -244,6 +261,7 @@ class SearchService(BaseService):
         query: str,
         projects: dict[str, ProjectConfig],
         item_types: list[str] | None,
+        scopes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Delegate to ConfigService for JSON-body search across projects.
 
@@ -274,21 +292,28 @@ class SearchService(BaseService):
             ignore_case=True,
         )
 
-        # Re-shape matches into the unified results format.
-        results = [
-            {
-                "project_alias": m["project_alias"],
-                "type": "configuration",
-                "id": m["config_id"],
-                "name": m["config_name"],
-                "description": m.get("description", ""),
-                "component_id": m.get("component_id"),
-                "match_count": m.get("match_count", 0),
-                "match_locations": m.get("match_locations", []),
-                "matched_columns": [],
-            }
-            for m in raw.get("matches", [])
-        ]
+        # Re-shape matches into the unified results format, narrowing each
+        # hit to the requested scopes. Filtering here (rather than inside the
+        # JSON walk) keeps ConfigService's own `config search` surface -- which
+        # has no scope concept -- untouched.
+        results = []
+        for m in raw.get("matches", []):
+            locations = _filter_locations_by_scopes(m.get("match_locations", []), scopes)
+            if not locations:
+                continue
+            results.append(
+                {
+                    "project_alias": m["project_alias"],
+                    "type": "configuration",
+                    "id": m["config_id"],
+                    "name": m["config_name"],
+                    "description": m.get("description", ""),
+                    "component_id": m.get("component_id"),
+                    "match_count": len(locations),
+                    "match_locations": locations,
+                    "matched_columns": [],
+                }
+            )
 
         return {
             "results": results,
@@ -301,6 +326,46 @@ class SearchService(BaseService):
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+_CONFIG_BODY_PREFIX = re.compile(r"^(?:rows\[\d+\]\.)?configuration\.")
+
+
+def _strip_config_body_prefix(location: str) -> str | None:
+    """Return a match location relative to the configuration body, or None.
+
+    ConfigService reports absolute paths into the whole config record
+    (``configuration.parameters.host``, ``rows[0].configuration.storage...``),
+    while a scope is written the way it appears in the configuration itself
+    (``parameters``, ``storage.input``). Locations outside any configuration
+    body -- ``name``, ``description``, ``id`` -- have no relative form and
+    return None, so they never satisfy a scope.
+    """
+    stripped, replaced = _CONFIG_BODY_PREFIX.subn("", location, count=1)
+    return stripped if replaced else None
+
+
+def _filter_locations_by_scopes(
+    locations: list[str],
+    scopes: list[str] | None,
+) -> list[str]:
+    """Keep the locations that fall under at least one scope.
+
+    An empty/absent ``scopes`` keeps everything. Matching is on whole path
+    segments, so ``storage.in`` does not match ``storage.input``.
+    """
+    if not scopes:
+        return list(locations)
+
+    kept: list[str] = []
+    for location in locations:
+        relative = _strip_config_body_prefix(location)
+        if relative is None:
+            continue
+        if any(
+            relative == scope or relative.startswith((f"{scope}.", f"{scope}[")) for scope in scopes
+        ):
+            kept.append(location)
+    return kept
 
 
 def _resolve_api_types(item_types: list[str] | None) -> list[str]:

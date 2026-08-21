@@ -2143,3 +2143,119 @@ def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False
+
+
+# 0.89.0 MCP-parity flags: every one must be reachable over `kbagent serve`,
+# not just from the CLI. Each router docstring claims it "Mirrors" its command,
+# so a flag the router cannot express makes that claim false (PR #632 review).
+# ---------------------------------------------------------------------------
+
+
+def test_jobs_list_forwards_offset_and_sort(tmp_path: Path) -> None:
+    """GET /jobs must expose the Queue API paging controls."""
+    job_svc = MagicMock()
+    job_svc.list_jobs.return_value = {"jobs": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/jobs?offset=100&sort_by=endTime&sort_order=asc",
+            headers=AUTH,
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = job_svc.list_jobs.call_args.kwargs
+    assert kwargs["offset"] == 100
+    assert kwargs["sort_by"] == "endTime"
+    assert kwargs["sort_order"] == "asc"
+
+
+def test_jobs_detail_forwards_log_tail_lines(tmp_path: Path) -> None:
+    """GET /jobs/{p}/{id} must be able to ask for the log tail."""
+    job_svc = MagicMock()
+    job_svc.get_job_detail.return_value = {"id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/jobs/{PROJECT}/123?log_tail_lines=25", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert job_svc.get_job_detail.call_args.kwargs["log_tail_lines"] == 25
+
+
+def test_jobs_detail_defaults_to_no_log_tail(tmp_path: Path) -> None:
+    """The extra events call stays opt-in over REST too."""
+    job_svc = MagicMock()
+    job_svc.get_job_detail.return_value = {"id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/jobs/{PROJECT}/123", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert job_svc.get_job_detail.call_args.kwargs["log_tail_lines"] == 0
+
+
+def test_search_forwards_scopes(tmp_path: Path) -> None:
+    """GET /search must forward repeated ?scope= as scopes=."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    app = _make_app_with_registry(tmp_path, _mock_registry(search=search_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search?query=orders&search_type=config-based"
+            "&scope=storage.input&scope=storage.output",
+            headers=AUTH,
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = search_svc.search.call_args.kwargs
+    assert kwargs["scopes"] == ["storage.input", "storage.output"]
+
+
+def test_sharing_link_forwards_stage(tmp_path: Path) -> None:
+    """POST /sharing/{p}/link must be able to target the out stage."""
+    sharing_svc = MagicMock()
+    sharing_svc.link.return_value = {"linked_bucket_id": "out.c-x", "message": "ok"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(sharing=sharing_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/sharing/{PROJECT}/link",
+            headers=AUTH,
+            json={"source_project_id": 9, "bucket_id": "out.c-data", "stage": "out"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert sharing_svc.link.call_args.kwargs["stage"] == "out"
+
+
+def test_sharing_link_stage_defaults_to_in(tmp_path: Path) -> None:
+    """Omitting stage keeps the CLI's `in` default, not the source bucket's."""
+    sharing_svc = MagicMock()
+    sharing_svc.link.return_value = {"linked_bucket_id": "in.c-x", "message": "ok"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(sharing=sharing_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/sharing/{PROJECT}/link",
+            headers=AUTH,
+            json={"source_project_id": 9, "bucket_id": "out.c-data"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert sharing_svc.link.call_args.kwargs["stage"] == "in"
+
+
+def test_storage_tables_forwards_include_usage(tmp_path: Path) -> None:
+    """GET /storage/tables must expose the usage scan."""
+    storage_svc = MagicMock()
+    storage_svc.list_tables.return_value = {"tables": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/storage/tables?include_usage=true", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert storage_svc.list_tables.call_args.kwargs["include_usage"] is True

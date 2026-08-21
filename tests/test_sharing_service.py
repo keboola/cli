@@ -268,7 +268,78 @@ class TestLink:
             source_project_id=999,
             source_bucket_id="out.c-data",
             name="shared-data",
+            stage="in",
         )
+
+    def test_link_defaults_to_in_stage(self, tmp_config_dir: Path) -> None:
+        """Omitting stage keeps the historical 'in' default, even for an out-stage source."""
+        store = setup_single_project(tmp_config_dir)
+
+        mock_client = MagicMock()
+        mock_client.link_bucket.return_value = {
+            "status": "success",
+            "results": {"id": "in.c-shared-data"},
+        }
+
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        service.link(
+            alias="prod",
+            source_project_id=999,
+            source_bucket_id="out.c-data",
+            name="shared-data",
+        )
+
+        assert mock_client.link_bucket.call_args.kwargs["stage"] == "in"
+
+    def test_link_explicit_out_stage(self, tmp_config_dir: Path) -> None:
+        """--stage out links the bucket into the out stage (MCP link_shared_bucket parity)."""
+        store = setup_single_project(tmp_config_dir)
+
+        mock_client = MagicMock()
+        mock_client.link_bucket.return_value = {
+            "status": "success",
+            "results": {"id": "out.c-shared-data"},
+        }
+
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.link(
+            alias="prod",
+            source_project_id=999,
+            source_bucket_id="out.c-data",
+            name="shared-data",
+            stage="out",
+        )
+
+        assert mock_client.link_bucket.call_args.kwargs["stage"] == "out"
+        assert result["stage"] == "out"
+
+    def test_link_rejects_unknown_stage(self, tmp_config_dir: Path) -> None:
+        """An unknown stage fails before any API call."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(ValueError, match="Invalid stage"):
+            service.link(
+                alias="prod",
+                source_project_id=999,
+                source_bucket_id="out.c-data",
+                stage="staging",
+            )
+
+        mock_client.link_bucket.assert_not_called()
 
     def test_link_auto_name(self, tmp_config_dir: Path) -> None:
         """link generates name from source bucket ID when not specified."""

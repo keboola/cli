@@ -15,7 +15,9 @@ from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
+from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
+from .table_usage import collect_table_usage, fetch_usage_components
 
 logger = logging.getLogger(__name__)
 
@@ -659,6 +661,7 @@ class StorageService(ColumnDescriptionsMixin):
         aliases: list[str] | None = None,
         bucket_id: str | None = None,
         branch_id: int | None = None,
+        include_usage: bool = False,
     ) -> dict[str, Any]:
         """List tables from one or more projects (in parallel).
 
@@ -671,45 +674,42 @@ class StorageService(ColumnDescriptionsMixin):
             bucket_id: Optional bucket ID filter applied per project.
             branch_id: If set, target a specific dev branch
                 (only valid with a single project).
+            include_usage: When True, also report which configurations read or
+                write each table (``used_by``). Costs one extra component
+                listing per project -- not per table -- but that listing
+                carries every configuration body, so it is the expensive call
+                in a big project. Off by default.
 
         Returns:
             Dict with 'tables' list (each row tagged with ``project_alias``)
-            and 'errors' list (per-project failures).
+            and 'errors' list (per-project failures). With ``include_usage``
+            every table row also carries a ``used_by`` list (empty when
+            nothing references it, or when the usage scan itself failed).
         """
         projects = self.resolve_projects(aliases)
 
         def _worker(
             alias: str, project: ProjectConfig
-        ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
             return self._fetch_tables(
                 alias,
                 project,
                 bucket_id=bucket_id,
                 branch_id=branch_id,
+                include_usage=include_usage,
+                usage_branch_id=branch_id,
             )
 
         successes, errors = self._run_parallel(projects, _worker)
 
         tables: list[dict[str, Any]] = []
-        for result in successes:
-            alias = result[0]
-            for t in result[1]:
-                tables.append(
-                    {
-                        "project_alias": alias,
-                        "id": t.get("id", ""),
-                        "name": t.get("name", ""),
-                        "display_name": t.get("displayName", t.get("name", "")),
-                        "bucket_id": t.get("bucket", {}).get("id", "")
-                        if isinstance(t.get("bucket"), dict)
-                        else "",
-                        # API may return null on empty tables; coerce to 0.
-                        "rows_count": t.get("rowsCount") or 0,
-                        "data_size_bytes": t.get("dataSizeBytes") or 0,
-                        "is_alias": t.get("isAlias", False),
-                        "last_import_date": t.get("lastImportDate", ""),
-                    }
-                )
+        for alias, raw_tables, components in successes:
+            usage = (
+                collect_table_usage(components, [t.get("id", "") for t in raw_tables])
+                if include_usage
+                else None
+            )
+            tables.extend(normalize_table_rows(alias, raw_tables, usage))
 
         return {"tables": tables, "errors": errors}
 
@@ -2614,20 +2614,28 @@ class StorageService(ColumnDescriptionsMixin):
         project: ProjectConfig,
         bucket_id: str | None = None,
         branch_id: int | None = None,
-    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        include_usage: bool = False,
+        usage_branch_id: int | None = None,
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
         """Fetch tables for a single project (worker for _run_parallel).
 
         Per-project failures (e.g. bucket not found in this project, invalid
         token) are returned as error tuples so other projects still complete.
-        Returns a 3-tuple on success (alias, tables, True) or a 2-tuple
-        (alias, error_dict) on failure, matching the _run_parallel protocol.
+        Returns a 3-tuple on success (alias, tables, components) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol,
+        which tells the two apart by tuple LENGTH -- so the third slot can
+        carry the component listing rather than a success sentinel. It is
+        empty unless ``include_usage`` asked for a usage scan.
         """
         from ..errors import KeboolaApiError
 
         client = self._client_factory(project.stack_url, project.token)
         try:
             tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
-            return (alias, tables, True)
+            components = (
+                fetch_usage_components(client, alias, usage_branch_id) if include_usage else []
+            )
+            return (alias, tables, components)
         except KeboolaApiError as exc:
             return (
                 alias,

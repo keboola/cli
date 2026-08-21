@@ -1110,7 +1110,7 @@ class TestListJobs:
             },
         ]
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             json=jobs,
             status_code=200,
         )
@@ -1127,7 +1127,7 @@ class TestListJobs:
     def test_list_jobs_with_filters(self, httpx_mock) -> None:
         """list_jobs() passes component, config, and status filters as query params."""
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=10&offset=0&component=keboola.ex-db-snowflake&config=42&status=error",
+            url="https://queue.keboola.com/search/jobs?limit=10&offset=0&sortBy=startTime&sortOrder=desc&component=keboola.ex-db-snowflake&config=42&status=error",
             json=[],
             status_code=200,
         )
@@ -1147,7 +1147,7 @@ class TestListJobs:
     def test_list_jobs_401_error(self, httpx_mock) -> None:
         """list_jobs() raises KeboolaApiError with INVALID_TOKEN on 401 from Queue API."""
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             json={"error": "Invalid token"},
             status_code=401,
         )
@@ -1163,12 +1163,12 @@ class TestListJobs:
     def test_list_jobs_retry_on_503(self, httpx_mock) -> None:
         """list_jobs() retries on 503 from Queue API and succeeds."""
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             status_code=503,
             text="Service Unavailable",
         )
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             json=[{"id": 1, "status": "success"}],
             status_code=200,
         )
@@ -1190,7 +1190,7 @@ class TestListJobs:
     def test_list_jobs_empty_result(self, httpx_mock) -> None:
         """list_jobs() returns empty list when no jobs match."""
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             json=[],
             status_code=200,
         )
@@ -1218,7 +1218,7 @@ class TestCloseWithQueueClient:
     def test_close_with_queue_client(self, httpx_mock) -> None:
         """close() closes both storage and queue clients."""
         httpx_mock.add_response(
-            url="https://queue.keboola.com/search/jobs?limit=50&offset=0",
+            url="https://queue.keboola.com/search/jobs?limit=50&offset=0&sortBy=startTime&sortOrder=desc",
             json=[],
             status_code=200,
         )

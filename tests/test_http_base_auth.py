@@ -130,7 +130,9 @@ class TestSubClientAuthPropagation:
     """
 
     def test_queue_sub_client_inherits_bearer(self, httpx_mock) -> None:
-        httpx_mock.add_response(url=f"{QUEUE_URL}/search/jobs?limit=1&offset=0", json=[])
+        httpx_mock.add_response(
+            url=f"{QUEUE_URL}/search/jobs?limit=1&offset=0&sortBy=startTime&sortOrder=desc", json=[]
+        )
 
         with KeboolaClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()) as client:
             client.list_jobs(limit=1)
@@ -184,7 +186,9 @@ class TestSubClientAuthPropagation:
 
     def test_sub_clients_carry_no_auth_in_static_mode(self, httpx_mock) -> None:
         """Static mode keeps sending the storage token to sub-clients, as before."""
-        httpx_mock.add_response(url=f"{QUEUE_URL}/search/jobs?limit=1&offset=0", json=[])
+        httpx_mock.add_response(
+            url=f"{QUEUE_URL}/search/jobs?limit=1&offset=0&sortBy=startTime&sortOrder=desc", json=[]
+        )
 
         with KeboolaClient(stack_url=STACK_URL, token=STATIC_TOKEN) as client:
             client.list_jobs(limit=1)
