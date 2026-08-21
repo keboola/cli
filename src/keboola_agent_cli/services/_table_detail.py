@@ -17,26 +17,35 @@ command existed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 
-def _split_descriptions(raw_metadata: list[dict[str, Any]]) -> tuple[str, dict[str, str]]:
+@dataclass(frozen=True)
+class Descriptions:
+    """The user-authored descriptions carried in a table's metadata list."""
+
+    table: str = ""
+    columns: dict[str, str] = field(default_factory=dict)
+
+
+def _split_descriptions(raw_metadata: list[dict[str, Any]]) -> Descriptions:
     """Pull the user table description and per-column descriptions out of metadata.
 
     Keboola has no user-writable column-metadata endpoint, so column descriptions
     are stored as `KBC.column.{name}.description` rows in the *table's* metadata
     list rather than alongside the column.
     """
-    description = ""
+    table_description = ""
     col_descriptions: dict[str, str] = {}
     for entry in raw_metadata:
         key = entry.get("key", "")
         if key == "KBC.description" and entry.get("provider") == "user":
-            description = entry.get("value", "") or ""
+            table_description = entry.get("value", "") or ""
         elif key.startswith("KBC.column.") and key.endswith(".description"):
             col_name = key[len("KBC.column.") : -len(".description")]
             col_descriptions[col_name] = entry.get("value", "") or ""
-    return description, col_descriptions
+    return Descriptions(table=table_description, columns=col_descriptions)
 
 
 def _column_details(
@@ -87,7 +96,7 @@ def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict
     """
     columns = table.get("columns", [])
     raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
-    description, col_descriptions = _split_descriptions(raw_metadata)
+    descriptions = _split_descriptions(raw_metadata)
 
     return {
         "project_alias": alias,
@@ -100,10 +109,10 @@ def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict
         # (repartition) off it, and type resolution picks the matching
         # INFORMATION_SCHEMA dialect for alias / linked tables.
         "backend": table.get("bucket", {}).get("backend", ""),
-        "description": description,
+        "description": descriptions.table,
         "columns": columns,
         "column_details": _column_details(
-            columns, table.get("columnMetadata", {}), col_descriptions
+            columns, table.get("columnMetadata", {}), descriptions.columns
         ),
         "primary_key": table.get("primaryKey", []),
         # API may return null on empty tables; coerce to 0.
