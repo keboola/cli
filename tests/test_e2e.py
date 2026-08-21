@@ -4007,6 +4007,12 @@ class TestFullE2E:
         assert data["data"]["description"] == "Batch table desc"
         col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
         assert col_descs.get("id") == "Batch column id desc"
+        # The `columns` payload of PUT .../definition is a POSITIVE-ONLY patch:
+        # the batch above sent `id` alone, so `name` -- described two steps
+        # earlier -- must survive untouched. The whole write path assumes this;
+        # a full-replace endpoint would silently wipe every column left out of
+        # the payload, and the assertion on `id` alone would never notice.
+        assert col_descs.get("name") == "Human-readable name"
         # The native write leaves no legacy flat keys behind (#624).
         assert data["data"]["legacy_column_descriptions"] == []
 
@@ -4019,16 +4025,22 @@ class TestFullE2E:
         wrote before the native definition endpoint; nothing but kbagent ever
         read it. Seeding goes through the raw client on purpose -- no CLI
         command writes that shape any more.
+
+        Seeded on ``value``, the one column the describe steps above leave
+        undescribed: that is the real pre-0.88.0 shape (a legacy key and
+        nothing else). ``id`` / ``name`` already carry native descriptions,
+        so a legacy key there is a *conflict*, which the second half of this
+        test covers separately.
         """
         self.api.set_table_metadata(
             table_id=table_id,
-            entries=[("KBC.column.name.description", "Legacy column description")],
+            entries=[("KBC.column.value.description", "Legacy column description")],
         )
 
         data = self._run_ok(
             "storage", "table-detail", "--project", self.alias, "--table-id", table_id
         )
-        assert data["data"]["legacy_column_descriptions"] == ["name"]
+        assert data["data"]["legacy_column_descriptions"] == ["value"]
 
         # Dry run reports the table and writes nothing.
         data = self._run_ok(
@@ -4043,7 +4055,7 @@ class TestFullE2E:
         assert data["data"]["dry_run"] is True
         assert data["data"]["tables_migrated"] == 0
         migrated = {item["table_id"]: item["columns"] for item in data["data"]["migrated"]}
-        assert migrated[table_id]["name"] == "Legacy column description"
+        assert migrated[table_id]["value"] == "Legacy column description"
 
         data = self._run_ok(
             "storage",
@@ -4063,7 +4075,7 @@ class TestFullE2E:
         )
         assert data["data"]["legacy_column_descriptions"] == []
         col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
-        assert col_descs.get("name") == "Legacy column description"
+        assert col_descs.get("value") == "Legacy column description"
 
         # Re-running is a no-op: nothing left to migrate.
         data = self._run_ok(
@@ -4076,6 +4088,33 @@ class TestFullE2E:
             "--yes",
         )
         assert data["data"]["migrated"] == []
+
+        # A legacy key on a column that ALREADY has a native description is a
+        # conflict: the newer (visible) value wins, the stale key is reported
+        # and left alone rather than overwriting what the UI shows.
+        self.api.set_table_metadata(
+            table_id=table_id,
+            entries=[("KBC.column.id.description", "Stale legacy id description")],
+        )
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["migrated"] == []
+        conflicts = [s for s in data["data"]["skipped"] if s["reason"] == "conflict"]
+        assert [s["column"] for s in conflicts] == ["id"]
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Batch column id desc"
+        assert data["data"]["legacy_column_descriptions"] == ["id"]
 
     def _test_semantic_layer_roundtrip(self) -> None:
         """Live roundtrip of the semantic-layer command group against ``self.alias``.
