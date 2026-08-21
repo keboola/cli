@@ -122,7 +122,7 @@ a critical failure.
 | Create / update / delete a config row | `kbagent config row-create\|row-update\|row-delete --project P --component-id C --config-id K [--row-id R] [--name N] [--configuration JSON] [--yes]` (0.30.0+) -- `row-delete` is destructive (gated behind `--allow-destructive`); all three are branch-aware | -- | raw REST against `/v2/storage/components/C/configs/K/rows` |
 | Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` (0.30.0+) -- URL to open in a browser for OAuth | -- | raw `GET /v2/storage/components/C/configs/K/oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` (0.27.0+; 0.43.9+ skips sandboxes) | `kbagent config list --component-id keboola.data-apps` (Storage view only -- no state/URL/configVersion) | hand-joining Storage configs to Data Science per project |
-| Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) -- OR `--use-managed-git-repo` (0.65.0+) for an empty Keboola-hosted repo instead of `--git-repo` (mutually exclusive; forces --no-deploy; deploy flow = create -> git-credentials-create + push -> deploy; platform injects clone creds; see gotchas) | `kbagent config new --component-id keboola.data-apps` + `kbagent encrypt values` + raw `POST /apps` -- only for custom shapes | raw `POST data-science/apps` then `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, errors `dataApp.git.repository is required`) |
+| Bring a new data app online from a git repo | `kbagent data-app create --project P --name N --slug S --git-repo URL [--git-pat-env VAR \| --git-public]` (0.27.0+) -- Storage access ON by default on 0.87.0+ (`--no-workspace` opts out; on <= 0.86.0 patch `runtime.workspace.enabled` after create or it reads nothing) -- OR `--use-managed-git-repo` (0.65.0+) for an empty Keboola-hosted repo instead of `--git-repo` (mutually exclusive; forces --no-deploy; deploy flow = create -> git-credentials-create + push -> deploy; platform injects clone creds; see gotchas) | `kbagent config new --component-id keboola.data-apps` + `kbagent encrypt values` + raw `POST /apps` -- only for custom shapes | raw `POST data-science/apps` then `PATCH desiredState=running` without `configVersion + restartIfRunning` (the §9 footgun -- pins to v2 empty shell, errors `dataApp.git.repository is required`) |
 | Roll out a new code or config version on a data app | `kbagent data-app deploy --project P --app-id N --wait` (0.27.0+) -- always sends the §9 trio | -- | `config update` then `job run` (data apps are not jobs -- the queue runner does not deploy them) |
 | Wake an auto-suspended data app | `kbagent data-app start --project P --app-id N` (0.27.0+) -- does NOT bump configVersion | hitting the app's URL (auto-restart, 30-60s cold boot) | `kbagent data-app deploy` (overkill -- bumps configVersion) |
 | Pause a running data app | `kbagent data-app stop --project P --app-id N` (0.27.0+) | -- | `kbagent data-app delete` (irreversible; cascades to Storage config) |
@@ -303,25 +303,23 @@ read it when a trigger fires. Each `(X.Y.Z+)` tag is the version floor.
   `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do
   NOT reach for `--allow-plaintext-on-encrypt-failure` (it writes the PAT in
   clear). gotchas.md § Encryption ciphertext.
+- **Data app Storage access fails SILENTLY**: no `runtime.workspace.enabled`
+  -> deploys green, reads nothing, platform logs nothing. Empty results -> read
+  `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
+  grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
+  patch + redeploy.
 - **`validate-repo`** (0.29.0+): GitHub-only, `--type python-js` only, <=5 API
   calls; run BEFORE `data-app create`.
-- **`git-repo`** (0.63.3+): introspect the repo an app deploys from (clone
-  URLs + `is_managed_git_repo`). It returns 409 `no Git repository configured`
-  until the app has been **deployed at least once** -- the git block syncs
-  Storage->DS app record at deploy time, so a `--no-deploy` app reads as having
-  no repo. `git-credentials` / `git-credentials-create` (0.63.3+) work on
-  **managed** repos only (admin storage token; `http_token` returns a one-time
-  secret shown once); apps from `data-app create --git-repo <url>` are external
-  -> 409 on credential create. For a **managed** repo (`--use-managed-git-repo`,
-  0.65.0+) `git-repo` works immediately after create -- no deploy needed
-  (resolved via `managedGitRepoId`).
+- **`git-repo`** (0.63.3+): clone-URL introspection + `is_managed_git_repo`.
+  409 until the app has been **deployed at least once** -- the git block syncs
+  Storage->DS at deploy, so a `--no-deploy` app reads as having no repo; a
+  MANAGED repo is the exception (resolved via `managedGitRepoId`, works right
+  after create). `git-credentials*` need an admin storage token; `http_token`
+  returns a one-time secret shown once.
 - **`--use-managed-git-repo`** (0.65.0+): provisions an EMPTY Keboola-hosted repo
   instead of `--git-repo` (mutually exclusive; no git block; forces --no-deploy).
-  Verified deploy flow: create -> `git-credentials-create --type http_token
-  --permissions readWrite` + push to the managed URL -> `deploy`. The platform
-  injects the clone credentials at deploy time, so no credential wiring is
-  needed. `deploy` pins the latest configVersion when a git block is present,
-  and omits it for a pure managed repo (deploys from `managedGitRepoId`).
+  Deploy flow in the §2 matrix row. `deploy` pins the latest configVersion when a
+  git block is present, and omits it for a pure managed repo (`managedGitRepoId`).
 - **`runs`** (0.65.0+): `data-app runs --app-id ID` lists deploy attempts with
   `failure_reason` + `startup_logs` (incl. setup-phase git-clone errors); works on
   failed/never-started apps where `data-app logs` 400s. Use it to see WHY a deploy

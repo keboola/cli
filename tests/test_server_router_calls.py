@@ -999,6 +999,47 @@ def test_data_app_create_passes_use_managed_git_repo(tmp_path: Path) -> None:
     assert kwargs.get("git_repo") == ""
 
 
+def test_data_app_create_workspace_defaults_on_over_rest(tmp_path: Path) -> None:
+    """The REST surface must default Storage access ON, like the CLI."""
+    data_app_svc = MagicMock()
+    data_app_svc.create_data_app.return_value = {"app_id": "9", "workspace": True}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}",
+            headers=AUTH,
+            json={"name": "App", "slug": "app", "git_repo": "https://github.com/o/r"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert data_app_svc.create_data_app.call_args.kwargs.get("workspace") is True
+
+
+def test_data_app_create_workspace_can_be_disabled_over_rest(tmp_path: Path) -> None:
+    """``"workspace": false`` in the body must reach the service."""
+    data_app_svc = MagicMock()
+    data_app_svc.create_data_app.return_value = {"app_id": "9", "workspace": False}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}",
+            headers=AUTH,
+            json={
+                "name": "App",
+                "slug": "app",
+                "git_repo": "https://github.com/o/r",
+                "workspace": False,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert data_app_svc.create_data_app.call_args.kwargs.get("workspace") is False
+
+
 def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
     """GET /data-apps/{p}/{app}/runs must call DataAppService.list_app_runs."""
     data_app_svc = MagicMock()

@@ -568,7 +568,19 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
-kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+# --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
+#   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
+#   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
+#   0.87.0 kbagent never wrote it and offered no way to: such an app deploys, reports state=running and
+#   passes its health probe while being unable to read a row, and the PLATFORM reports nothing -- verify
+#   via `config detail` -> `configuration.runtime`, not by grepping `data-app logs` (a `Missing env vars:
+#   WORKSPACE_ID` line is the app's own output, so its absence rules nothing out; an app that does not
+#   check crash-loops behind the probe instead). It defaults ON because the opposite mistake -- an
+#   unused workspace on an app that never reads Storage -- is the cheap one; pass --no-workspace there.
+#   Omitting the flag writes NO `enabled: false` key: the body is byte-identical to pre-0.87.0.
+#   Not gated on any project feature -- the config option is the sole control. Retrofit an existing app:
+#   `config update --merge --set 'runtime.workspace.enabled=true'` then `data-app deploy` (pins latest).
 # Exactly one git source is required: --git-repo URL (external) OR --use-managed-git-repo (0.65.0+).
 # --use-managed-git-repo provisions an EMPTY Keboola-hosted repo (POST useManagedGitRepo:true), writes
 #   NO parameters.dataApp.git block, and forces --no-deploy (nothing to run yet). Mutually exclusive with

@@ -24,6 +24,32 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.87.0": [
+        "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
+        "Storage access BY DEFAULT. The flag writes `runtime.workspace.enabled: true`, which "
+        "is the single switch that makes the platform provision the app's ephemeral workspace "
+        "and inject `WORKSPACE_ID`, `QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`. "
+        "kbagent never wrote it before and offered no option to, so an app that reads Storage "
+        "-- including every app built from the `dataapp-developer` skill's DuckDB-cached "
+        "read-only pattern -- deployed, reported `state=running` and passed its health probe "
+        "while unable to read a single row, with no platform-side diagnostic at all -- an app "
+        "that checked its own environment logged something like `Missing env vars: "
+        "WORKSPACE_ID`, and one that did not crash-looped behind the probe instead. The "
+        "authoritative check is `config detail` -> `configuration.runtime`. Default-ON because "
+        "the opposite mistake (an unused workspace on an app that never reads Storage) is the "
+        "cheap one -- pass `--no-workspace` there. `--no-workspace` omits the key entirely "
+        "rather than writing `enabled: false`, so the request body is byte-identical to "
+        "0.86.0. The block is a SIBLING of `runtime.backend`, matching what the UI and "
+        "`modify_python_js_data_app` write. NOT gated on any project feature (the "
+        "`data-apps-storage-workspace` flag is being enabled everywhere and then removed) -- "
+        "the config option is the sole control, and kbagent deliberately does NOT copy MCP's "
+        "legacy `parameters.dataApp.secrets.WORKSPACE_ID` fallback. Mirrored on the REST "
+        'surface as `"workspace": true` in the `POST /data-apps/{project}` body, and '
+        "reported as `workspace` in the `--json` envelope; human output prints the Storage-"
+        "access state on every create, loudly when it is off. Retrofit an existing app with "
+        "`config update --merge --set 'runtime.workspace.enabled=true'` followed by "
+        "`data-app deploy` (which pins the latest config version).",
+    ],
     "0.86.0": [
         "New: read-only `kbagent notification` command group audits Flow "
         "Notifications-tab recipients across projects. Subcommands: `notification list` "

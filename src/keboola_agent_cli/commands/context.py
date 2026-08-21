@@ -1122,7 +1122,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     [--git-public/--no-git-public] [--git-username USER]
     [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...]
     [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
-    [--type python-js|python|streamlit|r|...] [--branch ID]
+    [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID]
     [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
     Create + configure + deploy in one call. Default `--auth password` mints
     a 20-char hex simpleAuth password (retrievable via `data-app password`).
@@ -1137,6 +1137,19 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --type http_token --permissions readWrite + push code to the managed repo
     URL -> deploy. The platform injects the clone credentials at deploy time,
     so no credential wiring is needed.
+    --workspace (0.87.0+, DEFAULT ON) writes runtime.workspace.enabled=true --
+    the single switch that makes the platform provision the ephemeral workspace
+    and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
+    Any app that reads Storage needs it. Before 0.87.0 kbagent never wrote it,
+    so apps deployed, reported state=running, passed the health probe, and then
+    served no data, with NO platform-side diagnostic: verify by reading
+    `config detail` -> `configuration.runtime`, not by grepping `data-app logs`
+    (a `Missing env vars: WORKSPACE_ID` line comes from the app's own code, so
+    its absence rules nothing out). Pass --no-workspace only for an app that
+    never touches Storage. Retrofit an existing app with:
+      kbagent config update --project P --component-id keboola.data-apps
+        --config-id ID --merge --set 'runtime.workspace.enabled=true'
+    then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID]
