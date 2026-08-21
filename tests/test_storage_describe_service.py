@@ -197,14 +197,17 @@ class TestDescribeColumnsService:
         assert result["table_id"] == "in.c-sales.orders"
         assert result["columns"]["order_id"] == "Unique order identifier"
         assert result["columns"]["total"] == "Order total in USD"
-        mock_client.set_table_metadata.assert_called_once_with(
+        mock_client.set_table_column_metadata.assert_called_once_with(
             table_id="in.c-sales.orders",
-            entries=[
-                ("KBC.column.order_id.description", "Unique order identifier"),
-                ("KBC.column.total.description", "Order total in USD"),
-            ],
+            columns={
+                "order_id": [("KBC.description", "Unique order identifier")],
+                "total": [("KBC.description", "Order total in USD")],
+            },
             branch_id=None,
         )
+        # The legacy flat-key table-metadata write must not happen any more --
+        # it is the write MCP consumers never saw (#624).
+        mock_client.set_table_metadata.assert_not_called()
         mock_client.close.assert_called_once()
 
     def test_empty_columns_raises_value_error(self, tmp_path: Path) -> None:
@@ -215,12 +218,12 @@ class TestDescribeColumnsService:
         with pytest.raises(ValueError, match="At least one column"):
             service.describe_columns(alias="prod", table_id="in.c-sales.orders", columns={})
 
-        mock_client.set_table_metadata.assert_not_called()
+        mock_client.set_table_column_metadata.assert_not_called()
 
     def test_with_branch(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.return_value = []
+        mock_client.set_table_column_metadata.return_value = {}
         service = _make_service(store, mock_client)
 
         service.describe_columns(
@@ -230,9 +233,9 @@ class TestDescribeColumnsService:
             branch_id=77,
         )
 
-        mock_client.set_table_metadata.assert_called_once_with(
+        mock_client.set_table_column_metadata.assert_called_once_with(
             table_id="in.c-sales.orders",
-            entries=[("KBC.column.col1.description", "First column")],
+            columns={"col1": [("KBC.description", "First column")]},
             branch_id=77,
         )
 
@@ -268,10 +271,11 @@ class TestDescribeBatchService:
         assert "bucket" in applied_types
         assert "table" in applied_types
         assert "columns" in applied_types
-        # Bucket metadata called once (for the bucket), table metadata called twice
-        # (once for table description, once for column descriptions)
+        # Bucket metadata once; table metadata once (the table description);
+        # column descriptions go through the separate columnsMetadata write (#624).
         assert mock_client.set_bucket_metadata.call_count == 1
-        assert mock_client.set_table_metadata.call_count == 2
+        assert mock_client.set_table_metadata.call_count == 1
+        assert mock_client.set_table_column_metadata.call_count == 1
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -638,7 +642,12 @@ class TestGetTableDetailDescriptionExtraction:
     """Verify get_table_detail extracts table + per-column descriptions from metadata."""
 
     def test_extracts_table_and_column_descriptions(self, tmp_path: Path) -> None:
-        """KBC.description + KBC.column.{name}.description are surfaced on the response."""
+        """Table KBC.description + the LEGACY flat per-column keys are surfaced.
+
+        The flat ``KBC.column.{name}.description`` keys are what kbagent <=
+        0.86.0 wrote (#624); reading them is a back-compat fallback so tables
+        described by an older kbagent keep showing their descriptions here.
+        """
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.get_table_detail.return_value = {
@@ -688,6 +697,95 @@ class TestGetTableDetailDescriptionExtraction:
         # raw_metadata must be exposed as the 'metadata' field
         assert isinstance(result["metadata"], list)
         assert len(result["metadata"]) == 3
+
+    def test_reads_description_from_column_metadata(self, tmp_path: Path) -> None:
+        """KBC.description inside columnMetadata is the primary source (#624).
+
+        This is where describe-column writes since 0.86.1, and where the
+        Keboola UI and MCP server read from.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "displayName": "orders",
+            "bucket": {"id": "in.c-sales"},
+            "columns": ["order_id", "total"],
+            "primaryKey": ["order_id"],
+            "rowsCount": 42,
+            "columnMetadata": {
+                "order_id": [
+                    {
+                        "id": "10",
+                        "key": "KBC.datatype.basetype",
+                        "value": "INTEGER",
+                        "provider": "storage",
+                    },
+                    {
+                        "id": "11",
+                        "key": "KBC.description",
+                        "value": "Unique order identifier",
+                        "provider": "user",
+                    },
+                ],
+                "total": [
+                    {
+                        "id": "12",
+                        "key": "KBC.description",
+                        "value": "Order total in USD",
+                        "provider": "user",
+                    }
+                ],
+            },
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["order_id"]["description"] == "Unique order identifier"
+        assert col_map["order_id"]["type"] == "INTEGER"
+        assert col_map["total"]["description"] == "Order total in USD"
+
+    def test_column_metadata_description_wins_over_legacy_flat_key(self, tmp_path: Path) -> None:
+        """When both conventions carry a value, columnMetadata wins (#624).
+
+        A table described by an old kbagent and then re-described by a current
+        one holds both; the one MCP consumers see must be the one kbagent
+        reports.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "displayName": "orders",
+            "bucket": {"id": "in.c-sales"},
+            "columns": ["order_id"],
+            "primaryKey": [],
+            "rowsCount": 0,
+            "columnMetadata": {
+                "order_id": [
+                    {"id": "1", "key": "KBC.description", "value": "current", "provider": "user"}
+                ]
+            },
+            "metadata": [
+                {
+                    "id": "2",
+                    "key": "KBC.column.order_id.description",
+                    "value": "stale",
+                    "provider": "user",
+                }
+            ],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["order_id"]["description"] == "current"
 
     def test_surfaces_bucket_backend(self, tmp_path: Path) -> None:
         """The owning bucket's storage backend is exposed on the response.

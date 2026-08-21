@@ -123,10 +123,10 @@ class _StorageTablesMixin(_CoreClient):
         POST /v2/storage/tables/{id}/metadata
 
         Provider is always ``"user"`` for CLI-originated descriptions.
-        Column-level descriptions use the namespaced key convention
-        ``KBC.column.{colname}.description`` stored at table-metadata level
-        (Keboola Storage API does not expose a user-writable column-metadata
-        endpoint; ``columnMetadata`` is populated exclusively by components).
+        This method writes **table-level** metadata only. For per-column
+        descriptions use :meth:`set_table_column_metadata`, which targets the
+        native ``columnMetadata`` store the platform (and the Keboola MCP
+        server) actually reads.
 
         Args:
             table_id: Full table ID (e.g. "in.c-bucket.table").
@@ -143,6 +143,55 @@ class _StorageTablesMixin(_CoreClient):
             form[f"metadata[{i}][key]"] = key
             form[f"metadata[{i}][value]"] = value
         response = self._request("POST", f"{prefix}/tables/{safe_id}/metadata", data=form)
+        return response.json()
+
+    def set_table_column_metadata(
+        self,
+        table_id: str,
+        columns: dict[str, list[tuple[str, str]]],
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Upsert per-column metadata on a storage table.
+
+        POST /v2/storage/tables/{id}/metadata with a JSON ``columnsMetadata``
+        payload.
+
+        The same endpoint that takes table-level ``metadata`` also accepts a
+        ``columnsMetadata`` object with ``provider: user``, writing into the
+        native per-column store that ``GET /v2/storage/tables/{id}`` returns as
+        ``columnMetadata``. That is the store the platform UI and the Keboola
+        MCP server read column descriptions from; the older flat
+        ``KBC.column.{name}.description`` table-metadata convention is invisible
+        to them (issue #624).
+
+        Unlike the table-level sibling this sends JSON rather than form data --
+        the nested per-column shape has no form-encoded equivalent.
+
+        Args:
+            table_id: Full table ID (e.g. "in.c-bucket.table").
+            columns: Mapping of column name -> ordered ``(key, value)`` tuples.
+            branch_id: If set, target a specific dev branch.
+
+        Returns:
+            Response dict from the API, carrying ``metadata`` and
+            ``columnsMetadata`` for the table after the upsert.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        safe_id = quote(table_id, safe="")
+        payload: dict[str, Any] = {
+            "provider": "user",
+            "columnsMetadata": {
+                name: [
+                    # ``columnName`` is redundant with the mapping key but the
+                    # platform's own clients send it; mirror them rather than
+                    # rely on the server inferring it.
+                    {"key": key, "value": value, "columnName": name}
+                    for key, value in entries
+                ]
+                for name, entries in columns.items()
+            },
+        }
+        response = self._request("POST", f"{prefix}/tables/{safe_id}/metadata", json=payload)
         return response.json()
 
     def get_bucket_detail(

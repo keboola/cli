@@ -724,8 +724,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
 
   kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
-    Set per-column descriptions stored as KBC.column.{{name}}.description in table metadata (upsert).
-    Readable via table-detail --json .data.column_details[].description.
+    Set per-column descriptions as KBC.description in the table's columnMetadata (upsert) -- the store
+    the Keboola UI and MCP server read. Readable via table-detail --json .data.column_details[].description.
+    kbagent <= 0.86.0 wrote flat KBC.column.{{name}}.description table metadata that MCP never read (#624);
+    re-run describe-column on an affected table to repair it.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
     Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).

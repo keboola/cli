@@ -81,6 +81,22 @@ _COL_SPEC_RE = re.compile(
     r"\s*$"
 )
 
+# Column-metadata key -> the field it lands on in ``column_details``. Straight
+# pass-through of the raw string value; keys needing a transform (nullable) or
+# absent from a table's columnMetadata stay special-cased at the call site.
+_COLUMN_META_FIELDS = {
+    "KBC.datatype.basetype": "type",
+    # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ") --
+    # distinct from the Keboola basetype it maps to.
+    "KBC.datatype.type": "native_type",
+    # Length as stored: "40", "18,2", "255", ...
+    "KBC.datatype.length": "length",
+    "KBC.datatype.default": "default",
+    # Written by `storage describe-column` since 0.87.1, and by the Keboola UI
+    # and MCP server. See the legacy fallback in get_table_detail (#624).
+    "KBC.description": "description",
+}
+
 
 def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
     """Return column names from the first row of a CSV file.
@@ -654,39 +670,34 @@ class StorageService(BaseService):
         column_metadata = table.get("columnMetadata", {})
         raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
 
-        # Extract description and per-column descriptions from metadata list
+        # Extract the table description and the LEGACY per-column descriptions
+        # from the table-level metadata list. Legacy: kbagent <= 0.86.0 wrote
+        # column descriptions as flat ``KBC.column.{name}.description`` keys
+        # here instead of into ``columnMetadata`` (#624). They are still read so
+        # that tables described by an older kbagent do not lose their
+        # descriptions in this output, but ``columnMetadata`` wins.
         description = ""
-        col_descriptions: dict[str, str] = {}
+        legacy_col_descriptions: dict[str, str] = {}
         for m in raw_metadata:
             key = m.get("key", "")
             if key == "KBC.description" and m.get("provider") == "user":
                 description = m.get("value", "") or ""
             elif key.startswith("KBC.column.") and key.endswith(".description"):
                 col_name = key[len("KBC.column.") : -len(".description")]
-                col_descriptions[col_name] = m.get("value", "") or ""
+                legacy_col_descriptions[col_name] = m.get("value", "") or ""
 
         column_details = []
         for col in columns:
             col_info: dict[str, Any] = {"name": col}
-            meta = column_metadata.get(col, [])
-            for m in meta:
+            for m in column_metadata.get(col, []):
                 key = m.get("key", "")
                 value = m.get("value", "")
-                if key == "KBC.datatype.basetype":
-                    col_info["type"] = value
-                elif key == "KBC.datatype.type":
-                    # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
-                    # -- distinct from the Keboola basetype it maps to.
-                    col_info["native_type"] = value
-                elif key == "KBC.datatype.length":
-                    # Length as stored: "40", "18,2", "255", ...
-                    col_info["length"] = value
+                if key in _COLUMN_META_FIELDS:
+                    col_info[_COLUMN_META_FIELDS[key]] = value
                 elif key == "KBC.datatype.nullable":
                     col_info["nullable"] = value == "1"
-                elif key == "KBC.datatype.default":
-                    col_info["default"] = value
-            if col in col_descriptions:
-                col_info["description"] = col_descriptions[col]
+            if "description" not in col_info and col in legacy_col_descriptions:
+                col_info["description"] = legacy_col_descriptions[col]
             column_details.append(col_info)
 
         return {
@@ -2530,12 +2541,18 @@ class StorageService(BaseService):
     ) -> dict[str, Any]:
         """Set per-column descriptions on a storage table.
 
-        Column descriptions are stored as namespaced table metadata using the
-        key convention ``KBC.column.{colname}.description``.  Keboola's
-        Storage API does not provide a user-writable column-level metadata
-        endpoint (``columnMetadata`` is populated exclusively by processing
-        components); this convention is the supported alternative for
-        annotating columns from the CLI.
+        Descriptions are written as ``KBC.description`` inside the table's
+        native per-column metadata store (``columnMetadata``), which is where
+        the platform UI and the Keboola MCP server read them from.
+
+        Until 0.87.1 they were written as flat ``KBC.column.{colname}.description``
+        table-level metadata instead, on the mistaken assumption that no
+        user-writable column-metadata endpoint existed. It does -- the same
+        ``POST .../metadata`` endpoint takes a ``columnsMetadata`` payload --
+        and the old convention was invisible to every MCP consumer while
+        ``table-detail`` still reported the descriptions as applied (#624).
+        Re-running this command on an affected table repairs it; the read path
+        keeps a fallback so already-written values stay visible in kbagent.
 
         Args:
             alias: Project alias.
@@ -2550,12 +2567,12 @@ class StorageService(BaseService):
             raise ValueError("At least one column description must be provided.")
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        entries = [(f"KBC.column.{name}.description", desc) for name, desc in columns.items()]
+        entries = {name: [("KBC.description", desc)] for name, desc in columns.items()}
         client = self._client_factory(project.stack_url, project.token)
         try:
-            result = client.set_table_metadata(
+            result = client.set_table_column_metadata(
                 table_id=table_id,
-                entries=entries,
+                columns=entries,
                 branch_id=branch_id,
             )
         finally:

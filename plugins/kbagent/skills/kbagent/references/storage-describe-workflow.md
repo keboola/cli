@@ -35,10 +35,16 @@ Descriptions are stored as metadata entries on the object:
 
 - **Bucket description** -- `KBC.description` (provider=user) on bucket metadata
 - **Table description** -- `KBC.description` (provider=user) on table metadata
-- **Column description** -- `KBC.column.{column_name}.description` on the
-  **table's** metadata. Keboola has no user-writable column-metadata endpoint,
-  so this key convention is the storage layer for column descriptions. Read
+- **Column description** -- `KBC.description` (provider=user) inside the
+  table's **`columnMetadata`** store, written through the `columnsMetadata`
+  payload of `POST /v2/storage/tables/{id}/metadata`. This is the store the
+  Keboola UI and the Keboola MCP server read column descriptions from. Read
   them back via `storage table-detail` (`column_details[].description`).
+  **(since v0.87.1)** -- kbagent `<= 0.86.0` wrote flat
+  `KBC.column.{name}.description` keys on the **table's** metadata instead,
+  which no MCP consumer ever read (#624). kbagent still reads that convention
+  as a fallback, so old descriptions stay visible here, but they remain
+  invisible to MCP until you re-run `describe-column` on the table.
 
 Descriptions are `upsert`: calling `describe-*` with a new text replaces
 whatever was there before. There is no append mode.
@@ -106,10 +112,12 @@ kbagent --json storage describe-column \
   --column "created_at=Server-side creation timestamp (UTC)"
 ```
 
-Column descriptions live under `KBC.column.{name}.description` on the
-**table's** metadata -- they are NOT attached to the column record itself.
-If you rename or delete a column, the old key lingers until you manually
-clean it up (there is no `--delete-column-description` command today).
+Column descriptions live under `KBC.description` inside the table's
+`columnMetadata` store, keyed by column name (since v0.87.1; before that they
+were flat `KBC.column.{name}.description` keys on the table's metadata that MCP
+never read -- see #624). If you rename or delete a column, the old entry
+lingers until you manually clean it up (there is no
+`--delete-column-description` command today).
 
 Read back via `storage table-detail`:
 
@@ -246,8 +254,10 @@ entries with `provider="user"` are considered the canonical description.
 ## Key behaviors
 
 - `describe-*` is **upsert** -- no append mode; re-running replaces the value.
-- Column descriptions piggy-back on table metadata via the
-  `KBC.column.{name}.description` key convention.
+- Column descriptions are written as `KBC.description` into the table's
+  `columnMetadata` store (since v0.87.1), so MCP clients see them. Values
+  written by an older kbagent under `KBC.column.{name}.description` are still
+  read here but are invisible to MCP -- re-run `describe-column` to migrate.
 - `describe-batch` is **partial-failure-tolerant** -- check `errors[]` even
   on exit code 0.
 - All commands support `--branch ID` to target a dev branch.

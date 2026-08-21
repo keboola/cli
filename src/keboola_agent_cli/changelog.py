@@ -24,6 +24,26 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.87.1": [
+        "Fix (#624): `storage describe-column` / `describe-batch` now write column "
+        "descriptions where every Keboola consumer actually reads them. They used to be "
+        "stored as flat `KBC.column.{name}.description` entries on the TABLE's metadata, on "
+        "the documented but incorrect assumption that Keboola exposes no user-writable "
+        "column-metadata endpoint. It does: the same `POST /v2/storage/tables/{id}/metadata` "
+        "kbagent already called accepts a `columnsMetadata` payload with `provider: user`, "
+        "and that native `columnMetadata` store is what the Keboola UI and the Keboola MCP "
+        "server (`get_table_detail`, `search`) read. Nothing ever read the flat keys, so "
+        "column descriptions written by kbagent were invisible to every AI client using the "
+        "MCP server -- the exact audience they are written for. The failure was silent in "
+        "BOTH directions: `storage table-detail` read back kbagent's own convention, so the "
+        "descriptions were reported as correctly applied. `table-detail` now reads "
+        "`KBC.description` from `columnMetadata` first and keeps the flat keys as a fallback, "
+        "so descriptions written by an older kbagent stay visible here; when both carry a "
+        "value, `columnMetadata` wins. There is NO bulk migration -- re-running "
+        "`describe-column` (or `describe-batch`) on an affected table rewrites it into the "
+        "right place, and until you do, those tables remain invisible to MCP clients. Table "
+        "and bucket descriptions are unaffected.",
+    ],
     "0.87.0": [
         "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
         "Storage access BY DEFAULT. The flag writes `runtime.workspace.enabled: true`, which "

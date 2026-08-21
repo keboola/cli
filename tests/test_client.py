@@ -4022,8 +4022,13 @@ class TestSetTableMetadata:
             )
         assert result == _STORAGE_META_RESPONSE
 
-    def test_set_table_metadata_column_convention(self, httpx_mock) -> None:
-        """Column descriptions use KBC.column.{name}.description key convention."""
+    def test_set_table_column_metadata_posts_columns_metadata_json(self, httpx_mock) -> None:
+        """Per-column metadata goes out as a JSON columnsMetadata payload (#624).
+
+        The flat form-encoded ``KBC.column.{name}.description`` convention this
+        replaced wrote into table metadata, which no MCP consumer reads.
+        """
+        import json as _json
         from urllib.parse import quote as url_quote
 
         safe_id = url_quote("in.c-b.tbl", safe="")
@@ -4034,12 +4039,38 @@ class TestSetTableMetadata:
             status_code=201,
         )
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
-            client.set_table_metadata(
+            result = client.set_table_column_metadata(
                 table_id="in.c-b.tbl",
-                entries=[("KBC.column.city.description", "City name")],
+                columns={"city": [("KBC.description", "City name")]},
             )
-        body = httpx_mock.get_request().content.decode().replace("%5B", "[").replace("%5D", "]")
-        assert "KBC.column.city.description" in body
+        assert result == _STORAGE_META_RESPONSE
+        request = httpx_mock.get_request()
+        assert request.headers["content-type"].startswith("application/json")
+        body = _json.loads(request.content)
+        assert body == {
+            "provider": "user",
+            "columnsMetadata": {
+                "city": [{"key": "KBC.description", "value": "City name", "columnName": "city"}]
+            },
+        }
+
+    def test_set_table_column_metadata_branch(self, httpx_mock) -> None:
+        """A dev branch id selects the branch-scoped metadata endpoint."""
+        from urllib.parse import quote as url_quote
+
+        safe_id = url_quote("in.c-b.tbl", safe="")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/branch/7/tables/{safe_id}/metadata",
+            method="POST",
+            json=_STORAGE_META_RESPONSE,
+            status_code=201,
+        )
+        with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
+            client.set_table_column_metadata(
+                table_id="in.c-b.tbl",
+                columns={"city": [("KBC.description", "City name")]},
+                branch_id=7,
+            )
 
 
 class TestAssertSafeDownloadUrl:

@@ -2622,15 +2622,23 @@ so setting a branch's description will **not** update the dashboard.
 `kbagent storage describe-bucket / describe-table / describe-column / describe-batch`
 write descriptive metadata onto storage objects. Three behaviors are easy to miss:
 
-- **Column descriptions use a metadata-key convention, not a column endpoint.**
-  The Keboola Storage API has no user-writable column-level metadata endpoint,
-  so `describe-column` stores each description as a `KBC.column.{name}.description`
-  entry on the **table's** metadata (upsert). `storage table-detail` reads them
-  back via the same key and surfaces them under `column_details[].description`.
-  Renaming or deleting a column does NOT automatically clean these entries up
-  (they remain on the table's metadata under the old name). Same convention for
-  table and bucket descriptions: stored as `KBC.description` (provider=user) on
-  the object's metadata.
+- **Column descriptions written before v0.87.1 are invisible to MCP clients.**
+  `describe-column` used to store each description as a flat
+  `KBC.column.{name}.description` entry on the **table's** metadata, on the
+  mistaken assumption that Keboola had no user-writable column-metadata
+  endpoint. It does: `POST /v2/storage/tables/{id}/metadata` accepts a
+  `columnsMetadata` payload with `provider: user`, and that native
+  `columnMetadata` store is where the Keboola UI and the Keboola MCP server
+  (`get_table_detail`, `search`) read column descriptions from. **(since
+  v0.87.1)** `describe-column` / `describe-batch` write there. The failure was
+  silent in both directions — `storage table-detail` read back kbagent's own
+  convention, so the descriptions looked correctly applied while no AI client
+  could see them (#624). kbagent still reads the flat keys as a fallback, and
+  `columnMetadata` wins when both carry a value, so **re-running
+  `describe-column` on an affected table is the migration** — there is no bulk
+  migration command. Renaming or deleting a column does NOT clean the old
+  entries up under either convention. Table and bucket descriptions are
+  unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always

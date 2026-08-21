@@ -1864,10 +1864,13 @@ def storage_describe_column(
 ) -> None:
     """Set descriptions on one or more columns of a storage table.
 
-    Descriptions are stored as KBC.column.{name}.description keys in table
-    metadata (upsert).  Keboola Storage does not expose a user-writable
-    column-level metadata endpoint; this convention lets you annotate columns
-    and read them back via 'storage table-detail'.
+    Descriptions are stored as KBC.description in the table's per-column
+    metadata (upsert) -- the same place the Keboola UI and the Keboola MCP
+    server read them from.  Read them back via 'storage table-detail'.
+
+    kbagent <= 0.86.0 wrote them as flat KBC.column.{name}.description table
+    metadata instead, which no MCP consumer ever read; re-run this command on
+    an affected table to repair it.
 
     Example:
 
