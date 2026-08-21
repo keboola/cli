@@ -207,10 +207,20 @@ def list_tables(
     project: list[str] | None = Query(None),
     bucket_id: str | None = None,
     branch_id: int | None = None,
+    include_usage: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """List tables across one or more projects. Mirrors `kbagent storage tables`."""
-    return registry.storage.list_tables(aliases=project, bucket_id=bucket_id, branch_id=branch_id)
+    """List tables across one or more projects. Mirrors `kbagent storage tables`.
+
+    ``include_usage`` costs one extra component listing per project; see the
+    CLI flag's help for the caveats.
+    """
+    return registry.storage.list_tables(
+        aliases=project,
+        bucket_id=bucket_id,
+        branch_id=branch_id,
+        include_usage=include_usage,
+    )
 
 
 @router.get("/table-detail/{project}/{table_id:path}", summary="Get table detail")

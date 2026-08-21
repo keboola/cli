@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from ...constants import DEFAULT_JOB_MODE, DEFAULT_LOG_TAIL_LINES, DEFAULT_POLL_STRATEGY
+from ...constants import (
+    DEFAULT_JOB_MODE,
+    DEFAULT_JOB_SORT_BY,
+    DEFAULT_JOB_SORT_ORDER,
+    DEFAULT_LOG_TAIL_LINES,
+    DEFAULT_POLL_STRATEGY,
+)
 from ..dependencies import ServiceRegistry, get_registry
 from ..sse import json_event
 
@@ -44,6 +50,9 @@ def list_jobs(
     config_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
+    offset: int = 0,
+    sort_by: str = DEFAULT_JOB_SORT_BY,
+    sort_order: str = DEFAULT_JOB_SORT_ORDER,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List jobs across one or more projects. Mirrors `kbagent job list`."""
@@ -53,15 +62,25 @@ def list_jobs(
         config_id=config_id,
         status=status,
         limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
 @router.get("/{project}/{job_id}", summary="Get job detail")
 def detail(
-    project: str, job_id: str, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    job_id: str,
+    log_tail_lines: int = 0,
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Fetch detail for a single job. Mirrors `kbagent job detail`."""
-    return registry.job.get_job_detail(alias=project, job_id=job_id)
+    """Fetch detail for a single job. Mirrors `kbagent job detail`.
+
+    ``log_tail_lines`` > 0 attaches the job's last N events as ``logTail``;
+    0 (the default) keeps this a single API call.
+    """
+    return registry.job.get_job_detail(alias=project, job_id=job_id, log_tail_lines=log_tail_lines)
 
 
 @router.post("/{project}/run", summary="Run a component configuration")

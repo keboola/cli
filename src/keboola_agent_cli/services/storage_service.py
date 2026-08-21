@@ -690,7 +690,7 @@ class StorageService(ColumnDescriptionsMixin):
 
         def _worker(
             alias: str, project: ProjectConfig
-        ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
             return self._fetch_tables(
                 alias,
                 project,
@@ -703,15 +703,13 @@ class StorageService(ColumnDescriptionsMixin):
         successes, errors = self._run_parallel(projects, _worker)
 
         tables: list[dict[str, Any]] = []
-        for result in successes:
-            alias = result[0]
-            components = result[2] if include_usage and len(result) > 2 else []
+        for alias, raw_tables, components in successes:
             usage = (
-                collect_table_usage(components, [t.get("id", "") for t in result[1]])
+                collect_table_usage(components, [t.get("id", "") for t in raw_tables])
                 if include_usage
                 else None
             )
-            tables.extend(normalize_table_rows(alias, result[1], usage))
+            tables.extend(normalize_table_rows(alias, raw_tables, usage))
 
         return {"tables": tables, "errors": errors}
 
@@ -2618,22 +2616,26 @@ class StorageService(ColumnDescriptionsMixin):
         branch_id: int | None = None,
         include_usage: bool = False,
         usage_branch_id: int | None = None,
-    ) -> tuple[str, list[dict[str, Any]], Any] | tuple[str, dict[str, Any]]:
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
         """Fetch tables for a single project (worker for _run_parallel).
 
         Per-project failures (e.g. bucket not found in this project, invalid
         token) are returned as error tuples so other projects still complete.
-        Returns a 3-tuple on success (alias, tables, True) or a 2-tuple
-        (alias, error_dict) on failure, matching the _run_parallel protocol.
+        Returns a 3-tuple on success (alias, tables, components) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol,
+        which tells the two apart by tuple LENGTH -- so the third slot can
+        carry the component listing rather than a success sentinel. It is
+        empty unless ``include_usage`` asked for a usage scan.
         """
         from ..errors import KeboolaApiError
 
         client = self._client_factory(project.stack_url, project.token)
         try:
             tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
-            if not include_usage:
-                return (alias, tables, True)
-            return (alias, tables, fetch_usage_components(client, alias, usage_branch_id))
+            components = (
+                fetch_usage_components(client, alias, usage_branch_id) if include_usage else []
+            )
+            return (alias, tables, components)
         except KeboolaApiError as exc:
             return (
                 alias,

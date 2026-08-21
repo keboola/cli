@@ -19,6 +19,7 @@ def search(
     search_type: str = "textual",
     limit: int = 50,
     regex: bool = False,
+    scope: list[str] | None = Query(None),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Search tables, buckets, configs and flows across one or more projects. Mirrors `kbagent search`."""
@@ -29,4 +30,5 @@ def search(
         search_type=search_type,
         limit=limit,
         regex=regex,
+        scopes=scope or [],
     )

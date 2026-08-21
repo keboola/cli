@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from ...constants import DEFAULT_LINK_STAGE
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/sharing", tags=["sharing"])
@@ -23,6 +24,10 @@ class LinkBucket(BaseModel):
     source_project_id: int
     bucket_id: str
     name: str | None = None
+    # Stage in the TARGET project. Defaults to "in" like the CLI -- it is NOT
+    # derived from the source bucket (keboola-mcp-server's link_shared_bucket
+    # does derive it, so the two surfaces differ on purpose).
+    stage: str = DEFAULT_LINK_STAGE
 
 
 @router.get("", summary="List shared buckets")
@@ -75,6 +80,7 @@ def link(
         source_project_id=body.source_project_id,
         source_bucket_id=body.bucket_id,
         name=body.name,
+        stage=body.stage,
     )
 
 

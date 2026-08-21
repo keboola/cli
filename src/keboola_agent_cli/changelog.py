@@ -66,6 +66,49 @@ CHANGELOG: dict[str, list[str]] = {
         "`TokenListEntryResult` gains `last_used`, `last_used_event` and "
         "`last_used_status`. REST: `GET /token/{project}/list` gains a matching "
         "`with_last_used` query parameter.",
+        "New: `storage tables --include-usage` reports which configurations read or write "
+        "each table. Closes the last read-side gap against keboola-mcp-server's "
+        "`get_tables(include_usage=True)`. Only storage input/output mappings count as a "
+        "reference -- a table id that merely appears inside a transformation's SQL is text "
+        'that happens to match, and counting it would make "what breaks if I drop this '
+        'table?" answer with false positives. Costs one extra component listing per project '
+        "(not per table), but that listing carries every configuration body, so expect it to "
+        "be slow in a big project; a project whose components are unreadable degrades to an "
+        "empty `used_by` instead of failing the listing.",
+        "New: `job detail --log-tail-lines N` attaches a finished job's last N events. Until "
+        "now the log tail existed only on the `job run --wait` path, so inspecting the logs "
+        "of a job that failed yesterday had no CLI route at all (MCP `get_jobs` exposed it "
+        "via `include_logs`). Off by default -- a plain `job detail` still costs one API "
+        "call -- and an events-endpoint blip degrades to an empty tail rather than hiding "
+        "the job detail you asked for.",
+        "New: `job list` gains `--offset`, `--sort-by` and `--sort-order`, so paging past "
+        "`--limit` and asking for oldest-first no longer requires the raw Queue API. "
+        "`--sort-by` accepts startTime, endTime, createdTime, durationSeconds and id; an "
+        "unknown value fails locally with exit 2 rather than silently returning an "
+        "arbitrarily ordered page. Defaults (offset 0, startTime desc) match what the "
+        "command already did.",
+        "New: `search --scope PATH` narrows a config-based hit to part of the configuration "
+        "body, e.g. `--scope storage.input`. Repeatable and OR-ed; a configuration whose "
+        "every match falls outside the scopes drops out of the results entirely. Scopes are "
+        "written the way they read in a configuration (`parameters`, `storage.input`) -- the "
+        "`configuration.` / `rows[N].configuration.` wrapper is normalised away -- and match "
+        "on whole path segments, so `storage.in` does not match `storage.input`. "
+        "Config-based search only; combining it with textual search exits 2.",
+        "New: `sharing link --stage in|out` chooses the stage the linked bucket lands in. "
+        "kbagent previously hardcoded `in`, so a shared `out.*` bucket could not be linked "
+        "into `out` at all. The default stays `in` -- it is NOT derived from the source "
+        "bucket the way MCP's `link_shared_bucket` does it, because silently relocating "
+        "where existing scripts' buckets land would be the worse surprise.",
+        "Note: all five flags are exposed over `kbagent serve` too. The REST routers "
+        "mirror their CLI command 1:1, so `GET /jobs?offset=&sort_by=&sort_order=`, "
+        "`GET /jobs/{project}/{id}?log_tail_lines=`, `GET /search?scope=`, "
+        "`GET /storage/tables?include_usage=` and the `stage` field on "
+        "`POST /sharing/{project}/link` all work -- scheduled agent tasks reach the "
+        "same parity as an interactive CLI caller.",
+        "Note: every keboola-mcp-server tool kbagent intends to cover is now covered. "
+        "`docs/mcp-migration.md` gains the two Data Catalog tools it was missing "
+        "(`get_shared_buckets` -> `sharing list`, `link_shared_bucket` -> `sharing link`) "
+        "and records the mcp-server version the map was verified against (v1.76.2).",
     ],
     "0.88.0": [
         "Fix (#621): `storage table-detail` now returns the Storage API's `definition` "
@@ -139,43 +182,6 @@ CHANGELOG: dict[str, list[str]] = {
         "accepted anything and silently created an entry nothing could ever read, so a "
         "typo looked like a success. Scripts that relied on that behaviour will now get a "
         "usage error naming the unknown columns.",
-        "New: `storage tables --include-usage` reports which configurations read or write "
-        "each table. Closes the last read-side gap against keboola-mcp-server's "
-        "`get_tables(include_usage=True)`. Only storage input/output mappings count as a "
-        "reference -- a table id that merely appears inside a transformation's SQL is text "
-        'that happens to match, and counting it would make "what breaks if I drop this '
-        'table?" answer with false positives. Costs one extra component listing per project '
-        "(not per table), but that listing carries every configuration body, so expect it to "
-        "be slow in a big project; a project whose components are unreadable degrades to an "
-        "empty `used_by` instead of failing the listing.",
-        "New: `job detail --log-tail-lines N` attaches a finished job's last N events. Until "
-        "now the log tail existed only on the `job run --wait` path, so inspecting the logs "
-        "of a job that failed yesterday had no CLI route at all (MCP `get_jobs` exposed it "
-        "via `include_logs`). Off by default -- a plain `job detail` still costs one API "
-        "call -- and an events-endpoint blip degrades to an empty tail rather than hiding "
-        "the job detail you asked for.",
-        "New: `job list` gains `--offset`, `--sort-by` and `--sort-order`, so paging past "
-        "`--limit` and asking for oldest-first no longer requires the raw Queue API. "
-        "`--sort-by` accepts startTime, endTime, createdTime, durationSeconds and id; an "
-        "unknown value fails locally with exit 2 rather than silently returning an "
-        "arbitrarily ordered page. Defaults (offset 0, startTime desc) match what the "
-        "command already did.",
-        "New: `search --scope PATH` narrows a config-based hit to part of the configuration "
-        "body, e.g. `--scope storage.input`. Repeatable and OR-ed; a configuration whose "
-        "every match falls outside the scopes drops out of the results entirely. Scopes are "
-        "written the way they read in a configuration (`parameters`, `storage.input`) -- the "
-        "`configuration.` / `rows[N].configuration.` wrapper is normalised away -- and match "
-        "on whole path segments, so `storage.in` does not match `storage.input`. "
-        "Config-based search only; combining it with textual search exits 2.",
-        "New: `sharing link --stage in|out` chooses the stage the linked bucket lands in. "
-        "kbagent previously hardcoded `in`, so a shared `out.*` bucket could not be linked "
-        "into `out` at all. The default stays `in` -- it is NOT derived from the source "
-        "bucket the way MCP's `link_shared_bucket` does it, because silently relocating "
-        "where existing scripts' buckets land would be the worse surprise.",
-        "Note: every keboola-mcp-server tool kbagent intends to cover is now covered. "
-        "`docs/mcp-migration.md` gains the two Data Catalog tools it was missing "
-        "(`get_shared_buckets` -> `sharing list`, `link_shared_bucket` -> `sharing link`) "
-        "and records the mcp-server version the map was verified against (v1.76.2).",
     ],
     "0.87.0": [
         "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
