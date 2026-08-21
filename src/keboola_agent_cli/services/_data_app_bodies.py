@@ -12,16 +12,26 @@ from __future__ import annotations
 import json
 from typing import Any
 
+# Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
+# ciphertext -- one variant per cloud, and exactly these three exist:
+# ``KBC::ProjectSecure::`` (AWS KMS), ``KBC::ProjectSecureGKMS::`` (Google KMS)
+# and ``KBC::ProjectSecureKV::`` (Azure Key Vault). All three are project-bound
+# and decrypt only with the originating project's key. The wider
+# ``ComponentSecure*`` / ``ConfigSecure*`` / ``ProjectWideSecure*`` scopes are
+# deliberately NOT accepted here -- they are not bound to this project.
+#
+# Source of truth: the platform's own cipher registry, keboola/keboola-operator
+# ``internal/encryptor/wrapper/registry.go`` (mirrored by the wrappers in
+# keboola/object-encryptor) and
+# https://developers.keboola.com/overview/encryption/. A fourth entry,
+# ``KBC::ProjectSecureKMS::``, was carried here from 0.27.0 but appears nowhere
+# in the platform -- the AWS wrapper is *named* ``PrefixProjectKMS`` while the
+# prefix it emits is plain ``KBC::ProjectSecure::``. Dropped in 0.86.0 (#607).
 ENCRYPTED_PASSWORD_PREFIXES: tuple[str, ...] = (
     "KBC::ProjectSecure::",
     "KBC::ProjectSecureGKMS::",
     "KBC::ProjectSecureKV::",
 )
-
-# Defence-in-depth caps for free-form user input. The platform may accept
-# longer values, but kbagent refuses anything beyond these bounds at the
-# service boundary so an external caller using the service directly cannot
-# exfiltrate giant payloads or smuggle control characters into audit logs.
 
 
 def _secret_fingerprint(ciphertext: str) -> str:
