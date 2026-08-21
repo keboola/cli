@@ -3949,3 +3949,77 @@ the web UI.
   be deleted -- the API refuses.
 - SDK parity: `Client.list_tokens() -> list[TokenListEntryResult]`, secrets
   stripped there too.
+
+## A data app without `runtime.workspace.enabled` deploys green and reads nothing (since v0.87.0)
+
+- **`data-app create` now grants Storage access by default.** The new
+  `--workspace / --no-workspace` flag writes
+  `runtime.workspace.enabled: true` into the `keboola.data-apps` config, and
+  `--workspace` is the default. That flag is the **single** switch that makes
+  the platform provision the app's ephemeral workspace and inject
+  `WORKSPACE_ID`, `QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`. No
+  flag, no env vars, no Storage access -- for reads *and* writes.
+- **Before v0.87.0 kbagent never wrote it and offered no option to.** Every
+  app created with `data-app create` on 0.86.0 or earlier that reads Storage
+  has a dead data path unless someone hand-patched the config afterwards.
+  If you are debugging an app created by an older kbagent, **check this
+  first**:
+
+  ```bash
+  kbagent --json config detail --project P --component-id keboola.data-apps \
+    --config-id <cfg> | jq '.data.configuration.runtime'
+  # missing "workspace": {"enabled": true}  ->  this is your bug
+  ```
+
+- **The failure is silent and every platform-level signal is green.** The
+  deploy succeeds, `setup_sh` completes, `state=running`,
+  `desiredState=running`, the health probe passes. The only diagnostic is one
+  line in the container log:
+
+  ```
+  [startup] initial cache load failed: Missing env vars: WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)
+  ```
+
+  An app that catches that failure serves an empty dashboard -- all zeros, no
+  error banner. An app that does not crash-loops behind the health probe,
+  which is *more* visible and therefore the better of the two outcomes. Do
+  not read "the app is running" as "the app can read data".
+- **Reach for `data-app logs` when a data app returns empty results**, not
+  just when it fails to start. `Missing env vars: WORKSPACE_ID` never
+  surfaces through `data-app detail`, `data-app runs`, or the job status.
+- **`--no-workspace` omits the key rather than writing `enabled: false`.**
+  The request body is byte-identical to 0.86.0, so an app deliberately
+  created without Storage access carries no new config noise. Use it only for
+  an app that never touches Storage.
+- **The block is a SIBLING of `runtime.backend`, not a replacement.** The
+  correct shape (matching what the UI and MCP's `modify_python_js_data_app`
+  both write) is:
+
+  ```json
+  "runtime": {
+    "backend":   {"size": "small", "type": "e2bSandbox"},
+    "workspace": {"enabled": true}
+  }
+  ```
+
+- **Retrofitting requires a redeploy, not just a config update.** A config
+  change alone never reaches the running container:
+
+  ```bash
+  kbagent config update --project P --component-id keboola.data-apps \
+    --config-id <cfg> --merge --set 'runtime.workspace.enabled=true'
+  kbagent data-app deploy --project P --app-id <ID> --wait
+  ```
+
+  `data-app deploy` pins the LATEST config version, so the plain form is
+  correct here -- do not pass `--config-version`.
+- **Not gated on any project feature.** The `data-apps-storage-workspace`
+  project flag is being enabled everywhere and then removed, so the config
+  option is the sole control. kbagent deliberately does **not** implement
+  MCP's legacy fallback of injecting `WORKSPACE_ID` through
+  `parameters.dataApp.secrets` (`keboola-mcp-server` still does that when the
+  feature is off) -- do not add it, and do not expect to see it.
+- **`--json` reports it:** the create envelope gains a `workspace` boolean,
+  and the human output prints the Storage-access state on every create --
+  loudly when it is off. The REST surface mirrors the flag as
+  `"workspace": true` in the `POST /data-apps/{project}` body.

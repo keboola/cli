@@ -261,6 +261,121 @@ class TestDataAppCreateValidation:
         # typer.BadParameter -> exit code 2
         assert result.exit_code == 2
 
+    def test_workspace_defaults_on_and_can_be_disabled(self, tmp_path: Path) -> None:
+        """AI-3753: Storage access is on by default; --no-workspace opts out."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        base_args = [
+            "data-app",
+            "create",
+            "--project",
+            "prod",
+            "--name",
+            "App",
+            "--slug",
+            "my-app",
+            "--git-repo",
+            "https://github.com/o/r",
+            "--git-public",
+            "--auth",
+            "public",
+            "--dry-run",
+        ]
+        payload = {
+            "dry_run": True,
+            "project_alias": "prod",
+            "requests": {"post_apps": {}, "put_storage_config": {}, "patch_apps": {}},
+            "message": "Dry run -- no API calls made.",
+        }
+
+        mock = MagicMock()
+        mock.create_data_app.return_value = payload
+        result = _invoke(base_args, store=store, data_app_mock=mock)
+        assert result.exit_code == 0, result.output
+        assert mock.create_data_app.call_args.kwargs["workspace"] is True
+
+        mock = MagicMock()
+        mock.create_data_app.return_value = payload
+        result = _invoke([*base_args, "--no-workspace"], store=store, data_app_mock=mock)
+        assert result.exit_code == 0, result.output
+        assert mock.create_data_app.call_args.kwargs["workspace"] is False
+
+    def test_disabled_storage_access_is_called_out_in_human_output(self, tmp_path: Path) -> None:
+        """A dead data path must never be a silent outcome (AI-3753)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.create_data_app.return_value = {
+            "app_id": "42",
+            "config_id": "ulid",
+            "workspace": False,
+            "state": "created",
+            "desired_state": "stopped",
+            "message": "created",
+        }
+        result = _invoke(
+            [
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--git-repo",
+                "https://github.com/o/r",
+                "--git-public",
+                "--auth",
+                "public",
+                "--no-workspace",
+                "--no-deploy",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "DISABLED" in result.output
+        assert "WORKSPACE_ID" in result.output
+
+    def test_enabled_storage_access_reported_in_human_output(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.create_data_app.return_value = {
+            "app_id": "42",
+            "config_id": "ulid",
+            "workspace": True,
+            "state": "created",
+            "desired_state": "stopped",
+            "message": "created",
+        }
+        result = _invoke(
+            [
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--git-repo",
+                "https://github.com/o/r",
+                "--git-public",
+                "--auth",
+                "public",
+                "--no-deploy",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "runtime.workspace.enabled=true" in result.output
+
     def test_dry_run_human_output(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()

@@ -8866,7 +8866,9 @@ class TestE2EDataAppLifecycle:
     def cleanup(self) -> Any:
         yield
         print("\n--- DATA-APP CLEANUP ---")
-        for app_id in self._created_app_ids:
+        # ``setup`` may have skipped before assigning this (fixture teardown
+        # still runs); a test gated only on credentials must not error here.
+        for app_id in getattr(self, "_created_app_ids", []):
             try:
                 _invoke(
                     self.config_dir,
@@ -8958,6 +8960,102 @@ class TestE2EDataAppLifecycle:
         assert detail["config_version_storage"], (
             "Storage config version should be populated after PUT"
         )
+
+        _step(4, "Storage access is granted by default (AI-3753)")
+        assert body["data"]["workspace"] is True, (
+            "create must report Storage access enabled by default"
+        )
+        cfg = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    body["data"]["config_id"],
+                ],
+            )
+        )["data"]
+        record = cfg[0] if isinstance(cfg, list) else cfg
+        runtime = record["configuration"]["runtime"]
+        # This is the switch that makes the platform inject WORKSPACE_ID /
+        # QUERY_SERVICE_URL. Without it the app deploys and reports running
+        # while being unable to read a single row (AI-3753).
+        assert runtime.get("workspace") == {"enabled": True}, (
+            f"expected runtime.workspace.enabled=true in the live config, got {runtime!r}"
+        )
+        # ...and it must not have displaced the backend sizing.
+        assert runtime.get("backend", {}).get("size"), (
+            f"workspace block must be a sibling of backend, got {runtime!r}"
+        )
+
+    def test_data_app_no_workspace_omits_the_block(self) -> None:
+        """``--no-workspace`` renders the pre-0.87.0 runtime body (AI-3753).
+
+        Dry run: proves the opt-out reaches the request body without
+        provisioning an app on the stack.
+        """
+        _step(1, "Dry-run create with --no-workspace")
+        body = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E NoWorkspace {RUN_ID}",
+                    "--slug",
+                    f"e2e-nows-{RUN_ID}"[:60],
+                    "--git-repo",
+                    "https://github.com/keboola/does-not-matter-for-dry-run",
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-workspace",
+                    "--dry-run",
+                ],
+            )
+        )["data"]
+        assert body["dry_run"] is True
+        assert body["workspace"] is False
+        runtime = body["requests"]["put_storage_config"]["runtime"]
+        assert "workspace" not in runtime, (
+            f"--no-workspace must omit the block entirely, got {runtime!r}"
+        )
+
+        _step(2, "Same dry run WITHOUT the flag carries the block")
+        body = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Workspace {RUN_ID}",
+                    "--slug",
+                    f"e2e-ws-{RUN_ID}"[:60],
+                    "--git-repo",
+                    "https://github.com/keboola/does-not-matter-for-dry-run",
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--dry-run",
+                ],
+            )
+        )["data"]
+        assert body["workspace"] is True
+        assert body["requests"]["put_storage_config"]["runtime"]["workspace"] == {"enabled": True}
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:

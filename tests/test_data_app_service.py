@@ -437,6 +437,112 @@ class TestDataAppCreate:
         storage_mock.assert_not_called()
         encrypt_mock.encrypt.assert_not_called()
 
+    def test_workspace_enabled_by_default(self, tmp_path: Path) -> None:
+        """AI-3753: Storage access needs ``runtime.workspace.enabled: true``.
+
+        Without it the app deploys, reports ``state=running`` and passes its
+        health probe while ``WORKSPACE_ID`` / ``QUERY_SERVICE_URL`` are never
+        injected -- a dead data path with no error surfaced anywhere but the
+        container log. Default it on so the safe shape is the shape you get.
+        """
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "1", "configId": "ulid"}
+        storage_mock.update_config.return_value = {"version": "2"}
+
+        result = service.create_data_app(
+            alias="prod",
+            name="App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=False,
+            wait=False,
+            dry_run=False,
+        )
+
+        body = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert body["runtime"]["workspace"] == {"enabled": True}
+        # The workspace block is a SIBLING of backend, not a replacement.
+        assert body["runtime"]["backend"]["size"] == "tiny"
+        assert result["workspace"] is True
+
+    def test_no_workspace_omits_the_block(self, tmp_path: Path) -> None:
+        """``--no-workspace`` writes the pre-0.87.0 shape: backend only."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.create_app.return_value = {"id": "1", "configId": "ulid"}
+        storage_mock.update_config.return_value = {"version": "2"}
+
+        result = service.create_data_app(
+            alias="prod",
+            name="App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            workspace=False,
+            deploy=False,
+            wait=False,
+            dry_run=False,
+        )
+
+        body = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert body["runtime"] == {"backend": {"size": "tiny"}}
+        assert "workspace" not in body["runtime"]
+        assert result["workspace"] is False
+
+    def test_workspace_shows_in_dry_run_put_body(self, tmp_path: Path) -> None:
+        """The dry-run preview must not lie about what the PUT will carry."""
+        store = _make_store(tmp_path)
+        service, _ds, _storage, _enc = _make_service(store)
+
+        enabled = service.create_data_app(
+            alias="prod",
+            name="App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            deploy=True,
+            dry_run=True,
+        )
+        assert enabled["requests"]["put_storage_config"]["runtime"]["workspace"] == {
+            "enabled": True
+        }
+        assert enabled["workspace"] is True
+
+        disabled = service.create_data_app(
+            alias="prod",
+            name="App",
+            description="",
+            slug="my-app",
+            git_repo="https://github.com/o/r",
+            git_public=True,
+            auth="public",
+            size="tiny",
+            auto_suspend_after_seconds=900,
+            type_="python-js",
+            workspace=False,
+            deploy=True,
+            dry_run=True,
+        )
+        assert "workspace" not in disabled["requests"]["put_storage_config"]["runtime"]
+        assert disabled["workspace"] is False
+
     def test_happy_path_private_repo(self, tmp_path: Path) -> None:
         """Verifies POST -> encrypt -> PUT -> PATCH order and arguments."""
         store = _make_store(tmp_path)

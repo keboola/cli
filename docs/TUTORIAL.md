@@ -829,6 +829,21 @@ Storage went `1 -> 2` (the empty shell that `POST /apps` minted, with an
 auto-injected `parameters.id` back-pointer to the deployment record) and
 `2 -> 3` (the full body with the git block + runtime block + auth block).
 
+That runtime block carries `workspace: {enabled: true}` by default since
+0.87.0 -- the switch that makes the platform inject `WORKSPACE_ID`,
+`QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`, i.e. the app's only
+route to Storage. Pass `--no-workspace` for an app that never reads Storage.
+Get this wrong and the failure is silent: the app deploys, reports
+`state=running`, passes its health probe, and serves nothing, with
+`Missing env vars: WORKSPACE_ID` visible only in `data-app logs`. On an app
+created by kbagent 0.86.0 or earlier, patch it in and redeploy:
+
+```bash
+kbagent config update --project prod --component-id keboola.data-apps \
+  --config-id <config_id> --merge --set 'runtime.workspace.enabled=true'
+kbagent data-app deploy --project prod --app-id 12345678 --wait
+```
+
 ```bash
 # Deploy: pins the deployment record to configVersion=3 and waits.
 kbagent --json data-app deploy \
