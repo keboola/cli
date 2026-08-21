@@ -25,8 +25,8 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.88.0": [
-        "Fix (#621): `storage table-detail` now surfaces the Storage API's `definition` "
-        "object, which for a BigQuery table is the only readable record of the registered "
+        "Fix (#621): `storage table-detail` now returns the Storage API's `definition` "
+        "object. On BigQuery that is the only readable record of a table's registered "
         "`timePartitioning` / `rangePartitioning` / `clustering` layout. The service built "
         "its response as a field allowlist and `definition` was never on it, so the layout "
         "that `storage create-table --source-table-id ... --time-partitioning-field ...` "
