@@ -57,7 +57,7 @@ Resources are prefixed with `e2e-{timestamp}` and cleaned up via yield fixture e
 | 9 | `storage create-table` | Table created with typed columns (INTEGER, STRING) and primary key |
 | 10 | `storage upload-table` | 5-row CSV uploaded, `imported_rows: 5` |
 | 11 | `storage upload-table --incremental` | 3 more rows appended, download verifies 8 total rows |
-| 12 | `storage tables`, `storage table-detail` | Table in listing, column details match (id, name, value) |
+| 12 | `storage tables`, `storage table-detail` | Table in listing, column details match (id, name, value), `definition` passed through (#621) |
 | 13 | `storage download-table` | Full download: 8 rows, correct IDs. With `--columns`/`--limit`: subset verified |
 | 14 | `storage unload-table --download` | Table exported to file storage, file_id > 0, file downloaded |
 | 15 | `storage load-file` | CSV uploaded as file, then loaded into table via `load-file` |

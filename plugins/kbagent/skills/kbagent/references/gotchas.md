@@ -2050,6 +2050,32 @@ unknown -- do not try to parse a fallback message.
 See [storage-types-workflow.md](storage-types-workflow.md) for the full
 type inventory and examples.
 
+## `storage table-detail` is the only way to READ a BigQuery partition layout (since v0.88.0, #621)
+
+- **`create-table` output does not prove anything.** Its `--json` echoes the
+  `time_partitioning` / `range_partitioning` / `clustering` you *requested*, not
+  what the server registered, and its `--if-not-exists` skip path sets all three
+  to `null` on purpose (the existing table's layout is never re-derived). To
+  confirm a repartition landed, read it back:
+  `kbagent --json storage table-detail --project P --table-id T` ->
+  `.definition.timePartitioning` / `.definition.clustering`.
+- **Before 0.88.0 the field was dropped entirely.** The service assembled its
+  response from a field allowlist that omitted `definition`, so on 0.87.0 and
+  earlier the layout is unreachable from kbagent -- verifying meant raw Storage
+  API calls or BigQuery metadata access. Version-gate accordingly.
+- **`definition` is present on EVERY table-detail response**, untyped and
+  Snowflake tables included (connection builds one either way). `null` therefore
+  means the stack omitted the key -- it never means "this table is untyped".
+  Test for the layout keys, not for `definition`.
+- **`.definition.partitions` is unbounded.** It is one entry per physical
+  partition, straight from `INFORMATION_SCHEMA.PARTITIONS` -- a DAY-partitioned
+  table with a few years of history returns thousands. `--json` carries the whole
+  list; human mode prints only the count. Do not pipe the raw JSON of a large
+  partitioned table into a context window unfiltered.
+- **`storage tables` (the LIST endpoint) still has no layout.** The Storage API's
+  `include=` on the list route accepts no `definition` value, so reading the
+  layout costs one `table-detail` request per table.
+
 ## `storage create-table --source-table-id` + partition/clustering are BigQuery-only (since 0.66.0)
 
 - **`--source-table-id` copies an existing table instead of building from `--column`.**

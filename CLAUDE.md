@@ -433,6 +433,18 @@ kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
 kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
+# table-detail (0.88.0+, #621): also returns the raw Storage API `definition`. On BigQuery
+#   that object (timePartitioning / rangePartitioning / clustering / requirePartitionFilter /
+#   partitions[]) is the ONLY readable record of the registered layout, so it is how a
+#   `create-table --source-table-id ...` + `swap-tables` repartition is VERIFIED -- the table
+#   ID is unchanged either way, and `create-table` only echoes the layout you REQUESTED (its
+#   --if-not-exists skip path nulls the layout keys outright). Human mode adds Time
+#   partitioning / Range partitioning / Clustering / Partition filter required / Partitions
+#   (a COUNT) and prints nothing new when there is no layout; --json passes `definition`
+#   through verbatim, including the unbounded `partitions[]` (one entry per physical
+#   partition from INFORMATION_SCHEMA.PARTITIONS). `definition` is present on EVERY response
+#   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".
+#   `storage tables` (the LIST endpoint) is unaffected: the API has no `definition` include.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
