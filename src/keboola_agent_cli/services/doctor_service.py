@@ -534,12 +534,14 @@ class DoctorService:
     def _check_claude_plugin() -> dict[str, Any]:
         """Check 6: Claude Code plugin installation.
 
-        Detects whether the kbagent Claude Code plugin (this repo's plugin
-        marketplace entry) is installed under ``~/.claude/plugins/cache/``.
-        Emits a 'skip' if Claude Code is not detected at all on the host;
-        'warn' with copy-pasteable install commands if Claude Code is
-        present but the plugin is missing; 'pass' with the installed
-        version otherwise.
+        Detects whether the kbagent Claude Code plugin is installed under
+        ``~/.claude/plugins/cache/``, from either marketplace: the current
+        one (``keboola-claude-kit``, published from keboola/ai-kit) or this
+        repo's deprecated ``keboola-agent-cli`` shim. Emits a 'skip' if
+        Claude Code is not detected at all on the host; 'warn' with
+        copy-pasteable install commands if Claude Code is present but the
+        plugin is missing; 'pass' with the installed version otherwise --
+        plus a reinstall-from-ai-kit note when the copy came from the shim.
 
         Intentionally does NOT auto-fix: Claude Code's plugin install flow
         goes through the user's in-session ``/plugin`` commands, which a
@@ -558,12 +560,28 @@ class DoctorService:
                 ),
             }
 
-        plugin_root = claude_home / "plugins" / "cache" / "keboola-agent-cli" / "kbagent"
         # Claude Code caches each plugin version under its own subdir
-        # (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/).
+        # (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/), so the
+        # marketplace the user installed FROM is visible in the path. Probe the
+        # current marketplace (`keboola-claude-kit`, published from
+        # keboola/ai-kit) first, then the legacy one (`keboola-agent-cli`, this
+        # repo's own deprecated shim) -- an install from the shim still works and
+        # still passes, it just earns a migration note.
+        cache_root = claude_home / "plugins" / "cache"
+        candidates: tuple[tuple[Path, bool], ...] = (
+            (cache_root / "keboola-claude-kit" / "kbagent", False),
+            (cache_root / "keboola-agent-cli" / "kbagent", True),
+        )
         version_dirs: list[Path] = []
-        if plugin_root.is_dir():
-            version_dirs = [p for p in plugin_root.iterdir() if p.is_dir()]
+        from_legacy_marketplace = False
+        for plugin_root, is_legacy in candidates:
+            if not plugin_root.is_dir():
+                continue
+            found = [p for p in plugin_root.iterdir() if p.is_dir()]
+            if found:
+                version_dirs = found
+                from_legacy_marketplace = is_legacy
+                break
 
         if not version_dirs:
             return {
@@ -572,8 +590,8 @@ class DoctorService:
                 "status": "warn",
                 "message": (
                     "kbagent Claude Code plugin not installed. In Claude Code, run:\n"
-                    "  /plugin marketplace add keboola/cli\n"
-                    "  /plugin install kbagent@keboola-agent-cli\n"
+                    "  /plugin marketplace add keboola/ai-kit\n"
+                    "  /plugin install kbagent@keboola-claude-kit\n"
                     "This enables the /keboola slash command and the "
                     "keboola-expert specialist subagent."
                 ),
@@ -597,11 +615,23 @@ class DoctorService:
             if plugin_version == cli_version
             else f" (CLI is v{cli_version} -- run `/plugin update kbagent` in Claude Code to sync)"
         )
+        # Installed from this repo's deprecated marketplace shim: still a pass (it
+        # keeps working and keeps updating), but the shim's entry goes away in a few
+        # releases, so say so now while there is time to move.
+        migration = (
+            ""
+            if not from_legacy_marketplace
+            else (
+                " -- installed from the deprecated keboola-agent-cli marketplace; "
+                "reinstall from keboola/ai-kit: /plugin marketplace add keboola/ai-kit "
+                "then /plugin install kbagent@keboola-claude-kit"
+            )
+        )
         return {
             "check": "claude_plugin",
             "name": "Claude Code plugin",
             "status": "pass",
-            "message": f"kbagent plugin v{plugin_version} installed at {latest}{drift}",
+            "message": f"kbagent plugin v{plugin_version} installed at {latest}{drift}{migration}",
             "plugin_path": str(latest),
             "plugin_version": plugin_version,
         }

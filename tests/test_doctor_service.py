@@ -487,13 +487,13 @@ class TestDoctorServiceCheckClaudePlugin:
         result = DoctorService._check_claude_plugin()
 
         assert result["status"] == "warn"
-        assert "/plugin marketplace add keboola/cli" in result["message"]
-        assert "/plugin install kbagent@keboola-agent-cli" in result["message"]
+        assert "/plugin marketplace add keboola/ai-kit" in result["message"]
+        assert "/plugin install kbagent@keboola-claude-kit" in result["message"]
 
     def test_warn_when_plugin_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:
         """Plugin root dir with no version subdir still counts as not-installed."""
         fake_home = tmp_path / "has-empty-root"
-        plugin_root = fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent"
+        plugin_root = fake_home / ".claude" / "plugins" / "cache" / "keboola-claude-kit" / "kbagent"
         plugin_root.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: fake_home)
 
@@ -505,7 +505,13 @@ class TestDoctorServiceCheckClaudePlugin:
         """Claude Code caches plugins under <root>/<plugin>/<version>/; derive version from dir name."""
         fake_home = tmp_path / "has-plugin"
         version_dir = (
-            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.24.0"
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "keboola-claude-kit"
+            / "kbagent"
+            / "0.24.0"
         )
         version_dir.mkdir(parents=True)
 
@@ -516,6 +522,61 @@ class TestDoctorServiceCheckClaudePlugin:
         assert result["status"] == "pass"
         assert "v0.24.0" in result["message"]
         assert result["plugin_version"] == "0.24.0"
+        # Installed from the current marketplace -> no migration nagging.
+        assert "deprecated" not in result["message"]
+
+    def test_pass_from_legacy_marketplace_cache_dir_carries_migration_note(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A copy installed from this repo's deprecated marketplace still passes.
+
+        The `keboola-agent-cli` marketplace entry is a shim kept alive so existing
+        installs keep updating; the cache path is the only signal of where the copy
+        came from, so a legacy path passes but carries the reinstall instructions.
+        """
+        fake_home = tmp_path / "legacy-marketplace"
+        version_dir = (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.24.0"
+        )
+        version_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert "deprecated keboola-agent-cli marketplace" in result["message"]
+        assert "/plugin marketplace add keboola/ai-kit" in result["message"]
+        assert "/plugin install kbagent@keboola-claude-kit" in result["message"]
+
+    def test_pass_prefers_current_marketplace_when_both_cached(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """With both cache dirs present, the current marketplace wins and no note is added."""
+        fake_home = tmp_path / "both-marketplaces"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent" / "0.24.0").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.20.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert "keboola-claude-kit" in result["plugin_path"]
+        assert "deprecated" not in result["message"]
+
+    def test_warn_when_only_legacy_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:
+        """An empty legacy plugin root is still not-installed (no false pass)."""
+        fake_home = tmp_path / "empty-legacy-root"
+        (fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent").mkdir(
+            parents=True
+        )
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "warn"
 
     def test_pass_with_manifest_version_overrides_dirname(
         self, tmp_path: Path, monkeypatch
@@ -523,7 +584,13 @@ class TestDoctorServiceCheckClaudePlugin:
         """If plugin.json has a version, it takes precedence over the subdir name."""
         fake_home = tmp_path / "has-manifest"
         version_dir = (
-            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.20.0"
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "keboola-claude-kit"
+            / "kbagent"
+            / "0.20.0"
         )
         (version_dir / ".claude-plugin").mkdir(parents=True)
         (version_dir / ".claude-plugin" / "plugin.json").write_text(
@@ -543,7 +610,7 @@ class TestDoctorServiceCheckClaudePlugin:
         """If plugin version != CLI version, pass still but include drift hint."""
         fake_home = tmp_path / "drifted"
         version_dir = (
-            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.1.0"
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-claude-kit" / "kbagent" / "0.1.0"
         )
         version_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: fake_home)
@@ -560,7 +627,13 @@ class TestDoctorServiceCheckClaudePlugin:
         """If plugin.json is unparseable, version still comes from the subdir name."""
         fake_home = tmp_path / "broken-manifest"
         version_dir = (
-            fake_home / ".claude" / "plugins" / "cache" / "keboola-agent-cli" / "kbagent" / "0.24.0"
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "keboola-claude-kit"
+            / "kbagent"
+            / "0.24.0"
         )
         (version_dir / ".claude-plugin").mkdir(parents=True)
         (version_dir / ".claude-plugin" / "plugin.json").write_text(

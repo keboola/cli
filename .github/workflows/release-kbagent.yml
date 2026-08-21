@@ -46,7 +46,9 @@ env:
 # narrower scope it actually needs (see the per-job `permissions:` below). Only three
 # jobs get an elevated token — pypi + publish-s3 (id-token for OIDC) and github-release
 # (contents: write to create the Release). version/gate/freeze/package-linux/homebrew/
-# chocolatey/winget/test-install all stay read-only.
+# ai-kit-marketplace/chocolatey/winget/test-install all stay read-only -- the two jobs
+# that write to another repo (homebrew, ai-kit-marketplace) do it with a PAT, not with
+# this workflow's token.
 permissions:
   contents: read
 
@@ -465,6 +467,118 @@ jobs:
           destination-github-username: keboola
           destination-repository-name: homebrew-keboola-cli2
           target-branch: main
+
+  # ── ai-kit: point keboola/ai-kit's `keboola-claude-kit` marketplace at this tag.
+  #
+  # The kbagent plugin SOURCE stays in this repo (plugins/kbagent/ — four CI gates
+  # here generate and validate it against the live command tree). What ai-kit owns
+  # is PUBLICATION: its marketplace carries an external `git-subdir` entry pointing
+  # at `plugins/kbagent` in this repo, pinned to a release tag. This job is the
+  # syncing mechanism: on every stable tag it rewrites that entry's `version` +
+  # `source.ref` and opens a PR against keboola/ai-kit.
+  #
+  # Deliberately a PR, not a push to ai-kit's main: ai-kit runs Tier 0 / Tier 1
+  # evals on incoming changes and a plugin bump must go through them. That also
+  # means a release does NOT instantly move ai-kit users — the PR has to be merged
+  # there. No-op safe: if the entry already names this version, the job exits 0
+  # without opening an empty PR (re-run a tag as often as you like).
+  ai-kit-marketplace:
+    needs: [version, freeze, publish-s3]
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      AI_KIT_REPO: keboola/ai-kit
+      # Plugin name as it appears in ai-kit's marketplace `plugins[]` catalogue.
+      PLUGIN_NAME: kbagent
+    steps:
+      - name: Check out keboola/ai-kit
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.AI_KIT_REPO }}
+          # AI_KIT_TOKEN is a write-scoped PAT to keboola/ai-kit — same threat model
+          # as HOMEBREW_TAP_TOKEN above: `github.token` is scoped to THIS repo and
+          # cannot push a branch to another one. Keep the PAT's scope to contents +
+          # pull-requests on keboola/ai-kit only; anything wider is a supply-chain
+          # foothold on the marketplace every Keboola Claude Code user installs from.
+          # MUST be provisioned in the `release` environment before the next release
+          # or this job fails (the rest of the release still ships).
+          token: ${{ secrets.AI_KIT_TOKEN }}
+      - name: Rewrite the kbagent entry
+        id: bump
+        run: |
+          set -euo pipefail
+          f=.claude-plugin/marketplace.json
+          [ -f "$f" ] || { echo "::error::$AI_KIT_REPO has no $f"; exit 1; }
+          # A missing entry means the ai-kit side was never registered (or was
+          # reverted) — fail loudly rather than silently publishing nothing.
+          jq -e --arg n "$PLUGIN_NAME" 'any(.plugins[]?; .name == $n)' "$f" > /dev/null \
+            || { echo "::error::$AI_KIT_REPO $f has no plugins[] entry named '$PLUGIN_NAME'"; exit 1; }
+          # Compare the VALUES before touching the file: jq re-emits the whole
+          # document with its own indentation, so a `git diff` on an already-correct
+          # entry could still be non-empty (pure reformatting) and would open an
+          # otherwise-empty PR. The value check is what makes the job no-op safe.
+          cur_version=$(jq -r --arg n "$PLUGIN_NAME" \
+            '.plugins[] | select(.name == $n) | .version // ""' "$f")
+          cur_ref=$(jq -r --arg n "$PLUGIN_NAME" \
+            '.plugins[] | select(.name == $n) | .source.ref? // ""' "$f")
+          if [ "$cur_version" = "$VERSION" ] && [ "$cur_ref" = "v$VERSION" ]; then
+            echo "$PLUGIN_NAME is already published at $VERSION in $AI_KIT_REPO; nothing to open"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq --arg n "$PLUGIN_NAME" --arg v "$VERSION" --arg ref "v$VERSION" \
+            '(.plugins[] | select(.name == $n)) |= (.version = $v | .source.ref = $ref)' \
+            "$f" > "$f.tmp"
+          mv "$f.tmp" "$f"
+          if git diff --quiet -- "$f"; then
+            echo "::error::rewrote $f but nothing changed — is the entry's source a git-subdir?"
+            exit 1
+          fi
+          git diff -- "$f"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Open the bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AI_KIT_TOKEN }}
+          GH_REPO: ${{ env.AI_KIT_REPO }}
+          SRC_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch="chore/kbagent-${VERSION}"
+          # Re-running the same tag must not fail on an already-open PR.
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "a PR for $branch is already open in $AI_KIT_REPO; leaving it alone"
+            exit 0
+          fi
+          git config user.name "keboola-cli-release[bot]"
+          git config user.email "support@keboola.com"
+          git checkout -b "$branch"
+          git add .claude-plugin/marketplace.json
+          git commit -m "chore(kbagent): publish v${VERSION}"
+          # --force, not --force-with-lease: the branch has no remote-tracking ref on a
+          # fresh checkout (lease would refuse), and a leftover `chore/kbagent-<v>` from
+          # an earlier failed run of the SAME tag is exactly what we want to overwrite.
+          # Nothing but this job ever writes that branch name.
+          git push --force origin "$branch"
+          # Body assembled with printf, not a heredoc: a heredoc body inside a YAML
+          # block scalar has to carry the block's indentation, which markdown would
+          # then render as a code block.
+          body=$(mktemp)
+          {
+            printf '%s\n' "Automated by \`release-kbagent\` in \`${SRC_REPO}\` on tag \`v${VERSION}\`." ""
+            printf '%s\n' \
+              "Points the \`kbagent\` marketplace entry at \`v${VERSION}\` (\`version\` + \`source.ref\`)." \
+              "The plugin SOURCE lives in \`${SRC_REPO}\` under \`plugins/kbagent/\`, where the CI gates" \
+              "that generate and validate it against the live command tree run; this repo publishes" \
+              "it. Merging this PR is what moves \`keboola-claude-kit\` users onto the new version." ""
+            printf '%s\n' "Release: https://github.com/${SRC_REPO}/releases/tag/v${VERSION}"
+          } > "$body"
+          gh pr create \
+            --base main --head "$branch" \
+            --title "chore(kbagent): publish v${VERSION}" \
+            --body-file "$body"
 
   # ── Chocolatey: wrap the signed Windows .exe and push.
   chocolatey:

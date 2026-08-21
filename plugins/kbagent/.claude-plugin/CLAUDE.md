@@ -134,6 +134,11 @@ When the subagent returns:
   the read-only reviewer to leave a structured comment review on the
   PR. Requires `gh auth login`
 - Or let description-matching auto-trigger the skill for ambient help
+- Install or reinstall this plugin from Keboola's marketplace:
+  `/plugin marketplace add keboola/ai-kit` then
+  `/plugin install kbagent@keboola-claude-kit`. A copy installed from the
+  older `keboola-agent-cli` marketplace still works, but that entry is
+  deprecated -- `kbagent doctor` says so and prints those two lines
 
 ## Version
 
