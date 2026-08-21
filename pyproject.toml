@@ -54,7 +54,7 @@ packages = ["src/keboola_agent_cli"]
 # hatchling a plain exported source tree, no `.git`), the default package
 # globbing is not excluded and picks up `_ui_dist/` too, colliding with
 # force-include and aborting the build with "A second file is being added to
-# the wheel archive at the same path" (issue AI-3750). `exclude` here is a
+# the wheel archive at the same path". `exclude` here is a
 # plain glob, evaluated unconditionally regardless of VCS state, so the
 # duplicate can't happen either way.
 exclude = ["src/keboola_agent_cli/_ui_dist"]

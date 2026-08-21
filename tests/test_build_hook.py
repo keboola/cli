@@ -14,7 +14,7 @@ The two bugs are reproduced *without a Windows machine*:
   ``force-include`` then failed the whole build. We assert every code path
   leaves ``_ui_dist/`` existing on disk.
 
-Also covers issue AI-3750: the CI wheel build always runs inside a real `git`
+Also covers a gap where the CI wheel build always runs inside a real `git`
 checkout, so it never exercised the no-``.git`` case (a VCS-url install that
 hands hatchling a plain exported source tree). Without a ``.git`` dir,
 hatchling's gitignore-based default-exclusion can't run, so the (gitignored)
@@ -300,7 +300,7 @@ class TestCheckWheelUiHelper:
 
 
 class TestForceIncludeNoDuplicate:
-    """AI-3750: building without a ``.git`` dir must not duplicate ``_ui_dist/``.
+    """Building without a ``.git`` dir must not duplicate ``_ui_dist/``.
 
     Reproduces the real failure end-to-end (not mocked): a minimal project
     laid out with the actual ``pyproject.toml`` / ``hatch_build.py``, a
