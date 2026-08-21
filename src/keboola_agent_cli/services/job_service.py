@@ -12,6 +12,8 @@ from typing import Any
 from ..constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOB_MODE,
+    DEFAULT_JOB_SORT_BY,
+    DEFAULT_JOB_SORT_ORDER,
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
     JOB_IDEMPOTENCY_FILENAME,
@@ -194,6 +196,9 @@ class JobService(BaseService):
         config_id: str | None = None,
         status: str | None = None,
         limit: int = DEFAULT_JOB_LIMIT,
+        offset: int = 0,
+        sort_by: str = DEFAULT_JOB_SORT_BY,
+        sort_order: str = DEFAULT_JOB_SORT_ORDER,
     ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
         """Fetch jobs for a single project (runs in a worker thread).
 
@@ -208,6 +213,9 @@ class JobService(BaseService):
                 config_id=config_id,
                 status=status,
                 limit=limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
             for job in jobs:
                 job["project_alias"] = alias
@@ -240,6 +248,9 @@ class JobService(BaseService):
         config_id: str | None = None,
         status: str | None = None,
         limit: int = DEFAULT_JOB_LIMIT,
+        offset: int = 0,
+        sort_by: str = DEFAULT_JOB_SORT_BY,
+        sort_order: str = DEFAULT_JOB_SORT_ORDER,
     ) -> dict[str, Any]:
         """List jobs across one or multiple projects.
 
@@ -253,6 +264,9 @@ class JobService(BaseService):
             config_id: Optional filter by config ID.
             status: Optional filter by job status.
             limit: Max number of jobs per project (1-500, default 50).
+            offset: Number of jobs to skip per project, for pagination.
+            sort_by: Queue API field to sort by (see JOB_SORT_FIELDS).
+            sort_order: "asc" or "desc".
 
         Returns:
             Dict with keys:
@@ -266,7 +280,17 @@ class JobService(BaseService):
         projects = self.resolve_projects(aliases)
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
-            return self._fetch_project_jobs(alias, project, component_id, config_id, status, limit)
+            return self._fetch_project_jobs(
+                alias,
+                project,
+                component_id,
+                config_id,
+                status,
+                limit,
+                offset,
+                sort_by,
+                sort_order,
+            )
 
         successes, errors = self._run_parallel(projects, worker)
 
@@ -285,16 +309,21 @@ class JobService(BaseService):
         self,
         alias: str,
         job_id: str,
+        log_tail_lines: int = 0,
     ) -> dict[str, Any]:
         """Get detailed information about a specific job.
 
         Args:
             alias: Project alias to query.
             job_id: The job ID.
+            log_tail_lines: When > 0, also fetch that many of the job's most
+                recent events and attach them as ``logTail``. Off by default
+                so a plain detail lookup stays a single API call; ``job run``
+                attaches a tail on its own for terminal failures.
 
         Returns:
-            Dict with the full job detail from the Queue API,
-            plus a "project_alias" key.
+            Dict with the full job detail from the Queue API, plus a
+            "project_alias" key (and ``logTail`` when requested).
 
         Raises:
             ConfigError: If the alias is not found.
@@ -306,6 +335,10 @@ class JobService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             detail = client.get_job_detail(job_id)
+            if log_tail_lines > 0:
+                # Never raises -- a blip on the events endpoint must not hide
+                # the job detail the caller actually asked for.
+                detail["logTail"] = _safe_fetch_log_tail(client, detail, log_tail_lines)
         finally:
             client.close()
 

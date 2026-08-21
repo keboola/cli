@@ -4148,3 +4148,34 @@ show it.
   without it. They are derived per token, so with no derivation there is
   nothing honest to render -- and the alternative (a blank or a default
   label) would state something about data nobody fetched.
+## `--include-usage` counts mappings, not SQL text (since v0.89.0)
+
+`storage tables --include-usage` reports a table as used only when a
+configuration names it in `storage.input.tables[].source` or
+`storage.output.tables[].destination`. A transformation whose SQL says
+`SELECT * FROM in.c-main.orders` but whose input mapping does not list the
+table is **not** reported.
+
+That is deliberate -- the question the column answers is "what breaks if this
+table changes?", and matching free text would answer it with false positives.
+It also means the column is not a complete "is this string anywhere?" audit:
+for that, use `search --search-type config-based` (which scans whole bodies),
+optionally narrowed with `--scope`.
+
+Matching is case-insensitive but whole-id: `in.c-main.order` does not match
+`in.c-main.orders`.
+
+## `sharing link` does not inherit the source bucket's stage (since v0.89.0)
+
+`--stage` defaults to `in`, the stage kbagent has always used. MCP's
+`link_shared_bucket` instead derives the stage from the source bucket, so the
+same link lands in different places depending on which tool you drive. If you
+are porting an MCP call that relied on the derived stage, pass `--stage out`
+explicitly for an `out.*` source.
+
+## `job detail` needs `--log-tail-lines` to show logs (since v0.89.0)
+
+The log tail is off by default so a plain `job detail` stays one API call.
+`job run --wait` still attaches a tail on its own for terminal failures --
+that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
+maximum as `job detail`'s.

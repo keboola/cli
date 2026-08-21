@@ -14,7 +14,7 @@ import os
 from typing import Any
 
 from ..auth.sentinel import require_static_token
-from ..constants import ENV_KBC_MASTER_TOKEN
+from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE, ENV_KBC_MASTER_TOKEN
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -167,6 +167,7 @@ class SharingService(BaseService):
         source_project_id: int,
         source_bucket_id: str,
         name: str | None = None,
+        stage: str = DEFAULT_LINK_STAGE,
     ) -> dict[str, Any]:
         """Link a shared bucket into the target project.
 
@@ -177,10 +178,22 @@ class SharingService(BaseService):
             source_project_id: ID of the project that owns the shared bucket.
             source_bucket_id: Bucket ID in the source project.
             name: Display name for the linked bucket. Defaults to source bucket name.
+            stage: Stage for the linked bucket in THIS project ("in" or "out").
+                Defaults to "in" -- unlike the MCP ``link_shared_bucket`` tool, which
+                derives the stage from the source bucket. The default is kept so that
+                linking an ``out.*`` bucket lands where it always has; pass "out"
+                explicitly to mirror the source stage.
 
         Returns:
             Dict with linked bucket info.
+
+        Raises:
+            ValueError: If stage is not "in" or "out".
         """
+        stage = stage.lower()
+        if stage not in BUCKET_STAGES:
+            raise ValueError(f"Invalid stage '{stage}'. Must be 'in' or 'out'.")
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -199,12 +212,13 @@ class SharingService(BaseService):
                 source_project_id=source_project_id,
                 source_bucket_id=source_bucket_id,
                 name=name,
+                stage=stage,
             )
         finally:
             client.close()
 
         results = job.get("results", {})
-        linked_bucket_id = results.get("id", f"in.c-{name}")
+        linked_bucket_id = results.get("id", f"{stage}.c-{name}")
 
         return {
             "project_alias": alias,
@@ -212,6 +226,7 @@ class SharingService(BaseService):
             "source_project_id": source_project_id,
             "source_bucket_id": source_bucket_id,
             "name": name,
+            "stage": stage,
             "job_status": job.get("status", "unknown"),
             "message": (
                 f"Linked bucket '{linked_bucket_id}' created in project '{alias}' "

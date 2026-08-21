@@ -14,15 +14,19 @@ from ..constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOB_MODE,
     DEFAULT_JOB_RUN_TIMEOUT,
+    DEFAULT_JOB_SORT_BY,
+    DEFAULT_JOB_SORT_ORDER,
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
+    JOB_SORT_FIELDS,
+    JOB_SORT_ORDERS,
     KILLABLE_JOB_STATUSES,
     MAX_JOB_LIMIT,
     MAX_LOG_TAIL_LINES,
     VALID_STATUSES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import format_job_detail, format_jobs_table
+from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -56,6 +60,23 @@ def _job_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "job")
 
 
+def _validate_log_tail_lines(formatter: OutputFormatter, log_tail_lines: int) -> None:
+    """Reject an out-of-range --log-tail-lines with exit 2.
+
+    Shared by ``job run`` and ``job detail`` so both surfaces accept exactly
+    the same range and report a rejection the same way.
+    """
+    if log_tail_lines < 0 or log_tail_lines > MAX_LOG_TAIL_LINES:
+        formatter.error(
+            message=(
+                f"--log-tail-lines must be between 0 and {MAX_LOG_TAIL_LINES}. "
+                f"Got {log_tail_lines}."
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+
 @job_app.command("list")
 def job_list(
     ctx: typer.Context,
@@ -84,6 +105,21 @@ def job_list(
         "--limit",
         help=f"Maximum number of jobs to return per project (1-{MAX_JOB_LIMIT})",
     ),
+    offset: int = typer.Option(
+        0,
+        "--offset",
+        help="Number of jobs to skip per project, for paging past --limit",
+    ),
+    sort_by: str = typer.Option(
+        DEFAULT_JOB_SORT_BY,
+        "--sort-by",
+        help=f"Field to sort by: {', '.join(JOB_SORT_FIELDS)}",
+    ),
+    sort_order: str = typer.Option(
+        DEFAULT_JOB_SORT_ORDER,
+        "--sort-order",
+        help=f"Sort direction: {', '.join(JOB_SORT_ORDERS)}",
+    ),
 ) -> None:
     """List jobs from connected projects."""
     formatter = get_formatter(ctx)
@@ -105,6 +141,29 @@ def job_list(
         )
         raise typer.Exit(code=2)
 
+    # Validate offset
+    if offset < 0:
+        formatter.error(
+            message=f"Invalid --offset {offset}. Must be 0 or greater.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    # Validate sort controls against the Queue API's accepted values
+    if sort_by not in JOB_SORT_FIELDS:
+        formatter.error(
+            message=f"Invalid --sort-by '{sort_by}'. Valid fields: {', '.join(JOB_SORT_FIELDS)}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
+    if sort_order not in JOB_SORT_ORDERS:
+        formatter.error(
+            message=f"Invalid --sort-order '{sort_order}'. Valid values: {', '.join(JOB_SORT_ORDERS)}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
     # Validate config_id requires component_id
     if config_id and not component_id:
         formatter.error(
@@ -120,6 +179,9 @@ def job_list(
             config_id=config_id,
             status=status,
             limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -137,13 +199,29 @@ def job_detail(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
+    log_tail_lines: int = typer.Option(
+        0,
+        "--log-tail-lines",
+        help="Also fetch this many of the job's most recent events (0 = skip the extra call)",
+    ),
 ) -> None:
-    """Show detailed information about a specific job."""
+    """Show detailed information about a specific job.
+
+    Pass --log-tail-lines N to attach the job's last N events, which is how
+    you inspect the logs of a job that already finished (`job run` only
+    surfaces a tail for the run it started itself).
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "job_service")
 
+    _validate_log_tail_lines(formatter, log_tail_lines)
+
     try:
-        result = service.get_job_detail(alias=project, job_id=job_id)
+        result = service.get_job_detail(
+            alias=project,
+            job_id=job_id,
+            log_tail_lines=log_tail_lines,
+        )
         formatter.output(result, format_job_detail)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -315,15 +393,7 @@ def job_run(
         )
         raise typer.Exit(code=2)
 
-    if log_tail_lines < 0 or log_tail_lines > MAX_LOG_TAIL_LINES:
-        formatter.error(
-            message=(
-                f"--log-tail-lines must be between 0 and {MAX_LOG_TAIL_LINES}. "
-                f"Got {log_tail_lines}."
-            ),
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2)
+    _validate_log_tail_lines(formatter, log_tail_lines)
 
     validate_branch_requires_project(formatter, branch, project)
     _, effective_branch = resolve_branch(config_store, formatter, project, branch)

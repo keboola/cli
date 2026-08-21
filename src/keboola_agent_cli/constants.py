@@ -124,6 +124,12 @@ TOKEN_EVENTS_RETENTION_DAYS: int = 180
 # one from -- i.e. the importable SDK, which is deliberately config-dir-free.
 # Mirrors the `max_parallel_workers` default in `models.py`.
 DEFAULT_MAX_PARALLEL_WORKERS: int = 10
+# --- Bucket Sharing ---
+# Stage a `sharing link` bucket lands in when --stage is omitted. Kept at "in"
+# for backwards compatibility: the MCP `link_shared_bucket` tool instead derives
+# the stage from the source bucket, so an out.* source lands in "out" there.
+DEFAULT_LINK_STAGE: str = "in"
+BUCKET_STAGES: tuple[str, ...] = ("in", "out")
 
 # --- Job Limits ---
 DEFAULT_JOB_LIMIT: int = 50
@@ -131,6 +137,20 @@ DEFAULT_JOBS_PER_CONFIG: int = 5
 # Max groups: constrained by API rule jobsPerGroup * limit <= 500
 DEFAULT_GROUPED_JOBS_LIMIT: int = 100
 MAX_JOB_LIMIT: int = 500
+
+# Queue API `GET /search/jobs` sort controls. The allowlist mirrors what the
+# Queue API accepts (and what keboola-mcp-server's get_jobs exposes) so a typo
+# fails locally with exit 2 instead of silently returning an unsorted page.
+JOB_SORT_FIELDS: tuple[str, ...] = (
+    "startTime",
+    "endTime",
+    "createdTime",
+    "durationSeconds",
+    "id",
+)
+JOB_SORT_ORDERS: tuple[str, ...] = ("asc", "desc")
+DEFAULT_JOB_SORT_BY: str = "startTime"
+DEFAULT_JOB_SORT_ORDER: str = "desc"
 
 # --- Retry-After Header ---
 MAX_RETRY_AFTER_SECONDS: int = 60

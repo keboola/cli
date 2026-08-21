@@ -8,6 +8,7 @@ Enable data sharing between Keboola projects:
 
 import typer
 
+from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
@@ -237,6 +238,11 @@ def sharing_link(
         "--name",
         help="Display name for the linked bucket. Auto-generated if omitted.",
     ),
+    stage: str = typer.Option(
+        DEFAULT_LINK_STAGE,
+        "--stage",
+        help="Stage for the linked bucket in the target project: 'in' or 'out'.",
+    ),
 ) -> None:
     """Link a shared bucket into a project.
 
@@ -244,10 +250,21 @@ def sharing_link(
     the source bucket's tables. Uses the regular project token
     (no master token needed).
 
+    The linked bucket lands in the 'in' stage unless --stage says otherwise;
+    the source bucket's own stage is never inherited automatically, so an
+    out.* source still links to in.* by default.
+
     Use 'sharing list' to discover available shared buckets.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
+
+    if stage.lower() not in BUCKET_STAGES:
+        formatter.error(
+            message=f"Invalid stage '{stage}'. Must be one of: {', '.join(BUCKET_STAGES)}.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
 
     try:
         result = service.link(
@@ -255,6 +272,7 @@ def sharing_link(
             source_project_id=source_project_id,
             source_bucket_id=bucket_id,
             name=name,
+            stage=stage,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

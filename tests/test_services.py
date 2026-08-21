@@ -2939,6 +2939,9 @@ class TestJobServiceListJobs:
             config_id="42",
             status="error",
             limit=10,
+            offset=0,
+            sort_by="startTime",
+            sort_order="desc",
         )
 
     def test_list_jobs_unknown_alias_raises_config_error(self, tmp_config_dir: Path) -> None:
