@@ -5582,11 +5582,21 @@ class TestE2ENotificationSubscriptions:
     def _run(self, *args: str) -> Any:
         return _invoke(self.config_dir, ["--json", *args])
 
+    def _payload(self, *args: str) -> dict[str, Any]:
+        """Run the CLI and return the ``data`` payload, not the whole envelope.
+
+        ``_json_ok`` hands back ``{"status": ..., "data": {...}}``, while every
+        assertion below is about what sits inside ``data``. Unwrapping once
+        here keeps that off each call site: reading the envelope as if it were
+        the payload is exactly how this class shipped raising ``KeyError`` on
+        every run, and a per-call-site ``["data"]`` invites the same slip again.
+        """
+        return _json_ok(self._run(*args))["data"]
+
     def test_notification_list_returns_well_formed_envelope(self) -> None:
         """A plain Storage token must reach the notification host and list."""
         _step(1, "notification list -- envelope + live auth path")
-        result = self._run("notification", "list", "--project", self.alias)
-        data = _json_ok(result)
+        data = self._payload("notification", "list", "--project", self.alias)
 
         assert isinstance(data["subscriptions"], list)
         assert isinstance(data["errors"], list)
@@ -5614,8 +5624,9 @@ class TestE2ENotificationSubscriptions:
         filter away on the strength of the swagger.
         """
         _step(2, "notification list --event job-failed")
-        result = self._run("notification", "list", "--project", self.alias, "--event", "job-failed")
-        data = _json_ok(result)
+        data = self._payload(
+            "notification", "list", "--project", self.alias, "--event", "job-failed"
+        )
 
         assert all(row["event"] == "job-failed" for row in data["subscriptions"])
 
@@ -5628,7 +5639,7 @@ class TestE2ENotificationSubscriptions:
         loudly otherwise.
         """
         _step(3, "notification list --event <one of several>")
-        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        everything = self._payload("notification", "list", "--project", self.alias)
         rows = everything["subscriptions"]
         events = {row["event"] for row in rows}
         if len(events) < 2:
@@ -5639,9 +5650,7 @@ class TestE2ENotificationSubscriptions:
 
         target = sorted(events)[0]
         expected = sum(1 for row in rows if row["event"] == target)
-        filtered = _json_ok(
-            self._run("notification", "list", "--project", self.alias, "--event", target)
-        )
+        filtered = self._payload("notification", "list", "--project", self.alias, "--event", target)
 
         assert len(filtered["subscriptions"]) == expected
         assert len(filtered["subscriptions"]) < len(rows)
@@ -5663,7 +5672,7 @@ class TestE2ENotificationSubscriptions:
         the two behaviors apart.
         """
         _step(4, "raw ?event= behavior canary")
-        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        everything = self._payload("notification", "list", "--project", self.alias)
         events = {row["event"] for row in everything["subscriptions"]}
         if len(events) < 2:
             pytest.skip("need >= 2 distinct events to observe the API-side filter")
@@ -5692,7 +5701,7 @@ class TestE2ENotificationSubscriptions:
         and read as "these all fire on that event".
         """
         _step(5, "notification list --event <nonexistent>")
-        result = self._run(
+        data = self._payload(
             "notification",
             "list",
             "--project",
@@ -5700,14 +5709,13 @@ class TestE2ENotificationSubscriptions:
             "--event",
             "definitely-not-an-event",
         )
-        data = _json_ok(result)
 
         assert data["subscriptions"] == []
 
     def test_config_filter_counts_excluded_catchalls(self) -> None:
         """Project-wide subscriptions dropped by a scope filter must be counted."""
         _step(6, "notification list --component-id keboola.flow")
-        unfiltered = _json_ok(self._run("notification", "list", "--project", self.alias))
+        unfiltered = self._payload("notification", "list", "--project", self.alias)
         # Only the rows the filter DROPS are counted -- a project-wide
         # subscription that filters on keboola.flow survives and is shown.
         expected_excluded = sum(
@@ -5716,15 +5724,13 @@ class TestE2ENotificationSubscriptions:
             if row["scope"] == "project-wide" and row["component_id"] != "keboola.flow"
         )
 
-        filtered = _json_ok(
-            self._run(
-                "notification",
-                "list",
-                "--project",
-                self.alias,
-                "--component-id",
-                "keboola.flow",
-            )
+        filtered = self._payload(
+            "notification",
+            "list",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
         )
 
         assert filtered["project_wide_excluded"] == expected_excluded
@@ -5733,20 +5739,18 @@ class TestE2ENotificationSubscriptions:
     def test_detail_round_trips_a_listed_subscription(self) -> None:
         """`detail` must resolve the same row `list` reported."""
         _step(7, "notification detail -- round-trip from list")
-        listed = _json_ok(self._run("notification", "list", "--project", self.alias))
+        listed = self._payload("notification", "list", "--project", self.alias)
         if not listed["subscriptions"]:
             pytest.skip("project has no notification subscriptions to inspect")
 
         expected = listed["subscriptions"][0]
-        detail = _json_ok(
-            self._run(
-                "notification",
-                "detail",
-                "--project",
-                self.alias,
-                "--subscription-id",
-                expected["subscription_id"],
-            )
+        detail = self._payload(
+            "notification",
+            "detail",
+            "--project",
+            self.alias,
+            "--subscription-id",
+            expected["subscription_id"],
         )
 
         assert detail["subscription_id"] == expected["subscription_id"]
@@ -9278,73 +9282,72 @@ class TestE2EDataAppLifecycle:
         self._created_app_ids.append(app_id)
 
         _step(2, "secrets-set: encrypt and write")
-        set_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-set",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                    "--secret",
-                    f"{secret_key}={secret_plaintext}",
-                    "--no-hint-next",
-                ],
-            )
+        # Keep the raw CLI result: the leak assertions below are about the
+        # command's stdout, which the parsed envelope no longer carries.
+        set_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-set",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--secret",
+                f"{secret_key}={secret_plaintext}",
+                "--no-hint-next",
+            ],
         )
-        assert secret_plaintext not in set_result["raw_output"], (
+        _json_ok(set_raw)
+        assert secret_plaintext not in set_raw.output, (
             "Plaintext value MUST NEVER appear in secrets-set output"
         )
 
         _step(3, "secrets-list: enumerate keys (never decrypts)")
-        list_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-list",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                ],
-            )
+        list_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-list",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+            ],
         )
+        list_result = _json_ok(list_raw)
         keys_in_list = [s["key"] for s in list_result["data"]["secrets"]]
         assert secret_key in keys_in_list, (
             f"secrets-list must surface the just-written key; got {keys_in_list}"
         )
-        assert secret_plaintext not in list_result["raw_output"], (
+        assert secret_plaintext not in list_raw.output, (
             "Plaintext value MUST NEVER appear in secrets-list output"
         )
 
         _step(4, "secrets-get: metadata only (never plaintext)")
-        get_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-get",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                    "--key",
-                    secret_key,
-                ],
-            )
+        get_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-get",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--key",
+                secret_key,
+            ],
         )
+        get_result = _json_ok(get_raw)
         assert get_result["data"]["key"] == secret_key
         assert get_result["data"]["encrypted"] is True, (
             "an encrypted secret must report encrypted=true"
         )
         assert get_result["data"]["value"] is None, "an encrypted secret must NOT expose a value"
-        assert secret_plaintext not in get_result["raw_output"], (
+        assert secret_plaintext not in get_raw.output, (
             "secrets-get MUST NEVER echo the decrypted plaintext (Encryption API is one-way)"
         )
 
