@@ -20,6 +20,11 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_branch,
 )
+from ._storage_table_detail import (
+    format_range_partitioning,
+    format_time_partitioning,
+    render_table_detail,
+)
 
 storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
 
@@ -383,7 +388,15 @@ def storage_table_detail(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """Show detailed table info including columns and types."""
+    """Show detailed table info including columns, types and physical layout.
+
+    The Storage API's `definition` object is returned as-is. On BigQuery it
+    carries the registered `timePartitioning` / `rangePartitioning` /
+    `clustering` -- the only way to confirm a `create-table --source-table-id`
+    + `swap-tables` repartition landed, since the table ID is the same either
+    way. Human mode prints the layout and a partition count; `--json` carries
+    the full `definition`.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -408,34 +421,7 @@ def storage_table_detail(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.console.print(f"[bold]Table:[/bold] {result['table_id']}")
-        formatter.console.print(f"  Name: {escape(result['display_name'] or result['name'])}")
-        formatter.console.print(f"  Bucket: {result['bucket_id']}")
-        formatter.console.print(f"  Rows: {result['rows_count']:,}")
-        size_mb = result["data_size_bytes"] / (1024 * 1024)
-        formatter.console.print(f"  Size: {size_mb:.2f} MB")
-        if result["primary_key"]:
-            formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
-        if result["last_import_date"]:
-            formatter.console.print(f"  Last import: {result['last_import_date']}")
-
-        if result["column_details"]:
-            formatter.console.print()
-            from rich.table import Table
-
-            table = Table(title="Columns")
-            table.add_column("Name", style="bold cyan")
-            table.add_column("Type", style="dim")
-            table.add_column("Nullable", style="dim")
-
-            for col in result["column_details"]:
-                table.add_row(
-                    col["name"],
-                    col.get("type", ""),
-                    "yes" if col.get("nullable") else "",
-                )
-
-            formatter.console.print(table)
+        render_table_detail(formatter, result)
 
 
 @storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
@@ -730,20 +716,13 @@ def storage_create_table(
                 formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
             time_partitioning = result.get("time_partitioning")
             if time_partitioning:
-                field = time_partitioning.get("field")
-                suffix = f" on {field}" if field else " (ingestion time)"
-                formatter.console.print(f"  Time partitioning: {time_partitioning['type']}{suffix}")
+                formatter.console.print(
+                    f"  Time partitioning: {format_time_partitioning(time_partitioning)}"
+                )
             range_partitioning = result.get("range_partitioning")
             if range_partitioning:
-                bounds = range_partitioning.get("range") or {}
-                bounds_suffix = ""
-                if bounds:
-                    bounds_suffix = (
-                        f" [{bounds.get('start')}, {bounds.get('end')})"
-                        f" step {bounds.get('interval')}"
-                    )
                 formatter.console.print(
-                    f"  Range partitioning: {range_partitioning['field']}{bounds_suffix}"
+                    f"  Range partitioning: {format_range_partitioning(range_partitioning)}"
                 )
             clustering = result.get("clustering")
             if clustering:

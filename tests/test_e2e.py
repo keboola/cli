@@ -950,6 +950,28 @@ class TestFullE2E:
             "--yes",
         )
 
+        # Verify the swap through `definition` (issue #621). The table ID is
+        # identical whether or not the swap happened -- the registered layout is
+        # the only thing that tells the two apart, and before 0.88.0 kbagent
+        # could not read it at all. `create-table`'s own output is no substitute:
+        # it echoes the layout that was REQUESTED.
+        swapped = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            source_table_id,
+            "--branch",
+            str(branch_id),
+        )["data"]
+        definition = swapped["definition"]
+        assert isinstance(definition, dict), f"Expected a definition object, got {definition!r}"
+        assert definition.get("clustering", {}).get("fields") == ["id"], (
+            "The clustering layout applied by create-table is not readable on the "
+            f"production name after the swap: {definition.get('clustering')!r}"
+        )
+
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""
         csv_path = _create_test_csv(self.data_dir, rows=5)
@@ -1299,6 +1321,14 @@ class TestFullE2E:
         assert "id" in col_names
         assert "name" in col_names
         assert "value" in col_names
+        # The raw Storage API `definition` is passed through (issue #621). It is
+        # present on every table-detail response regardless of backend or typing,
+        # so the KEY is the contract here; the BigQuery layout inside it is
+        # asserted in _test_create_table_from_source where a layout is actually set.
+        assert "definition" in detail, (
+            "table-detail dropped `definition` -- the BigQuery partition/cluster "
+            "layout is unreadable without it (issue #621)"
+        )
 
     def _test_download_table(self, table_id: str) -> None:
         """Download table data and verify round-trip integrity."""

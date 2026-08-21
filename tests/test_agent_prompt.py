@@ -23,12 +23,21 @@ COMMAND_FILE = PLUGIN_DIR / "commands" / "keboola.md"
 PLUGIN_CLAUDE_MD = PLUGIN_DIR / ".claude-plugin" / "CLAUDE.md"
 PLUGIN_JSON = PLUGIN_DIR / ".claude-plugin" / "plugin.json"
 
-# ~20k tokens ≈ 80 kB in typical English markdown (~4 chars/token).
-# We target well under that to leave headroom. Bumped 60 kB -> 62 kB in
-# v0.48.0 to fit the `feature` command-group matrix row; if this keeps
-# creeping up, split keboola-expert into per-domain specialists rather
-# than raising the ceiling again.
-PROMPT_BYTE_BUDGET = 62_000
+# ~20k tokens ~= 80 kB in typical English markdown (~4 chars/token). The budget
+# stays under that so the static prompt never crowds out the task.
+#
+# History: 60 kB -> 62 000 B in v0.48.0 (the `feature` matrix row); 62 000 B ->
+# 70 000 B in v0.88.0. That earlier bump left the file with under 100 bytes of
+# headroom, which stopped being a budget and became a tripwire: the next PR to
+# touch the prompt paid for an unrelated trim before it could add its own line.
+# 70 000 B is a deliberate owner decision to buy that room back, and it still
+# sits ~12% under the 80 kB reference point.
+#
+# It is NOT a licence to grow the file. The standing instruction is unchanged:
+# exhaustive per-command detail belongs in `AGENT_CONTEXT` (loaded on demand),
+# and the real answer to sustained growth is splitting keboola-expert into
+# per-domain specialists, not another bump. Trim before you add.
+PROMPT_BYTE_BUDGET = 70_000
 
 
 @pytest.fixture(scope="module")

@@ -322,7 +322,21 @@ kbagent storage create-table --project prod --bucket-id in.c-main \
 kbagent storage table-detail --project prod --table-id in.c-main.events_repart
 kbagent storage swap-tables --project prod --table-id in.c-main.events \
   --target-table-id in.c-main.events_repart --branch <DEFAULT_BRANCH_ID> --yes
+
+# 3. Verify the layout actually landed on the production name (0.88.0+, #621).
+#    The table ID is identical whether or not the swap happened -- the layout is
+#    the only thing that tells the two apart.
+kbagent --json storage table-detail --project prod --table-id in.c-main.events \
+  | jq '.data.definition | {timePartitioning, clustering, requirePartitionFilter}'
 ```
+
+On 0.87.0 and earlier `table-detail` dropped `definition`, so step 3 was not
+possible from kbagent at all. `create-table`'s own output is not a substitute:
+it echoes the layout you *requested*, and its `--if-not-exists` skip path
+reports `null` for all three layout keys rather than re-deriving the existing
+table's. Note `.definition.partitions` is one entry per physical partition
+(thousands on a long-lived daily table) -- select the keys you need, as above,
+rather than dumping the whole object.
 
 Rules:
 - **BigQuery only.** `--source-table-id` and the partition/clustering flags

@@ -14,6 +14,7 @@ from typing import Any
 from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from ._table_detail import build_table_detail
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -639,7 +640,8 @@ class StorageService(BaseService):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with table metadata, columns, and size info.
+            Dict with table metadata, columns, size info and the raw Storage API
+            ``definition`` (the BigQuery partition/cluster layout lives there).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -650,69 +652,7 @@ class StorageService(BaseService):
         finally:
             client.close()
 
-        columns = table.get("columns", [])
-        column_metadata = table.get("columnMetadata", {})
-        raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
-
-        # Extract description and per-column descriptions from metadata list
-        description = ""
-        col_descriptions: dict[str, str] = {}
-        for m in raw_metadata:
-            key = m.get("key", "")
-            if key == "KBC.description" and m.get("provider") == "user":
-                description = m.get("value", "") or ""
-            elif key.startswith("KBC.column.") and key.endswith(".description"):
-                col_name = key[len("KBC.column.") : -len(".description")]
-                col_descriptions[col_name] = m.get("value", "") or ""
-
-        column_details = []
-        for col in columns:
-            col_info: dict[str, Any] = {"name": col}
-            meta = column_metadata.get(col, [])
-            for m in meta:
-                key = m.get("key", "")
-                value = m.get("value", "")
-                if key == "KBC.datatype.basetype":
-                    col_info["type"] = value
-                elif key == "KBC.datatype.type":
-                    # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
-                    # -- distinct from the Keboola basetype it maps to.
-                    col_info["native_type"] = value
-                elif key == "KBC.datatype.length":
-                    # Length as stored: "40", "18,2", "255", ...
-                    col_info["length"] = value
-                elif key == "KBC.datatype.nullable":
-                    col_info["nullable"] = value == "1"
-                elif key == "KBC.datatype.default":
-                    col_info["default"] = value
-            if col in col_descriptions:
-                col_info["description"] = col_descriptions[col]
-            column_details.append(col_info)
-
-        return {
-            "project_alias": alias,
-            "table_id": table.get("id", table_id),
-            "name": table.get("name", ""),
-            "display_name": table.get("displayName", ""),
-            "bucket_id": table.get("bucket", {}).get("id", ""),
-            # Storage backend of the owning bucket (e.g. "snowflake",
-            # "bigquery"). Consumers: the web UI keys BigQuery-only features
-            # (repartition) off it, and type resolution picks the matching
-            # INFORMATION_SCHEMA dialect for alias / linked tables.
-            "backend": table.get("bucket", {}).get("backend", ""),
-            "description": description,
-            "columns": columns,
-            "column_details": column_details,
-            "primary_key": table.get("primaryKey", []),
-            # API may return null on empty tables; coerce to 0.
-            "rows_count": table.get("rowsCount") or 0,
-            "data_size_bytes": table.get("dataSizeBytes") or 0,
-            "is_alias": table.get("isAlias", False),
-            "last_import_date": table.get("lastImportDate", ""),
-            "last_change_date": table.get("lastChangeDate", ""),
-            "created": table.get("created", ""),
-            "metadata": raw_metadata,
-        }
+        return build_table_detail(alias, table_id, table)
 
     def list_tables(
         self,

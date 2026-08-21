@@ -24,6 +24,35 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.88.0": [
+        "Fix (#621): `storage table-detail` now returns the Storage API's `definition` "
+        "object. On BigQuery that is the only readable record of a table's registered "
+        "`timePartitioning` / `rangePartitioning` / `clustering` layout. The service built "
+        "its response as a field allowlist and `definition` was never on it, so the layout "
+        "that `storage create-table --source-table-id ... --time-partitioning-field ...` "
+        "plus `storage swap-tables` had just applied was invisible to kbagent: the write "
+        "half of the documented repartition flow was supported, the verify half was not, "
+        "and confirming a swap meant leaving kbagent for raw Storage API or BigQuery "
+        "metadata access. `create-table` is no substitute -- its JSON echoes the layout you "
+        "REQUESTED, and its `--if-not-exists` skip path nulls those keys outright. Human "
+        "mode prints `Time partitioning:` / `Range partitioning:` / `Clustering:` / "
+        "`Partition filter required:` / `Partitions:` (a COUNT -- the API returns one entry "
+        "per physical partition from INFORMATION_SCHEMA.PARTITIONS, thousands on a "
+        "long-lived daily table) between the existing `Primary key` and `Last import` "
+        "lines, and prints nothing new when there is no layout, so Snowflake and untyped "
+        "output is unchanged. `--json` passes `definition` through verbatim, full "
+        "`partitions[]` included. Note that `definition` is present on EVERY table-detail "
+        "response, untyped tables included, so a null there means the stack omitted the key "
+        '-- never "this table is untyped". `GET /storage/table-detail/...` on `kbagent '
+        "serve` picks the field up for free. `storage tables` (the LIST endpoint) still has "
+        "no layout: the API offers no `definition` include value, so it would cost one "
+        "detail request per table.",
+        "Internal: the `keboola-expert.md` prompt budget moves 62 000 B -> 70 000 B. The "
+        "62 000 B ceiling had under 100 bytes of headroom left, which made every PR "
+        "touching the prompt pay for an unrelated trim first. `AGENT_CONTEXT` remains the "
+        "place for exhaustive per-command detail, and splitting the prompt into per-domain "
+        "specialists remains the answer to sustained growth.",
+    ],
     "0.87.0": [
         "New (#626): `data-app create` gains `--workspace / --no-workspace` and grants "
         "Storage access BY DEFAULT. The flag writes `runtime.workspace.enabled: true`, which "
