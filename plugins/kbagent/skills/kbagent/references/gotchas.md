@@ -4125,3 +4125,7 @@ show it.
 - An explicit `--columns` is taken literally -- combining it with
   `--with-last-used` does *not* silently append the derived columns. Name
   `last_used` yourself if you want it.
+- **`last_used` / `last_used_event` REQUIRE `--with-last-used`** and exit 2
+  without it. They are derived per token, so with no derivation there is
+  nothing honest to render -- and the alternative (a blank or a default
+  label) would state something about data nobody fetched.

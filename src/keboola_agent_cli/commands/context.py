@@ -816,7 +816,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     before revoking on a project that uses branches.
     --columns (repeatable, human output only -- --json is unaffected) selects and orders the table.
     Names: id, description, created, refreshed, expires, master, created_by, last_used,
-    last_used_event. An unknown name exits 2 and lists the valid ones.
+    last_used_event. An unknown name exits 2 and lists the valid ones. last_used /
+    last_used_event REQUIRE --with-last-used (exit 2 otherwise) -- they are derived, so without
+    the derivation there is no honest value to show.
   kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
     Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
     --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.

@@ -89,8 +89,16 @@ def _last_used_cell(token: dict[str, Any]) -> str:
     "never used" and "unknown" both have an empty ``lastUsed``, but they mean
     opposite things for a revocation decision -- one is proof, the other is the
     absence of it -- so they must never render as the same blank cell.
+
+    A row carrying no status at all renders EMPTY rather than falling through
+    to "unknown": that string asserts something about event retention, and
+    asserting it for a token nobody looked up would be a confident lie. The
+    command guards the reachable case (``--columns last_used`` without
+    ``--with-last-used``); this is the belt to that pair of braces.
     """
     status = token.get("lastUsedStatus")
+    if status is None:
+        return ""
     if status == "used":
         return str(token.get("lastUsed") or "")
     if status == "never":
@@ -131,6 +139,11 @@ _DEFAULT_COLUMNS: tuple[str, ...] = (
     "master",
     "created_by",
 )
+
+# Columns whose values only exist once the last-used derivation has run.
+# Selecting one without `--with-last-used` is a usage error, not an empty
+# column: the data was never fetched, so there is nothing honest to render.
+_DERIVED_COLUMNS: frozenset[str] = frozenset({"last_used", "last_used_event"})
 
 
 def _resolve_columns(selected: list[str] | None, with_last_used: bool) -> list[str]:
@@ -285,6 +298,18 @@ def token_list(
             message=(
                 f"Unknown --columns value(s): {', '.join(unknown)}. "
                 f"Available: {', '.join(_COLUMNS)}"
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+    ungathered = (
+        [name for name in columns or [] if name in _DERIVED_COLUMNS] if not with_last_used else []
+    )
+    if ungathered:
+        formatter.error(
+            message=(
+                f"--columns {', '.join(ungathered)} requires --with-last-used; "
+                "those values are derived per token and are not fetched otherwise."
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,
         )

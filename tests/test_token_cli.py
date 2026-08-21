@@ -463,3 +463,86 @@ class TestListColumns:
         token = json.loads(result.stdout)["data"]["tokens"][0]
         assert token["description"] == "device enrollment"
         assert token["created"] == "2026-08-01T10:00:00+0200"
+
+
+class TestLastUsedColumnsGuard:
+    """`--columns last_used` cannot render data no derivation produced."""
+
+    def _svc(self, tokens: list[dict]) -> MagicMock:
+        svc = MagicMock()
+        svc.list_tokens.return_value = {
+            "alias": ALIAS,
+            "count": len(tokens),
+            "tokens": tokens,
+        }
+        return svc
+
+    def test_derived_column_without_the_flag_is_a_usage_error(self, tmp_path: Path) -> None:
+        """Asking for `last_used` without `--with-last-used` must fail loudly.
+
+        Rendering the column anyway is worse than useless: nothing was fetched,
+        so every row falls through to the "unknown (older than event
+        retention)" branch and the table states -- definitively -- something
+        that was never checked. A token proven active seconds earlier reads as
+        unknown. Fail fast and name the missing flag instead.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir,
+            self._svc([{"id": "1", "description": "a"}]),
+            ["token", "list", "--project", ALIAS, "--columns", "last_used"],
+        )
+        assert result.exit_code == 2
+        assert "--with-last-used" in result.stderr
+        assert "last_used" in result.stderr
+
+    def test_derived_event_column_without_the_flag_is_also_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        result = _invoke(
+            config_dir,
+            self._svc([{"id": "1", "description": "a"}]),
+            ["token", "list", "--project", ALIAS, "--columns", "last_used_event"],
+        )
+        assert result.exit_code == 2
+        assert "--with-last-used" in result.stderr
+
+    def test_derived_column_with_the_flag_renders(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc(
+            [{"id": "1", "description": "a", "lastUsed": None, "lastUsedStatus": "never"}]
+        )
+        result = _invoke(
+            config_dir,
+            svc,
+            ["token", "list", "--project", ALIAS, "--columns", "last_used", "--with-last-used"],
+            env={"COLUMNS": "200"},
+        )
+        assert result.exit_code == 0
+        assert "never used" in result.stdout
+
+    def test_a_row_missing_its_status_renders_blank_not_a_claim(self, tmp_path: Path) -> None:
+        """Defence in depth: the cell renderer must never invent a verdict.
+
+        The guard above stops the reachable case, but if a row ever arrives
+        without `lastUsedStatus` the honest render is an empty cell -- not
+        "unknown (older than event retention)", which asserts a fact about
+        retention that nothing established.
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = self._svc([{"id": "1", "description": "a"}])  # no lastUsedStatus at all
+        result = _invoke(
+            config_dir,
+            svc,
+            ["token", "list", "--project", ALIAS, "--with-last-used"],
+            env={"COLUMNS": "200"},
+        )
+        assert result.exit_code == 0
+        assert "older than event retention" not in result.stdout

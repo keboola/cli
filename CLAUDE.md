@@ -548,6 +548,8 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   `idBranch == <production> OR NOT EXISTS idBranch`), so a branch-only token reads as dormant.
 # `--columns` (0.89.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
 #   column (--json always returned it). --json is deliberately NOT affected by --columns.
+#   `last_used` / `last_used_event` REQUIRE --with-last-used (exit 2 otherwise): nothing was
+#   derived, so any rendered value would assert something never checked.
 # SDK (importable Client(url,token)) now exposes create_scoped_token / list_tokens / delete_token /
 # refresh_token / create_stream_source / get_stream_source / list_stream_sources /
 # delete_stream_source: dicts on .raw, typed ScopedTokenResult / TokenListEntryResult /

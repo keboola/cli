@@ -58,6 +58,10 @@ CHANGELOG: dict[str, list[str]] = {
         "also joins the default columns -- `--json` already returned it but the fixed "
         "6-column table had no way to show it. `--json` is deliberately unaffected by "
         "`--columns`: the machine contract stays whole.",
+        "Note: `--columns last_used` / `last_used_event` REQUIRE `--with-last-used` and exit 2 "
+        "without it. Those values are derived per token, so with no derivation there is nothing "
+        "honest to put in the cell -- rendering one anyway would state something about data that "
+        "was never fetched.",
         "SDK: `Client.list_tokens(with_last_used=True)` exposes the same derivation; "
         "`TokenListEntryResult` gains `last_used`, `last_used_event` and "
         "`last_used_status`. REST: `GET /token/{project}/list` gains a matching "
