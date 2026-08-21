@@ -259,7 +259,7 @@ printf '  %sno sudo required%s\n' "$DIM" "$RESET" >&2
 info ""
 printf '  %sNext steps%s\n' "$BOLD" "$RESET" >&2
 printf '    %sIn Claude Code:%s %s/kbagent:setup%s   %s# connect + verify in one command%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
-printf '    %s(needs the plugin: /plugin marketplace add keboola/cli, /plugin install kbagent@keboola-agent-cli)%s\n' "$DIM" "$RESET" >&2
+printf '    %s(needs the plugin:%s %skbagent doctor%s %sprints the exact /plugin commands)%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 info ""
 printf '  %sOr do it by hand%s\n' "$BOLD" "$RESET" >&2
 printf '    %skbagent project add%s --project myproject \\\n' "$BOLD" "$RESET" >&2
