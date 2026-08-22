@@ -24,20 +24,6 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.88.1": [
-        "UX: `kbagent storage table-detail` now shows column descriptions in its "
-        "human-mode Columns table. 0.88.0 (#624) made a description visible in the "
-        "Keboola UI, in the MCP server's `get_tables` and in the warehouse's own "
-        "`COMMENT`, and `--json` has carried it on `column_details[].description` all "
-        "along -- kbagent's own terminal output was the one surface still showing "
-        "nothing, so `storage describe-column` followed by `storage table-detail` (the "
-        "obvious way to check your own work) was the one way that did not work. The "
-        "column appears only when at least one column actually has a description, the "
-        "same rule the partitioning block follows, so an undocumented table's output is "
-        "byte-identical to before. Long text wraps rather than truncating -- verifying "
-        "what you just wrote is the point -- and the cell is width-capped so a wide "
-        "terminal does not stretch it across the screen. `--json` is unchanged.",
-    ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "
         "MCP server actually read them. Until 0.87.0 `storage describe-column` / "
