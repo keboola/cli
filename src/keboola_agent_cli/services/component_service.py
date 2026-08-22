@@ -7,6 +7,7 @@ local-first development workflows.
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -16,7 +17,8 @@ from ..config_store import ConfigStore
 from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
-from ..sync.config_format import api_config_to_local
+from ..sync.code_extraction import extract_code_files
+from ..sync.config_format import api_config_to_local, dump_config_yaml
 from .base import BaseService, ClientFactory
 from .org_service import slugify
 
@@ -319,7 +321,9 @@ def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[s
     files: list[dict[str, Any]] = []
     for entry in scaffold["files"]:
         if entry["path"] != CONFIG_FILENAME:
-            files.append(entry)
+            # Copy, don't share -- a later in-place mutation of a companion
+            # entry must not reach back into the caller's scaffold.
+            files.append(dict(entry))
             continue
         content: str = entry["content"]
         out: list[str] = []
@@ -353,43 +357,50 @@ def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[s
     return {**scaffold, "files": files}
 
 
-def build_pushed_config_files(
+def materialize_pushed_config(
     component_id: str,
     config_id: str,
     name: str,
     description: str,
     configuration: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Build the local file list mirroring an explicitly pushed config body.
+    config_dir: Path,
+) -> list[str]:
+    """Write the local files mirroring an explicitly pushed config body.
 
     Used by ``config new --push --output-dir`` when ``--configuration`` /
-    ``--configuration-file`` supplied a real body: the placeholder scaffold
-    would diverge from the remote, and the next ``sync push`` would overwrite
-    the freshly created configuration with TODO templates. The mirrored body
-    comes from the API response, so ``#``-secrets are already encrypted
-    (``KBC::...``) -- no plaintext ever reaches the disk. The YAML layout
-    matches what ``sync pull`` would materialize (same converter, same dump
-    settings), so the follow-up ``sync diff`` reports no spurious changes.
+    ``--configuration-file`` supplied a real body: writing the placeholder
+    scaffold instead would diverge from the remote, and the next ``sync
+    push`` would overwrite the freshly created configuration with TODO
+    templates. The mirrored body comes from the API response, so
+    ``#``-secrets are already encrypted (``KBC::...``) -- no plaintext ever
+    reaches the disk.
+
+    The directory is materialized exactly the way ``sync pull`` would do it:
+    the same converter (:func:`api_config_to_local`), the same code
+    extraction (a transformation body's ``parameters.blocks`` become a real
+    ``transform.sql`` / ``transform.py`` next to ``_config.yml`` -- NOT
+    placeholder templates, which would be merged back over the real code on
+    the next push), and the same YAML serialization
+    (:func:`..sync.config_format.dump_config_yaml`, written with
+    ``newline=""`` so Windows does not CRLF-translate what every other sync
+    write leaves LF-only). The follow-up ``sync diff`` therefore reports no
+    spurious changes.
+
+    Returns the list of file paths written, relative to *config_dir*.
     """
     local = api_config_to_local(
         component_id,
         {"name": name, "description": description, "configuration": configuration},
         str(config_id),
     )
-    content = yaml.dump(
-        local,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-        width=120,
+    config_dir.mkdir(parents=True, exist_ok=True)
+    extract_code_files(component_id, local, config_dir)
+    content = dump_config_yaml(local)
+    (config_dir / CONFIG_FILENAME).write_text(content, encoding="utf-8", newline="")
+    written = sorted(
+        p.relative_to(config_dir).as_posix() for p in config_dir.rglob("*") if p.is_file()
     )
-    return [
-        {
-            "path": CONFIG_FILENAME,
-            "content": content,
-            "description": "Configuration mirroring the pushed body",
-        }
-    ]
+    return written
 
 
 def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str:

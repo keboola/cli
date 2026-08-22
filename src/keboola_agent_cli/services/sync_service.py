@@ -25,12 +25,18 @@ from ..constants import (
     MANIFEST_VERSION,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
-from ..sync.branch_registry import ensure_branch_registered, register_branch_dir
+from ..sync.branch_registry import (
+    ScaffoldPlacement,
+    ensure_branch_registered,
+    register_branch_dir,
+    resolve_scaffold_placement,
+)
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
+    dump_config_yaml,
     local_config_to_api,
     local_row_to_api,
 )
@@ -2090,13 +2096,7 @@ class SyncService(BaseService):
         """
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / CONFIG_FILENAME
-        content = yaml.dump(
-            config_data,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-            width=120,
-        )
+        content = dump_config_yaml(config_data)
         config_file.write_text(content, encoding="utf-8", newline="")
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -2188,6 +2188,23 @@ class SyncService(BaseService):
         """
         projects = self.resolve_projects([alias])
         return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
+
+    def resolve_scaffold_placement(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int | None,
+    ) -> ScaffoldPlacement:
+        """Resolve where a ``config new --push`` scaffold belongs on disk.
+
+        Thin wrapper over :func:`..sync.branch_registry.resolve_scaffold_placement`
+        (issue #644). The project is resolved lazily -- a production create
+        (``branch_id is None``) never needs a client or the config store.
+        """
+        project = None
+        if branch_id is not None:
+            project = self.resolve_projects([alias])[alias]
+        return resolve_scaffold_placement(project, project_root, branch_id, self._client_factory)
 
     def _ensure_branch_registered(
         self,

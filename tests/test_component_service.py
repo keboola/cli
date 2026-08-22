@@ -844,6 +844,28 @@ class TestStampScaffoldConfigId:
         assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
         assert parsed["_keboola"]["config_id"] == "999"
 
+    def test_stamps_real_generator_output_with_single_keboola_block(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Guard against builder-format drift: feed REAL _build_config_yml
+        output through the stamper (PR #653 review) -- a renamed or
+        reordered _keboola block would silently fall into the append path
+        and produce a duplicate block."""
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+        scaffold = service.generate_scaffold(alias="prod", component_id="keboola.ex-http")
+
+        stamped = stamp_scaffold_config_id(scaffold, "01m0njbrqwpyqbx0yqfqq9pyen")
+
+        content = stamped["files"][0]["content"]
+        assert content.count("_keboola:") == 1, "stamping must not append a second block"
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "01m0njbrqwpyqbx0yqfqq9pyen"
+        assert "assigned by Keboola on first push" not in content
+
     def test_companion_files_untouched_and_input_not_mutated(self) -> None:
         from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
 
@@ -855,15 +877,17 @@ class TestStampScaffoldConfigId:
         assert scaffold["files"][0]["content"] == original_yml
 
 
-class TestBuildPushedConfigFiles:
-    """When --configuration was pushed, the local file must mirror the pushed
-    body -- writing placeholder scaffolding instead would make the next
-    ``sync push`` overwrite the real remote config with TODO templates."""
+class TestMaterializePushedConfig:
+    """When --configuration was pushed, the local dir must mirror the pushed
+    body exactly the way ``sync pull`` would materialize it -- placeholder
+    scaffolding would make the next ``sync push`` overwrite the real remote
+    config with TODO templates, and inline-only YAML would drop the code
+    files pull-based trees carry."""
 
-    def test_mirrors_pushed_body(self) -> None:
-        from keboola_agent_cli.services.component_service import build_pushed_config_files
+    def test_mirrors_pushed_body(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
 
-        files = build_pushed_config_files(
+        written = materialize_pushed_config(
             component_id="keboola.ex-http",
             config_id="12345",
             name="test-config",
@@ -875,9 +899,12 @@ class TestBuildPushedConfigFiles:
                 },
                 "storage": {"input": {"tables": [{"source": "in.c-b.t"}]}},
             },
+            config_dir=tmp_path,
         )
-        assert [f["path"] for f in files] == ["_config.yml"]
-        parsed = yaml.safe_load(files[0]["content"])
+        # _description.md is pull-parity: sync pull extracts a non-empty
+        # description into a companion file the same way.
+        assert written == ["_config.yml", "_description.md"]
+        parsed = yaml.safe_load((tmp_path / "_config.yml").read_text(encoding="utf-8"))
         assert parsed["name"] == "test-config"
         assert parsed["parameters"]["baseUrl"] == "https://example.com"
         # Encrypted value travels verbatim -- never decrypted, never a TODO.
@@ -887,3 +914,30 @@ class TestBuildPushedConfigFiles:
             "component_id": "keboola.ex-http",
             "config_id": "12345",
         }
+
+    def test_transformation_body_extracts_real_code(self, tmp_path: Path) -> None:
+        """A pushed SQL body must yield a real transform.sql (like sync pull),
+        NOT a placeholder -- and not disappear entirely (PR #653 review)."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        written = materialize_pushed_config(
+            component_id="keboola.snowflake-transformation",
+            config_id="67890",
+            name="tf",
+            description="",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Blocks",
+                            "codes": [{"name": "Code", "script": ["SELECT 1;"]}],
+                        }
+                    ]
+                }
+            },
+            config_dir=tmp_path,
+        )
+        assert "transform.sql" in written and "_config.yml" in written
+        sql = (tmp_path / "transform.sql").read_text(encoding="utf-8")
+        assert "SELECT 1;" in sql
+        assert "TODO" not in sql

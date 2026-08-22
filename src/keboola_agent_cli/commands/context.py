@@ -432,7 +432,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     of the branch the config was created in (--branch or the active branch; the branch
     is registered in the manifest if missing) -- the next sync push adopts the config
     instead of creating a duplicate. With an explicit --configuration body the local
-    file mirrors the pushed (already encrypted) body instead of placeholder scaffolding.
+    directory mirrors the pushed (already encrypted) body exactly like sync pull would
+    materialize it (real transform.sql/.py extracted from the body) instead of
+    placeholder scaffolding.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]

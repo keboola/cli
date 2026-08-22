@@ -520,6 +520,9 @@ class TestFullE2E:
         _step("19c", "config new --push validation", "real schema vs real body (#587)")
         self._test_config_new_push_schema_validation()
 
+        _step("19c2", "config new --push --output-dir", "scaffold carries created config_id (#644)")
+        self._test_config_new_push_output_dir()
+
         _step("19d", "config clone", "whole-config duplicate incl. rows (#587)")
         self._test_config_clone()
 
@@ -2187,6 +2190,62 @@ class TestFullE2E:
             # remote config promptly; the global teardown loop is a safety
             # net for the case where this delete itself fails.
             # ``config delete`` has no ``--yes`` flag (CLAUDE.md inventory).
+            self._run_ok(
+                "config",
+                "delete",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                new_config_id,
+            )
+
+    def _test_config_new_push_output_dir(self) -> None:
+        """Test ``config new --push --output-dir`` writes an adoptable scaffold (issue #644).
+
+        The written ``_config.yml`` must carry ``_keboola.config_id`` of the
+        just-created configuration -- before the #644 fix it did not, and the
+        next ``sync push`` created a duplicate (34-config incident). A plain
+        (non-sync) output dir is used, so the layout is flat and no manifest
+        is involved; the stamped ID is the contract under test.
+        """
+        import yaml as _yaml
+
+        push_name = f"{RUN_ID} push-scaffold-644"
+        out_dir = self.work_dir / "scaffold-644"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        created = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--name",
+            push_name,
+            "--push",
+            "--output-dir",
+            str(out_dir),
+        )["data"]
+        new_config_id = str(created["id"])
+        self._created_config_ids.append(("keboola.ex-http", new_config_id))
+
+        try:
+            scaffold_info = created["local_scaffold"]
+            assert scaffold_info["config_id"] == new_config_id, scaffold_info
+            config_yml = Path(scaffold_info["directory"]) / "_config.yml"
+            assert config_yml.is_file(), f"scaffold not written: {scaffold_info}"
+            raw = config_yml.read_text(encoding="utf-8")
+            parsed = _yaml.safe_load(raw)
+            assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+            # The stamped ID is the duplicate-prevention contract (#644):
+            # sync diff's adopt-by-id guard pairs the dir with the remote.
+            assert parsed["_keboola"]["config_id"] == new_config_id, raw
+            assert isinstance(parsed["_keboola"]["config_id"], str)
+            assert "assigned by Keboola on first push" not in raw
+        finally:
             self._run_ok(
                 "config",
                 "delete",

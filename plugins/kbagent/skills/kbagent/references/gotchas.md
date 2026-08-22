@@ -1171,10 +1171,13 @@ events and emits a final `done` SSE frame mirroring the same record.
 - The follow-up `sync diff` reports the new config as `modified` (placeholder
   scaffold vs the pushed empty body) -- that is the expected "now edit and
   push" state, NOT drift. With an explicit `--configuration` body the local
-  file mirrors the pushed (already encrypted) body instead, so the diff is
-  clean and a later push cannot regress the remote to TODO placeholders.
-- `--json` gains an additive `local_scaffold: {directory, files}` key on this
-  path.
+  directory mirrors the pushed (already encrypted) body instead, materialized
+  exactly like `sync pull` would (a transformation body's `parameters.blocks`
+  become a REAL `transform.sql`/`transform.py`, a non-empty description
+  becomes `_description.md`) -- so the diff is clean and a later push cannot
+  regress the remote to TODO placeholders.
+- `--json` gains an additive `local_scaffold: {directory, files, config_id}`
+  key on this path.
 - Agents on kbagent < vNEXT: do NOT recommend `--output-dir` + `--push`
   together; use scaffold-only then `sync push`, or `--push --no-files`.
 

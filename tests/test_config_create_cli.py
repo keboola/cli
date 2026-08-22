@@ -828,12 +828,14 @@ class TestConfigNewPushScaffoldStamping:
         assert not (out / "main/extractor").exists(), "must not write into the default branch tree"
 
     def test_branch_unknown_to_manifest_gets_registered(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.sync.branch_registry import ScaffoldPlacement
+
         out = tmp_path / "ws"
         _write_manifest(out, [{"id": 10, "path": "main"}])
         svc_config = MagicMock()
         svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
         sync_mock = MagicMock()
-        sync_mock.register_branch_dir.return_value = "issue-branch"
+        sync_mock.resolve_scaffold_placement.return_value = ScaffoldPlacement("issue-branch")
 
         result = self._run(
             tmp_path,
@@ -845,21 +847,26 @@ class TestConfigNewPushScaffoldStamping:
         )
 
         assert result.exit_code == 0, result.output
-        sync_mock.register_branch_dir.assert_called_once()
-        kwargs = sync_mock.register_branch_dir.call_args.kwargs
+        sync_mock.resolve_scaffold_placement.assert_called_once()
+        kwargs = sync_mock.resolve_scaffold_placement.call_args.kwargs
         assert kwargs.get("branch_id") == 20
         expected = out / "issue-branch/extractor/keboola.ex-http/test-config/_config.yml"
         assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
 
-    def test_branch_registration_failure_falls_back_to_branch_dir(self, tmp_path: Path) -> None:
-        """Never fall back to the default-branch tree -- a wrong-branch file
-        is the exact duplicate factory this fix removes."""
+    def test_placement_warning_surfaces_in_envelope(self, tmp_path: Path) -> None:
+        """A degraded placement (registration failed -> branch-{id}/) must be
+        honored AND surfaced -- never silently retargeted to the default
+        tree, which is the exact duplicate factory this fix removes."""
+        from keboola_agent_cli.sync.branch_registry import ScaffoldPlacement
+
         out = tmp_path / "ws"
         _write_manifest(out, [{"id": 10, "path": "main"}])
         svc_config = MagicMock()
         svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
         sync_mock = MagicMock()
-        sync_mock.register_branch_dir.side_effect = RuntimeError("api down")
+        sync_mock.resolve_scaffold_placement.return_value = ScaffoldPlacement(
+            "branch-20", "registration failed; reconcile with sync pull"
+        )
 
         result = self._run(
             tmp_path,
@@ -874,14 +881,19 @@ class TestConfigNewPushScaffoldStamping:
         expected = out / "branch-20/extractor/keboola.ex-http/test-config/_config.yml"
         assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
         assert not (out / "main/extractor").exists()
+        envelope = json.loads(result.output)
+        assert envelope["data"]["warnings"] == ["registration failed; reconcile with sync pull"]
 
     def test_branch_without_manifest_stays_flat(self, tmp_path: Path) -> None:
-        """No sync workspace in output_dir -> flat layout, no sync calls."""
+        """No sync workspace in output_dir -> flat layout (placement None)."""
+        from keboola_agent_cli.sync.branch_registry import ScaffoldPlacement
+
         out = tmp_path / "plain"
         out.mkdir()
         svc_config = MagicMock()
         svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
         sync_mock = MagicMock()
+        sync_mock.resolve_scaffold_placement.return_value = ScaffoldPlacement(None)
 
         result = self._run(
             tmp_path,
@@ -895,7 +907,6 @@ class TestConfigNewPushScaffoldStamping:
         assert result.exit_code == 0, result.output
         expected = out / "extractor/keboola.ex-http/test-config/_config.yml"
         assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
-        sync_mock.register_branch_dir.assert_not_called()
 
     def test_pushed_body_is_mirrored_not_placeholder(self, tmp_path: Path) -> None:
         """--configuration: the local file mirrors the pushed (already
