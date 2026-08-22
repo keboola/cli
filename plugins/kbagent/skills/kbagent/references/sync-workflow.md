@@ -425,10 +425,10 @@ Override files are JSON or YAML objects:
 - `--variable-values` → `{ "db_host": "prod-db", "api_base": "https://..." }` — overrides matching `keboola.variables` row values.
 - `--instance-rename` → `{ "extractor/keboola.ex-db/Acme": "extractor/keboola.ex-db/Globex" }` — renames config dirs + manifest paths.
 
-All three files must be **flat `{id: scalar}` mappings** — a nested mapping,
-list, or empty (`null`) value is rejected with `CONFIG_ERROR` (exit 5) naming
-the offending key and its actual type, instead of being silently stringified
-into a bogus ID.
+All three files must be **flat `{id: scalar}` mappings** (since v0.89.1) — a
+nested mapping, list, or empty (`null`) value is rejected with `CONFIG_ERROR`
+(exit 5) naming the offending key and its actual type, instead of being
+silently stringified into a bogus ID.
 
 **Why it just works on a fresh target:** the reference's config ids do not exist
 in the target project, so the push diff classifies every config as `added` and
