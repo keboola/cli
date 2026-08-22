@@ -3514,6 +3514,14 @@ things to internalise:
   new/empty target. Re-running clone with the same `--target-dir` is idempotent
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
+- Override files (`--bucket-map` / `--variable-values` / `--instance-rename`)
+  must be **flat `{id: scalar}` mappings**. A nested value — one fat-fingered
+  colon away from valid YAML, e.g. `in.c-old:` followed by an indented
+  `new: in.c-new` — is rejected with `CONFIG_ERROR` (exit 5) naming the
+  offending key and its actual type. Older versions silently stringified it
+  (`str(dict)` → `"{'new': 'in.c-new'}"`) and pushed that as a "bucket ID".
+  (Release step: once this ships, tag this bullet `(since vX.Y.Z)` with the
+  version that carried it.)
 
 ### `search --regex` matches entity names only; `matched_columns` is textual-only (since v0.67.0)
 

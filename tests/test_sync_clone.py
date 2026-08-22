@@ -602,6 +602,43 @@ class TestSyncCloneCLI:
         assert call["overrides"]["bucket_map"] == {"in.c-ref": "in.c-prod"}
         assert "Cloned into target" in result.output
 
+    def test_nested_override_value_errors(self, tmp_path: Path) -> None:
+        """A non-scalar override value (fat-fingered colon) is rejected, not stringified."""
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app
+
+        runner = CliRunner()
+        source = tmp_path / "golden"
+        _golden_source(source)
+        bmap = tmp_path / "buckets.yaml"
+        bmap.write_text("in.c-ref:\n  new: in.c-prod\n", encoding="utf-8")
+
+        with patch("keboola_agent_cli.cli.SyncService") as MockSync:
+            svc = MagicMock()
+            MockSync.return_value = svc
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "clone",
+                    "--source",
+                    str(source),
+                    "--target",
+                    "target",
+                    "--target-dir",
+                    str(tmp_path / "clone"),
+                    "--bucket-map",
+                    str(bmap),
+                ],
+            )
+        assert result.exit_code == 5
+        assert "in.c-ref" in result.output
+        assert "mapping" in result.output
+        svc.clone_project.assert_not_called()
+
     def test_missing_override_file_errors(self, tmp_path: Path) -> None:
         from unittest.mock import patch
 
