@@ -12,6 +12,44 @@ that auto-suspends after idle. Two API surfaces own them:
 git PATs. The CLI encapsulates the documented footguns so callers cannot
 hit them; see "Gotchas encoded" below.
 
+## What goes IN the repo: the `dataapp-developer` skill (read before authoring)
+
+This file covers the **lifecycle** -- create, deploy, secrets, credentials,
+rollback -- i.e. what `kbagent data-app` does to an app. It does NOT specify
+what the git repo must contain. That is the base image's contract, and it is
+owned by Keboola's official skill:
+
+    keboola/ai-kit -> plugins/dataapp-developer/skills/dataapp-development/
+      SKILL.md
+      references/python-js-apps.md     <- the /app contract, nginx, supervisord
+      references/storage-access.md
+      references/troubleshooting.md
+      templates/{python-app,nodejs-app,python-node-app}/
+
+Read `references/python-js-apps.md` before authoring or reviewing a repo. The
+rules that bite hardest are not discoverable from a failed deploy, because a
+container that never becomes ready produces **no logs at all** -- the deploy
+just dies as `StartupDeadlineExceeded` after ten minutes:
+
+- **nginx must `listen 8888`.** Hardcoded by the platform; the proxy routes
+  external traffic there and nowhere else. Only ports >= 1024 work at all
+  (the container does not run as root).
+- **Never declare `[program:nginx]`** in `keboola-config/supervisord/`. The
+  base image manages nginx; declaring it too makes one of the two fail to
+  start.
+- **The health check polls `GET /`**, not `/health`. Blocking work on that
+  path stalls it and the container never reports ready.
+- Required paths are fixed: `keboola-config/nginx/sites/*.conf` and
+  `keboola-config/supervisord/services/*.conf`. The repo is cloned to `/app`.
+
+`kbagent data-app validate-repo` checks a SUBSET of that contract (see
+"Pre-flight repo validation" below) -- notably it does not inspect the nginx
+`listen` port, so **0 BLOCKING is not a promise that the app will start**.
+Treat the skill as the specification and validate-repo as a cheap first pass.
+
+The templates under `templates/` are the fastest correct starting point: copy
+one rather than assembling `keboola-config/` by hand.
+
 ## Storage access: `runtime.workspace.enabled` (read this first)
 
 Any data app that reads Storage needs `runtime.workspace.enabled: true` in
