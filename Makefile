@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -113,6 +113,9 @@ check-error-codes: ## Reject raw error_code string literals in source (use Error
 command-sync-check: ## Verify every CLI command is registered + documented (silent-drift gate)
 	uv run python scripts/check_command_sync.py
 
+version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unreleased version
+	uv run python scripts/check_version_gates.py
+
 check-sentinel-guards: ## Reject an unguarded kbc-session:// sentinel path (silent-drift gate)
 	uv run python scripts/check_sentinel_guards.py
 
@@ -124,7 +127,7 @@ hooks: ## Install git pre-commit hook (lint + format on staged files)
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check typecheck skill-check version-check command-sync-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + command-sync + changelog + error-codes + sentinel-guards + file-size + test)
+check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + changelog + error-codes + sentinel-guards + file-size + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

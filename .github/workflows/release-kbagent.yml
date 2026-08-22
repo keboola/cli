@@ -111,6 +111,10 @@ jobs:
       # Same silent-drift gates ci.yml enforces, so a tag pushed directly can't bypass them.
       - run: uv run python scripts/check_command_sync.py
       - run: uv run python scripts/check_error_codes.py
+      # A renumbered release is exactly the mistake that reaches a TAG rather
+      # than a PR, so this gate matters more here than in ci.yml: the markers
+      # break in bulk the moment the version they name stops shipping.
+      - run: uv run python scripts/check_version_gates.py
       - name: SKILL.md + version drift
         run: |
           uv run python scripts/generate_skill.py > /dev/null 2>&1
