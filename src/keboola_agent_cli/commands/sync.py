@@ -9,6 +9,7 @@ from typing import Any
 
 import typer
 
+from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
 
@@ -249,16 +250,43 @@ def _format_never_fetched(formatter: Any, never_fetched: list[dict]) -> None:
         )
 
 
+def _format_orphaned(formatter: Any, orphaned: list[dict]) -> None:
+    """Warn about configs excluded because they belong to another branch's tree.
+
+    ``sync pull --branch <dev>`` re-targets the whole manifest, so this list is
+    project-sized in the case that matters (issue #649) -- print a preview and
+    collapse the tail into a count.
+    """
+    if not orphaned:
+        return
+    formatter.console.print(
+        f"\n  [yellow]Warning: {len(orphaned)} config(s) belong to a different branch "
+        f"than the one being synced. They are excluded from the diff and from push "
+        f"planning -- run 'kbagent sync pull' to re-target the manifest to this "
+        f"branch, or remove the stale directory:[/yellow]"
+    )
+    for item in orphaned[:SYNC_ORPHAN_PREVIEW_LIMIT]:
+        formatter.console.print(
+            f"    ? {item.get('component_id')}/{item.get('config_id')}  "
+            f"[dim]{item.get('path', '')} -- {item.get('hint', '')}[/dim]"
+        )
+    remaining = len(orphaned) - SYNC_ORPHAN_PREVIEW_LIMIT
+    if remaining > 0:
+        formatter.console.print(f"    [dim]... and {remaining} more[/dim]")
+
+
 def _format_diff_result(formatter: Any, result: dict) -> None:
     """Format a single-project diff result for human output."""
     changes = result["changes"]
     summary = result["summary"]
     remote_only = result.get("remote_only", [])
     never_fetched = result.get("never_fetched", [])
+    orphaned = result.get("orphaned", [])
 
     if not changes and not remote_only:
-        if never_fetched:
+        if never_fetched or orphaned:
             _format_never_fetched(formatter, never_fetched)
+            _format_orphaned(formatter, orphaned)
         else:
             formatter.console.print("[green]No differences.[/green]")
         return
@@ -286,6 +314,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
     if remote_only:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
     _format_never_fetched(formatter, never_fetched)
+    _format_orphaned(formatter, orphaned)
 
 
 def _format_conflict_list(formatter: Any, conflicts: list[dict[str, str]]) -> None:
@@ -311,6 +340,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
         _format_never_fetched(formatter, result.get("never_fetched", []))
+        _format_orphaned(formatter, result.get("orphaned", []))
         return
     if status == "dry_run":
         summary = result.get("summary", {})
@@ -320,6 +350,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
             f"delete {summary.get('deleted', 0)}"
         )
         _format_never_fetched(formatter, result.get("never_fetched", []))
+        _format_orphaned(formatter, result.get("orphaned", []))
         return
     formatter.console.print(
         f"  {result.get('created', 0)} created, "
@@ -327,6 +358,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         f"{result.get('deleted', 0)} deleted"
     )
     _format_never_fetched(formatter, result.get("never_fetched", []))
+    _format_orphaned(formatter, result.get("orphaned", []))
     # Show name drift warnings
     drift_warnings = result.get("name_drift_warnings", [])
     if drift_warnings:
@@ -810,8 +842,9 @@ def sync_diff(
         remote_only = result.get("remote_only", [])
 
         if not changes and not remote_only:
-            if result.get("never_fetched"):
-                _format_never_fetched(formatter, result["never_fetched"])
+            if result.get("never_fetched") or result.get("orphaned"):
+                _format_never_fetched(formatter, result.get("never_fetched", []))
+                _format_orphaned(formatter, result.get("orphaned", []))
             else:
                 formatter.console.print(
                     "[green]No differences found.[/green] Local and remote are in sync."
@@ -897,6 +930,7 @@ def sync_diff(
                 formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
 
         _format_never_fetched(formatter, result.get("never_fetched", []))
+        _format_orphaned(formatter, result.get("orphaned", []))
 
 
 @sync_app.command("push")
@@ -1031,6 +1065,7 @@ def sync_push(
             if skipped_reason:
                 formatter.console.print(f"  [yellow]{skipped_reason}[/yellow]")
             _format_never_fetched(formatter, result.get("never_fetched", []))
+            _format_orphaned(formatter, result.get("orphaned", []))
             return
 
         if status == "dry_run":
@@ -1044,6 +1079,7 @@ def sync_push(
                 f"delete {summary['deleted']}"
             )
             _format_never_fetched(formatter, result.get("never_fetched", []))
+            _format_orphaned(formatter, result.get("orphaned", []))
             return
 
         formatter.success(
@@ -1052,6 +1088,7 @@ def sync_push(
             f"{result['deleted']} deleted"
         )
         _format_never_fetched(formatter, result.get("never_fetched", []))
+        _format_orphaned(formatter, result.get("orphaned", []))
         for change in result.get("pushed_details", []):
             label = _change_label(change)
             action = change["change_type"].upper()

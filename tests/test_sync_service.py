@@ -3977,3 +3977,403 @@ class TestBranchOverrideAndNameDriftFlag:
         assert "name_drift_warnings" not in suppressed_result, (
             "--no-name-drift-warnings must drop the field from the envelope"
         )
+
+
+# ===================================================================
+# Issue #649 regression tests
+# ===================================================================
+
+
+DEV_ONLY_COMPONENTS = [
+    {
+        "id": "keboola.ex-http",
+        "type": "extractor",
+        "configurations": [
+            # Inherited from production -- same id, same content.
+            {
+                "id": "cfg-001",
+                "name": "My HTTP Extractor",
+                "description": "Fetches data",
+                "configuration": {
+                    "parameters": {"baseUrl": "https://api.example.com"},
+                },
+                "rows": [],
+            },
+            # Created ON the dev branch -- exists nowhere in production.
+            {
+                "id": "cfg-900",
+                "name": "Branch Only Extractor",
+                "description": "",
+                "configuration": {
+                    "parameters": {"baseUrl": "https://branch.example.com"},
+                },
+                "rows": [],
+            },
+        ],
+    },
+]
+
+
+class TestIssue649ProductionDiffAfterBranchPull:
+    """Regression coverage for issue #649.
+
+    ``sync pull --branch <dev>`` re-targets every ``manifest.configurations``
+    entry to the dev branch and materializes a ``<branch>/`` subtree, leaving
+    the default ``main/`` tree orphaned on disk. A subsequent **production**
+    diff/push then hit two independent bugs:
+
+    1. every file in the orphaned ``main/`` tree surfaced as ``added`` with an
+       empty ``config_id`` -- the adopt-by-id guard (#482) refused to adopt
+       because the id was "claimed" by a manifest entry, without noticing the
+       claim came from a *different branch*;
+    2. dev-only configs (tracked on the dev branch, absent from production)
+       surfaced as ``added`` **with** an id, so push would recreate them in
+       production.
+
+    Both made ``sync push`` a mass-duplicate factory against production.
+    """
+
+    def _init_and_pull_main(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+        components: list,
+    ) -> ConfigStore:
+        """init + pull production so ``main/`` is materialized and tracked."""
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        init_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        )
+        init_svc.init_sync(alias="prod", project_root=project_root)
+
+        pull_client = _make_sync_mock_client(components_response=components)
+        pull_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+        pull_svc.pull(alias="prod", project_root=project_root)
+        return store
+
+    def _pull_dev_branch(
+        self,
+        store: ConfigStore,
+        project_root: Path,
+        components: list,
+    ) -> None:
+        """Pull the dev branch, re-targeting the manifest and orphaning main/."""
+        dev_client = _make_sync_mock_client(
+            components_response=components,
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        dev_svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: dev_client,
+        )
+        dev_svc.pull(alias="prod", project_root=project_root, branch_override=99999)
+
+    def _reproduce(self, tmp_config_dir: Path, tmp_path: Path) -> tuple[ConfigStore, Path]:
+        """Replay the issue's repro up to the point of the production diff."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+        self._pull_dev_branch(store, project_root, DEV_ONLY_COMPONENTS)
+
+        # Bug precondition: the manifest tracks ONLY the dev branch while both
+        # trees sit on disk.
+        manifest = load_manifest(project_root)
+        assert {cfg.branch_id for cfg in manifest.configurations} == {99999}
+        assert (project_root / "main").is_dir()
+        assert (project_root / "feature-x").is_dir()
+        return store, project_root
+
+    def test_production_diff_plans_no_creates(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """The issue's exact repro: a production diff after a dev pull must not
+        classify the orphaned ``main/`` tree (or the dev-only configs) as
+        ``added``."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+
+        assert diff_result["summary"]["added"] == 0
+        assert [c for c in diff_result["changes"] if c["change_type"] == "added"] == []
+        # The orphaned main/ file carries the production id -> adopted and
+        # compared against the production remote instead of duplicated.
+        assert diff_result["summary"]["unchanged"] == 1
+        assert diff_result["summary"]["deleted"] == 0
+
+    def test_production_diff_reports_orphans(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Both manifest entries land in the new ``orphaned`` bucket: they are
+        tracked on the dev branch, not on the branch being diffed."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+
+        orphaned = diff_result["orphaned"]
+        assert diff_result["summary"]["orphaned"] == len(orphaned) == 2
+        by_id = {item["config_id"]: item for item in orphaned}
+        assert set(by_id) == {"cfg-001", "cfg-900"}
+        for item in orphaned:
+            assert item["branch_id"] == 99999
+            assert item["reason"] == "tracked_on_other_branch"
+            assert item["component_id"] == "keboola.ex-http"
+            assert item["path"]
+        # cfg-900 lives only on the dev branch -> the hint points at branch merge.
+        assert by_id["cfg-900"]["exists_on_target"] is False
+        assert "branch merge" in by_id["cfg-900"]["hint"]
+        assert by_id["cfg-001"]["exists_on_target"] is True
+        assert "sync pull" in by_id["cfg-001"]["hint"]
+
+    def test_production_push_creates_nothing(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """push inherits the diff's classification: nothing is POSTed, and the
+        orphan warning rides along on the result envelope."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        push_result = svc.push(alias="prod", project_root=project_root)
+
+        assert push_result["status"] == "no_changes"
+        assert push_result["created"] == 0
+        client.create_config.assert_not_called()
+        client.delete_config.assert_not_called()
+        assert len(push_result["orphaned"]) == 2
+
+    def test_production_push_dry_run_plans_nothing(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """``sync push --dry-run`` is the surface a user checks before the real
+        push -- it must agree with the diff."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        push_result = svc.push(alias="prod", project_root=project_root, dry_run=True)
+
+        assert push_result["status"] == "no_changes"
+        assert push_result.get("changes", []) == []
+
+    def test_stale_tree_file_gone_from_remote_is_orphaned_not_added(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A file in the orphaned tree whose id no longer resolves on the target
+        branch cannot be adopted -- it must be reported, never re-created."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        # Production no longer has cfg-001 (deleted remotely in the meantime),
+        # so the orphaned main/ file has nothing to adopt.
+        client = _make_sync_mock_client(
+            components_response=[{**SAMPLE_COMPONENTS_NO_ROWS[0], "configurations": []}],
+        )
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+
+        assert diff_result["summary"]["added"] == 0
+        stale = [
+            item
+            for item in diff_result["orphaned"]
+            if item["reason"] == "stale_branch_tree" and item["config_id"] == "cfg-001"
+        ]
+        assert len(stale) == 1
+        assert stale[0]["claimed_branch_ids"] == [99999]
+        assert stale[0]["path"]
+
+        push_result = svc.push(alias="prod", project_root=project_root)
+        assert push_result["created"] == 0
+        client.create_config.assert_not_called()
+
+    def test_dev_branch_diff_is_unaffected(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """Control: the dev-branch side of the same working tree keeps behaving
+        exactly as it did before (issue #482's acceptance)."""
+        store, project_root = self._reproduce(tmp_config_dir, tmp_path)
+
+        client = _make_sync_mock_client(
+            components_response=DEV_ONLY_COMPONENTS,
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root, branch_override=99999)
+
+        assert diff_result["changes"] == []
+        assert diff_result["summary"]["added"] == 0
+        assert diff_result["orphaned"] == []
+
+    def test_kfr07_promote_default_tree_to_dev_branch_still_creates(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """KFR-07 must survive the fix: with no ``<branch>/`` subtree on disk the
+        production tree is the source for a ``--branch`` push, and a config
+        missing on the target branch is still CREATED there."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        # The dev branch does not carry cfg-001 yet -> promoting the default
+        # tree must create it there.
+        client = _make_sync_mock_client(
+            components_response=[{**SAMPLE_COMPONENTS_NO_ROWS[0], "configurations": []}],
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        client.create_config.return_value = {"id": "cfg-new-on-branch"}
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+        diff_result = svc.diff(alias="prod", project_root=project_root, branch_override=99999)
+        assert diff_result["summary"]["added"] == 1
+        assert diff_result["orphaned"] == []
+
+        push_result = svc.push(alias="prod", project_root=project_root, branch_override=99999)
+        assert push_result["created"] == 1
+        client.create_config.assert_called_once()
+
+    def test_legacy_zero_branch_id_is_not_an_orphan(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Production is spelled three ways in the wild -- ``None`` (CLI), ``0``
+        (git-branching pull: ``branchId=branch_id or 0``) and the default
+        branch's numeric id (plain pull). All three name the SAME tree, so a
+        legacy ``branchId: 0`` entry must stay in the diff, not be reported as
+        tracked on another branch."""
+        from keboola_agent_cli.sync.manifest import save_manifest
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        manifest = load_manifest(project_root)
+        for cfg in manifest.configurations:
+            cfg.branch_id = 0
+        save_manifest(project_root, manifest)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+
+        assert diff_result["orphaned"] == []
+        assert diff_result["summary"]["added"] == 0
+        assert diff_result["summary"]["unchanged"] == 1
+
+    def test_branch_tree_path_normalizes_every_spelling_of_production(self, tmp_path: Path) -> None:
+        """Unit-level lock on the normalizer the whole fix compares with."""
+        from keboola_agent_cli.sync.branch_scope import branch_tree_path
+        from keboola_agent_cli.sync.manifest import (
+            ManifestBranch,
+            ManifestNaming,
+            ManifestProject,
+        )
+
+        manifest = Manifest.model_construct(
+            project=ManifestProject(id=1, apiHost="connection.keboola.com"),
+            naming=ManifestNaming(),
+            branches=[
+                ManifestBranch(id=12345, path="main", metadata={}),
+                ManifestBranch(id=99999, path="feature-x", metadata={}),
+            ],
+        )
+
+        assert branch_tree_path(manifest, None) == "main"
+        assert branch_tree_path(manifest, 0) == "main"
+        assert branch_tree_path(manifest, 12345) == "main"
+        assert branch_tree_path(manifest, 99999) == "feature-x"
+        # Unregistered id -> default tree (same fallback _find_branch_path had).
+        assert branch_tree_path(manifest, 4242) == "main"
+
+    def test_orphan_bucket_stays_empty_on_a_healthy_tree(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """No orphans on an ordinary single-branch working tree -- the new keys
+        are additive and stay empty."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_NO_ROWS)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root)
+
+        assert diff_result["orphaned"] == []
+        assert diff_result["summary"]["orphaned"] == 0
+        assert diff_result["summary"]["added"] == 0
+
+        push_result = svc.push(alias="prod", project_root=project_root)
+        assert "orphaned" not in push_result
+
+    def test_config_new_push_scaffold_is_adopted_not_recreated(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Interaction with issue #644: ``config new --push --output-dir``
+        stamps the created config's id into the scaffold and places it in the
+        target branch's subtree. That file is untracked and unclaimed, so the
+        adopt-by-id path must still adopt it -- the branch-scoped claim check
+        must not turn "created via the API, mirrored to disk" into a duplicate
+        create. The manifest entries left on the production tree are reported,
+        never diffed against the dev branch."""
+        from keboola_agent_cli.sync.manifest import ManifestBranch, save_manifest
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
+
+        # #644 placement: branch subtree registered + scaffold written there,
+        # carrying the id the API assigned on create.
+        manifest = load_manifest(project_root)
+        manifest.branches.append(ManifestBranch(id=99999, path="feature-x"))
+        save_manifest(project_root, manifest)
+        scaffold_dir = project_root / "feature-x" / "extractor/keboola.ex-http/branch-scaffold"
+        scaffold_dir.mkdir(parents=True)
+        (scaffold_dir / CONFIG_FILENAME).write_text(
+            yaml.safe_dump(
+                {
+                    "version": 2,
+                    "name": "Branch Scaffold",
+                    "parameters": {"baseUrl": "https://scaffold.example.com"},
+                    "_keboola": {
+                        "component_id": "keboola.ex-http",
+                        "config_id": "cfg-644",
+                    },
+                }
+            )
+        )
+
+        # The dev branch inherits cfg-001 and carries the freshly created
+        # cfg-644 (identical content -> the scaffold is in sync with it).
+        client = _make_sync_mock_client(
+            components_response=[
+                {
+                    **SAMPLE_COMPONENTS_NO_ROWS[0],
+                    "configurations": [
+                        *SAMPLE_COMPONENTS_NO_ROWS[0]["configurations"],
+                        {
+                            "id": "cfg-644",
+                            "name": "Branch Scaffold",
+                            "description": "",
+                            "configuration": {
+                                "parameters": {"baseUrl": "https://scaffold.example.com"},
+                            },
+                            "rows": [],
+                        },
+                    ],
+                }
+            ],
+            branches_response=SAMPLE_BRANCHES_WITH_DEV,
+        )
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        diff_result = svc.diff(alias="prod", project_root=project_root, branch_override=99999)
+
+        # Adopted by id -> no create planned for the scaffold.
+        assert diff_result["summary"]["added"] == 0
+        assert [c for c in diff_result["changes"] if c["change_type"] == "added"] == []
+        # cfg-001 is tracked on the production tree, which is NOT the tree this
+        # diff reads -> reported, not diffed against the dev branch.
+        assert [item["config_id"] for item in diff_result["orphaned"]] == ["cfg-001"]
+
+        push_result = svc.push(alias="prod", project_root=project_root, branch_override=99999)
+        client.create_config.assert_not_called()
+        assert push_result["created"] == 0

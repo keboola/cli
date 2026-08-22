@@ -1378,6 +1378,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --branch (since 0.47.0): per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
+    Branch-scoped (since vNEXT, #649): the local side is read from exactly ONE tree --
+    the target branch's subtree, or main/ when the target has none. `sync pull --branch
+    <dev>` re-targets the WHOLE manifest to that branch, so a later production diff
+    reads a main/ tree the manifest no longer tracks. Entries belonging to another
+    branch's tree are excluded from the changeset and reported under `orphaned`
+    (summary.orphaned + details: component_id, config_id, path, branch_id, branch_path,
+    exists_on_target, reason, hint); human mode previews the first 10. An orphaned FILE
+    whose _keboola.config_id still resolves on the target is ADOPTED (unchanged/modified),
+    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
+    non-zero summary.orphaned with `sync pull`; promote dev-only configs with
+    `branch merge`, never by pushing them to production.
 
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
@@ -1405,6 +1416,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
+    Branch-scoped (since vNEXT, #649): push consumes the diff's changeset, so configs
+    tracked on another branch's tree are never planned as creates -- they ride along on
+    the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 
   kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it

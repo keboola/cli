@@ -630,6 +630,11 @@ DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
 # not change the on-disk YAML shape, so CONFIG_YML_VERSION stays at 2.
 CONFIG_YML_VERSION: int = 2
 SANITIZE_NAME_MAX_LENGTH: int = 100
+# How many `orphaned` rows `sync diff` / `sync push` print in human mode before
+# collapsing the rest into a count. A manifest re-targeted by
+# `sync pull --branch` orphans EVERY config at once (issue #649), so the list is
+# project-sized; --json always carries all of them.
+SYNC_ORPHAN_PREVIEW_LIMIT: int = 10
 
 # --- Sync Pull: Storage & Jobs ---
 JOBS_FILENAME: str = "_jobs.jsonl"

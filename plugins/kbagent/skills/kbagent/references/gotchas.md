@@ -4312,10 +4312,51 @@ category (extractor/writer, SQL/Python transformation, custom Python app)
 always got `_keboola: {component_id: ...}` appended, but the flow builder
 (`_build_flow_config_yml` in `services/component_service.py`) never emitted
 one. `sync push` resolves the component of an untracked local config from
-`_keboola.component_id` (`_find_untracked_configs` in `sync_service.py`);
+`_keboola.component_id` (the untracked-config walker in `sync/branch_scope.py`);
 without it the config resolved to `"unknown"`, so a scaffolded flow could
 never be pushed via the documented scaffold -> edit -> `sync push` workflow
 (issue #650). Fixed by appending the same footer the other categories get.
 No CLI behavior change beyond the file content -- if you were hand-patching
 scaffolded flow files with a `_keboola` block as a workaround, that step is
 no longer necessary.
+
+## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since vNEXT)
+
+`sync pull --branch <dev>` re-targets EVERY `manifest.configurations` entry to
+that dev branch. The `main/` tree stays on disk and stops being tracked, so a
+later **production** `sync diff` / `sync push` reads a tree the manifest no
+longer knows about. Before this fix that combination classified the whole
+orphaned `main/` tree as `added` with an EMPTY `config_id`, and dev-only configs
+as `added` WITH an id -- one `sync push` away from duplicating an entire
+production project. No scaffolding or hand-edited manifest was needed; the
+documented multi-branch pull was enough (issue #649).
+
+- **diff/push act on exactly one tree**, the source branch path (the target
+  branch's own subtree, or `main/` when the target has none -- the KFR-07
+  promote path). Manifest entries whose branch resolves to a DIFFERENT tree are
+  excluded from the changeset and reported under a new `orphaned` bucket
+  (`summary.orphaned` + a details list; human mode previews the first 10).
+  This is not cosmetic: `push` already reads every file through the source
+  path, so an entry diffed from another tree would be pushed from a different
+  file than the one that produced the classification.
+- **An orphaned file that still resolves on the target is ADOPTED**, not
+  duplicated: the id-claim check now has a branch dimension. A claim by an entry
+  in the SAME tree is still the #482/#497 fork-by-copy case (copy a tracked
+  config dir -> the copy CREATEs). A claim only from another tree means the
+  manifest was re-targeted, so the file is diffed against the remote config
+  carrying its id -- `unchanged`/`modified`, never `added`.
+- **An orphaned file whose id no longer exists on the target** is reported with
+  `reason: "stale_branch_tree"` and acted on in no way at all.
+- **A config that exists only on the dev branch** is reported with
+  `reason: "tracked_on_other_branch"` and `exists_on_target: false`; its hint
+  points at `kbagent branch merge`. Pushing it to production would have created
+  a second, unrelated config there.
+- **Production is spelled three ways** in manifests in the wild -- `None` (CLI
+  `--branch` absent), `0` (`branchId: branch_id or 0` from a git-branching
+  pull) and the default branch's numeric id (plain pull). All three normalize to
+  the default tree before anything is compared, so a legacy `branchId: 0` entry
+  is NOT an orphan.
+- **The fix is one command**: `kbagent sync pull --project ALIAS` re-targets the
+  manifest to the branch you are actually on. `--json` callers should treat a
+  non-zero `summary.orphaned` as "the manifest is pointing at another branch",
+  not as a per-config problem.
