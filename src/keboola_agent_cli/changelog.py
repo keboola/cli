@@ -25,6 +25,15 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.89.0": [
+        "Fix (#646): `sync clone` now rejects a malformed override file instead of "
+        "silently pushing garbage IDs. The `--bucket-map` / `--variable-values` / "
+        "`--instance-rename` loader used to coerce every YAML value with bare "
+        "`str(value)`, so a nested mapping -- one fat-fingered colon away from valid "
+        "input -- was used as the literal string `\"{'new': 'in.c-new'}\"` in the "
+        "target project. A mapping, list, or empty (`null`) value now fails fast with "
+        "`CONFIG_ERROR` (exit 5) naming the offending key and its actual type in YAML "
+        "vocabulary (mapping/list/null). Scalar values (string, number, boolean) keep "
+        "the existing string coercion.",
         "Fix: `config delete` can no longer permanently purge a configuration by being run "
         "twice. The Storage API overloads DELETE -- on a live configuration it soft-deletes "
         "into the trash, but on a configuration ALREADY in the trash the same call purges it "

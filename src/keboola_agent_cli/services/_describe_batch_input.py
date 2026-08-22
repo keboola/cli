@@ -39,17 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
 
-# YAML-flavoured names for the types a section can wrongly be: the author is
-# reading their own YAML, not Python, so "string"/"number" beat "str"/"int".
-_TYPE_NAMES: dict[type, str] = {
-    bool: "boolean",
-    dict: "mapping",
-    float: "number",
-    int: "number",
-    list: "list",
-    str: "string",
-    type(None): "null",
-}
+from ..yaml_input import yaml_type_name
 
 
 class _Section(NamedTuple):
@@ -102,15 +92,10 @@ class DescribeBatchInput:
         return len(self.buckets) + len(self.tables) + len(self.columns)
 
 
-def _type_name(value: Any) -> str:
-    """Return ``value``'s type named in YAML vocabulary."""
-    return _TYPE_NAMES.get(type(value), type(value).__name__)
-
-
 def _shape_error(key: str, expected: str, value: Any, example: str) -> ValueError:
     """Build the ValueError for one wrongly-shaped key."""
     return ValueError(
-        f"'{key}' must be {expected}, got a {_type_name(value)}. Expected:\n{example}"
+        f"'{key}' must be {expected}, got a {yaml_type_name(value)}. Expected:\n{example}"
     )
 
 

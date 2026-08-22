@@ -52,21 +52,13 @@ def _resolve_project_root(directory: Path, alias: str | None = None) -> Path:
 def _load_override_file(path: Path) -> dict[str, str]:
     """Load a clone override map (JSON or YAML) as a flat ``{str: str}`` dict.
 
-    YAML's loader also parses JSON, so a single path handles both. Every value
-    is coerced to ``str`` (bucket ids, variable values, and path prefixes are
-    all strings).
+    Values must be scalars (bucket ids, variable values, and path prefixes are
+    all strings); a nested mapping or list raises instead of being silently
+    stringified into a bogus ID.
     """
-    import yaml
+    from ..yaml_input import load_flat_scalar_mapping
 
-    if not path.exists():
-        raise ConfigError(f"Override file not found: {path}")
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"Cannot parse override file {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ConfigError(f"Override file {path} must contain a JSON/YAML object (mapping).")
-    return {str(key): str(value) for key, value in data.items()}
+    return load_flat_scalar_mapping(path, label="override file")
 
 
 def _change_label(change: dict) -> str:
