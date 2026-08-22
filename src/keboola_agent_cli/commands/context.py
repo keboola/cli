@@ -827,7 +827,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
     List the project's Storage API tokens (id, description, created, refreshed, expires, master
     flag, creating token). Secrets are never listed -- `token create` is the only reveal. This is
-    where the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
+    where the --token-id for delete/refresh comes from. Acting token needs canManageTokens
+    (master NOT required -- unlike `token create`).
     --with-last-used (0.88.0+) answers "which of these are still in use": it derives each token's
     most recent activity from its own event feed and sorts dormant-first, so reading order is
     cleanup order. Opt-in -- it is ONE EXTRA API CALL PER TOKEN (fanned out in parallel).
@@ -850,13 +851,19 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
     --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.
     --component-access (repeatable) restricts to named components. The token secret is printed ONCE
-    in a Rich Panel -- store it now, it is never retrievable again. Acting token needs canManageTokens.
+    in a Rich Panel -- store it now, it is never retrievable again. REQUIRES A MASTER (admin)
+    token -- canManageTokens alone gets MISSING_MASTER_TOKEN (pre-flight guard, exit 3; a
+    non-master token with that flag makes the API 500, issue #599).
   kbagent token delete --project NAME --token-id ID [--yes]
     Revoke a token by its numeric id (destructive; confirms unless --yes / --json).
   kbagent token refresh --project NAME --token-id ID [--yes]
     Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
-  Notes: uses the per-project Storage token (no manage token); the acting token must have the
-  canManageTokens privilege. The importable SDK (Client(url,token)) mirrors these as
+    Needs canManageTokens only -- NOT master-guarded (that API defect is create-only). The new
+    secret is NOT written back to config.json: rotating the alias's own token leaves it dead
+    until `project edit --project ALIAS --token <NEW>`.
+  Notes: uses the per-project Storage token (no manage token). `token create` requires a MASTER
+  (admin) token; list/delete/refresh only need the canManageTokens privilege. The importable SDK
+  (Client(url,token)) has NO pre-flight guard and mirrors these as
   create_scoped_token / delete_token / refresh_token (dicts on .raw, typed ScopedTokenResult on the facade).
 
 ### Sharing (Cross-Project)

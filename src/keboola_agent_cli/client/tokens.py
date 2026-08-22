@@ -130,9 +130,15 @@ class _TokensMixin(_CoreClient):
         ``can_read_all_file_uploads`` only widens *reading* files uploaded by
         *other* tokens (a device sees its own uploads regardless).
 
-        The acting token must carry ``canManageTokens`` (the API rejects the
-        create otherwise -- surfaced as an ``ACCESS_DENIED`` :class:`KeboolaApiError`
-        with the token masked). The returned dict is the raw API response; its
+        The acting token must be a **master (admin) token** -- ``canManageTokens``
+        alone is not sufficient. ``POST /v2/storage/tokens`` authorizes via
+        ``CreateTokenVoter``, which throws a ``LogicException`` ("Normal token
+        cannot have manage tokens") for a non-admin token carrying that flag,
+        surfaced as a generic 500 "Application error." rather than a 403
+        (issue #599; a token without the flag at all gets a clean 403
+        ``ACCESS_DENIED``). ``TokenService`` pre-flights this via
+        :meth:`get_project_info` ``isMasterToken``; direct SDK callers hit the
+        raw API behavior. The returned dict is the raw API response; its
         ``token`` field is a **one-time** secret reveal -- persist only ``id``
         (for :meth:`delete_token` / :meth:`refresh_token`) and ``expires``.
 
@@ -168,7 +174,8 @@ class _TokensMixin(_CoreClient):
         the token was minted by another token) ``creatorToken``.
 
         The acting token must carry ``canManageTokens``; the API answers 403
-        otherwise (surfaced as ``ACCESS_DENIED``).
+        otherwise (surfaced as ``ACCESS_DENIED``). Unlike the create write it
+        does **not** need to be a master token.
 
         A **secret is never listed here as a rule, but the API is not a
         guarantee**: on a project carrying the ``force-decrypted-token``
@@ -253,6 +260,13 @@ class _TokensMixin(_CoreClient):
         **old** token string becomes immediately invalid (rotation, not
         additive), so every place using it must be updated. The token id is
         stable across a refresh.
+
+        Server-side (``RefreshTokenVoter``) any token may refresh **itself**
+        and refreshing *another* token needs ``canManageTokens``. No master
+        token required -- the ``CreateTokenVoter`` defect behind
+        :meth:`create_scoped_token`'s master-token guard is create-only, so
+        ``TokenService.refresh_token`` deliberately does not guard this
+        (issue #599).
         """
         response = self._request(
             "POST", f"/v2/storage/tokens/{quote(str(token_id), safe='')}/refresh"

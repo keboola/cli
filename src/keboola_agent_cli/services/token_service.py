@@ -6,9 +6,19 @@ token endpoints (``POST /v2/storage/tokens``, ``DELETE .../{id}``,
 :class:`KeboolaClient` factory (testability).
 
 These are **Storage API** operations authenticated with the per-project Storage
-token (``X-StorageApi-Token``) -- no manage token is involved. The acting token
-must itself carry ``canManageTokens``; the API rejects the mint/rotate otherwise
-(surfaced as an ``ACCESS_DENIED`` :class:`KeboolaApiError` with the token masked).
+token (``X-StorageApi-Token``) -- no manage token is involved. **Minting**
+requires a **master (admin) Storage token** -- ``canManageTokens`` alone is not
+sufficient: the Storage API's ``CreateTokenVoter`` treats a non-admin token
+carrying that flag as an impossible state and throws a ``LogicException``
+(surfaced as a generic 500 "Application error."), which is exactly the shape of
+token ``org setup`` / ``project refresh`` mint (issue #599). A pre-flight guard
+turns that into a clean ``MISSING_MASTER_TOKEN`` error before any write.
+
+That defect is create-only. Rotating, listing and deleting need just
+``canManageTokens`` (``RefreshTokenVoter`` additionally lets any token rotate
+itself) and are deliberately **not** guarded -- blocking them would break
+working paths, most sharply the incident one: rotating a leaked device token
+from an ``org setup`` project token.
 
 The scoped-token use case is the Keboola "single-bucket write token" pattern
 (and device enrollment, ADR 0005 in keboola/jasnost): mint a narrow, expiring
@@ -22,6 +32,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..client import KeboolaClient
+from ..errors import ErrorCode, KeboolaApiError
 from ._token_last_used import dormancy_rank, enrich_tokens
 from .base import (
     BaseService,
@@ -83,6 +94,7 @@ class TokenService(BaseService):
             bucket_permissions[bucket_id] = "write"
         client = self._client_factory(creds.stack_url, creds.token)
         try:
+            self._require_master_token(client, alias=alias)
             result = client.create_scoped_token(
                 description=description,
                 bucket_permissions=bucket_permissions or None,
@@ -112,7 +124,9 @@ class TokenService(BaseService):
         that only wants an id to hand to ``token delete`` must not pay for it,
         and machine consumers keep the exact response shape they parse today.
 
-        The acting token needs ``canManageTokens``, same as create/refresh.
+        The acting token needs ``canManageTokens`` -- unlike ``create`` it does
+        **not** need to be a master token, so this listing is deliberately not
+        behind :meth:`_require_master_token`.
         """
         creds = self._resolve_project(alias)
         client = self._client_factory(creds.stack_url, creds.token)
@@ -152,7 +166,15 @@ class TokenService(BaseService):
             client.close()
 
     def refresh_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
-        """Rotate a token (old value invalidated) in ``alias``'s project."""
+        """Rotate a token (old value invalidated) in ``alias``'s project.
+
+        Deliberately **not** behind :meth:`_require_master_token`. The
+        ``CreateTokenVoter`` defect that guard exists for lives only on the
+        create endpoint; ``RefreshTokenVoter`` lets any token rotate itself and
+        a ``canManageTokens`` token rotate another, both of which work today.
+        Guarding here would block a working incident path -- revoking a leaked
+        device token from an ``org setup`` project token -- to fix nothing.
+        """
         creds = self._resolve_project(alias)
         client = self._client_factory(creds.stack_url, creds.token)
         try:
@@ -160,6 +182,44 @@ class TokenService(BaseService):
             return {"alias": alias, **result}
         finally:
             client.close()
+
+    def _require_master_token(self, client: KeboolaClient, *, alias: str) -> None:
+        """Fail fast unless the acting token is a master (admin) token.
+
+        Pre-flight for the token mint only (``token refresh`` is deliberately
+        exempt -- see :meth:`refresh_token`), mirroring the
+        ``config oauth-url`` guard: ``POST /v2/storage/tokens`` authorizes via
+        ``CreateTokenVoter``, which throws a ``LogicException`` ("Normal token
+        cannot have manage tokens") for a non-admin token carrying
+        ``canManageTokens`` -- surfaced to the caller as a vague 500
+        "Application error." instead of a 403. Every token minted by
+        ``org setup`` / ``project refresh`` is exactly that shape (issue #599),
+        so without this check the operator gets a misleading server-side error
+        for what is really a local credential problem.
+
+        Raises:
+            KeboolaApiError: ``MISSING_MASTER_TOKEN`` (403) when the acting
+                token is not a master token.
+        """
+        info = client.get_project_info()
+        if not info.get("isMasterToken", False):
+            raise KeboolaApiError(
+                status_code=403,
+                error_code=ErrorCode.MISSING_MASTER_TOKEN,
+                message=(
+                    f"`token create` requires a master Storage API token on "
+                    f"project '{alias}'. The current token "
+                    f"(id={info.get('id', '?')}, "
+                    f"description='{info.get('description', '?')}') is not a "
+                    f"master token -- `canManageTokens` alone is not enough: "
+                    f"the Storage API rejects the request with a generic 500 "
+                    f"'Application error.' (CreateTokenVoter LogicException, "
+                    f"issue #599). Point the alias at a master token "
+                    f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                    f"-- master = the token from your own user account in the "
+                    f"Keboola UI, `isMasterToken: true` in `kbagent token list`."
+                ),
+            )
 
     def _resolve_project(self, alias: str) -> ResolvedProjectCredentials:
         """Resolve ``alias`` to its stack URL + token (or raise ConfigError)."""
