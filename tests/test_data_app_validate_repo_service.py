@@ -95,6 +95,44 @@ class TestPureValidatorSetupSh:
         names = {r.name: r.severity for r in results}
         assert names["golden-rule.setup-sh-no-pip"] == SEVERITY_BLOCKING
 
+    def test_pip_install_only_in_a_comment_does_not_block(self) -> None:
+        """A comment warning against pip is not an invocation of pip.
+
+        The rule greps for what the script RUNS. Reading prose as code
+        penalises exactly the author who documents the rule above the
+        command that follows it -- i.e. the one complying with it.
+        """
+        snap = _good_snapshot(
+            setup_sh="#!/bin/bash\n# always uv sync here, never pip install\nuv sync\n"
+        )
+        results = validate_keboola_repo(snap, type_="python-js")
+        names = {r.name: r.severity for r in results}
+        assert names["golden-rule.setup-sh-no-pip"] == SEVERITY_OK
+        assert names["golden-rule.setup-sh-uv-sync"] == SEVERITY_OK
+
+    def test_pip_install_with_a_trailing_comment_still_blocks(self) -> None:
+        """Stripping comments must not smuggle a real invocation past the rule."""
+        snap = _good_snapshot(setup_sh="#!/bin/bash\npip install flask  # legacy\n")
+        results = validate_keboola_repo(snap, type_="python-js")
+        names = {r.name: r.severity for r in results}
+        assert names["golden-rule.setup-sh-no-pip"] == SEVERITY_BLOCKING
+
+    def test_hash_inside_a_quoted_string_is_not_a_comment(self) -> None:
+        """Only unquoted `#` starts a comment, so quoted code stays visible."""
+        snap = _good_snapshot(
+            setup_sh='#!/bin/bash\necho "install deps # step 1"\npip install flask\n'
+        )
+        results = validate_keboola_repo(snap, type_="python-js")
+        names = {r.name: r.severity for r in results}
+        assert names["golden-rule.setup-sh-no-pip"] == SEVERITY_BLOCKING
+
+    def test_uv_sync_only_in_a_comment_still_warns(self) -> None:
+        """The inverse false reading: prose must not satisfy the rule either."""
+        snap = _good_snapshot(setup_sh="#!/bin/bash\n# remember to uv sync\necho hello\n")
+        results = validate_keboola_repo(snap, type_="python-js")
+        names = {r.name: r.severity for r in results}
+        assert names["golden-rule.setup-sh-uv-sync"] == SEVERITY_WARN
+
     def test_setup_sh_without_uv_sync_warns(self) -> None:
         # Setup.sh present but no `uv sync` invocation; pyproject.toml
         # declares deps so the WARN should fire.
