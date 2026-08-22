@@ -113,7 +113,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
-| Delete a configuration from a project | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Soft-delete a configuration into the trash (restorable) | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot | `kbagent config new --component-id COMPONENT-ID` |
 | List all metadata entries on a configuration | `kbagent config metadata-list --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
@@ -130,6 +130,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --state STATE` |
 | Duplicate a configuration, whole -- including runtime, storage and authorization | `kbagent config clone --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Restore a configuration from the trash (undo of 'config delete') | `kbagent config restore --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List configurations in the trash (restorable via 'config restore') | `kbagent config trash-list --project PROJECT` |
 | List data apps across one or more registered projects | `kbagent data-app list` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |

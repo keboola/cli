@@ -1327,6 +1327,38 @@ events and emits a final `done` SSE frame mirroring the same record.
   error names the created configuration id and how many rows landed, so you
   can delete it and re-run.
 
+## `config delete` twice = permanent purge -- kbagent now refuses the second one (since v0.89.0)
+
+The Storage API overloads `DELETE .../configs/{id}`: on a live configuration
+it soft-deletes into the trash (restorable), but on a configuration ALREADY in
+the trash the same call **purges it permanently** -- versions, rows and
+metadata gone, no restore. The classic way to hit this is an agent retry: the
+first DELETE times out client-side after the server already trashed the
+config, the retry fires, and the retry destroys it for good.
+
+- Since 0.89.0 `config delete` locates the configuration first and never
+  sends a DELETE at anything that is not live. A config already in the trash
+  answers `status: "already_in_trash"` with **exit 0** (the retry stays
+  idempotent for scripts) and a pointer to `config restore`. A config in
+  neither place is NOT_FOUND.
+- `config restore --project P --component-id C --config-id ID` is the undo;
+  `config trash-list` shows what is restorable. Restore brings back versions,
+  rows and metadata.
+- **On kbagent <= 0.88.x the guard does not exist** -- a repeated
+  `config delete` there purges permanently. When driving an older kbagent,
+  never blind-retry a delete; check `config list` first.
+- Direct API callers: the purge-safe alternative is the dedicated
+  `POST .../configs/{id}/purge` endpoint (fails with 400 when the config is
+  not in the trash), never a second DELETE.
+- **The likeliest second DELETE is not a human retry -- it is the HTTP
+  client's own.** `DELETE` is conventionally idempotent, so most transports
+  (kbagent's included, before 0.89.0) repeat it after a read timeout or a
+  5xx. On this endpoint that automatic repeat IS the purge, and it happens
+  before any caller sees a result. If you are writing a script or another
+  client against the Storage API, disable transport-level retry for a config
+  DELETE specifically; idempotency here is a property of the endpoint, not
+  of the method.
+
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
 - Every `kbagent --json data-app <subcommand>` envelope emits the

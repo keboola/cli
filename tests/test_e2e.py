@@ -3626,10 +3626,15 @@ class TestFullE2E:
             assert detail_data["data"]["id"]
 
     def _test_config_delete(self, config_id: str) -> None:
-        """Delete the test config via CLI."""
-        data = self._run_ok(
-            "config",
-            "delete",
+        """Delete the test config via CLI, exercising the 0.89.0 trash round trip.
+
+        delete -> repeated delete answers ``already_in_trash`` (the retry that
+        used to PURGE permanently) -> trash-list finds it -> restore brings it
+        back -> final delete. Every leg runs against the real Storage API, so
+        the double-delete guard is proven against the endpoint that actually
+        overloads DELETE, not against a mock.
+        """
+        common = (
             "--project",
             self.alias,
             "--component-id",
@@ -3637,7 +3642,43 @@ class TestFullE2E:
             "--config-id",
             config_id,
         )
+        data = self._run_ok("config", "delete", *common)
         assert data["data"]["config_id"] == config_id
+        assert data["data"]["status"] == "deleted"
+
+        # The retry: MUST be a no-op success, never a permanent purge.
+        data = self._run_ok("config", "delete", *common)
+        assert data["data"]["status"] == "already_in_trash"
+
+        data = self._run_ok(
+            "config",
+            "trash-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+        )
+        trashed_ids = [e["config_id"] for e in data["data"]["trash"]]
+        assert config_id in trashed_ids, f"{config_id} not in trash listing: {trashed_ids}"
+
+        data = self._run_ok("config", "restore", *common)
+        assert data["data"]["status"] == "restored"
+
+        # Restored config is live again -- detail must answer.
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+
+        # Final cleanup: back into the trash.
+        data = self._run_ok("config", "delete", *common)
+        assert data["data"]["status"] == "deleted"
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
 

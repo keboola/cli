@@ -24,6 +24,30 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.89.0": [
+        "Fix: `config delete` can no longer permanently purge a configuration by being run "
+        "twice. The Storage API overloads DELETE -- on a live configuration it soft-deletes "
+        "into the trash, but on a configuration ALREADY in the trash the same call purges it "
+        "permanently, versions, rows and metadata included. A timed-out delete followed by a "
+        "retry is exactly that second call, and retrying on timeout is what every agent and CI "
+        "script does. `config delete` now locates the configuration first and never sends a "
+        "DELETE at anything that is not live: already trashed answers `already_in_trash` with "
+        "exit 0 (the retry stays idempotent), absent from both answers NOT_FOUND. `--dry-run` "
+        "reports the located state without writing.",
+        "Fix: the config DELETE is no longer retried by the HTTP layer itself. `DELETE` sits in `RETRY_SAFE_METHODS`, so a read timeout or a 5xx made the transport repeat it automatically -- and for THIS endpoint the repeat is the purge. The server trashes the config, the response is lost, the retry lands on the now-trashed config and destroys it before any caller sees a result. The service-level locate-first guard runs once per call and cannot see inside that loop, so `client.delete_config` now passes a new per-call `retry_safe=False` override and a lost response surfaces as a TIMEOUT the caller decides about; re-running the command is safe because the guard catches the trashed state. Every other DELETE keeps the retry -- the opt-out is per endpoint, because idempotency is a property of the endpoint, not of the method.",
+        "Note: `locate_config` no longer infers a live state from the absence of a 404 either. Every stack checked answers 404 for a trashed configuration (verified live on connection.keboola.com and the GCP stack), but a body carrying `isDeleted: true` is now read as trashed regardless of status code -- that flag decides whether a purge-capable DELETE goes out, so it is read rather than inferred.",
+        "New: `kbagent config restore` -- the undo for `config delete`. Restores a trashed "
+        "configuration with its versions, rows and metadata (`POST .../configs/{id}/restore`). "
+        "Only works on a configuration currently in the trash.",
+        "New: `kbagent config trash-list` lists configurations in the trash, project-wide or "
+        "narrowed by `--component-id`. Each row carries component_id, config_id, name, version "
+        "and deleted_at -- exactly what `config restore` needs.",
+        "Note: all three are mirrored on `kbagent serve`. `DELETE /configs/...` gains "
+        "`dry_run`; `POST /configs/{p}/{c}/{id}/restore` and `GET /configs/trash/{p}` are new.",
+        "Plugin docs: `CLAUDE.md`'s command list had never included `config delete` at all. "
+        "That silent drift made the command look nonexistent to AI agents reading it. "
+        "Added alongside the new commands, with the double-delete trap recorded in gotchas.md.",
+    ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "
         "MCP server actually read them. Until 0.87.0 `storage describe-column` / "
