@@ -485,6 +485,43 @@ class TestGenerateScaffold:
         assert parsed["tasks"][0]["phase"] == "phase-1"
         assert parsed["tasks"][0]["task"]["type"] == "job"
 
+    @pytest.mark.parametrize(
+        ("detail_response", "component_id"),
+        [
+            (EXTRACTOR_RESPONSE, "keboola.ex-http"),
+            (SQL_TRANSFORM_RESPONSE, "keboola.snowflake-transformation"),
+            (PYTHON_TRANSFORM_RESPONSE, "keboola.python-transformation-v2"),
+            (CUSTOM_PYTHON_APP_RESPONSE, "kds-team.app-custom-python"),
+            (FLOW_RESPONSE, "keboola.flow"),
+        ],
+        ids=["extractor", "sql_transformation", "python_transformation", "custom_python", "flow"],
+    )
+    def test_scaffold_every_category_has_keboola_block(
+        self, tmp_config_dir: Path, detail_response: dict[str, Any], component_id: str
+    ) -> None:
+        """Every scaffold category's _config.yml must carry a `_keboola` block.
+
+        `sync push` resolves the component of an untracked local config from
+        `_keboola.component_id` (`_find_untracked_configs` in sync_service.py);
+        a scaffold category missing this block falls back to "unknown" and can
+        never be pushed from disk (issue #650). The flow category used to be
+        the sole exception -- regression-guard every category here so a future
+        scaffold builder cannot reintroduce the gap.
+        """
+        mock_ai = _make_ai_client(detail_response=detail_response)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias="prod", component_id=component_id)
+
+        config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
+        content = config_file["content"]
+
+        assert "_keboola:" in content, (
+            f"_config.yml for {component_id} must contain a _keboola block"
+        )
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == component_id
+
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""
         mock_ai = _make_ai_client(detail_response=DB_EXTRACTOR_RESPONSE)

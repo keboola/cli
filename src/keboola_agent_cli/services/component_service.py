@@ -300,6 +300,8 @@ def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str
     and tasks are typed (job/notification/variable).
     """
     lines = [
+        "#",
+        "# NOTE: config_id will be assigned by Keboola on first push",
         f'name: "{name}"',
         "description: |",
         "  TODO: describe this flow",
@@ -319,6 +321,10 @@ def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str
         '      componentId: "keboola.ex-http"',
         '      configId: "TODO"',
         "      mode: run",
+        # _keboola metadata (component_id required for sync push, config_id assigned on first push)
+        "",
+        "_keboola:",
+        f"  component_id: {component_id}",
     ]
     return "\n".join(lines) + "\n"
 
