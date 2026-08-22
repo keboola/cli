@@ -869,7 +869,11 @@ kbagent update [--beta]
 # the kbagent self-update stage and reports that channel's own command instead -- a uv/pip
 # reinstall would install a SECOND, unrelated kbagent that shadows it on PATH. `version
 # --json` gains additive `install_channel` + `upgrade_hint`; `upgrade_command` is empty for
-# a hand-unpacked archive. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
+# a hand-unpacked archive. Since 0.88.0 `upgrade_command` is ALSO empty whenever `up_to_date`
+# is not `false` (i.e. `true` or `null`) -- it used to be built unconditionally, so a caller on
+# a pre-release got `up_to_date: true` beside a pinned `--force --reinstall` command for the
+# older STABLE wheel (a silent downgrade), and an unreachable feed got an unpinned `git+`
+# default-branch install. Gate on `up_to_date is False`, never on the string being present. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
 # is no longer installed or refreshed by kbagent (see docs/mcp-migration.md for the manual
 # `uv tool install --upgrade --prerelease=allow keboola-mcp-server` command). Self-update
 # completes discovery first, then does the terminal exact-version reinstall and immediately

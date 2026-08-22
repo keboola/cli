@@ -69,6 +69,11 @@ CHANGELOG: dict[str, list[str]] = {
         "accepted anything and silently created an entry nothing could ever read, so a "
         "typo looked like a success. Scripts that relied on that behaviour will now get a "
         "usage error naming the unknown columns.",
+        "Fix (#636): `data-app validate-repo` no longer blocks a `setup.sh` for what its COMMENTS say. The `setup-sh-no-pip` rule grepped the raw file, so a script whose comment read `# always uv sync here, never pip install` was rejected as BLOCKING -- the rule penalised precisely the author who documented it for their colleagues. The companion `golden-rule.setup-sh-uv-sync` misread the same way in reverse: a comment merely MENTIONING `uv sync` satisfied it, so a script that installed nothing could pass. Both rules ask what the script RUNS, so both now read comment-stripped code. The stripper tracks single/double quotes (a `#` inside a string survives) and is deliberately not a shell parser -- heredocs and `${...#...}` expansions are out of scope, matching the heuristic-over-parser choice the module already made.",
+        'Note (#636): the module comment justified these heuristics with "false positives are operationally cheap -- a WARN, not a BLOCKING". That held for every regex there except this one: `setup-sh-no-pip` emits BLOCKING, so the stated rationale for tolerating imprecision never covered the one check where imprecision is expensive.',
+        "Plugin docs (#637): the data-app workflow reference now says what a data-app git repo must CONTAIN. That contract is owned by the base image and documented in Keboola's official `dataapp-developer` skill in `keboola/ai-kit`. kbagent's docs covered the lifecycle (create / deploy / secrets / rollback) but never the repo-side contract owned by the base image, so an agent authoring a repo from them alone worked from half the picture. Those rules are not discoverable by trying: a container that never becomes ready produces NO container logs at all -- `data-app logs` answers `App is not running` and the deploy dies as `StartupDeadlineExceeded` after ten minutes, leaving nothing to grep. The three that bite hardest are named inline: nginx must `listen 8888`, never declare `[program:nginx]`, and the health check polls `GET /` rather than `/health`.",
+        "Note (#637): `0 BLOCKING` from `data-app validate-repo` is not a promise that the app will start. The validator checks a SUBSET of that contract, notably NOT the nginx `listen` port. An E2E fixture repo reported `0 BLOCKING, 6 OK` and failed to start twice. The boundary is now written down next to the recommendation to use the validator.",
+        "Fix: `kbagent version --json` no longer advertises an `upgrade_command` when there is nothing to upgrade to. The string is documented as one a consumer may shell out to verbatim, but it was built unconditionally, so both non-false states of `up_to_date` handed out an actively wrong command. On `true` a caller sitting on a PRE-RELEASE (`0.44.0b1` compares ahead of the `0.43.3` stable a non-`--beta` fetch returns) was told it was up to date beside a `--force --reinstall` command pinned to the OLDER stable wheel -- running it silently downgrades off the beta, the exact foot-gun the beta channel's three gates exist to prevent. On `null` (release feed unreachable) it fell through to an UNPINNED `git+` source install resolving whatever the default branch happens to be, on the one path reached precisely because kbagent could not establish what the current release is. `upgrade_command` is now an empty string unless `up_to_date` is `false`; the frozen (PyInstaller) channel reporting is unchanged, and `kbagent update` was never affected (`prepare_kbagent_update_plan` already gated on `up_to_date is False`).",
         "Fix (#621): `storage table-detail` now returns the Storage API's `definition` "
         "object. On BigQuery that is the only readable record of a table's registered "
         "`timePartitioning` / `rangePartitioning` / `clustering` layout. The service built "
@@ -91,7 +96,7 @@ CHANGELOG: dict[str, list[str]] = {
         "serve` picks the field up for free. `storage tables` (the LIST endpoint) still has "
         "no layout: the API offers no `definition` include value, so it would cost one "
         "detail request per table.",
-        "New: `kbagent token list --with-last-used` answers which of a project's tokens "
+        "New (#622): `kbagent token list --with-last-used` answers which of a project's tokens "
         "are still in use. `token list` could only say what EXISTS -- a shared project "
         "with 25 tokens (per-user master tokens, MCP tokens, device tokens, `[_internal]` "
         "orchestration tokens) gave no way to tell one used four minutes ago from one "
@@ -102,7 +107,7 @@ CHANGELOG: dict[str, list[str]] = {
         "parallel over the existing `max_parallel_workers` pool. Opt-in: it is one extra "
         "request per token, and plain `token list` must stay cheap. Rows sort "
         "dormant-first, so reading order is cleanup order.",
-        "Note: the derivation narrows to events the token PERFORMED, server-side, via "
+        "Note (#622): the derivation narrows to events the token PERFORMED, server-side, via "
         "`q=token.id:{id}`. The raw feed also carries events performed ON the token, so a "
         "freshly minted token's newest raw event is its own `storage.tokenCreated` -- "
         'reading `events[0]` reports a never-used token as "used today", exactly '
@@ -110,7 +115,7 @@ CHANGELOG: dict[str, list[str]] = {
         "failure: right after an admin rotates a token, the single event a `limit=1` "
         "fetch returns is that rotation, leaving the filter with nothing and reporting an "
         "actively-used token as never used.",
-        "Note: `lastUsedStatus` separates `never` from `unknown` rather than collapsing "
+        "Note (#622): `lastUsedStatus` separates `never` from `unknown` rather than collapsing "
         "both empty feeds into one blank. Events are retained ~6 months, so an empty feed "
         'means "never used" only when the token was minted INSIDE that window; an older '
         "token reports `unknown` because the API genuinely cannot say. `error` marks a "
@@ -119,20 +124,20 @@ CHANGELOG: dict[str, list[str]] = {
         "invisible to this feed (the endpoint always resolves to the default branch), so "
         "a branch-only token reads as dormant -- check `branch list` before revoking on a "
         "project that uses branches.",
-        "New: `kbagent token list --columns` selects and orders the human-mode table. "
+        "New (#622): `kbagent token list --columns` selects and orders the human-mode table. "
         "It is repeatable, e.g. `--columns description --columns last_used`. `Refreshed` "
         "also joins the default columns -- `--json` already returned it but the fixed "
         "6-column table had no way to show it. `--json` is deliberately unaffected by "
         "`--columns`: the machine contract stays whole.",
-        "Note: `--columns last_used` / `last_used_event` REQUIRE `--with-last-used` and exit 2 "
+        "Note (#622): `--columns last_used` / `last_used_event` REQUIRE `--with-last-used` and exit 2 "
         "without it. Those values are derived per token, so with no derivation there is nothing "
         "honest to put in the cell -- rendering one anyway would state something about data that "
         "was never fetched.",
-        "SDK: `Client.list_tokens(with_last_used=True)` exposes the same derivation; "
+        "New (#622): the SDK exposes the same derivation. `Client.list_tokens(with_last_used=True)`; "
         "`TokenListEntryResult` gains `last_used`, `last_used_event` and "
         "`last_used_status`. REST: `GET /token/{project}/list` gains a matching "
         "`with_last_used` query parameter.",
-        "New: `storage tables --include-usage` reports which configurations read or write "
+        "New (#632): `storage tables --include-usage` reports which configurations read or write "
         "each table. Closes the last read-side gap against keboola-mcp-server's "
         "`get_tables(include_usage=True)`. Only storage input/output mappings count as a "
         "reference -- a table id that merely appears inside a transformation's SQL is text "
@@ -141,41 +146,41 @@ CHANGELOG: dict[str, list[str]] = {
         "(not per table), but that listing carries every configuration body, so expect it to "
         "be slow in a big project; a project whose components are unreadable degrades to an "
         "empty `used_by` instead of failing the listing.",
-        "New: `job detail --log-tail-lines N` attaches a finished job's last N events. Until "
+        "New (#632): `job detail --log-tail-lines N` attaches a finished job's last N events. Until "
         "now the log tail existed only on the `job run --wait` path, so inspecting the logs "
         "of a job that failed yesterday had no CLI route at all (MCP `get_jobs` exposed it "
         "via `include_logs`). Off by default -- a plain `job detail` still costs one API "
         "call -- and an events-endpoint blip degrades to an empty tail rather than hiding "
         "the job detail you asked for.",
-        "New: `job list` gains `--offset`, `--sort-by` and `--sort-order`, so paging past "
+        "New (#632): `job list` gains `--offset`, `--sort-by` and `--sort-order`. Paging past "
         "`--limit` and asking for oldest-first no longer requires the raw Queue API. "
         "`--sort-by` accepts startTime, endTime, createdTime, durationSeconds and id; an "
         "unknown value fails locally with exit 2 rather than silently returning an "
         "arbitrarily ordered page. Defaults (offset 0, startTime desc) match what the "
         "command already did.",
-        "New: `search --scope PATH` narrows a config-based hit to part of the configuration "
+        "New (#632): `search --scope PATH` narrows a config-based hit to part of the configuration "
         "body, e.g. `--scope storage.input`. Repeatable and OR-ed; a configuration whose "
         "every match falls outside the scopes drops out of the results entirely. Scopes are "
         "written the way they read in a configuration (`parameters`, `storage.input`) -- the "
         "`configuration.` / `rows[N].configuration.` wrapper is normalised away -- and match "
         "on whole path segments, so `storage.in` does not match `storage.input`. "
         "Config-based search only; combining it with textual search exits 2.",
-        "New: `sharing link --stage in|out` chooses the stage the linked bucket lands in. "
+        "New (#632): `sharing link --stage in|out` chooses the stage the linked bucket lands in. "
         "kbagent previously hardcoded `in`, so a shared `out.*` bucket could not be linked "
         "into `out` at all. The default stays `in` -- it is NOT derived from the source "
         "bucket the way MCP's `link_shared_bucket` does it, because silently relocating "
         "where existing scripts' buckets land would be the worse surprise.",
-        "Note: all five flags are exposed over `kbagent serve` too. The REST routers "
+        "Note (#632): all five flags are exposed over `kbagent serve` too. The REST routers "
         "mirror their CLI command 1:1, so `GET /jobs?offset=&sort_by=&sort_order=`, "
         "`GET /jobs/{project}/{id}?log_tail_lines=`, `GET /search?scope=`, "
         "`GET /storage/tables?include_usage=` and the `stage` field on "
         "`POST /sharing/{project}/link` all work -- scheduled agent tasks reach the "
         "same parity as an interactive CLI caller.",
-        "Note: every keboola-mcp-server tool kbagent intends to cover is now covered. "
+        "Note (#632): every keboola-mcp-server tool kbagent intends to cover is now covered. "
         "`docs/mcp-migration.md` gains the two Data Catalog tools it was missing "
         "(`get_shared_buckets` -> `sharing list`, `link_shared_bucket` -> `sharing link`) "
         "and records the mcp-server version the map was verified against (v1.76.2).",
-        "Internal: the `keboola-expert.md` prompt budget moves 62 000 B -> 70 000 B. The "
+        "Internal (#629, #634): the `keboola-expert.md` prompt budget moves 62 000 B -> 70 000 B. The "
         "62 000 B ceiling had under 100 bytes of headroom left, which made every PR "
         "touching the prompt pay for an unrelated trim first. `AGENT_CONTEXT` remains the "
         "place for exhaustive per-command detail, and splitting the prompt into per-domain "

@@ -476,6 +476,29 @@ class VersionService:
             # single command (hand-unpacked archive, unidentified system
             # package) carry the sentence in `upgrade_hint` instead.
             kbagent_upgrade_str = frozen_distribution.upgrade_command or ""
+        elif kbagent_up_to_date is not False:
+            # Nothing to upgrade TO, so name nothing. `upgrade_command` is
+            # documented as a string a consumer may shell out to verbatim, and
+            # this branch used to build one unconditionally -- which made the two
+            # non-`False` states hand out actively wrong commands:
+            #
+            # * ``True`` (local >= latest). A caller on a pre-release compares
+            #   ahead of the stable release a non-``--beta`` fetch returns
+            #   (``0.44.0b1`` >= ``0.43.3``), so it was told ``up_to_date: true``
+            #   AND given a ``--force --reinstall`` command pinned to the older
+            #   stable wheel. Running it is a silent downgrade off the beta --
+            #   exactly the foot-gun the beta channel's three gates exist to
+            #   prevent.
+            # * ``None`` (release feed unreachable, or an unparseable version).
+            #   ``resolve_kbagent_wheel_url(None)`` yields no asset, so this fell
+            #   through to the unpinned ``git+`` source install -- resolving
+            #   whatever the default branch happens to be, on the one code path
+            #   that reached it precisely because kbagent could not establish
+            #   what the current release is.
+            #
+            # `mirror the _update_kbagent path` (issue #353, NB-1) still holds
+            # for the real ``False`` case below.
+            kbagent_upgrade_str = ""
         else:
             # Mirror the _update_kbagent path (issue #353, NB-1): advertise the
             # prebuilt-wheel install command when the asset exists, so a programmatic
