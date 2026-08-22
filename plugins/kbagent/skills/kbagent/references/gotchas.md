@@ -1637,6 +1637,20 @@ events and emits a final `done` SSE frame mirroring the same record.
   per-type canon citations. Tracked as a follow-up.
 - **GitHub-only.** GitLab / Bitbucket support is a follow-up. Calling
   with a non-GitHub URL exits 2 / `INVALID_ARGUMENT`.
+- **The `setup.sh` rules read CODE, not comments** *(since v0.88.0)*. Both
+  `golden-rule.setup-sh-no-pip` and `golden-rule.setup-sh-uv-sync` strip shell
+  comments before matching. Before 0.88.0 they grepped the raw file, which broke
+  in both directions: a script whose comment read
+  `# always uv sync here, never pip install` was rejected as **BLOCKING** --
+  penalising exactly the author who documented the rule -- while a script whose
+  only mention of `uv sync` was in a comment **satisfied** the uv-sync rule
+  despite installing nothing. If you are advising on a repo validated by an
+  older kbagent, a BLOCKING `setup-sh-no-pip` may be about a comment; check the
+  file before telling anyone to change what the script runs.
+- The stripper is deliberately not a shell parser: it tracks single/double
+  quotes, so a `#` inside a string survives, but heredocs and `${...#...}`
+  expansions are out of scope. A `pip install` hidden inside a heredoc is not
+  detected -- the rule is a pre-flight heuristic, not a guarantee.
 - Exit 0 on all checks <= WARN; exit 1 on any BLOCKING. `--strict`
   treats WARNs as failures (exit 1) for CI gating.
 - **Reading the build / runtime log** is now available via
