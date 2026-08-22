@@ -547,6 +547,254 @@ class TestDescribeBatchService:
             service.describe_batch(alias="prod", from_file=batch_file)
 
 
+class TestDescribeBatchShapeValidation:
+    """Malformed `--from-file` documents are rejected before any write (#640).
+
+    Each case used to reach the write loop and die on ``.items()`` with an
+    ``AttributeError`` -- a traceback even under ``--json``. They must now
+    raise ``ValueError`` (mapped to INVALID_ARGUMENT / exit 2 by the command),
+    name the offending key and its actual type, and touch no API.
+    """
+
+    def _service(self, tmp_path: Path) -> tuple[StorageService, MagicMock]:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        return _make_service(store, mock_client), mock_client
+
+    def _run(self, tmp_path: Path, yaml_text: str) -> tuple[str, MagicMock]:
+        """Run describe_batch on ``yaml_text``, returning the message + client."""
+        service, mock_client = self._service(tmp_path)
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text(yaml_text, encoding="utf-8")
+        with pytest.raises(ValueError) as excinfo:
+            service.describe_batch(alias="prod", from_file=batch_file)
+        return str(excinfo.value), mock_client
+
+    def _assert_no_writes(self, mock_client: MagicMock) -> None:
+        mock_client.set_bucket_metadata.assert_not_called()
+        mock_client.set_table_metadata.assert_not_called()
+        mock_client.update_table_definition.assert_not_called()
+
+    def test_tables_as_list(self, tmp_path: Path) -> None:
+        """The exact repro from issue #640: `tables:` is a list of objects."""
+        message, mock_client = self._run(
+            tmp_path,
+            "tables:\n  - table_id: in.c-test.part_verify\n    columns:\n      id: Surrogate key\n",
+        )
+
+        assert "'tables' must be a mapping of table ID to description" in message
+        assert "got a list" in message
+        # The message carries a copy-pasteable example of the right shape.
+        assert "in.c-sales.orders: All sales orders" in message
+        self._assert_no_writes(mock_client)
+
+    def test_buckets_as_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "buckets:\n  - in.c-sales\n")
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_as_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "columns:\n  - in.c-sales.orders\n")
+
+        assert "'columns' must be a mapping of table ID to a column mapping" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_entry_scalar(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders: Unique order ID\n"
+        )
+
+        assert "'columns.in.c-sales.orders' must be a mapping of column name to description" in (
+            message
+        )
+        assert "got a string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_entry_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders:\n    - order_id\n"
+        )
+
+        assert "'columns.in.c-sales.orders' must be" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_column_description_is_a_container(self, tmp_path: Path) -> None:
+        """A nested mapping under a column name would be str()'d into garbage."""
+        message, mock_client = self._run(
+            tmp_path,
+            "columns:\n  in.c-sales.orders:\n    order_id:\n      text: Unique order ID\n",
+        )
+
+        assert "'columns.in.c-sales.orders.order_id' must be a description string" in message
+        assert "got a mapping" in message
+        self._assert_no_writes(mock_client)
+
+    def test_table_description_is_a_container(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "tables:\n  in.c-sales.orders:\n    - All sales orders\n"
+        )
+
+        assert "'tables.in.c-sales.orders' must be a description string" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_bucket_description_is_null(self, tmp_path: Path) -> None:
+        """A bare key used to write the literal text "None" onto the bucket."""
+        message, mock_client = self._run(tmp_path, "buckets:\n  in.c-sales:\n")
+
+        assert "'buckets.in.c-sales' has no description (empty value)" in message
+        assert "write a non-empty string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_table_description_is_null(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "tables:\n  in.c-sales.orders:\n")
+
+        assert "'tables.in.c-sales.orders' has no description (empty value)" in message
+        self._assert_no_writes(mock_client)
+
+    def test_column_description_is_null(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders:\n    order_id:\n"
+        )
+
+        assert "'columns.in.c-sales.orders.order_id' has no description (empty value)" in message
+        self._assert_no_writes(mock_client)
+
+    def test_duplicate_keys_colliding_after_coercion(self, tmp_path: Path) -> None:
+        """`1:` and `"1":` are two YAML keys; one used to silently overwrite the other."""
+        message, mock_client = self._run(tmp_path, 'tables:\n  1: First\n  "1": Second\n')
+
+        assert "'tables' has two entries that both resolve to the ID '1'" in message
+        self._assert_no_writes(mock_client)
+
+    def test_duplicate_column_names_colliding_after_coercion(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path,
+            'columns:\n  in.c-sales.orders:\n    1: First\n    "1": Second\n',
+        )
+
+        assert "'columns.in.c-sales.orders' has two entries" in message
+        assert "resolve to the ID '1'" in message
+        self._assert_no_writes(mock_client)
+
+    def test_top_level_scalar(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "just a string\n")
+
+        assert "must be a YAML mapping of 'buckets' / 'tables' / 'columns' sections" in message
+        assert "got a string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_malformed_yaml_syntax(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "tables:\n  - [unclosed\n")
+
+        assert "Batch file is not valid YAML" in message
+        self._assert_no_writes(mock_client)
+
+    def test_nothing_is_applied_when_a_later_section_is_malformed(self, tmp_path: Path) -> None:
+        """Validation is up front: a bad `columns:` must not let buckets through."""
+        message, mock_client = self._run(
+            tmp_path,
+            "buckets:\n  in.c-sales: Sales data\ncolumns:\n  - in.c-sales.orders\n",
+        )
+
+        assert "'columns' must be" in message
+        self._assert_no_writes(mock_client)
+
+    def _apply(self, tmp_path: Path, yaml_text: str) -> tuple[dict[str, Any], MagicMock]:
+        """Run describe_batch on a document expected to be accepted."""
+        service, mock_client = self._service(tmp_path)
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text(yaml_text, encoding="utf-8")
+        return service.describe_batch(alias="prod", from_file=batch_file), mock_client
+
+    @pytest.mark.parametrize(
+        "yaml_text",
+        [
+            "buckets:\n",  # bare key -> None
+            "buckets: []\n",
+            "buckets: ''\n",
+            "buckets: {}\n",
+        ],
+        ids=["null", "empty-list", "empty-string", "empty-mapping"],
+    )
+    def test_empty_section_is_a_no_op(self, tmp_path: Path, yaml_text: str) -> None:
+        """Back-compat: `raw.get(key) or {}` skipped these, so they must not exit 2."""
+        result, mock_client = self._apply(tmp_path, yaml_text)
+
+        assert result["applied"] == []
+        assert result["errors"] == []
+        self._assert_no_writes(mock_client)
+
+    def test_empty_column_mapping_is_a_no_op(self, tmp_path: Path) -> None:
+        """Same rule one level down: nothing to write, so no API roundtrip."""
+        result, mock_client = self._apply(tmp_path, "columns:\n  in.c-sales.orders: {}\n")
+
+        assert result["applied"] == []
+        assert result["errors"] == []
+        self._assert_no_writes(mock_client)
+
+    def test_non_empty_list_section_still_errors(self, tmp_path: Path) -> None:
+        """Only EMPTY containers are skipped -- content must never be dropped."""
+        message, mock_client = self._run(tmp_path, "buckets:\n  - in.c-sales\n")
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        self._assert_no_writes(mock_client)
+
+    @pytest.mark.parametrize(
+        ("yaml_text", "expected_type"),
+        [("buckets: false\n", "boolean"), ("buckets: 0\n", "number")],
+        ids=["false", "zero"],
+    )
+    def test_falsy_scalar_section_still_errors(
+        self, tmp_path: Path, yaml_text: str, expected_type: str
+    ) -> None:
+        """`false` / `0` are typed content, not an empty section."""
+        message, mock_client = self._run(tmp_path, yaml_text)
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        assert f"got a {expected_type}" in message
+        self._assert_no_writes(mock_client)
+
+    def test_top_level_false_errors(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "false\n")
+
+        assert "must be a YAML mapping of 'buckets' / 'tables' / 'columns' sections" in message
+        assert "got a boolean" in message
+        self._assert_no_writes(mock_client)
+
+    def test_valid_file_still_applies(self, tmp_path: Path) -> None:
+        """Happy-path regression: the documented schema is untouched."""
+        service, mock_client = self._service(tmp_path)
+        mock_client.set_bucket_metadata.return_value = []
+        mock_client.set_table_metadata.return_value = []
+        mock_client.get_table_detail.return_value = _table_detail(columns=["order_id"])
+        mock_client.update_table_definition.return_value = _JOB_OK
+
+        batch_file = tmp_path / "good.yaml"
+        batch_file.write_text(
+            "buckets:\n"
+            "  in.c-sales: Sales data\n"
+            "tables:\n"
+            "  in.c-sales.orders: 2026\n"
+            "columns:\n"
+            "  in.c-sales.orders:\n"
+            "    order_id: Unique order ID\n",
+            encoding="utf-8",
+        )
+
+        result = service.describe_batch(alias="prod", from_file=batch_file)
+
+        assert result["error_count"] == 0
+        assert result["applied_count"] == 3
+        # Non-string scalars stay coerced to str, as before the validation pass.
+        table_applied = next(a for a in result["applied"] if a["type"] == "table")
+        assert table_applied["description"] == "2026"
+
+
 def _token_info(project_id: int = 258) -> TokenVerifyResponse:
     return TokenVerifyResponse(
         token_id="12345",

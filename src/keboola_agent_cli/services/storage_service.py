@@ -2481,10 +2481,19 @@ class StorageService(ColumnDescriptionsMixin):
                 col1: "Column 1 description"
                 col2: "Column 2 description"
 
-        All sections are optional; empty or absent sections are silently
-        skipped.  Within each section the operations are applied in order.
-        A failure in one item does not skip remaining items — all results
-        (success and error) are collected and returned.
+        All sections are optional: absent, ``None`` (a bare ``buckets:`` key)
+        and empty (``[]``, ``''``, ``{}``) sections are silently skipped.
+        Within each section the operations are applied in order.
+
+        The document's shape is validated up front (see
+        ``_describe_batch_input``): a section with a wrong NON-EMPTY shape, a
+        null description, or two keys colliding after string coercion raises
+        ``ValueError`` before the first write, so the file is rejected whole
+        rather than half-applied.
+
+        Once application starts, a failure in one item does not skip the
+        remaining items — all per-item *API* results (success and error) are
+        collected and returned.
 
         Args:
             alias: Project alias.
@@ -2500,69 +2509,47 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
         """
-        import yaml
-
         from ..errors import KeboolaApiError
+        from ._describe_batch_input import parse_describe_batch_file
 
-        if not from_file.is_file():
-            raise ValueError(f"Batch file not found: {from_file}")
-        raw = yaml.safe_load(from_file.read_text(encoding="utf-8")) or {}
-        if not isinstance(raw, dict):
-            raise ValueError("Batch file must be a YAML mapping.")
+        parsed = parse_describe_batch_file(from_file)
 
         applied: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
 
-        buckets: dict[str, str] = raw.get("buckets") or {}
-        tables: dict[str, str] = raw.get("tables") or {}
-        columns: dict[str, dict[str, str]] = raw.get("columns") or {}
-
-        total = len(buckets) + len(tables) + len(columns)
+        total = parsed.total
         current = 0
 
-        for bucket_id, desc in buckets.items():
+        for bucket_id, desc in parsed.buckets.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("bucket", bucket_id, current, total)
             try:
-                self.describe_bucket(alias, bucket_id, str(desc), branch_id=branch_id)
+                self.describe_bucket(alias, bucket_id, desc, branch_id=branch_id)
                 applied.append({"type": "bucket", "id": bucket_id, "description": desc})
                 logger.debug("describe_batch bucket %s: ok", bucket_id)
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "bucket", "id": bucket_id, "error": msg})
 
-        for table_id, desc in tables.items():
+        for table_id, desc in parsed.tables.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("table", table_id, current, total)
             try:
-                self.describe_table(alias, table_id, str(desc), branch_id=branch_id)
+                self.describe_table(alias, table_id, desc, branch_id=branch_id)
                 applied.append({"type": "table", "id": table_id, "description": desc})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "table", "id": table_id, "error": msg})
 
-        for table_id, col_map in columns.items():
+        for table_id, col_map in parsed.columns.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("columns", table_id, current, total)
-            if not isinstance(col_map, dict):
-                errors.append(
-                    {"type": "columns", "id": table_id, "error": "columns entry must be a mapping"}
-                )
-                continue
             try:
-                self.describe_columns(
-                    alias, table_id, {k: str(v) for k, v in col_map.items()}, branch_id=branch_id
-                )
-                applied.append(
-                    {
-                        "type": "columns",
-                        "id": table_id,
-                        "columns": {k: str(v) for k, v in col_map.items()},
-                    }
-                )
+                self.describe_columns(alias, table_id, col_map, branch_id=branch_id)
+                applied.append({"type": "columns", "id": table_id, "columns": col_map})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "columns", "id": table_id, "error": msg})

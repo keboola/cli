@@ -753,9 +753,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Readable via table-detail --json .data.column_details[].description.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
-    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).
-    Columns go through the same native write as describe-column.
-    Failures collected; one error does not abort remaining items.
+    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;
+    absent or empty sections are skipped). Columns go through the same native write as describe-column.
+    File shape is validated BEFORE any write: a section that is not a mapping of ID to description, a null
+    description, or a non-mapping columns entry aborts with INVALID_ARGUMENT and exit 2, naming the offending
+    key -- nothing is half-applied. During application, per-item API failures are collected and reported
+    (one error does not abort the remaining items); the command exits 1 when error_count > 0.
 
   kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
     Bulk-convert legacy pre-0.88.0 flat KBC.column.*.description metadata to the native endpoint.

@@ -262,6 +262,14 @@ The CLI exits **1** when `error_count > 0`. In scripts, always inspect the
 without issues (it means there were no partial failures). A non-zero exit
 means *some* items failed; the successful items still landed.
 
+This tolerance applies to **API** failures. A malformed file is a usage error
+instead: if a section is not a mapping of ID to description (a `tables:` list,
+a scalar under a `columns:` table ID, a document that is not a mapping at all),
+the whole file is rejected **before the first write** with
+`INVALID_ARGUMENT` and exit **2**, and the message names the offending key plus
+its actual type. Nothing is half-applied, so fixing the file and re-running is
+always safe.
+
 ## Migrating legacy column descriptions (since v0.88.0)
 
 A project that was documented with kbagent 0.87.0 or older still has its column

@@ -315,8 +315,14 @@ def register(app: typer.Typer) -> None:
                 col1: "Column 1 description"
                 col2: "Column 2 description"
 
-        All sections are optional.  A failure in one item does not abort the
-        rest -- all results are collected and reported.
+        All sections are optional (absent or empty sections are skipped).
+
+        A malformed file -- a section that is not a mapping of ID to
+        description, a null description, a non-mapping columns entry -- is
+        rejected before any write (INVALID_ARGUMENT, exit 2), naming the
+        offending key.  Once application starts, a per-item API failure does
+        not abort the rest: those results are collected and reported, and the
+        command exits 1 if any item failed.
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
