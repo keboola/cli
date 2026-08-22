@@ -802,7 +802,8 @@ class TestConfigNewPushScaffoldStamping:
         envelope = json.loads(result.output)
         scaffold_info = envelope["data"]["local_scaffold"]
         assert scaffold_info["files"] == ["_config.yml"]
-        assert scaffold_info["directory"].endswith("extractor/keboola.ex-http/test-config")
+        # Path comparison, not str.endswith -- Windows renders backslashes.
+        assert Path(scaffold_info["directory"]) == out / "extractor/keboola.ex-http/test-config"
 
     def test_branch_create_writes_into_registered_branch_dir(self, tmp_path: Path) -> None:
         """A config created in a dev branch must scaffold into that branch's
@@ -934,3 +935,55 @@ class TestConfigNewPushScaffoldStamping:
         assert parsed["parameters"] == {"baseUrl": "https://real.example.com"}
         assert parsed["_keboola"]["config_id"] == "12345"
         assert "TODO" not in written.read_text(encoding="utf-8")
+
+    def test_pushed_transformation_body_extracts_code_through_cli(self, tmp_path: Path) -> None:
+        """End-to-end through the Typer command: a pushed SQL body yields a
+        real transform.sql next to _config.yml (PR #653 review sweep -- the
+        mirror branch was previously only unit-tested)."""
+        out = tmp_path / "ws"
+        out.mkdir()
+        body = {
+            "parameters": {
+                "blocks": [{"name": "Blocks", "codes": [{"name": "Code", "script": ["SELECT 1;"]}]}]
+            }
+        }
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {**_push_result(), "configuration": body}
+        svc_component = MagicMock()
+        svc_component.generate_scaffold.return_value = {
+            **json.loads(json.dumps(_REALISTIC_SCAFFOLD)),
+            "component_id": "keboola.snowflake-transformation",
+            "directory": "transformation/keboola.snowflake-transformation/test-config",
+        }
+
+        result = _invoke_push(
+            [
+                "--json",
+                "config",
+                "new",
+                "--component-id",
+                "keboola.snowflake-transformation",
+                "--project",
+                "prod",
+                "--name",
+                "test-config",
+                "--push",
+                "--output-dir",
+                str(out),
+                "--configuration",
+                json.dumps(body),
+            ],
+            config_dir=tmp_path / "config",
+            config_service_mock=svc_config,
+            component_service_mock=svc_component,
+        )
+
+        assert result.exit_code == 0, result.output
+        base = out / "transformation/keboola.snowflake-transformation/test-config"
+        assert (base / "transform.sql").is_file(), list(out.rglob("*"))
+        assert "SELECT 1;" in (base / "transform.sql").read_text(encoding="utf-8")
+        envelope = json.loads(result.output)
+        assert sorted(envelope["data"]["local_scaffold"]["files"]) == [
+            "_config.yml",
+            "transform.sql",
+        ]

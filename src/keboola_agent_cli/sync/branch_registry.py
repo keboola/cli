@@ -45,17 +45,25 @@ def default_branch_prefix(project_root: Path) -> str | None:
     and a read-only prefix lookup has no business schema-validating the
     whole file.
     """
+    raw = _peek_manifest(project_root)
+    if raw:
+        branches = raw.get("branches", [])
+        if branches:
+            return branches[0].get("path") or None
+    return None
+
+
+def _peek_manifest(project_root: Path) -> dict[str, Any] | None:
+    """Raw, tolerant read of ``.keboola/manifest.json`` (None on any problem)."""
     manifest_path = project_root / KEBOOLA_DIR_NAME / MANIFEST_FILENAME
     if not manifest_path.is_file():
         return None
     try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        branches = raw.get("branches", [])
-        if branches:
-            return branches[0].get("path") or None
+        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else None
     except (json.JSONDecodeError, OSError) as exc:
         logger.debug("Could not read manifest under %s: %s", project_root, exc)
-    return None
+        return None
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,12 @@ def resolve_scaffold_placement(
       than lost, and the warning names the mismatch.
     """
     if branch_id is None:
+        mismatch = _project_mismatch_warning(project, project_root)
+        if mismatch:
+            # Foreign workspace: write FLAT (outside every branch tree, so a
+            # later `sync push` there can never pick the files up as a new
+            # config of the WRONG project) and say so.
+            return ScaffoldPlacement(None, mismatch)
         return ScaffoldPlacement(default_branch_prefix(project_root))
     if not (project_root / KEBOOLA_DIR_NAME / MANIFEST_FILENAME).is_file():
         return ScaffoldPlacement(None)
@@ -209,3 +223,22 @@ def register_branch_dir(
         if branch.id == branch_id:
             return branch.path
     return f"branch-{branch_id}"
+
+
+def _project_mismatch_warning(project: Any, project_root: Path) -> str | None:
+    """Warning text when *project_root*'s manifest belongs to another project.
+
+    ``None`` when the identities match or either side is unknown (no
+    manifest, unreadable manifest, or a project without a stored id).
+    """
+    if project is None or getattr(project, "project_id", None) is None:
+        return None
+    raw = _peek_manifest(project_root)
+    manifest_project_id = (raw or {}).get("project", {}).get("id")
+    if manifest_project_id is None or manifest_project_id == project.project_id:
+        return None
+    return (
+        f"Manifest in {project_root} belongs to project {manifest_project_id}, "
+        f"not to project {project.project_id}; scaffold written flat at the "
+        f"workspace root (untracked by that workspace's sync tree)."
+    )

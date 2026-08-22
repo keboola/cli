@@ -2198,12 +2198,11 @@ class SyncService(BaseService):
         """Resolve where a ``config new --push`` scaffold belongs on disk.
 
         Thin wrapper over :func:`..sync.branch_registry.resolve_scaffold_placement`
-        (issue #644). The project is resolved lazily -- a production create
-        (``branch_id is None``) never needs a client or the config store.
+        (issue #644).
         """
-        project = None
-        if branch_id is not None:
-            project = self.resolve_projects([alias])[alias]
+        # Resolved for BOTH paths: the production path needs the project id
+        # for the foreign-workspace mismatch check (PR #653 review sweep).
+        project = self.resolve_projects([alias])[alias]
         return resolve_scaffold_placement(project, project_root, branch_id, self._client_factory)
 
     def _ensure_branch_registered(

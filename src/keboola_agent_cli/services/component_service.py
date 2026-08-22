@@ -17,7 +17,7 @@ from ..config_store import ConfigStore
 from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
-from ..sync.code_extraction import extract_code_files
+from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
 from ..sync.config_format import api_config_to_local, dump_config_yaml
 from .base import BaseService, ClientFactory
 from .org_service import slugify
@@ -394,13 +394,21 @@ def materialize_pushed_config(
         str(config_id),
     )
     config_dir.mkdir(parents=True, exist_ok=True)
+    # The slugified directory can pre-exist (same-name re-run, stray files):
+    # report only what THIS call wrote, and clear a stale _description.md a
+    # previous occupant left behind when the pushed description is empty --
+    # _extract_description only ever writes, so the stale file would
+    # misattribute to the new config_id (PR #653 review sweep).
+    if not description:
+        stale_description = config_dir / DESCRIPTION_FILENAME
+        stale_description.unlink(missing_ok=True)
+    before = {q for q in config_dir.rglob("*") if q.is_file()}
     extract_code_files(component_id, local, config_dir)
     content = dump_config_yaml(local)
     (config_dir / CONFIG_FILENAME).write_text(content, encoding="utf-8", newline="")
-    written = sorted(
-        p.relative_to(config_dir).as_posix() for p in config_dir.rglob("*") if p.is_file()
-    )
-    return written
+    after = {q for q in config_dir.rglob("*") if q.is_file()}
+    created = (after - before) | {config_dir / CONFIG_FILENAME}
+    return sorted(q.relative_to(config_dir).as_posix() for q in created)
 
 
 def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str:

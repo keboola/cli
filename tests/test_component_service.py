@@ -941,3 +941,41 @@ class TestMaterializePushedConfig:
         sql = (tmp_path / "transform.sql").read_text(encoding="utf-8")
         assert "SELECT 1;" in sql
         assert "TODO" not in sql
+
+    def test_null_parameters_body_does_not_crash(self, tmp_path: Path) -> None:
+        """'{"parameters": null}' is accepted by the Storage API; the local
+        materialization must not crash after the remote create succeeded
+        (PR #653 review sweep)."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        written = materialize_pushed_config(
+            component_id="keboola.snowflake-transformation",
+            config_id="123",
+            name="tf",
+            description="",
+            configuration={"parameters": None},
+            config_dir=tmp_path,
+        )
+        assert "_config.yml" in written
+
+    def test_stale_files_not_reported_and_stale_description_removed(self, tmp_path: Path) -> None:
+        """The slugified dir can pre-exist: stray files must not be reported
+        as written, and a stale _description.md must not misattribute to the
+        new config when the pushed description is empty."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        (tmp_path / "_description.md").write_text("old description", encoding="utf-8")
+        (tmp_path / "leftover_notes.txt").write_text("stray", encoding="utf-8")
+
+        written = materialize_pushed_config(
+            component_id="keboola.ex-http",
+            config_id="123",
+            name="cfg",
+            description="",
+            configuration={"parameters": {"a": 1}},
+            config_dir=tmp_path,
+        )
+        assert written == ["_config.yml"]
+        assert not (tmp_path / "_description.md").exists()
+        # Stray unrelated files are left alone -- just not claimed as ours.
+        assert (tmp_path / "leftover_notes.txt").exists()

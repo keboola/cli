@@ -143,3 +143,23 @@ class TestResolveScaffoldPlacement:
         assert placement.branch_prefix == "branch-20"
         assert placement.warning is not None
         assert "belongs to project 9999" in placement.warning
+
+
+class TestProductionMismatchGuard:
+    def test_production_create_into_foreign_workspace_goes_flat_with_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """A production create pointed at ANOTHER project's workspace must not
+        write into that workspace's main/ tree -- its next sync push would
+        create the config in the WRONG project (PR #653 review sweep). Flat
+        files sit outside every branch tree, so they are inert there."""
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}], project_id=9999)
+        placement = resolve_scaffold_placement(_project(1234), tmp_path, None, MagicMock())
+        assert placement.branch_prefix is None
+        assert placement.warning is not None
+        assert "belongs to project 9999" in placement.warning
+
+    def test_production_create_matching_project_uses_default_prefix(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}], project_id=1234)
+        placement = resolve_scaffold_placement(_project(1234), tmp_path, None, MagicMock())
+        assert placement == ScaffoldPlacement("main")
