@@ -38,7 +38,7 @@ def store(tmp_config_dir: Path) -> ConfigStore:
 @pytest.fixture
 def client_factory() -> tuple[MagicMock, MagicMock]:
     mock = MagicMock()
-    # Explicit master-token info so tests exercising create/refresh pass the
+    # Explicit master-token info so tests exercising `create` pass the
     # pre-flight guard deliberately, not via a truthy MagicMock return.
     mock.get_project_info.return_value = {
         "id": "6610637",
@@ -122,14 +122,15 @@ class TestCreateScopedToken:
 
 
 class TestMasterTokenGuard:
-    """`token create` / `token refresh` pre-flight: the acting token must be a master token.
+    """`token create` pre-flight: the acting token must be a master token.
 
     The Storage API's `CreateTokenVoter` treats "a normal token carrying
     `canManageTokens`" as an impossible state and throws a `LogicException`,
     surfaced to the caller as a generic 500 "Application error." -- exactly the
     shape of token `org setup` / `project refresh` mint (issue #599). The
     guard turns that into a clean local MISSING_MASTER_TOKEN before any write,
-    mirroring the existing `config oauth-url` guard.
+    mirroring the existing `config oauth-url` guard. It covers the mint ONLY --
+    refresh/list/delete have no such defect and stay unguarded.
     """
 
     NON_MASTER_INFO: ClassVar[dict[str, object]] = {
@@ -167,35 +168,30 @@ class TestMasterTokenGuard:
         mock.get_project_info.assert_called_once()
         mock.create_scoped_token.assert_called_once()
 
-    def test_refresh_rejects_non_master_token_before_any_write(self, store, client_factory) -> None:
+    def test_refresh_delete_and_list_are_not_guarded(self, store, client_factory) -> None:
+        """Only the mint is guarded -- the other three must keep working.
+
+        The `CreateTokenVoter` defect is create-only. `RefreshTokenVoter` lets
+        any token rotate itself and a `canManageTokens` token rotate another,
+        and list/delete need the same flag (all verified in #599), so guarding
+        them would block working paths -- most sharply the incident one:
+        rotating a leaked device token from an `org setup` project token.
+        """
         factory, mock = client_factory
         mock.get_project_info.return_value = self.NON_MASTER_INFO
-        with pytest.raises(KeboolaApiError) as excinfo:
-            _svc(store, factory).refresh_token(alias=ALIAS, token_id="999")
-        assert excinfo.value.error_code == ErrorCode.MISSING_MASTER_TOKEN
-        assert excinfo.value.status_code == 403
-        mock.refresh_token.assert_not_called()
-        mock.close.assert_called_once()
-
-    def test_refresh_passes_on_master_token(self, store, client_factory) -> None:
-        factory, mock = client_factory
         mock.refresh_token.return_value = {"id": "999", "token": "999-new"}
-        result = _svc(store, factory).refresh_token(alias=ALIAS, token_id="999")
-        assert result["id"] == "999"
-        mock.get_project_info.assert_called_once()
-        mock.refresh_token.assert_called_once_with("999")
-
-    def test_delete_and_list_are_not_guarded(self, store, client_factory) -> None:
-        """delete/list work with a non-master `canManageTokens` token (verified
-        live in #599) -- the guard must not creep onto them."""
-        factory, mock = client_factory
-        mock.get_project_info.return_value = self.NON_MASTER_INFO
         mock.list_tokens.return_value = []
         svc = _svc(store, factory)
+
+        assert svc.refresh_token(alias=ALIAS, token_id="999")["id"] == "999"
         svc.delete_token(alias=ALIAS, token_id="1")
         svc.list_tokens(alias=ALIAS)
+
+        mock.refresh_token.assert_called_once_with("999")
         mock.delete_token.assert_called_once()
         mock.list_tokens.assert_called_once()
+        # not even the pre-flight verify goes out -- no wasted request either
+        mock.get_project_info.assert_not_called()
 
 
 class TestDeleteToken:

@@ -828,7 +828,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     List the project's Storage API tokens (id, description, created, refreshed, expires, master
     flag, creating token). Secrets are never listed -- `token create` is the only reveal. This is
     where the --token-id for delete/refresh comes from. Acting token needs canManageTokens
-    (master NOT required for list/delete -- unlike create/refresh).
+    (master NOT required -- unlike `token create`).
     --with-last-used (0.88.0+) answers "which of these are still in use": it derives each token's
     most recent activity from its own event feed and sorts dormant-first, so reading order is
     cleanup order. Opt-in -- it is ONE EXTRA API CALL PER TOKEN (fanned out in parallel).
@@ -858,9 +858,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Revoke a token by its numeric id (destructive; confirms unless --yes / --json).
   kbagent token refresh --project NAME --token-id ID [--yes]
     Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
-    Same master-token pre-flight guard as `token create`.
-  Notes: uses the per-project Storage token (no manage token). create/refresh require a MASTER
-  (admin) token; list/delete only need the canManageTokens privilege. The importable SDK
+    Needs canManageTokens only -- NOT master-guarded (that API defect is create-only). The new
+    secret is NOT written back to config.json: rotating the alias's own token leaves it dead
+    until `project edit --project ALIAS --token <NEW>`.
+  Notes: uses the per-project Storage token (no manage token). `token create` requires a MASTER
+  (admin) token; list/delete/refresh only need the canManageTokens privilege. The importable SDK
   (Client(url,token)) has NO pre-flight guard and mirrors these as
   create_scoped_token / delete_token / refresh_token (dicts on .raw, typed ScopedTokenResult on the facade).
 

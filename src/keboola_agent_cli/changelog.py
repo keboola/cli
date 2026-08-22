@@ -47,9 +47,8 @@ CHANGELOG: dict[str, list[str]] = {
         "Plugin docs: `CLAUDE.md`'s command list had never included `config delete` at all. "
         "That silent drift made the command look nonexistent to AI agents reading it. "
         "Added alongside the new commands, with the double-delete trap recorded in gotchas.md.",
-        "Fix (#599): `token create` / `token refresh` on a non-master token now fail "
-        "fast with `MISSING_MASTER_TOKEN` (exit 3) instead of the API's generic "
-        "500 error. "
+        "Fix (#599): `token create` on a non-master token now fails fast with "
+        "`MISSING_MASTER_TOKEN` (exit 3) instead of the API's generic 500 error. "
         "Root cause found in #599: the API's `CreateTokenVoter` "
         "treats a non-admin token carrying `canManageTokens` as an impossible state "
         "and throws a `LogicException` -- and that is exactly the token shape "
@@ -57,13 +56,16 @@ CHANGELOG: dict[str, list[str]] = {
         "hit the 500. The new pre-flight guard mirrors the existing `config oauth-url` "
         "one (`isMasterToken` via `GET /v2/storage/tokens/verify`, checked before any "
         "write) and its message names the fix: point the alias at a master token via "
-        "`kbagent project edit --project ALIAS --token <MASTER>`. `token list` / "
-        "`token delete` are unchanged -- they genuinely work with `canManageTokens` "
-        "alone and are deliberately not guarded.",
+        "`kbagent project edit --project ALIAS --token <MASTER>`. The defect is "
+        "create-only, so `token refresh` / `token list` / `token delete` are "
+        "unchanged and deliberately NOT guarded: `RefreshTokenVoter` lets any token "
+        "rotate itself and a `canManageTokens` token rotate another, and guarding "
+        "that would break a working incident path -- rotating a leaked device token "
+        "from an `org setup` project token -- to fix nothing.",
         "Change (#599): token-group docs no longer claim `canManageTokens` is enough "
-        "for create/refresh -- the real requirement is a master token. "
-        "`canManageTokens` alone is necessary but not sufficient there; it is "
-        "sufficient only for `token list` / `token delete`.",
+        "for `token create` -- the real requirement there is a master token. "
+        "`canManageTokens` alone is necessary but not sufficient for the mint; it is "
+        "sufficient for `token list` / `token delete` / `token refresh`.",
     ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "

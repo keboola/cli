@@ -5,11 +5,11 @@ Thin CLI layer for the ``kbagent token`` command group: parses arguments, calls
 
 These are Storage API operations authenticated with the per-project Storage
 token kbagent already stores (``X-StorageApi-Token``) -- no manage token, no
-extra prompt. ``token create`` / ``token refresh`` require a **master (admin)
-Storage token**: ``canManageTokens`` alone is not enough (the API answers a
-generic 500, issue #599), so a pre-flight guard fails fast with
-``MISSING_MASTER_TOKEN`` instead. ``token list`` / ``token delete`` only need
-``canManageTokens``.
+extra prompt. ``token create`` requires a **master (admin) Storage token**:
+``canManageTokens`` alone is not enough there (the API answers a generic 500,
+issue #599), so a pre-flight guard fails fast with ``MISSING_MASTER_TOKEN``
+instead. ``token list`` / ``token delete`` / ``token refresh`` need only
+``canManageTokens`` and are deliberately unguarded.
 
 ``token create`` mints a scoped token and prints its secret value **once** --
 kbagent never persists it. Store it immediately; it cannot be retrieved again.
@@ -286,8 +286,8 @@ def token_list(
 
     Answers "what already exists" and hands you the token id that `token delete`
     and `token refresh` require, without a detour through the web UI. The acting
-    project token must carry canManageTokens -- unlike `token create` /
-    `token refresh` it does NOT need to be a master token.
+    project token must carry canManageTokens -- unlike `token create` it does
+    NOT need to be a master token.
 
     --with-last-used answers the follow-up question -- which of them are still
     in use -- by deriving each token's most recent activity from its event
@@ -364,8 +364,10 @@ def token_refresh(
 ) -> None:
     """Rotate a token: generate a new value and invalidate the old one (secret shown once).
 
-    Requires a master (admin) project token, same as `token create` -- non-master
-    tokens fail fast with MISSING_MASTER_TOKEN before any write (issue #599).
+    Needs canManageTokens, NOT a master token -- unlike `token create` (the API
+    defect behind that guard is create-only, issue #599). Note the new secret is
+    printed but not stored: rotating the token this project alias itself uses
+    leaves the alias holding a dead value until you run `project edit --token`.
     """
     formatter = get_formatter(ctx)
     if (

@@ -555,9 +555,11 @@ kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
 # token: scoped Storage tokens (Keboola single-bucket-write pattern; secret shown once).
-# create/refresh REQUIRE a MASTER (admin) token -- pre-flight MISSING_MASTER_TOKEN guard (exit 3)
+# create REQUIRES a MASTER (admin) token -- pre-flight MISSING_MASTER_TOKEN guard (exit 3)
 #   since #599: a non-master token with canManageTokens is CreateTokenVoter's "impossible state"
-#   and the API answers a generic 500. list/delete need only canManageTokens (no master).
+#   and the API answers a generic 500. That defect is CREATE-ONLY: list/delete/refresh need only
+#   canManageTokens and are deliberately NOT guarded (RefreshTokenVoter also lets any token
+#   rotate itself), so rotating a leaked device token from an org-setup token keeps working.
 kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
 kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
 kbagent token delete --project NAME --token-id ID [--yes]

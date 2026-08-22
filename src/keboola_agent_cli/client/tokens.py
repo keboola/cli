@@ -174,8 +174,8 @@ class _TokensMixin(_CoreClient):
         the token was minted by another token) ``creatorToken``.
 
         The acting token must carry ``canManageTokens``; the API answers 403
-        otherwise (surfaced as ``ACCESS_DENIED``). Unlike the create/refresh
-        writes it does **not** need to be a master token.
+        otherwise (surfaced as ``ACCESS_DENIED``). Unlike the create write it
+        does **not** need to be a master token.
 
         A **secret is never listed here as a rule, but the API is not a
         guarantee**: on a project carrying the ``force-decrypted-token``
@@ -262,9 +262,11 @@ class _TokensMixin(_CoreClient):
         stable across a refresh.
 
         Server-side (``RefreshTokenVoter``) any token may refresh **itself**
-        and refreshing *another* token needs ``canManageTokens``; kbagent's
-        ``TokenService`` is stricter and pre-flights for a master (admin)
-        token, matching the create path (issue #599).
+        and refreshing *another* token needs ``canManageTokens``. No master
+        token required -- the ``CreateTokenVoter`` defect behind
+        :meth:`create_scoped_token`'s master-token guard is create-only, so
+        ``TokenService.refresh_token`` deliberately does not guard this
+        (issue #599).
         """
         response = self._request(
             "POST", f"/v2/storage/tokens/{quote(str(token_id), safe='')}/refresh"

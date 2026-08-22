@@ -294,15 +294,26 @@ Versioning convention:
   --token-id ID` revokes. All three back the SDK facade
   (`Client.create_scoped_token` / `refresh_token` / `delete_token`) and the same
   service layer.
-- **`create` / `refresh` require a MASTER (admin) token — `canManageTokens` alone
-  is NOT enough.** A non-master token carrying the flag is the Storage API's
+- **`create` requires a MASTER (admin) token — `canManageTokens` alone is NOT
+  enough.** A non-master token carrying the flag is the Storage API's
   "impossible state" (`CreateTokenVoter` `LogicException` → generic 500, issue
   #599) — exactly the shape `org setup` / `project refresh` mint. Since v0.89.0
-  both commands pre-flight `isMasterToken` and fail fast with
+  `token create` pre-flights `isMasterToken` and fails fast with
   `MISSING_MASTER_TOKEN` (exit 3) naming the fix (`kbagent project edit
-  --project ALIAS --token <MASTER>`). `list` / `delete` only need
-  `canManageTokens` — and a narrowly-scoped device token has neither, so you
-  still cannot bootstrap tokens from a token you just minted.
+  --project ALIAS --token <MASTER>`).
+- **That defect is CREATE-ONLY — `refresh` / `list` / `delete` are NOT
+  master-guarded.** `RefreshTokenVoter` lets any token rotate **itself** and a
+  `canManageTokens` token rotate another, so rotating a leaked device token
+  from an `org setup` project token works and kbagent deliberately does not
+  block it (the incident path is the last place to add a credential upgrade
+  step). Do not "fix" a failing `refresh` by hunting for a master token — read
+  the actual error. A narrowly-scoped device token has neither privilege, so
+  you still cannot bootstrap tokens from a token you just minted.
+- **`token refresh` does not write the new secret back to `config.json`.** The
+  value is printed once, exactly like `create`. Rotating the very token an
+  alias uses therefore leaves that alias holding a dead value — follow it with
+  `kbagent project edit --project ALIAS --token <NEW>` or the next command
+  fails on auth.
 - **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
   once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
   retrievable again — persist only the `id` (to revoke/refresh later) and `expires`.
@@ -2993,8 +3004,8 @@ requires a **master (admin) token** — `canManageTokens` alone is not enough
   minted token `canManageTokens` would NOT help: issue #599 established the
   Storage API rejects a non-admin token carrying that flag with a 500
   (`CreateTokenVoter` "impossible state"), so a master token is the only
-  working credential here. `token create` / `token refresh` carry the same
-  guard since v0.89.0.
+  working credential here. `token create` carries the same guard since
+  v0.89.0 (`token refresh` does not — that endpoint has no such defect).
 
 ## `data-app logs` is the only unconstrained log surface (since v0.43.8)
 
@@ -4065,9 +4076,9 @@ the web UI.
   `token refresh` are the only reveals, and a listing that dumped live values
   would break that contract for every token in the project at once. Do not
   reach for `kbagent http get` to work around this.
-- **It needs `canManageTokens` — but unlike `create`/`refresh` it does NOT need
-  a master token** (since v0.89.0 those two are master-guarded, issue #599). A
-  plain Storage token gets a 403 -> `ACCESS_DENIED`.
+- **It needs `canManageTokens` — but unlike `create` it does NOT need a master
+  token** (since v0.89.0 the mint is master-guarded, issue #599). A plain
+  Storage token gets a 403 -> `ACCESS_DENIED`.
 - The master token appears in the listing with `isMasterToken: true` and cannot
   be deleted -- the API refuses.
 - SDK parity: `Client.list_tokens() -> list[TokenListEntryResult]`, secrets
