@@ -17,6 +17,7 @@ from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.project_service import ProjectService
+from keboola_agent_cli.services.storage_service import StorageService
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
@@ -654,6 +655,62 @@ class TestStorageDescribeBatch:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_describe_batch_malformed_shape_json_envelope(self, tmp_path: Path) -> None:
+        """Issue #640: a list under `tables:` answers --json, not a traceback.
+
+        Runs the REAL StorageService so the shape check actually executes; the
+        client factory raises if reached, proving the rejection happens before
+        any API call.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        batch_file = tmp_path / "bad.yaml"
+        batch_file.write_text(
+            "tables:\n  - table_id: in.c-test.orders\n    columns:\n      id: Surrogate key\n",
+            encoding="utf-8",
+        )
+
+        def _no_client(url: str, token: str) -> MagicMock:
+            raise AssertionError("describe-batch must not reach the API on a malformed file")
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockStorageService.return_value = StorageService(
+                config_store=store,
+                client_factory=_no_client,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "describe-batch",
+                    "--project",
+                    "prod",
+                    "--from-file",
+                    str(batch_file),
+                ],
+            )
+
+        assert result.exit_code == 2, f"Expected 2, got {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "INVALID_ARGUMENT"
+        assert "'tables' must be a mapping of table ID to description" in output["error"]["message"]
+        assert "got a list" in output["error"]["message"]
 
     def test_describe_batch_human_mode_wires_progress_callback(self, tmp_path: Path) -> None:
         """Human mode must pass a progress_callback; JSON mode must not."""

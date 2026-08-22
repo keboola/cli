@@ -547,6 +547,153 @@ class TestDescribeBatchService:
             service.describe_batch(alias="prod", from_file=batch_file)
 
 
+class TestDescribeBatchShapeValidation:
+    """Malformed `--from-file` documents are rejected before any write (#640).
+
+    Each case used to reach the write loop and die on ``.items()`` with an
+    ``AttributeError`` -- a traceback even under ``--json``. They must now
+    raise ``ValueError`` (mapped to INVALID_ARGUMENT / exit 2 by the command),
+    name the offending key and its actual type, and touch no API.
+    """
+
+    def _service(self, tmp_path: Path) -> tuple[StorageService, MagicMock]:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        return _make_service(store, mock_client), mock_client
+
+    def _run(self, tmp_path: Path, yaml_text: str) -> tuple[str, MagicMock]:
+        """Run describe_batch on ``yaml_text``, returning the message + client."""
+        service, mock_client = self._service(tmp_path)
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text(yaml_text, encoding="utf-8")
+        with pytest.raises(ValueError) as excinfo:
+            service.describe_batch(alias="prod", from_file=batch_file)
+        return str(excinfo.value), mock_client
+
+    def _assert_no_writes(self, mock_client: MagicMock) -> None:
+        mock_client.set_bucket_metadata.assert_not_called()
+        mock_client.set_table_metadata.assert_not_called()
+        mock_client.update_table_definition.assert_not_called()
+
+    def test_tables_as_list(self, tmp_path: Path) -> None:
+        """The exact repro from issue #640: `tables:` is a list of objects."""
+        message, mock_client = self._run(
+            tmp_path,
+            "tables:\n  - table_id: in.c-test.part_verify\n    columns:\n      id: Surrogate key\n",
+        )
+
+        assert "'tables' must be a mapping of table ID to description" in message
+        assert "got a list" in message
+        # The message carries a copy-pasteable example of the right shape.
+        assert "in.c-sales.orders: All sales orders" in message
+        self._assert_no_writes(mock_client)
+
+    def test_buckets_as_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "buckets:\n  - in.c-sales\n")
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_as_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "columns:\n  - in.c-sales.orders\n")
+
+        assert "'columns' must be a mapping of table ID to a column mapping" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_entry_scalar(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders: Unique order ID\n"
+        )
+
+        assert "'columns.in.c-sales.orders' must be a mapping of column name to description" in (
+            message
+        )
+        assert "got a string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_columns_entry_list(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders:\n    - order_id\n"
+        )
+
+        assert "'columns.in.c-sales.orders' must be" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_column_description_is_a_container(self, tmp_path: Path) -> None:
+        """A nested mapping under a column name would be str()'d into garbage."""
+        message, mock_client = self._run(
+            tmp_path,
+            "columns:\n  in.c-sales.orders:\n    order_id:\n      text: Unique order ID\n",
+        )
+
+        assert "'columns.in.c-sales.orders.order_id' must be a description string" in message
+        assert "got a mapping" in message
+        self._assert_no_writes(mock_client)
+
+    def test_table_description_is_a_container(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "tables:\n  in.c-sales.orders:\n    - All sales orders\n"
+        )
+
+        assert "'tables.in.c-sales.orders' must be a description string" in message
+        assert "got a list" in message
+        self._assert_no_writes(mock_client)
+
+    def test_top_level_scalar(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "just a string\n")
+
+        assert "must be a YAML mapping of 'buckets' / 'tables' / 'columns' sections" in message
+        assert "got a string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_malformed_yaml_syntax(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "tables:\n  - [unclosed\n")
+
+        assert "Batch file is not valid YAML" in message
+        self._assert_no_writes(mock_client)
+
+    def test_nothing_is_applied_when_a_later_section_is_malformed(self, tmp_path: Path) -> None:
+        """Validation is up front: a bad `columns:` must not let buckets through."""
+        message, mock_client = self._run(
+            tmp_path,
+            "buckets:\n  in.c-sales: Sales data\ncolumns:\n  - in.c-sales.orders\n",
+        )
+
+        assert "'columns' must be" in message
+        self._assert_no_writes(mock_client)
+
+    def test_valid_file_still_applies(self, tmp_path: Path) -> None:
+        """Happy-path regression: the documented schema is untouched."""
+        service, mock_client = self._service(tmp_path)
+        mock_client.set_bucket_metadata.return_value = []
+        mock_client.set_table_metadata.return_value = []
+        mock_client.get_table_detail.return_value = _table_detail(columns=["order_id"])
+        mock_client.update_table_definition.return_value = _JOB_OK
+
+        batch_file = tmp_path / "good.yaml"
+        batch_file.write_text(
+            "buckets:\n"
+            "  in.c-sales: Sales data\n"
+            "tables:\n"
+            "  in.c-sales.orders: 2026\n"
+            "columns:\n"
+            "  in.c-sales.orders:\n"
+            "    order_id: Unique order ID\n",
+            encoding="utf-8",
+        )
+
+        result = service.describe_batch(alias="prod", from_file=batch_file)
+
+        assert result["error_count"] == 0
+        assert result["applied_count"] == 3
+        # Non-string scalars stay coerced to str, as before the validation pass.
+        table_applied = next(a for a in result["applied"] if a["type"] == "table")
+        assert table_applied["description"] == "2026"
+
+
 def _token_info(project_id: int = 258) -> TokenVerifyResponse:
     return TokenVerifyResponse(
         token_id="12345",

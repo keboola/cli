@@ -2699,7 +2699,14 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
   inspect `errors[]` (or at least `error_count`) rather than relying solely on
   the exit code — and when consuming `--json` output, never trust a zero-exit
-  as "everything applied."
+  as "everything applied." That tolerance covers **API** failures only: a
+  `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
+  section that is a list instead of a mapping of ID to description, a column
+  entry that is not a mapping, a document that is not a mapping at all) is a
+  usage error — the whole file is rejected before the first write with
+  `INVALID_ARGUMENT` and exit 2, naming the offending key and its actual type.
+  Nothing is half-applied. (Release step: once this ships, tag this sentence
+  `(since vX.Y.Z)` with the version that carried it.)
 - **Description-field precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
   metadata entry are present, `storage bucket-detail` / `storage table-detail`
