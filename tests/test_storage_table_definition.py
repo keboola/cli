@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -251,3 +252,100 @@ class TestJsonOutput:
         payload = json.loads(result.output)
         data = payload.get("data", payload)
         assert data["definition"] == BIGQUERY_LAYOUT
+
+
+# A native `definition` carrying per-column descriptions -- the tier the Keboola
+# UI writes and shows, and the one `storage describe-column` has written since
+# 0.88.0 (#624). It rides in on the same `definition` object as the layout, so
+# the fixture above already covers it.
+DESCRIBED_LAYOUT: dict[str, Any] = {
+    "primaryKeysNames": ["id"],
+    "columns": [
+        {"name": "id", "definition": {"type": "INTEGER"}},
+        {
+            "name": "created_at",
+            "definition": {"type": "TIMESTAMP", "description": "Row creation timestamp, UTC."},
+        },
+        {
+            "name": "tenant_id",
+            "definition": {"type": "STRING", "description": "Owning tenant."},
+        },
+    ],
+}
+
+
+class TestColumnDescriptions:
+    """The Columns table must show what `storage describe-column` just wrote.
+
+    0.88.0 (#624) moved the write to the native table-definition endpoint so the
+    description surfaces in the Keboola UI, the MCP server's `get_tables` and the
+    warehouse's own COMMENT. `column_details[].description` has carried it in
+    `--json` all along. Human mode was the one place still showing nothing, so
+    the obvious way to check your own work -- describe, then `table-detail` --
+    was the one way that did not work.
+    """
+
+    def test_description_is_rendered_in_the_columns_table(self, tmp_path: Path) -> None:
+        result = _invoke_detail(tmp_path, DESCRIBED_LAYOUT)
+
+        assert result.exit_code == 0, result.output
+        assert "Description" in result.output
+        assert "Row creation timestamp, UTC." in result.output
+
+    def test_undescribed_table_grows_no_empty_column(self, tmp_path: Path) -> None:
+        """Same guard style as the layout block: no data, no chrome."""
+        result = _invoke_detail(tmp_path, UNTYPED_DEFINITION)
+
+        assert result.exit_code == 0, result.output
+        assert "Description" not in result.output
+
+    def test_markup_in_a_description_is_shown_literally(self, tmp_path: Path) -> None:
+        """Descriptions are user text; Rich would eat (or choke on) square brackets."""
+        definition = {
+            "columns": [{"name": "id", "definition": {"description": "see [note] and [/x]"}}]
+        }
+        result = _invoke_detail(tmp_path, definition)
+
+        assert result.exit_code == 0, result.output
+        assert "[note]" in result.output
+
+    def test_long_description_wraps_inside_an_80_column_terminal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wrapped cell keeps the table readable; an unwrapped one destroys it.
+
+        The `_deterministic_console_width` fixture in conftest pins every test to
+        a 200-column console, so the narrow case only gets exercised if a test
+        asks for it by name.
+        """
+        monkeypatch.setenv("COLUMNS", "80")
+        long_text = (
+            "Timestamp the row was created, in UTC, as written by the ingestion "
+            "job; backfilled rows carry the original source timestamp instead."
+        )
+        definition = {"columns": [{"name": "created_at", "definition": {"description": long_text}}]}
+        result = _invoke_detail(tmp_path, definition)
+
+        assert result.exit_code == 0, result.output
+        widest = max((len(line) for line in result.output.splitlines()), default=0)
+        assert widest <= 80, f"widest line was {widest} chars"
+        # Wrapped, not truncated -- the last word must survive.
+        assert "instead." in result.output
+
+    def test_wide_terminal_does_not_stretch_the_description_cell(self, tmp_path: Path) -> None:
+        """`max_width` is load-bearing: without it the cell fills the whole console.
+
+        Runs at the conftest default of 200 columns. A single-line description
+        would otherwise pull the table out to the full terminal width and put
+        yards of whitespace between the column name and its text.
+        """
+        long_text = (
+            "Timestamp the row was created, in UTC, as written by the ingestion "
+            "job; backfilled rows carry the original source timestamp instead."
+        )
+        definition = {"columns": [{"name": "created_at", "definition": {"description": long_text}}]}
+        result = _invoke_detail(tmp_path, definition)
+
+        assert result.exit_code == 0, result.output
+        widest = max((len(line) for line in result.output.splitlines()), default=0)
+        assert widest < 120, f"table sprawled to {widest} chars on a 200-column console"

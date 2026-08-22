@@ -2687,7 +2687,10 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   native definition -> `columnMetadata` `KBC.description` -> legacy flat key,
   always returns `legacy_column_descriptions`, and warns in human mode when
   legacy keys remain (it never writes -- safe under a read-only token or
-  `--deny-writes`). Unknown column names now fail fast BEFORE any write; the old
+  `--deny-writes`). Its human-mode Columns table gained a `Description` column
+  *(since v0.88.1)* -- on 0.88.0 the descriptions were readable ONLY through
+  `--json` `column_details[].description`, so a blank-looking terminal table on
+  that version does not mean the write failed. Unknown column names now fail fast BEFORE any write; the old
   flat write accepted typos silently. Table and bucket descriptions are
   unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
