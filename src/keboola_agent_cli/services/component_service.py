@@ -298,29 +298,43 @@ def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str
 
     IDs are strings; phases carry next[].goto transitions (a phase id or null)
     and tasks are typed (job/notification/variable).
+
+    The flow definition (``phases``/``tasks``) is nested under
+    ``_configuration_extra`` rather than emitted at the top level. This
+    matches the shape ``local_config_to_api`` (``sync/config_format.py``)
+    round-trips on ``sync push``: it only promotes ``parameters``,
+    ``input``/``output`` (under ``storage``), and ``processors`` to the API
+    body, merging every other top-level key back in verbatim from
+    ``_configuration_extra``. A top-level ``phases``/``tasks`` would be
+    silently dropped, pushing a flow with an empty configuration -- and it is
+    also the exact shape ``api_config_to_local`` produces when pulling a real
+    flow, so a scaffolded flow now round-trips identically to a pulled one
+    (issue #650 follow-up).
     """
     lines = [
         "#",
         "# NOTE: config_id will be assigned by Keboola on first push",
+        "version: 2",
         f'name: "{name}"',
         "description: |",
         "  TODO: describe this flow",
-        "phases:",
-        '  - id: "phase-1"',
-        '    name: "Phase 1"',
-        "    next:",
-        '      - id: "default"',
-        "        goto: null",
-        "tasks:",
-        '  - id: "task-1"',
-        '    name: "Task 1"',
-        '    phase: "phase-1"',
-        "    enabled: true",
-        "    task:",
-        "      type: job",
-        '      componentId: "keboola.ex-http"',
-        '      configId: "TODO"',
-        "      mode: run",
+        "_configuration_extra:",
+        "  phases:",
+        '    - id: "phase-1"',
+        '      name: "Phase 1"',
+        "      next:",
+        '        - id: "default"',
+        "          goto: null",
+        "  tasks:",
+        '    - id: "task-1"',
+        '      name: "Task 1"',
+        '      phase: "phase-1"',
+        "      enabled: true",
+        "      task:",
+        "        type: job",
+        '        componentId: "keboola.ex-http"',
+        '        configId: "TODO"',
+        "        mode: run",
         # _keboola metadata (component_id required for sync push, config_id assigned on first push)
         "",
         "_keboola:",
