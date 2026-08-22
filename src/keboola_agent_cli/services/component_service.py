@@ -7,15 +7,18 @@ local-first development workflows.
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
-from ..constants import SECRET_PLACEHOLDER
+from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
+from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
+from ..sync.config_format import api_config_to_local, dump_config_yaml
 from .base import BaseService, ClientFactory
 from .org_service import slugify
 
@@ -291,6 +294,121 @@ def _build_pyproject_toml(component_id: str, name: str, packages: list[str] | No
         'requires-python = ">=3.11"\n'
         f"{deps_lines}"
     )
+
+
+_SCAFFOLD_ID_NOTE = "# NOTE: config_id will be assigned by Keboola on first push"
+_SCAFFOLD_ID_STAMPED_NOTE = (
+    "# NOTE: created remotely by 'config new --push'; config_id recorded below"
+)
+
+
+def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[str, Any]:
+    """Return a copy of *scaffold* whose ``_config.yml`` records *config_id*.
+
+    On the ``config new --push --output-dir`` path the configuration already
+    exists remotely by the time the scaffold hits the disk. Writing the file
+    without ``_keboola.config_id`` makes the next ``sync push`` classify the
+    directory as a brand-new configuration and create a duplicate
+    (issue #644). With the ID present, the sync diff's adopt-by-id guard
+    (issue #482) pairs the directory with the existing remote config instead.
+
+    The ID is emitted double-quoted so legacy numeric IDs stay YAML strings
+    (an unquoted ``12345`` would parse as ``int`` and never match the
+    string-keyed remote lookup). A ``_config.yml`` without a ``_keboola``
+    block (flow scaffolds, issue #650) gets one appended wholesale. Pure
+    function: the input scaffold is not mutated.
+    """
+    files: list[dict[str, Any]] = []
+    for entry in scaffold["files"]:
+        if entry["path"] != CONFIG_FILENAME:
+            # Copy, don't share -- a later in-place mutation of a companion
+            # entry must not reach back into the caller's scaffold.
+            files.append(dict(entry))
+            continue
+        content: str = entry["content"]
+        out: list[str] = []
+        in_keboola = False
+        stamped = False
+        for line in content.splitlines():
+            if line == _SCAFFOLD_ID_NOTE:
+                out.append(_SCAFFOLD_ID_STAMPED_NOTE)
+                continue
+            out.append(line)
+            if line == "_keboola:":
+                in_keboola = True
+            elif in_keboola and line.startswith("  component_id:"):
+                out.append(f'  config_id: "{config_id}"')
+                stamped = True
+                in_keboola = False
+        if not stamped:
+            if out and out[-1] != "":
+                out.append("")
+            out.extend(
+                [
+                    "_keboola:",
+                    f"  component_id: {scaffold['component_id']}",
+                    f'  config_id: "{config_id}"',
+                ]
+            )
+        new_content = "\n".join(out)
+        if content.endswith("\n"):
+            new_content += "\n"
+        files.append({**entry, "content": new_content})
+    return {**scaffold, "files": files}
+
+
+def materialize_pushed_config(
+    component_id: str,
+    config_id: str,
+    name: str,
+    description: str,
+    configuration: dict[str, Any],
+    config_dir: Path,
+) -> list[str]:
+    """Write the local files mirroring an explicitly pushed config body.
+
+    Used by ``config new --push --output-dir`` when ``--configuration`` /
+    ``--configuration-file`` supplied a real body: writing the placeholder
+    scaffold instead would diverge from the remote, and the next ``sync
+    push`` would overwrite the freshly created configuration with TODO
+    templates. The mirrored body comes from the API response, so
+    ``#``-secrets are already encrypted (``KBC::...``) -- no plaintext ever
+    reaches the disk.
+
+    The directory is materialized exactly the way ``sync pull`` would do it:
+    the same converter (:func:`api_config_to_local`), the same code
+    extraction (a transformation body's ``parameters.blocks`` become a real
+    ``transform.sql`` / ``transform.py`` next to ``_config.yml`` -- NOT
+    placeholder templates, which would be merged back over the real code on
+    the next push), and the same YAML serialization
+    (:func:`..sync.config_format.dump_config_yaml`, written with
+    ``newline=""`` so Windows does not CRLF-translate what every other sync
+    write leaves LF-only). The follow-up ``sync diff`` therefore reports no
+    spurious changes.
+
+    Returns the list of file paths written, relative to *config_dir*.
+    """
+    local = api_config_to_local(
+        component_id,
+        {"name": name, "description": description, "configuration": configuration},
+        str(config_id),
+    )
+    config_dir.mkdir(parents=True, exist_ok=True)
+    # The slugified directory can pre-exist (same-name re-run, stray files):
+    # report only what THIS call wrote, and clear a stale _description.md a
+    # previous occupant left behind when the pushed description is empty --
+    # _extract_description only ever writes, so the stale file would
+    # misattribute to the new config_id (PR #653 review sweep).
+    if not description:
+        stale_description = config_dir / DESCRIPTION_FILENAME
+        stale_description.unlink(missing_ok=True)
+    before = {q for q in config_dir.rglob("*") if q.is_file()}
+    extract_code_files(component_id, local, config_dir)
+    content = dump_config_yaml(local)
+    (config_dir / CONFIG_FILENAME).write_text(content, encoding="utf-8", newline="")
+    after = {q for q in config_dir.rglob("*") if q.is_file()}
+    created = (after - before) | {config_dir / CONFIG_FILENAME}
+    return sorted(q.relative_to(config_dir).as_posix() for q in created)
 
 
 def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str:

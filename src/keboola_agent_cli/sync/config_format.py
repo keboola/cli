@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+import yaml
+
 from ..constants import CONFIG_YML_VERSION
 
 
@@ -296,3 +298,25 @@ def local_row_to_api(
             configuration.setdefault(key, value)
 
     return name, description, configuration
+
+
+# ---------------------------------------------------------------------------
+# Canonical _config.yml serialization
+# ---------------------------------------------------------------------------
+
+
+def dump_config_yaml(config_data: dict[str, Any]) -> str:
+    """Serialize a local ``_config.yml`` dict with the canonical settings.
+
+    The single source of truth for how sync materializes ``_config.yml``
+    content -- ``SyncService._write_config_file`` (pull) and
+    ``config new --push --output-dir`` (mirrored-body scaffold, issue #644)
+    both call this, so the two paths can never drift in formatting.
+    """
+    return yaml.dump(
+        config_data,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=120,
+    )

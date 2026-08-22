@@ -25,11 +25,18 @@ from ..constants import (
     MANIFEST_VERSION,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..sync.branch_registry import (
+    ScaffoldPlacement,
+    ensure_branch_registered,
+    register_branch_dir,
+    resolve_scaffold_placement,
+)
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
+    dump_config_yaml,
     local_config_to_api,
     local_row_to_api,
 )
@@ -2089,13 +2096,7 @@ class SyncService(BaseService):
         """
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / CONFIG_FILENAME
-        content = yaml.dump(
-            config_data,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-            width=120,
-        )
+        content = dump_config_yaml(config_data)
         config_file.write_text(content, encoding="utf-8", newline="")
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -2174,50 +2175,44 @@ class SyncService(BaseService):
             logger.warning("Failed to parse %s", config_file)
             return None
 
+    def register_branch_dir(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int,
+    ) -> str:
+        """Resolve (and register if needed) the on-disk directory for *branch_id*.
+
+        Thin wrapper over :func:`..sync.branch_registry.register_branch_dir`
+        (issue #644); see that module for the semantics.
+        """
+        projects = self.resolve_projects([alias])
+        return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
+
+    def resolve_scaffold_placement(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int | None,
+    ) -> ScaffoldPlacement:
+        """Resolve where a ``config new --push`` scaffold belongs on disk.
+
+        Thin wrapper over :func:`..sync.branch_registry.resolve_scaffold_placement`
+        (issue #644).
+        """
+        # Resolved for BOTH paths: the production path needs the project id
+        # for the foreign-workspace mismatch check (PR #653 review sweep).
+        project = self.resolve_projects([alias])[alias]
+        return resolve_scaffold_placement(project, project_root, branch_id, self._client_factory)
+
     def _ensure_branch_registered(
         self,
         manifest: Manifest,
         branch_id: int | None,
         client: Any,
     ) -> str | None:
-        """Ensure *branch_id* has an entry in ``manifest.branches``.
-
-        If *branch_id* is ``None`` (production) or already present, this is
-        a no-op.  Otherwise the branch name is fetched from the API and a
-        new :class:`ManifestBranch` is appended.
-
-        Returns:
-            The new branch path if one was added, ``None`` otherwise.
-        """
-        if branch_id is None:
-            return None
-
-        # Already registered?
-        for branch in manifest.branches:
-            if branch.id == branch_id:
-                return None
-
-        # Fetch branch info from API to get a human-readable name
-        all_branches = client.list_dev_branches()
-        branch_name = ""
-        for b in all_branches:
-            if b.get("id") == branch_id:
-                branch_name = b.get("name", "")
-                break
-
-        # Generate filesystem-safe path
-        path = sanitize_name(branch_name) if branch_name else ""
-        if not path:
-            path = f"branch-{branch_id}"
-
-        # Handle path uniqueness -- avoid collisions with existing entries
-        existing_paths = {br.path for br in manifest.branches}
-        if path in existing_paths:
-            path = f"{path}-{branch_id}"
-
-        manifest.branches.append(ManifestBranch(id=branch_id, path=path))
-        logger.info("Registered dev branch %d as '%s' in manifest", branch_id, path)
-        return path
+        """Delegate to :func:`..sync.branch_registry.ensure_branch_registered`."""
+        return ensure_branch_registered(manifest, branch_id, client)
 
     def _find_branch_path(self, manifest: Manifest, branch_id: int | None) -> str:
         """Find the branch directory name for a given branch ID.

@@ -313,7 +313,9 @@ def merge_code_files(
 
 def _extract_sql_transformation(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Extract SQL blocks from parameters.blocks into transform.sql."""
-    parameters = config_data.get("parameters", {})
+    parameters = config_data.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        return config_data
     blocks = parameters.get("blocks", [])
 
     if not blocks:
@@ -439,7 +441,9 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
 
 def _extract_python_transformation(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Extract Python blocks from parameters.blocks into transform.py, packages into pyproject.toml."""
-    parameters = config_data.get("parameters", {})
+    parameters = config_data.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        return config_data
     blocks = parameters.get("blocks", [])
 
     if blocks:
@@ -553,7 +557,9 @@ def _parse_python_blocks(content: str) -> list[dict[str, Any]]:
 
 def _extract_python_app(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Extract parameters.code into code.py and packages into pyproject.toml."""
-    parameters = config_data.get("parameters", {})
+    parameters = config_data.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        return config_data
 
     code = parameters.get("code")
     if code and isinstance(code, str):
