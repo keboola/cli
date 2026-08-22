@@ -228,7 +228,10 @@ kbagent data-app validate-repo \
 Walks the repo via the GitHub Contents + Trees API and emits
 BLOCKING / WARN / OK per check (Golden-Rule structure, no `pip install`
 in `setup.sh`, `requires-python` consistency, nginx/app port match,
-etc.). Each check carries a citation back to the help-doc anchor
+etc.). The two `setup.sh` rules match **comment-stripped code** *(since
+v0.88.0)*, so documenting the rule in a comment (`# never pip install`)
+no longer trips it -- and, in the other direction, a commented-out
+`uv sync` no longer satisfies the dependency-install rule. Each check carries a citation back to the help-doc anchor
 (<https://help.keboola.com/data-apps/python-js/>). Run before
 `data-app create` so you don't burn a deploy cycle on a misconfigured
 repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
