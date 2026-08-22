@@ -2481,15 +2481,19 @@ class StorageService(ColumnDescriptionsMixin):
                 col1: "Column 1 description"
                 col2: "Column 2 description"
 
-        All sections are optional; empty or absent sections are silently
-        skipped.  Within each section the operations are applied in order.
-        A failure in one item does not skip remaining items — all results
-        (success and error) are collected and returned.
+        All sections are optional: absent, ``None`` (a bare ``buckets:`` key)
+        and empty (``[]``, ``''``, ``{}``) sections are silently skipped.
+        Within each section the operations are applied in order.
 
         The document's shape is validated up front (see
-        ``_describe_batch_input``): a wrongly-shaped section is a usage error,
-        so the whole file is rejected before the first write rather than
-        half-applied.  Only per-item *API* failures degrade individually.
+        ``_describe_batch_input``): a section with a wrong NON-EMPTY shape, a
+        null description, or two keys colliding after string coercion raises
+        ``ValueError`` before the first write, so the file is rejected whole
+        rather than half-applied.
+
+        Once application starts, a failure in one item does not skip the
+        remaining items — all per-item *API* results (success and error) are
+        collected and returned.
 
         Args:
             alias: Project alias.

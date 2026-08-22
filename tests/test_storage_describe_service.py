@@ -642,6 +642,45 @@ class TestDescribeBatchShapeValidation:
         assert "got a list" in message
         self._assert_no_writes(mock_client)
 
+    def test_bucket_description_is_null(self, tmp_path: Path) -> None:
+        """A bare key used to write the literal text "None" onto the bucket."""
+        message, mock_client = self._run(tmp_path, "buckets:\n  in.c-sales:\n")
+
+        assert "'buckets.in.c-sales' has no description (empty value)" in message
+        assert "write a non-empty string" in message
+        self._assert_no_writes(mock_client)
+
+    def test_table_description_is_null(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "tables:\n  in.c-sales.orders:\n")
+
+        assert "'tables.in.c-sales.orders' has no description (empty value)" in message
+        self._assert_no_writes(mock_client)
+
+    def test_column_description_is_null(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path, "columns:\n  in.c-sales.orders:\n    order_id:\n"
+        )
+
+        assert "'columns.in.c-sales.orders.order_id' has no description (empty value)" in message
+        self._assert_no_writes(mock_client)
+
+    def test_duplicate_keys_colliding_after_coercion(self, tmp_path: Path) -> None:
+        """`1:` and `"1":` are two YAML keys; one used to silently overwrite the other."""
+        message, mock_client = self._run(tmp_path, 'tables:\n  1: First\n  "1": Second\n')
+
+        assert "'tables' has two entries that both resolve to the ID '1'" in message
+        self._assert_no_writes(mock_client)
+
+    def test_duplicate_column_names_colliding_after_coercion(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(
+            tmp_path,
+            'columns:\n  in.c-sales.orders:\n    1: First\n    "1": Second\n',
+        )
+
+        assert "'columns.in.c-sales.orders' has two entries" in message
+        assert "resolve to the ID '1'" in message
+        self._assert_no_writes(mock_client)
+
     def test_top_level_scalar(self, tmp_path: Path) -> None:
         message, mock_client = self._run(tmp_path, "just a string\n")
 
@@ -663,6 +702,68 @@ class TestDescribeBatchShapeValidation:
         )
 
         assert "'columns' must be" in message
+        self._assert_no_writes(mock_client)
+
+    def _apply(self, tmp_path: Path, yaml_text: str) -> tuple[dict[str, Any], MagicMock]:
+        """Run describe_batch on a document expected to be accepted."""
+        service, mock_client = self._service(tmp_path)
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text(yaml_text, encoding="utf-8")
+        return service.describe_batch(alias="prod", from_file=batch_file), mock_client
+
+    @pytest.mark.parametrize(
+        "yaml_text",
+        [
+            "buckets:\n",  # bare key -> None
+            "buckets: []\n",
+            "buckets: ''\n",
+            "buckets: {}\n",
+        ],
+        ids=["null", "empty-list", "empty-string", "empty-mapping"],
+    )
+    def test_empty_section_is_a_no_op(self, tmp_path: Path, yaml_text: str) -> None:
+        """Back-compat: `raw.get(key) or {}` skipped these, so they must not exit 2."""
+        result, mock_client = self._apply(tmp_path, yaml_text)
+
+        assert result["applied"] == []
+        assert result["errors"] == []
+        self._assert_no_writes(mock_client)
+
+    def test_empty_column_mapping_is_a_no_op(self, tmp_path: Path) -> None:
+        """Same rule one level down: nothing to write, so no API roundtrip."""
+        result, mock_client = self._apply(tmp_path, "columns:\n  in.c-sales.orders: {}\n")
+
+        assert result["applied"] == []
+        assert result["errors"] == []
+        self._assert_no_writes(mock_client)
+
+    def test_non_empty_list_section_still_errors(self, tmp_path: Path) -> None:
+        """Only EMPTY containers are skipped -- content must never be dropped."""
+        message, mock_client = self._run(tmp_path, "buckets:\n  - in.c-sales\n")
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        self._assert_no_writes(mock_client)
+
+    @pytest.mark.parametrize(
+        ("yaml_text", "expected_type"),
+        [("buckets: false\n", "boolean"), ("buckets: 0\n", "number")],
+        ids=["false", "zero"],
+    )
+    def test_falsy_scalar_section_still_errors(
+        self, tmp_path: Path, yaml_text: str, expected_type: str
+    ) -> None:
+        """`false` / `0` are typed content, not an empty section."""
+        message, mock_client = self._run(tmp_path, yaml_text)
+
+        assert "'buckets' must be a mapping of bucket ID to description" in message
+        assert f"got a {expected_type}" in message
+        self._assert_no_writes(mock_client)
+
+    def test_top_level_false_errors(self, tmp_path: Path) -> None:
+        message, mock_client = self._run(tmp_path, "false\n")
+
+        assert "must be a YAML mapping of 'buckets' / 'tables' / 'columns' sections" in message
+        assert "got a boolean" in message
         self._assert_no_writes(mock_client)
 
     def test_valid_file_still_applies(self, tmp_path: Path) -> None:
