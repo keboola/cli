@@ -10704,7 +10704,7 @@ class TestE2EMcpParityCommands:
         assert result.exit_code == 2
 
     # ------------------------------------------------------------------
-    # 0.89.0 MCP-parity flags
+    # 0.88.0 MCP-parity flags
     # ------------------------------------------------------------------
 
     def test_search_scope_narrows_config_based_results(self) -> None:

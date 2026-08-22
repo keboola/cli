@@ -2145,7 +2145,7 @@ def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
     assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False
 
 
-# 0.89.0 MCP-parity flags: every one must be reachable over `kbagent serve`,
+# 0.88.0 MCP-parity flags: every one must be reachable over `kbagent serve`,
 # not just from the CLI. Each router docstring claims it "Mirrors" its command,
 # so a flag the router cannot express makes that claim false (PR #632 review).
 # ---------------------------------------------------------------------------

@@ -3575,6 +3575,18 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   `archive` and `system` there is no single correct command, so it is `""` and
   the sentence lives in `upgrade_hint`. **Never shell out to `upgrade_hint`**,
   and check `upgrade_command` is non-empty before running it.
+- **`upgrade_command` is empty whenever `up_to_date` is not `false`** *(since
+  v0.88.0)*. That covers `true` (nothing to upgrade to) and `null` (the release
+  feed was unreachable, so kbagent cannot name a target). Before 0.88.0 it was
+  built unconditionally, which made both states hand out a wrong command: a
+  caller on a **pre-release** compares ahead of the stable release a
+  non-`--beta` fetch returns (`0.44.0b1` >= `0.43.3`), so it read
+  `up_to_date: true` next to a `--force --reinstall` command pinned to the
+  OLDER stable wheel -- a silent downgrade off the beta. With `up_to_date:
+  null` it fell through to an **unpinned `git+` source install**, resolving
+  whatever the default branch happens to be, on the one path reached precisely
+  because kbagent could not establish what the current release is. Gate on
+  `up_to_date is False`, not on the string being present.
   Do not infer it from the version string; a frozen binary reports a perfectly
   normal version (PyInstaller bundles the dist metadata, so there is no
   `0.0.0-dev` tell).
@@ -4088,7 +4100,7 @@ the web UI.
   loudly when it is off. The REST surface mirrors the flag as
   `"workspace": true` in the `POST /data-apps/{project}` body.
 
-## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.89.0)
+## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.88.0)
 
 `--with-last-used` derives each token's most recent activity so you can tell
 dormant tokens from live ones before revoking anything. Storage token payloads
@@ -4128,7 +4140,7 @@ only purpose is finding a `--token-id`.
 - SDK parity: `Client.list_tokens(with_last_used=True)`; the fields land on
   `TokenListEntryResult` as `last_used`, `last_used_event`, `last_used_status`.
 
-## `token list --columns` is human-output only (since v0.89.0)
+## `token list --columns` is human-output only (since v0.88.0)
 
 `--columns` (repeatable, e.g. `--columns description --columns last_used`)
 selects *and orders* the Rich table. `Refreshed` is now part of the default
@@ -4148,7 +4160,7 @@ show it.
   without it. They are derived per token, so with no derivation there is
   nothing honest to render -- and the alternative (a blank or a default
   label) would state something about data nobody fetched.
-## `--include-usage` counts mappings, not SQL text (since v0.89.0)
+## `--include-usage` counts mappings, not SQL text (since v0.88.0)
 
 `storage tables --include-usage` reports a table as used only when a
 configuration names it in `storage.input.tables[].source` or
@@ -4165,7 +4177,7 @@ optionally narrowed with `--scope`.
 Matching is case-insensitive but whole-id: `in.c-main.order` does not match
 `in.c-main.orders`.
 
-## `sharing link` does not inherit the source bucket's stage (since v0.89.0)
+## `sharing link` does not inherit the source bucket's stage (since v0.88.0)
 
 `--stage` defaults to `in`, the stage kbagent has always used. MCP's
 `link_shared_bucket` instead derives the stage from the source bucket, so the
@@ -4173,7 +4185,7 @@ same link lands in different places depending on which tool you drive. If you
 are porting an MCP call that relied on the derived stage, pass `--stage out`
 explicitly for an `out.*` source.
 
-## `job detail` needs `--log-tail-lines` to show logs (since v0.89.0)
+## `job detail` needs `--log-tail-lines` to show logs (since v0.88.0)
 
 The log tail is off by default so a plain `job detail` stays one API call.
 `job run --wait` still attaches a tail on its own for terminal failures --

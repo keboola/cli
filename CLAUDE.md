@@ -548,7 +548,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   get the id `delete`/`refresh` need, without the web UI. Secrets are STRIPPED from every row: a
 #   project with the `force-decrypted-token` feature has the API embed live values in the listing, and
 #   echoing those would break the group's "revealed once, at mint" contract for every token at once.
-# `--with-last-used` (0.89.0+, issue #622): answers which tokens are still IN USE -- the Storage API
+# `--with-last-used` (0.88.0+, issue #622): answers which tokens are still IN USE -- the Storage API
 #   carries no `lastUsed` (only the Manage API's PAT response does), so it is DERIVED per token from
 #   GET /v2/storage/tokens/{id}/events, fanned out over max_parallel_workers. Opt-in: ONE EXTRA CALL
 #   PER TOKEN. Adds lastUsed / lastUsedEvent / lastUsedStatus + a top-level `errors`; the default
@@ -563,7 +563,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   failed; row degrades, audit completes). Do not collapse never/unknown -- they lead to opposite
 #   decisions. DEV-BRANCH ACTIVITY IS INVISIBLE (the endpoint always resolves to the default branch:
 #   `idBranch == <production> OR NOT EXISTS idBranch`), so a branch-only token reads as dormant.
-# `--columns` (0.89.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
+# `--columns` (0.88.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
 #   column (--json always returned it). --json is deliberately NOT affected by --columns.
 #   `last_used` / `last_used_event` REQUIRE --with-last-used (exit 2 otherwise): nothing was
 #   derived, so any rendered value would assert something never checked.
@@ -869,7 +869,11 @@ kbagent update [--beta]
 # the kbagent self-update stage and reports that channel's own command instead -- a uv/pip
 # reinstall would install a SECOND, unrelated kbagent that shadows it on PATH. `version
 # --json` gains additive `install_channel` + `upgrade_hint`; `upgrade_command` is empty for
-# a hand-unpacked archive. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
+# a hand-unpacked archive. Since 0.88.0 `upgrade_command` is ALSO empty whenever `up_to_date`
+# is not `false` (i.e. `true` or `null`) -- it used to be built unconditionally, so a caller on
+# a pre-release got `up_to_date: true` beside a pinned `--force --reinstall` command for the
+# older STABLE wheel (a silent downgrade), and an unreachable feed got an unpinned `git+`
+# default-branch install. Gate on `up_to_date is False`, never on the string being present. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
 # is no longer installed or refreshed by kbagent (see docs/mcp-migration.md for the manual
 # `uv tool install --upgrade --prerelease=allow keboola-mcp-server` command). Self-update
 # completes discovery first, then does the terminal exact-version reinstall and immediately

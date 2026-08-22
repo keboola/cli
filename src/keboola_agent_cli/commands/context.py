@@ -814,7 +814,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     List the project's Storage API tokens (id, description, created, refreshed, expires, master
     flag, creating token). Secrets are never listed -- `token create` is the only reveal. This is
     where the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
-    --with-last-used (0.89.0+) answers "which of these are still in use": it derives each token's
+    --with-last-used (0.88.0+) answers "which of these are still in use": it derives each token's
     most recent activity from its own event feed and sorts dormant-first, so reading order is
     cleanup order. Opt-in -- it is ONE EXTRA API CALL PER TOKEN (fanned out in parallel).
     Adds lastUsed / lastUsedEvent / lastUsedStatus per token plus a top-level `errors` list;
