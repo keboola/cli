@@ -16,6 +16,7 @@ from keboola_agent_cli.services.component_service import (
     _generate_from_schema,
     _mask_secrets,
 )
+from keboola_agent_cli.sync.config_format import local_config_to_api
 
 # ---------------------------------------------------------------------------
 # Sample API responses
@@ -478,12 +479,84 @@ class TestGenerateScaffold:
         assert "tasks:" in content, "Flow config must contain tasks section"
         assert "goto:" in content, "Flow config must use goto transitions"
         assert "dependsOn" not in content, "Conditional flows do not use dependsOn"
+        assert "version: 2" in content, "Flow config must declare version: 2"
 
-        # Verify it's valid YAML with string ids
+        # Verify it's valid YAML with string ids. phases/tasks live under
+        # _configuration_extra (not top-level) so local_config_to_api merges
+        # them back into the API configuration body on push -- see
+        # test_scaffold_flow_round_trips_through_local_config_to_api below.
         parsed = yaml.safe_load(content)
-        assert parsed["phases"][0]["id"] == "phase-1"
-        assert parsed["tasks"][0]["phase"] == "phase-1"
-        assert parsed["tasks"][0]["task"]["type"] == "job"
+        extra = parsed["_configuration_extra"]
+        assert extra["phases"][0]["id"] == "phase-1"
+        assert extra["tasks"][0]["phase"] == "phase-1"
+        assert extra["tasks"][0]["task"]["type"] == "job"
+
+    def test_scaffold_flow_round_trips_through_local_config_to_api(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The flow scaffold must survive `sync push`'s local -> API conversion.
+
+        `local_config_to_api` (sync/config_format.py) only promotes
+        `parameters`/`input`/`output`/`processors` to the API configuration
+        body; every other top-level key is dropped unless it was preserved
+        under `_configuration_extra`. Before this fix, `phases`/`tasks` sat
+        at the top level of the flow scaffold and were silently lost on push,
+        producing a flow with an empty configuration (issue #650 follow-up).
+        """
+        mock_ai = _make_ai_client(detail_response=FLOW_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias="prod", component_id="keboola.flow")
+        config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
+        parsed = yaml.safe_load(config_file["content"])
+
+        _name, _description, configuration = local_config_to_api(parsed)
+
+        assert "phases" in configuration, (
+            "local_config_to_api must preserve phases from the flow scaffold"
+        )
+        assert "tasks" in configuration, (
+            "local_config_to_api must preserve tasks from the flow scaffold"
+        )
+        assert configuration["phases"][0]["id"] == "phase-1"
+        assert configuration["tasks"][0]["task"]["componentId"] == "keboola.ex-http"
+
+    @pytest.mark.parametrize(
+        ("detail_response", "component_id"),
+        [
+            (EXTRACTOR_RESPONSE, "keboola.ex-http"),
+            (SQL_TRANSFORM_RESPONSE, "keboola.snowflake-transformation"),
+            (PYTHON_TRANSFORM_RESPONSE, "keboola.python-transformation-v2"),
+            (CUSTOM_PYTHON_APP_RESPONSE, "kds-team.app-custom-python"),
+            (FLOW_RESPONSE, "keboola.flow"),
+        ],
+        ids=["extractor", "sql_transformation", "python_transformation", "custom_python", "flow"],
+    )
+    def test_scaffold_every_category_has_keboola_block(
+        self, tmp_config_dir: Path, detail_response: dict[str, Any], component_id: str
+    ) -> None:
+        """Every scaffold category's _config.yml must carry a `_keboola` block.
+
+        `sync push` resolves the component of an untracked local config from
+        `_keboola.component_id` (`_find_untracked_configs` in sync_service.py);
+        a scaffold category missing this block falls back to "unknown" and can
+        never be pushed from disk (issue #650). The flow category used to be
+        the sole exception -- regression-guard every category here so a future
+        scaffold builder cannot reintroduce the gap.
+        """
+        mock_ai = _make_ai_client(detail_response=detail_response)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias="prod", component_id=component_id)
+
+        config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
+        content = config_file["content"]
+
+        assert "_keboola:" in content, (
+            f"_config.yml for {component_id} must contain a _keboola block"
+        )
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == component_id
 
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""

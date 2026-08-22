@@ -4274,3 +4274,19 @@ The log tail is off by default so a plain `job detail` stays one API call.
 `job run --wait` still attaches a tail on its own for terminal failures --
 that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
 maximum as `job detail`'s.
+
+## A scaffolded `keboola.flow` config can now be pushed from disk (since vNEXT)
+
+`config new --component-id keboola.flow` (no `--push`) used to write a
+`_config.yml` with no `_keboola` block at all -- every other scaffold
+category (extractor/writer, SQL/Python transformation, custom Python app)
+always got `_keboola: {component_id: ...}` appended, but the flow builder
+(`_build_flow_config_yml` in `services/component_service.py`) never emitted
+one. `sync push` resolves the component of an untracked local config from
+`_keboola.component_id` (`_find_untracked_configs` in `sync_service.py`);
+without it the config resolved to `"unknown"`, so a scaffolded flow could
+never be pushed via the documented scaffold -> edit -> `sync push` workflow
+(issue #650). Fixed by appending the same footer the other categories get.
+No CLI behavior change beyond the file content -- if you were hand-patching
+scaffolded flow files with a `_keboola` block as a workaround, that step is
+no longer necessary.
