@@ -1220,8 +1220,21 @@ class ConfigService(BaseService):
         component_id: str,
         config_id: str,
         branch_id: int | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Delete a configuration from a project.
+        """Soft-delete a configuration into the trash, never past it.
+
+        The Storage API overloads DELETE: on a live configuration it moves it
+        to the trash (restorable), but on a configuration ALREADY in the
+        trash the same call purges it permanently -- versions, rows and
+        metadata included. A timed-out delete followed by a retry is exactly
+        that second call, so this method locates the configuration first and
+        refuses to issue a DELETE at anything that is not live:
+
+        * live -> DELETE, status ``deleted``
+        * already in the trash -> no API write, status ``already_in_trash``
+          (exit stays 0 -- the retry is idempotent, the purge never happens)
+        * absent from both -> NOT_FOUND
 
         Args:
             alias: Project alias.
@@ -1229,14 +1242,18 @@ class ConfigService(BaseService):
             config_id: The configuration ID to delete.
             branch_id: If set, delete from a specific dev branch.
                        If None, uses the project's active branch (if any).
+            dry_run: Report the located state without deleting anything.
 
         Returns:
             Dict with deletion confirmation details.
 
         Raises:
             ConfigError: If the alias is not found.
-            KeboolaApiError: If the API call fails.
+            KeboolaApiError: If the API call fails or the configuration does
+                not exist in either the live listing or the trash.
         """
+        from . import _config_trash as trash
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -1245,6 +1262,31 @@ class ConfigService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            state = trash.locate_config(client, component_id, config_id, effective_branch_id)
+            if state == trash.STATE_MISSING:
+                raise KeboolaApiError(
+                    message=(
+                        f"Configuration '{component_id}/{config_id}' not found -- "
+                        "neither live nor in the trash."
+                    ),
+                    error_code=ErrorCode.NOT_FOUND,
+                    status_code=404,
+                )
+            if state == trash.STATE_TRASHED:
+                result = trash.already_trashed_result(
+                    alias, component_id, config_id, effective_branch_id
+                )
+                result["dry_run"] = dry_run
+                return result
+            if dry_run:
+                return {
+                    "status": "would_delete",
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "component_id": component_id,
+                    "config_id": config_id,
+                    "branch_id": effective_branch_id,
+                }
             client.delete_config(
                 component_id=component_id,
                 config_id=config_id,
@@ -1255,10 +1297,67 @@ class ConfigService(BaseService):
 
         return {
             "status": "deleted",
+            "dry_run": False,
             "project_alias": alias,
             "component_id": component_id,
             "config_id": config_id,
             "branch_id": effective_branch_id,
+        }
+
+    def restore_config(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Restore a trashed configuration (the undo for :meth:`delete_config`)."""
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            restored = client.restore_config(
+                component_id=component_id,
+                config_id=config_id,
+                branch_id=effective_branch_id,
+            )
+        finally:
+            client.close()
+        return {
+            "status": "restored",
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": effective_branch_id,
+            "name": restored.get("name"),
+            "version": restored.get("version"),
+        }
+
+    def list_config_trash(
+        self,
+        alias: str,
+        component_id: str | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """List trashed configurations (what :meth:`restore_config` can bring back)."""
+        from . import _config_trash as trash
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch_id = branch_id or project.active_branch_id
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            raw = client.list_deleted_configs(
+                component_id=component_id, branch_id=effective_branch_id
+            )
+        finally:
+            client.close()
+        return {
+            "project_alias": alias,
+            "branch_id": effective_branch_id,
+            "component_id": component_id,
+            "trash": [trash.shape_trash_entry(cfg, component_id) for cfg in raw],
         }
 
     def rename_config(

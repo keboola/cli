@@ -2259,3 +2259,51 @@ def test_storage_tables_forwards_include_usage(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert storage_svc.list_tables.call_args.kwargs["include_usage"] is True
+
+
+# ---------------------------------------------------------------------------
+# configs.py  trash safety: DELETE dry_run + restore + trash listing (0.89.0)
+# ---------------------------------------------------------------------------
+
+
+def test_config_delete_forwards_dry_run(tmp_path: Path) -> None:
+    """DELETE /configs/... must be able to preview without deleting."""
+    cfg_svc = MagicMock()
+    cfg_svc.delete_config.return_value = {"status": "would_delete"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}?dry_run=true", headers=AUTH
+        )
+
+    assert res.status_code == 200, res.text
+    assert cfg_svc.delete_config.call_args.kwargs["dry_run"] is True
+
+
+def test_config_restore_route(tmp_path: Path) -> None:
+    """POST .../restore mirrors `kbagent config restore`."""
+    cfg_svc = MagicMock()
+    cfg_svc.restore_config.return_value = {"status": "restored"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/restore", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    kwargs = cfg_svc.restore_config.call_args.kwargs
+    assert kwargs["component_id"] == COMPONENT
+    assert kwargs["config_id"] == CONFIG_ID
+
+
+def test_config_trash_list_route(tmp_path: Path) -> None:
+    """GET /configs/trash/{project} mirrors `kbagent config trash-list`."""
+    cfg_svc = MagicMock()
+    cfg_svc.list_config_trash.return_value = {"trash": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/configs/trash/{PROJECT}?component_id={COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT

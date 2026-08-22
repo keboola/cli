@@ -1115,12 +1115,21 @@ def config_delete(
         "--branch",
         help="Delete from a specific dev branch ID (defaults to active branch)",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what would happen (live / already in trash) without deleting",
+    ),
 ) -> None:
-    """Delete a configuration from a project.
+    """Soft-delete a configuration into the trash (restorable).
 
     If a dev branch is active (via 'branch use'), the deletion targets
     that branch. Use --branch to override. Deleting in a branch marks
     the config as removed without affecting Main.
+
+    A configuration already in the trash is NOT deleted again -- the API
+    would purge it permanently -- the command reports 'already_in_trash'
+    and exits 0. Undo with 'config restore'; browse with 'config trash-list'.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
@@ -1131,6 +1140,7 @@ def config_delete(
             component_id=component_id,
             config_id=config_id,
             branch_id=branch,
+            dry_run=dry_run,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_config_service_error(formatter, exc)
@@ -1141,10 +1151,21 @@ def config_delete(
         branch_info = ""
         if result.get("branch_id"):
             branch_info = f" (branch {result['branch_id']})"
-        formatter.success(
-            f"Deleted config {result['component_id']}/{result['config_id']} "
-            f"from project '{result['project_alias']}'{branch_info}"
-        )
+        status = result.get("status")
+        if status == "already_in_trash":
+            formatter.console.print(f"[yellow]{result['message']}[/yellow]")
+        elif status == "would_delete":
+            formatter.console.print(
+                f"[bold yellow]DRY RUN[/bold yellow] -- would move config "
+                f"{result['component_id']}/{result['config_id']} to the trash"
+                f"{branch_info} (restorable via 'config restore')"
+            )
+        else:
+            formatter.success(
+                f"Moved config {result['component_id']}/{result['config_id']} "
+                f"to the trash in project '{result['project_alias']}'{branch_info} "
+                f"(undo: kbagent config restore)"
+            )
 
 
 # --- File extension to Rich Syntax lexer mapping ---
@@ -2470,6 +2491,8 @@ from . import config_state as _config_state  # noqa: E402,F401
 # the `config.*` permission namespace and appears in `kbagent config --help`.
 from ._config_clone_cmd import register as _register_clone_command  # noqa: E402
 from ._config_oauth import register as _register_oauth_command  # noqa: E402
+from ._config_trash_cmd import register as _register_trash_commands  # noqa: E402
 
 _register_clone_command(config_app)
 _register_oauth_command(config_app)
+_register_trash_commands(config_app)

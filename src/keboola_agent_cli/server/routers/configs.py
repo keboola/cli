@@ -205,13 +205,54 @@ def config_delete(
     component_id: str,
     config_id: str,
     branch_id: int | None = None,
+    dry_run: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Delete a component configuration."""
+    """Soft-delete a component configuration into the trash.
+
+    An already-trashed configuration is never deleted again (the API would
+    purge it permanently); the response reports ``already_in_trash`` instead.
+    """
     return registry.config.delete_config(
         alias=project,
         component_id=component_id,
         config_id=config_id,
+        branch_id=branch_id,
+        dry_run=dry_run,
+    )
+
+
+@router.post(
+    "/{project}/{component_id}/{config_id}/restore",
+    summary="Restore a configuration from the trash",
+)
+def config_restore(
+    project: str,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Restore a trashed configuration. Mirrors `kbagent config restore`."""
+    return registry.config.restore_config(
+        alias=project,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+    )
+
+
+@router.get("/trash/{project}", summary="List trashed configurations")
+def config_trash_list(
+    project: str,
+    component_id: str | None = None,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List configurations in the trash. Mirrors `kbagent config trash-list`."""
+    return registry.config.list_config_trash(
+        alias=project,
+        component_id=component_id,
         branch_id=branch_id,
     )
 

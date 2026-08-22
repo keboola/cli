@@ -405,8 +405,19 @@ Use `kbagent <command> --help` for full flag details and examples.
     exists (.keboola/manifest.json), renames the directory and updates the
     manifest path. Uses git mv when inside a git repo for cleaner history.
 
-  kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID]
-    Delete a configuration. Branch-aware.
+  kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID] [--dry-run]
+    Soft-delete a configuration into the Storage trash (restorable). Branch-aware.
+    Locates the config first: one already in the trash is NOT deleted again
+    (the raw API would purge it permanently on the second DELETE -- the classic
+    retry-after-timeout trap); it reports status "already_in_trash" and exits 0.
+    --dry-run reports the located state without writing.
+
+  kbagent config restore --project NAME --component-id ID --config-id ID [--branch ID]
+    Restore a trashed configuration -- the undo for `config delete`. Only works
+    on a config currently in the trash; brings back versions, rows and metadata.
+
+  kbagent config trash-list --project NAME [--component-id ID] [--branch ID]
+    List configurations in the trash (what `config restore` can bring back).
 
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
                      [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]

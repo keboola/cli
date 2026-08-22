@@ -74,6 +74,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "config.set-default-bucket": "write",
     "config.rename": "write",
     "config.delete": "destructive",
+    "config.restore": "write",
+    "config.trash-list": "read",
     "config.new": "write",
     # Creates a new configuration; never modifies or deletes the source.
     "config.clone": "write",

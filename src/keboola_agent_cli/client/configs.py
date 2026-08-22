@@ -789,6 +789,64 @@ class _ConfigsMixin(_CoreClient):
         """
         return self._rebase_request(component_id, config_id, branch_id, version, diff={})
 
+    def list_deleted_configs(
+        self,
+        component_id: str | None = None,
+        branch_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List configurations sitting in the trash (``isDeleted=true``).
+
+        With ``component_id`` this hits the per-component listing and returns
+        the trashed configuration dicts directly. Without it, it walks
+        ``GET /components?isDeleted=true`` -- which groups configurations
+        under their component -- and flattens the result, stamping each
+        configuration with its ``component_id`` so callers get one uniform
+        shape either way.
+
+        A trashed configuration is invisible to the normal listings and a
+        direct ``GET .../configs/{id}`` answers 404 for it, so this endpoint
+        is the only way to tell "in the trash" apart from "never existed" --
+        the distinction :meth:`restore_config` and the double-delete guard in
+        the service layer both depend on.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        if component_id is not None:
+            resp = self._request(
+                "GET",
+                f"{prefix}/components/{quote(component_id, safe='')}/configs",
+                params={"isDeleted": "true"},
+            )
+            return resp.json()
+        resp = self._request(
+            "GET",
+            f"{prefix}/components",
+            params={"isDeleted": "true"},
+        )
+        flat: list[dict[str, Any]] = []
+        for component in resp.json():
+            for config in component.get("configurations", []):
+                config["component_id"] = component.get("id")
+                flat.append(config)
+        return flat
+
+    def restore_config(
+        self, component_id: str, config_id: str, branch_id: int | None = None
+    ) -> dict[str, Any]:
+        """Restore a trashed configuration (``POST .../configs/{id}/restore``).
+
+        Only works on a configuration that is currently in the trash; the API
+        rejects a restore of a live configuration. Returns the restored
+        configuration body.
+        """
+        safe_component = quote(component_id, safe="")
+        safe_config = quote(config_id, safe="")
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        resp = self._request(
+            "POST",
+            f"{prefix}/components/{safe_component}/configs/{safe_config}/restore",
+        )
+        return resp.json()
+
     def delete_config(
         self, component_id: str, config_id: str, branch_id: int | None = None
     ) -> None:

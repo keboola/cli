@@ -377,6 +377,17 @@ kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [
 kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket --project NAME --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
 kbagent config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
+kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID] [--dry-run]
+kbagent config restore --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config trash-list --project NAME [--component-id ID] [--branch ID]
+# config delete (0.89.0+ safety): SOFT delete into the Storage trash, with a locate-first guard.
+#   The raw API purges PERMANENTLY when DELETE hits a config already in the trash -- the classic
+#   agent retry after a timeout. kbagent now looks the config up first: live -> trash it;
+#   already trashed -> status "already_in_trash", exit 0, NO second DELETE ever sent; absent
+#   from both -> NOT_FOUND. Undo with `config restore`; browse candidates with `config
+#   trash-list`. Before 0.89.0 the second delete destroyed the config permanently. CLAUDE.md
+#   did not list `config delete` at all until 0.89.0 (silent drift) -- the command itself has
+#   existed for a long time.
 kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
 kbagent config variables-get --project NAME --component-id ID --config-id ID [--branch ID]
 kbagent config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]
