@@ -47,6 +47,23 @@ CHANGELOG: dict[str, list[str]] = {
         "Plugin docs: `CLAUDE.md`'s command list had never included `config delete` at all. "
         "That silent drift made the command look nonexistent to AI agents reading it. "
         "Added alongside the new commands, with the double-delete trap recorded in gotchas.md.",
+        "Fix (#599): `token create` and `token refresh` now fail fast with a clean "
+        "`MISSING_MASTER_TOKEN` error (exit 3) when the acting token is not a master "
+        "(admin) Storage token, instead of surfacing the Storage API's generic 500 "
+        "'Application error.'. Root cause found in #599: the API's `CreateTokenVoter` "
+        "treats a non-admin token carrying `canManageTokens` as an impossible state "
+        "and throws a `LogicException` -- and that is exactly the token shape "
+        "`org setup` / `project refresh` mint, so every project onboarded that way "
+        "hit the 500. The new pre-flight guard mirrors the existing `config oauth-url` "
+        "one (`isMasterToken` via `GET /v2/storage/tokens/verify`, checked before any "
+        "write) and its message names the fix: point the alias at a master token via "
+        "`kbagent project edit --project ALIAS --token <MASTER>`. `token list` / "
+        "`token delete` are unchanged -- they genuinely work with `canManageTokens` "
+        "alone and are deliberately not guarded.",
+        "Change (#599): docs and docstrings across the token group no longer claim "
+        "the acting token merely 'must carry canManageTokens' for create/refresh -- "
+        "the real requirement is a master/admin token; `canManageTokens` alone is "
+        "necessary but not sufficient (it is sufficient only for list/delete).",
     ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "

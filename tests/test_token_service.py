@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,6 +38,13 @@ def store(tmp_config_dir: Path) -> ConfigStore:
 @pytest.fixture
 def client_factory() -> tuple[MagicMock, MagicMock]:
     mock = MagicMock()
+    # Explicit master-token info so tests exercising create/refresh pass the
+    # pre-flight guard deliberately, not via a truthy MagicMock return.
+    mock.get_project_info.return_value = {
+        "id": "6610637",
+        "description": "master",
+        "isMasterToken": True,
+    }
     factory = MagicMock(return_value=mock)
     return factory, mock
 
@@ -111,6 +119,83 @@ class TestCreateScopedToken:
         factory, _ = client_factory
         with pytest.raises(ConfigError):
             _svc(store, factory).create_scoped_token(alias="nope", description="x")
+
+
+class TestMasterTokenGuard:
+    """`token create` / `token refresh` pre-flight: the acting token must be a master token.
+
+    The Storage API's `CreateTokenVoter` treats "a normal token carrying
+    `canManageTokens`" as an impossible state and throws a `LogicException`,
+    surfaced to the caller as a generic 500 "Application error." -- exactly the
+    shape of token `org setup` / `project refresh` mint (issue #599). The
+    guard turns that into a clean local MISSING_MASTER_TOKEN before any write,
+    mirroring the existing `config oauth-url` guard.
+    """
+
+    NON_MASTER_INFO: ClassVar[dict[str, object]] = {
+        "id": "7434918",
+        "description": "kbagent-cli [petr@keboola.com]",
+        "isMasterToken": False,
+    }
+
+    def test_create_rejects_non_master_token_before_any_write(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.get_project_info.return_value = self.NON_MASTER_INFO
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _svc(store, factory).create_scoped_token(alias=ALIAS, description="repro")
+        assert excinfo.value.error_code == ErrorCode.MISSING_MASTER_TOKEN
+        assert excinfo.value.status_code == 403
+        # the guard must fire BEFORE the POST -- nothing may reach the API
+        mock.create_scoped_token.assert_not_called()
+        mock.close.assert_called_once()
+
+    def test_create_error_names_the_remedy(self, store, client_factory) -> None:
+        """The message must carry the token identity and the `project edit` fix."""
+        factory, mock = client_factory
+        mock.get_project_info.return_value = self.NON_MASTER_INFO
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _svc(store, factory).create_scoped_token(alias=ALIAS, description="repro")
+        message = str(excinfo.value)
+        assert "7434918" in message
+        assert f"kbagent project edit --project {ALIAS}" in message
+
+    def test_create_passes_on_master_token(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.create_scoped_token.return_value = {"id": "1", "token": "t"}
+        result = _svc(store, factory).create_scoped_token(alias=ALIAS, description="ok")
+        assert result["id"] == "1"
+        mock.get_project_info.assert_called_once()
+        mock.create_scoped_token.assert_called_once()
+
+    def test_refresh_rejects_non_master_token_before_any_write(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.get_project_info.return_value = self.NON_MASTER_INFO
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _svc(store, factory).refresh_token(alias=ALIAS, token_id="999")
+        assert excinfo.value.error_code == ErrorCode.MISSING_MASTER_TOKEN
+        assert excinfo.value.status_code == 403
+        mock.refresh_token.assert_not_called()
+        mock.close.assert_called_once()
+
+    def test_refresh_passes_on_master_token(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.refresh_token.return_value = {"id": "999", "token": "999-new"}
+        result = _svc(store, factory).refresh_token(alias=ALIAS, token_id="999")
+        assert result["id"] == "999"
+        mock.get_project_info.assert_called_once()
+        mock.refresh_token.assert_called_once_with("999")
+
+    def test_delete_and_list_are_not_guarded(self, store, client_factory) -> None:
+        """delete/list work with a non-master `canManageTokens` token (verified
+        live in #599) -- the guard must not creep onto them."""
+        factory, mock = client_factory
+        mock.get_project_info.return_value = self.NON_MASTER_INFO
+        mock.list_tokens.return_value = []
+        svc = _svc(store, factory)
+        svc.delete_token(alias=ALIAS, token_id="1")
+        svc.list_tokens(alias=ALIAS)
+        mock.delete_token.assert_called_once()
+        mock.list_tokens.assert_called_once()
 
 
 class TestDeleteToken:

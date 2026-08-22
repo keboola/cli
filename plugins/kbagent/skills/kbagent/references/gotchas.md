@@ -294,10 +294,15 @@ Versioning convention:
   --token-id ID` revokes. All three back the SDK facade
   (`Client.create_scoped_token` / `refresh_token` / `delete_token`) and the same
   service layer.
-- **The acting token must carry `canManageTokens`.** Without it the create/refresh
-  `POST /v2/storage/tokens[...]` returns 403. A normal project-admin storage token
-  has it; a narrowly-scoped device token does NOT — you cannot bootstrap tokens
-  from a token you just minted unless you granted it `canManageTokens`.
+- **`create` / `refresh` require a MASTER (admin) token — `canManageTokens` alone
+  is NOT enough.** A non-master token carrying the flag is the Storage API's
+  "impossible state" (`CreateTokenVoter` `LogicException` → generic 500, issue
+  #599) — exactly the shape `org setup` / `project refresh` mint. Since v0.89.0
+  both commands pre-flight `isMasterToken` and fail fast with
+  `MISSING_MASTER_TOKEN` (exit 3) naming the fix (`kbagent project edit
+  --project ALIAS --token <MASTER>`). `list` / `delete` only need
+  `canManageTokens` — and a narrowly-scoped device token has neither, so you
+  still cannot bootstrap tokens from a token you just minted.
 - **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
   once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
   retrievable again — persist only the `id` (to revoke/refresh later) and `expires`.
@@ -2972,7 +2977,8 @@ project list should do the same — never render the bare null.
 
 The OAuth wizard URL embeds a short-lived **child** Storage API token scoped
 to the target component. Minting this child token via `POST /v2/storage/tokens`
-requires `canManageTokens` privilege, which only **master tokens** carry.
+requires a **master (admin) token** — `canManageTokens` alone is not enough
+(issue #599: a non-master token carrying it makes the API 500 instead of 403).
 
 - Pre-flight: `kbagent` calls `verify_token` first and refuses with
   `MISSING_MASTER_TOKEN` (exit 3) before any HTTP write happens. Without this
@@ -2983,10 +2989,12 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
   the OAuth flow via the Keboola UI instead.
 - AI agents creating the project token via `kbagent project add` /
   `kbagent project refresh` get a non-master token by default — they must
-  switch to a master token before calling `config oauth-url`. See
-  https://github.com/keboola/cli/issues/<TBD> for the upstream
-  request to make `project add` / `project refresh` mint a token with
-  `canManageTokens` so OAuth flows work out of the box.
+  switch to a master token before calling `config oauth-url`. Granting the
+  minted token `canManageTokens` would NOT help: issue #599 established the
+  Storage API rejects a non-admin token carrying that flag with a 500
+  (`CreateTokenVoter` "impossible state"), so a master token is the only
+  working credential here. `token create` / `token refresh` carry the same
+  guard since v0.89.0.
 
 ## `data-app logs` is the only unconstrained log surface (since v0.43.8)
 
@@ -4057,8 +4065,9 @@ the web UI.
   `token refresh` are the only reveals, and a listing that dumped live values
   would break that contract for every token in the project at once. Do not
   reach for `kbagent http get` to work around this.
-- **It needs `canManageTokens`, same as `create`.** A plain Storage token gets
-  a 403 -> `ACCESS_DENIED`.
+- **It needs `canManageTokens` — but unlike `create`/`refresh` it does NOT need
+  a master token** (since v0.89.0 those two are master-guarded, issue #599). A
+  plain Storage token gets a 403 -> `ACCESS_DENIED`.
 - The master token appears in the listing with `isMasterToken: true` and cannot
   be deleted -- the API refuses.
 - SDK parity: `Client.list_tokens() -> list[TokenListEntryResult]`, secrets

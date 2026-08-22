@@ -5,8 +5,11 @@ Thin CLI layer for the ``kbagent token`` command group: parses arguments, calls
 
 These are Storage API operations authenticated with the per-project Storage
 token kbagent already stores (``X-StorageApi-Token``) -- no manage token, no
-extra prompt. The acting token must carry ``canManageTokens`` (the API rejects
-the mint/rotate otherwise).
+extra prompt. ``token create`` / ``token refresh`` require a **master (admin)
+Storage token**: ``canManageTokens`` alone is not enough (the API answers a
+generic 500, issue #599), so a pre-flight guard fails fast with
+``MISSING_MASTER_TOKEN`` instead. ``token list`` / ``token delete`` only need
+``canManageTokens``.
 
 ``token create`` mints a scoped token and prints its secret value **once** --
 kbagent never persists it. Store it immediately; it cannot be retrieved again.
@@ -239,8 +242,10 @@ def token_create(
 
     Grants only what you pass: bucket read/write, component access, expiry. A
     token with just --bucket-write on one bucket can upload Files and write that
-    bucket, nothing else -- the Keboola single-bucket-write pattern. The acting
-    project token must carry canManageTokens.
+    bucket, nothing else -- the Keboola single-bucket-write pattern. Requires a
+    master (admin) project token -- canManageTokens alone is not enough (issue
+    #599); non-master tokens fail fast with MISSING_MASTER_TOKEN before any
+    write.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "token_service")
@@ -281,7 +286,8 @@ def token_list(
 
     Answers "what already exists" and hands you the token id that `token delete`
     and `token refresh` require, without a detour through the web UI. The acting
-    project token must carry canManageTokens, same as `token create`.
+    project token must carry canManageTokens -- unlike `token create` /
+    `token refresh` it does NOT need to be a master token.
 
     --with-last-used answers the follow-up question -- which of them are still
     in use -- by deriving each token's most recent activity from its event
@@ -356,7 +362,11 @@ def token_refresh(
     token_id: str = typer.Option(..., "--token-id", help="ID of the token to rotate"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Rotate a token: generate a new value and invalidate the old one (secret shown once)."""
+    """Rotate a token: generate a new value and invalidate the old one (secret shown once).
+
+    Requires a master (admin) project token, same as `token create` -- non-master
+    tokens fail fast with MISSING_MASTER_TOKEN before any write (issue #599).
+    """
     formatter = get_formatter(ctx)
     if (
         not formatter.json_mode
