@@ -548,7 +548,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   get the id `delete`/`refresh` need, without the web UI. Secrets are STRIPPED from every row: a
 #   project with the `force-decrypted-token` feature has the API embed live values in the listing, and
 #   echoing those would break the group's "revealed once, at mint" contract for every token at once.
-# `--with-last-used` (0.89.0+, issue #622): answers which tokens are still IN USE -- the Storage API
+# `--with-last-used` (0.88.0+, issue #622): answers which tokens are still IN USE -- the Storage API
 #   carries no `lastUsed` (only the Manage API's PAT response does), so it is DERIVED per token from
 #   GET /v2/storage/tokens/{id}/events, fanned out over max_parallel_workers. Opt-in: ONE EXTRA CALL
 #   PER TOKEN. Adds lastUsed / lastUsedEvent / lastUsedStatus + a top-level `errors`; the default
@@ -563,7 +563,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   failed; row degrades, audit completes). Do not collapse never/unknown -- they lead to opposite
 #   decisions. DEV-BRANCH ACTIVITY IS INVISIBLE (the endpoint always resolves to the default branch:
 #   `idBranch == <production> OR NOT EXISTS idBranch`), so a branch-only token reads as dormant.
-# `--columns` (0.89.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
+# `--columns` (0.88.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
 #   column (--json always returned it). --json is deliberately NOT affected by --columns.
 #   `last_used` / `last_used_event` REQUIRE --with-last-used (exit 2 otherwise): nothing was
 #   derived, so any rendered value would assert something never checked.
