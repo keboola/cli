@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError, SyncConflictError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
@@ -1931,3 +1932,90 @@ class TestSyncInitAdoptExistingCli:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert "project_id" in output["error"]["message"]
+
+
+# ===================================================================
+# sync diff / push orphan warning (issue #649)
+# ===================================================================
+
+
+class TestSyncOrphanWarningCli:
+    """The ``orphaned`` bucket must reach the human output, not just --json.
+
+    A manifest re-targeted by ``sync pull --branch`` orphans EVERY config at
+    once, so the human list is capped at ``SYNC_ORPHAN_PREVIEW_LIMIT`` rows
+    with the tail collapsed into a count (issue #649).
+    """
+
+    @staticmethod
+    def _orphan(index: int) -> dict:
+        return {
+            "component_id": "keboola.ex-http",
+            "config_id": f"cfg-{index:03d}",
+            "path": f"extractor/keboola.ex-http/config-{index}",
+            "branch_id": 51406,
+            "branch_path": "issue644-b",
+            "exists_on_target": True,
+            "reason": "tracked_on_other_branch",
+            "hint": "tracked on branch 51406 ('issue644-b/')",
+        }
+
+    def _run_diff(self, tmp_path: Path, diff_result: dict) -> str:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.diff.return_value = diff_result
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                ["sync", "diff", "--project", "prod", "--directory", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        return _strip_ansi(result.output)
+
+    def test_diff_warns_instead_of_claiming_in_sync(self, tmp_path: Path) -> None:
+        """With no changes but orphans present, the reassuring "in sync" line
+        must NOT be printed -- the manifest points at another branch."""
+        output = self._run_diff(
+            tmp_path,
+            {
+                "changes": [],
+                "remote_only": [],
+                "orphaned": [self._orphan(1)],
+                "summary": {"added": 0, "modified": 0, "deleted": 0, "unchanged": 1},
+            },
+        )
+
+        assert "No differences found" not in output
+        assert "belong to a different branch" in output
+        assert "cfg-001" in output
+
+    def test_diff_orphan_list_is_capped(self, tmp_path: Path) -> None:
+        """A project-sized orphan list is previewed, not dumped in full."""
+        orphans = [self._orphan(i) for i in range(SYNC_ORPHAN_PREVIEW_LIMIT + 5)]
+        output = self._run_diff(
+            tmp_path,
+            {
+                "changes": [],
+                "remote_only": [],
+                "orphaned": orphans,
+                "summary": {"added": 0, "modified": 0, "deleted": 0, "unchanged": 0},
+            },
+        )
+
+        assert f"{len(orphans)} config(s) belong to a different branch" in output
+        assert "and 5 more" in output
+        assert orphans[0]["config_id"] in output
+        assert orphans[-1]["config_id"] not in output
