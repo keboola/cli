@@ -440,7 +440,11 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   ID is unchanged either way, and `create-table` only echoes the layout you REQUESTED (its
 #   --if-not-exists skip path nulls the layout keys outright). Human mode adds Time
 #   partitioning / Range partitioning / Clustering / Partition filter required / Partitions
-#   (a COUNT) and prints nothing new when there is no layout; --json passes `definition`
+#   (a COUNT) and prints nothing new when there is no layout. The human
+#   Columns table also carries a Description column (NOT on 0.88.0), populated from
+#   `column_details[].description` and shown only when some column has one -- the one
+#   surface #624 left blank, so `describe-column` then `table-detail` now verifies
+#   itself (long text wraps, never truncates). --json passes `definition`
 #   through verbatim, including the unbounded `partitions[]` (one entry per physical
 #   partition from INFORMATION_SCHEMA.PARTITIONS). `definition` is present on EVERY response
 #   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".

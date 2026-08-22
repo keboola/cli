@@ -14,6 +14,12 @@ Storage API reports under `definition`. Two shapes drive the guards here:
   tests/test_storage_empty_definition.py -- it broke the Go CLI's decoder), so
   the value is type-checked before any `.get()` reaches it.
 
+The columns table shows a `Description` column only when some column has one.
+Since 0.88.0 (#624) a description written by `storage describe-column` is visible
+in the Keboola UI, in the MCP server and in the warehouse's own COMMENT, and
+`--json` has always carried it -- this view was the last surface still blank, so
+`describe-column` followed by `table-detail` never confirmed its own write.
+
 `format_time_partitioning` / `format_range_partitioning` are shared with
 `storage create-table`'s result output on purpose: verifying a repartition means
 diffing what create-table said it applied against what table-detail reads back,
@@ -98,16 +104,35 @@ def render_table_detail(formatter: OutputFormatter, result: dict[str, Any]) -> N
 
     if result["column_details"]:
         formatter.console.print()
+        # Only grow the column when something fills it -- same rule the layout
+        # block above follows. `description` is set on a `column_details` entry
+        # only when one of the three tiers resolved (see
+        # services/_table_detail._column_details), so this is a real "nothing to
+        # show" test, not a test for empty strings.
+        show_description = any(col.get("description") for col in result["column_details"])
+
         table = Table(title="Columns")
         table.add_column("Name", style="bold cyan")
         table.add_column("Type", style="dim")
         table.add_column("Nullable", style="dim")
+        if show_description:
+            # Capped and wrapped, never truncated. A description is what the
+            # user came here to verify after `storage describe-column`, so an
+            # ellipsis would defeat the point -- `overflow="fold"` breaks even a
+            # long unbroken token instead of hiding its tail. `max_width` stops
+            # a wide terminal from stretching the cell across the screen; on a
+            # narrow one Rich shrinks it further and the table still fits.
+            table.add_column("Description", max_width=60, overflow="fold")
 
         for col in result["column_details"]:
-            table.add_row(
+            cells = [
                 col["name"],
                 col.get("type", ""),
                 "yes" if col.get("nullable") else "",
-            )
+            ]
+            if show_description:
+                # User-authored free text: `[note]` is a note, not Rich markup.
+                cells.append(escape(col.get("description") or ""))
+            table.add_row(*cells)
 
         formatter.console.print(table)
