@@ -1350,6 +1350,14 @@ config, the retry fires, and the retry destroys it for good.
 - Direct API callers: the purge-safe alternative is the dedicated
   `POST .../configs/{id}/purge` endpoint (fails with 400 when the config is
   not in the trash), never a second DELETE.
+- **The likeliest second DELETE is not a human retry -- it is the HTTP
+  client's own.** `DELETE` is conventionally idempotent, so most transports
+  (kbagent's included, before 0.89.0) repeat it after a read timeout or a
+  5xx. On this endpoint that automatic repeat IS the purge, and it happens
+  before any caller sees a result. If you are writing a script or another
+  client against the Storage API, disable transport-level retry for a config
+  DELETE specifically; idempotency here is a property of the endpoint, not
+  of the method.
 
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 

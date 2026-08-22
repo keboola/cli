@@ -34,6 +34,8 @@ CHANGELOG: dict[str, list[str]] = {
         "DELETE at anything that is not live: already trashed answers `already_in_trash` with "
         "exit 0 (the retry stays idempotent), absent from both answers NOT_FOUND. `--dry-run` "
         "reports the located state without writing.",
+        "Fix: the config DELETE is no longer retried by the HTTP layer itself. `DELETE` sits in `RETRY_SAFE_METHODS`, so a read timeout or a 5xx made the transport repeat it automatically -- and for THIS endpoint the repeat is the purge. The server trashes the config, the response is lost, the retry lands on the now-trashed config and destroys it before any caller sees a result. The service-level locate-first guard runs once per call and cannot see inside that loop, so `client.delete_config` now passes a new per-call `retry_safe=False` override and a lost response surfaces as a TIMEOUT the caller decides about; re-running the command is safe because the guard catches the trashed state. Every other DELETE keeps the retry -- the opt-out is per endpoint, because idempotency is a property of the endpoint, not of the method.",
+        "Note: `locate_config` no longer infers a live state from the absence of a 404 either. Every stack checked answers 404 for a trashed configuration (verified live on connection.keboola.com and the GCP stack), but a body carrying `isDeleted: true` is now read as trashed regardless of status code -- that flag decides whether a purge-capable DELETE goes out, so it is read rather than inferred.",
         "New: `kbagent config restore` -- the undo for `config delete`. Restores a trashed "
         "configuration with its versions, rows and metadata (`POST .../configs/{id}/restore`). "
         "Only works on a configuration currently in the trash.",

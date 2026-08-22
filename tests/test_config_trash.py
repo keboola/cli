@@ -332,3 +332,112 @@ class TestDeleteCliDryRun:
         )
         assert result.exit_code == 0
         assert "already in the trash" in result.stdout
+
+
+class TestDeleteIsNeverRetriedAtTheTransport:
+    """The purge path the locate-first guard alone cannot close.
+
+    ``DELETE`` sits in ``RETRY_SAFE_METHODS``, so before this fix the HTTP
+    layer repeated a timed-out or 5xx'd config delete on its own -- the server
+    trashed the config, the response was lost, and the retry purged it
+    permanently before any caller saw a result. The service guard runs ONCE
+    per call and cannot see inside that loop, so the opt-out has to live at
+    the transport.
+    """
+
+    URL = "https://connection.keboola.com/v2/storage/components/keboola.comp/configs/cfg-1"
+
+    def _client(self):
+        from keboola_agent_cli.client import KeboolaClient
+
+        return KeboolaClient("https://connection.keboola.com", TEST_TOKEN)
+
+    def test_read_timeout_sends_exactly_one_delete(self, httpx_mock) -> None:
+        """Server already trashed it; the lost response must NOT trigger a purge."""
+        import httpx
+
+        import keboola_agent_cli.http_base as hb
+
+        # Exactly ONE outcome is registered. If the transport retried, the
+        # second attempt would find no mock at all -- so a passing test proves
+        # a single DELETE left the client.
+        httpx_mock.add_exception(httpx.ReadTimeout("lost"), url=self.URL)
+
+        client = self._client()
+        original_sleep = hb.time.sleep
+        hb.time.sleep = lambda *a, **k: None  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client.delete_config("keboola.comp", "cfg-1")
+            assert exc_info.value.error_code == "TIMEOUT"
+            sent = [r for r in httpx_mock.get_requests() if r.method == "DELETE"]
+            assert len(sent) == 1, f"a second DELETE would purge; sent {len(sent)}"
+        finally:
+            hb.time.sleep = original_sleep
+            client.close()
+
+    def test_server_error_sends_exactly_one_delete(self, httpx_mock) -> None:
+        """A 5xx after a successful soft delete is the same trap as a timeout."""
+        import keboola_agent_cli.http_base as hb
+
+        httpx_mock.add_response(url=self.URL, status_code=503, text="unavailable")
+
+        client = self._client()
+        original_sleep = hb.time.sleep
+        hb.time.sleep = lambda *a, **k: None  # ty: ignore[invalid-assignment]
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.delete_config("keboola.comp", "cfg-1")
+            sent = [r for r in httpx_mock.get_requests() if r.method == "DELETE"]
+            assert len(sent) == 1, f"a second DELETE would purge; sent {len(sent)}"
+        finally:
+            hb.time.sleep = original_sleep
+            client.close()
+
+    def test_default_delete_still_retries(self, httpx_mock) -> None:
+        """The opt-out is per call, not a blanket policy change.
+
+        A DELETE without the override keeps the resilience RETRY_SAFE_METHODS
+        exists to provide -- deleting a table converges on repeat, so losing
+        that would trade one endpoint's safety for every other endpoint's.
+        """
+        import keboola_agent_cli.http_base as hb
+
+        url = "https://connection.keboola.com/plain-delete"
+        httpx_mock.add_response(url=url, status_code=503, text="unavailable")
+        httpx_mock.add_response(url=url, status_code=204)
+
+        client = self._client()
+        original_sleep = hb.time.sleep
+        hb.time.sleep = lambda *a, **k: None  # ty: ignore[invalid-assignment]
+        try:
+            response = client._do_request("DELETE", "/plain-delete")
+            assert response.status_code == 204
+            assert len(httpx_mock.get_requests()) == 2
+        finally:
+            hb.time.sleep = original_sleep
+            client.close()
+
+    def test_override_is_what_stops_it(self, httpx_mock) -> None:
+        """Same request, retry_safe=False -> exactly one attempt."""
+        url = "https://connection.keboola.com/plain-delete"
+        httpx_mock.add_response(url=url, status_code=503, text="unavailable")
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client._do_request("DELETE", "/plain-delete", retry_safe=False)
+            assert len(httpx_mock.get_requests()) == 1
+        finally:
+            client.close()
+
+
+class TestLocateDoesNotTrustTheStatusCode:
+    """A 200 carrying isDeleted must not be read as 'live' and then DELETEd."""
+
+    def test_tombstone_body_reports_trashed(self, tmp_config_dir: Path) -> None:
+        service, client = _make_service(tmp_config_dir, live=True, in_trash=False)
+        client.get_config_detail.return_value = {"id": "cfg-1", "isDeleted": True}
+        result = service.delete_config("prod", "keboola.comp", "cfg-1")
+        assert result["status"] == "already_in_trash"
+        client.delete_config.assert_not_called()

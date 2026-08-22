@@ -131,9 +131,15 @@ class _CoreClient(BaseHttpClient):
     def __exit__(self, *args: Any) -> None:
         self.close()
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Execute a Storage API request with retry."""
-        return self._do_request(method, path, **kwargs)
+    def _request(
+        self, method: str, path: str, retry_safe: bool | None = None, **kwargs: Any
+    ) -> httpx.Response:
+        """Execute a Storage API request with retry.
+
+        ``retry_safe=False`` opts a single call out of the method-based retry
+        rule -- see :meth:`BaseHttpClient._do_request`.
+        """
+        return self._do_request(method, path, retry_safe=retry_safe, **kwargs)
 
     def _get_or_create_sub_client(
         self,

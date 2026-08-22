@@ -153,6 +153,7 @@ class BaseHttpClient:
         *,
         client: httpx.Client | None = None,
         base_url: str | None = None,
+        retry_safe: bool | None = None,
         **kwargs: Any,
     ) -> httpx.Response:
         """Execute an HTTP request with retry and exponential backoff.
@@ -173,6 +174,12 @@ class BaseHttpClient:
             client: Optional httpx.Client to use (defaults to self._client).
                 Useful for subclasses that maintain multiple clients (e.g. queue client).
             base_url: Optional base URL for error messages (defaults to self._base_url).
+            retry_safe: Override the method-based idempotency verdict. Pass
+                ``False`` for a request whose method looks idempotent but whose
+                SERVER-SIDE MEANING changes once it has succeeded -- the
+                canonical case is ``DELETE`` on a component configuration,
+                where a repeat lands on the now-trashed config and purges it
+                permanently. ``None`` (default) keeps the method-based rule.
             **kwargs: Additional arguments passed to httpx.Client.request().
 
         Returns:
@@ -184,7 +191,9 @@ class BaseHttpClient:
         http_client = client or self._client
         url_label = base_url or self._base_url
         last_response: httpx.Response | None = None
-        retry_safe = method.upper() in RETRY_SAFE_METHODS
+        # An explicit override wins: RETRY_SAFE_METHODS reasons about the METHOD,
+        # but idempotency is a property of the endpoint. See the `retry_safe` arg.
+        retry_safe = method.upper() in RETRY_SAFE_METHODS if retry_safe is None else retry_safe
         # Counted separately from `attempt`: a 429 burns an attempt without
         # being a server error, so using the attempt index would report "the
         # same 5xx came back on N attempts" after seeing exactly one.
@@ -230,7 +239,9 @@ class BaseHttpClient:
                     last_response = response
                     continue
 
-                hint = self._server_error_hint(method, response.status_code, server_error_attempts)
+                hint = self._server_error_hint(
+                    method, response.status_code, server_error_attempts, retry_safe=retry_safe
+                )
                 self._raise_api_error(
                     response,
                     url_label,
@@ -331,7 +342,14 @@ class BaseHttpClient:
         )
 
     @classmethod
-    def _server_error_hint(cls, method: str, status: int, server_error_attempts: int) -> str | None:
+    def _server_error_hint(
+        cls,
+        method: str,
+        status: int,
+        server_error_attempts: int,
+        *,
+        retry_safe: bool | None = None,
+    ) -> str | None:
         """Return the actionable next step for a 5xx, or None if there isn't one.
 
         Two situations need two different answers (issue #599). A 5xx on a
@@ -349,7 +367,8 @@ class BaseHttpClient:
         """
         if status < 500:
             return None
-        if method.upper() not in RETRY_SAFE_METHODS:
+        effective_safe = method.upper() in RETRY_SAFE_METHODS if retry_safe is None else retry_safe
+        if not effective_safe:
             return cls._non_idempotent_note(method)
         if server_error_attempts > 1:
             return (

@@ -36,15 +36,30 @@ def locate_config(
     """Answer whether a configuration is live, in the trash, or absent.
 
     A direct ``GET .../configs/{id}`` answers 404 for BOTH a trashed and a
-    never-existed configuration, so a 404 alone cannot drive the delete
-    decision -- the trash listing is what separates the two.
+    never-existed configuration (verified live on connection.keboola.com and
+    the GCP stack), so a 404 alone cannot drive the delete decision -- the
+    trash listing is what separates the two.
+
+    The 200 path does not trust the status code either: a body carrying
+    ``isDeleted: true`` is reported as trashed. Nothing observed returns a
+    tombstone from that endpoint, but "not live" is the answer that decides
+    whether a purge-capable DELETE goes out, so it is read from the flag
+    rather than inferred from the absence of a 404.
     """
     try:
-        client.get_config_detail(component_id, config_id, branch_id=branch_id)
-        return STATE_LIVE
+        detail = client.get_config_detail(component_id, config_id, branch_id=branch_id)
     except KeboolaApiError as exc:
         if exc.status_code != 404:
             raise
+    else:
+        # Do not infer "live" from a 200 alone. Every stack checked so far
+        # answers 404 for a trashed configuration, but a stack that returned
+        # the tombstone body instead would make a 200 mean "trashed" -- and
+        # the DELETE that followed would purge it. The flag is authoritative
+        # where the status code is only conventional.
+        if isinstance(detail, dict) and detail.get("isDeleted"):
+            return STATE_TRASHED
+        return STATE_LIVE
     trashed = client.list_deleted_configs(component_id=component_id, branch_id=branch_id)
     if any(str(cfg.get("id")) == str(config_id) for cfg in trashed):
         return STATE_TRASHED

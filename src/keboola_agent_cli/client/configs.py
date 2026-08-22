@@ -850,7 +850,22 @@ class _ConfigsMixin(_CoreClient):
     def delete_config(
         self, component_id: str, config_id: str, branch_id: int | None = None
     ) -> None:
-        """Delete a component configuration.
+        """Delete a component configuration -- NEVER retried at the HTTP layer.
+
+        DELETE is normally treated as idempotent (``RETRY_SAFE_METHODS``), and
+        for most endpoints it is: repeating converges on the same state. This
+        endpoint is the exception, because its meaning CHANGES once it has
+        succeeded. The first DELETE moves a live configuration to the trash;
+        a second one lands on the now-trashed configuration and purges it
+        permanently -- versions, rows and metadata gone.
+
+        That makes the transport's own retry the most likely way to trigger
+        the purge: the server trashes the config, the response is lost to a
+        read timeout or a 5xx, and the retry destroys it before any caller
+        sees a result. So this call passes ``retry_safe=False`` and a lost
+        response surfaces as a TIMEOUT the caller must decide about.
+        ``ConfigService.delete_config``'s locate-first guard then makes the
+        re-run safe, which a transport-level retry can never be.
 
         Args:
             component_id: Component ID.
@@ -863,4 +878,5 @@ class _ConfigsMixin(_CoreClient):
         self._request(
             "DELETE",
             f"{prefix}/components/{safe_component}/configs/{safe_config}",
+            retry_safe=False,
         )
