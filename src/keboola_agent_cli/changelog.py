@@ -47,10 +47,10 @@ CHANGELOG: dict[str, list[str]] = {
         "Plugin docs: `CLAUDE.md`'s command list had never included `config delete` at all. "
         "That silent drift made the command look nonexistent to AI agents reading it. "
         "Added alongside the new commands, with the double-delete trap recorded in gotchas.md.",
-        "Fix (#599): `token create` and `token refresh` now fail fast with a clean "
-        "`MISSING_MASTER_TOKEN` error (exit 3) when the acting token is not a master "
-        "(admin) Storage token, instead of surfacing the Storage API's generic 500 "
-        "'Application error.'. Root cause found in #599: the API's `CreateTokenVoter` "
+        "Fix (#599): `token create` / `token refresh` on a non-master token now fail "
+        "fast with `MISSING_MASTER_TOKEN` (exit 3) instead of the API's generic "
+        "500 error. "
+        "Root cause found in #599: the API's `CreateTokenVoter` "
         "treats a non-admin token carrying `canManageTokens` as an impossible state "
         "and throws a `LogicException` -- and that is exactly the token shape "
         "`org setup` / `project refresh` mint, so every project onboarded that way "
@@ -60,10 +60,10 @@ CHANGELOG: dict[str, list[str]] = {
         "`kbagent project edit --project ALIAS --token <MASTER>`. `token list` / "
         "`token delete` are unchanged -- they genuinely work with `canManageTokens` "
         "alone and are deliberately not guarded.",
-        "Change (#599): docs and docstrings across the token group no longer claim "
-        "the acting token merely 'must carry canManageTokens' for create/refresh -- "
-        "the real requirement is a master/admin token; `canManageTokens` alone is "
-        "necessary but not sufficient (it is sufficient only for list/delete).",
+        "Change (#599): token-group docs no longer claim `canManageTokens` is enough "
+        "for create/refresh -- the real requirement is a master token. "
+        "`canManageTokens` alone is necessary but not sufficient there; it is "
+        "sufficient only for `token list` / `token delete`.",
     ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "
