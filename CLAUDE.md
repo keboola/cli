@@ -153,7 +153,38 @@ is simply a separate distribution kbagent no longer manages.
 - `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
 - The pre-commit hook and CI automatically check version consistency.
 
-**When bumping the version**: edit `pyproject.toml`, add a changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. CI enforces changelog completeness via `make changelog-check`.
+### Version bumps happen ONLY in a dedicated release PR
+
+**Feature/fix PRs MUST NOT bump the version and MUST NOT add a `changelog.py`
+entry.** PRs are routinely developed in parallel (separate AI sessions, one per
+issue); when each of them bumps `pyproject.toml`, every merge is a version
+conflict and the merge order silently renumbers releases. The historical
+`KNOWN_UNRELEASED` list in `scripts/generate_changelog.py` -- 18 versions whose
+content shipped with no release notes -- is exactly what that pattern produces.
+
+The flow is instead:
+
+1. **Feature PR**: merges to `main` with NO change to `pyproject.toml`
+   `version` and NO `changelog.py` entry. When the PR documents version-gated
+   behavior (gotchas.md, commands-reference.md, this file), it tags it with
+   the literal placeholder **`vNEXT`** -- `(since vNEXT)` / `vNEXT+`.
+   `make version-gate-check` ignores the placeholder (it only matches numeric
+   versions) but rejects a guessed numeric version with no changelog entry,
+   so a numeric future tag cannot even pass CI.
+2. **Release PR** (its only job): bump `pyproject.toml`, review everything
+   merged since the last release (`git log v<last>..origin/main`), write ONE
+   changelog entry covering all of it (one bullet per logical change, with
+   `(#PR)` references), replace every `vNEXT` placeholder with the real
+   version, run `make version-sync`. Merge, then tag -- the release pipeline
+   renders the GitHub release notes from the changelog entry
+   (`scripts/gen_release_notes.py`). Full checklist: `CONTRIBUTING.md` >
+   "Releasing a new version".
+
+**Inside the release PR**: edit `pyproject.toml`, add the changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. `make changelog-check` (release-time, needs `gh`) enforces changelog completeness in both directions.
+
+The one exception is a **beta/pre-release** (below): there the bump deliberately
+rides the feature branch, because the pre-release tag and GitHub Release are cut
+from that branch -- the branch temporarily *is* the release PR.
 
 ### Beta / pre-release versions (since 0.43.3)
 
@@ -237,7 +268,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
-    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with `(since vX.Y.Z)`)
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR)
     - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
