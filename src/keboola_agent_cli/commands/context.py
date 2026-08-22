@@ -351,6 +351,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     MCP run_sync_action parity). --config-data sends explicit configData
     verbatim and skips the config fetch. Response shape is action-specific
     (opaque pass-through).
+    (since 0.89.0) The ROOT configuration's authorization and runtime blocks
+    are forwarded into configData as well -- root only (a --row-id never
+    overrides them) and only when non-empty. authorization.oauth_api.id is the
+    OAuth broker reference the sync-actions service resolves and decrypts, so
+    before 0.89.0 sync actions on OAuth / Service-Account components (e.g.
+    keboola.ex-linkedin-ads) failed with an opaque empty-body 400.
 
 ### Configuration Browsing
 
@@ -620,6 +626,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     physical partition -- thousands on a long-lived daily table). `definition` is present on
     EVERY response, untyped tables included, so null means the stack omitted it, NOT "untyped".
     `storage tables` (the list endpoint) has no layout: the API offers no `definition` include.
+    Human mode also renders a Description column in the Columns table (0.89.0+, #642), shown only
+    when at least one column carries a description; long text wraps instead of truncating. On
+    0.88.0 column descriptions were readable through --json column_details[].description only.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -757,7 +766,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
     any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
     (conflict/orphan entries skipped) and the migrated flat keys deleted.
-    Readable via table-detail --json .data.column_details[].description.
+    Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the
+    human table-detail Columns table, which grows a Description column when any column has one.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
     Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;

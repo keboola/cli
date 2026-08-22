@@ -274,6 +274,19 @@ Versioning convention:
   `parameters`/`storage` top-level keys replace the root's wholesale -- a row
   that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
   deep-merge into it.
+- **`component sync-action` forwards the root `authorization` and `runtime`
+  blocks** *(since v0.89.0)*. `authorization.oauth_api.id` is the OAuth broker
+  reference the sync-actions service resolves and decrypts before invoking the
+  component. Below 0.89.0 kbagent sent only `parameters` + `storage`, so EVERY
+  sync action on an OAuth / Service-Account component (`keboola.ex-linkedin-ads`
+  and friends) died with an opaque **empty-body 400** -- the component crashed
+  before its own error handling could name the missing credential, so the
+  failure looked like a broken action rather than a missing block. If you see
+  that empty 400 on an OAuth component, check the kbagent version first. Both
+  blocks are taken from the ROOT configuration only -- a `--row-id` never
+  overrides them (docker-runner contract) -- and are forwarded only when
+  non-empty, so a component without them sends exactly the same body as before.
+  Matches keboola-mcp-server's `run_sync_action`.
 - **`transformation edit` ids are positional and renumber** after every
   structural op -- always `transformation show` immediately before `edit`
   (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
@@ -2767,8 +2780,8 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--deny-writes`). Its human-mode Columns table shows a `Description`
   column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
   readable only through `--json` `column_details[].description`, so a
-  blank-looking terminal table on that version does not mean the write
-  failed. Unknown column names now fail fast BEFORE any write; the old
+  blank-looking terminal table on that version does not mean the write failed.
+  Unknown column names now fail fast BEFORE any write; the old
   flat write accepted typos silently. Table and bucket descriptions are
   unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
@@ -2782,7 +2795,9 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   entry that is not a mapping, a document that is not a mapping at all) is a
   usage error *(since v0.89.0)* — the whole file is rejected before the first
   write with `INVALID_ARGUMENT` and exit 2, naming the offending key and its
-  actual type. Nothing is half-applied.
+  actual type. Nothing is half-applied. On 0.88.0 and earlier the same input
+  raised an `AttributeError` traceback partway through, after some items had
+  already been applied.
 - **Description-field precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
   metadata entry are present, `storage bucket-detail` / `storage table-detail`

@@ -34,7 +34,7 @@ CHANGELOG: dict[str, list[str]] = {
         "`CONFIG_ERROR` (exit 5) naming the offending key and its actual type in YAML "
         "vocabulary (mapping/list/null). Scalar values (string, number, boolean) keep "
         "the existing string coercion.",
-        "Fix: `config delete` can no longer permanently purge a configuration by being run "
+        "Fix (#643): `config delete` can no longer permanently purge a configuration by being run "
         "twice. The Storage API overloads DELETE -- on a live configuration it soft-deletes "
         "into the trash, but on a configuration ALREADY in the trash the same call purges it "
         "permanently, versions, rows and metadata included. A timed-out delete followed by a "
@@ -43,17 +43,17 @@ CHANGELOG: dict[str, list[str]] = {
         "DELETE at anything that is not live: already trashed answers `already_in_trash` with "
         "exit 0 (the retry stays idempotent), absent from both answers NOT_FOUND. `--dry-run` "
         "reports the located state without writing.",
-        "Fix: the config DELETE is no longer retried by the HTTP layer itself. `DELETE` sits in `RETRY_SAFE_METHODS`, so a read timeout or a 5xx made the transport repeat it automatically -- and for THIS endpoint the repeat is the purge. The server trashes the config, the response is lost, the retry lands on the now-trashed config and destroys it before any caller sees a result. The service-level locate-first guard runs once per call and cannot see inside that loop, so `client.delete_config` now passes a new per-call `retry_safe=False` override and a lost response surfaces as a TIMEOUT the caller decides about; re-running the command is safe because the guard catches the trashed state. Every other DELETE keeps the retry -- the opt-out is per endpoint, because idempotency is a property of the endpoint, not of the method.",
-        "Note: `locate_config` no longer infers a live state from the absence of a 404 either. Every stack checked answers 404 for a trashed configuration (verified live on connection.keboola.com and the GCP stack), but a body carrying `isDeleted: true` is now read as trashed regardless of status code -- that flag decides whether a purge-capable DELETE goes out, so it is read rather than inferred.",
-        "New: `kbagent config restore` -- the undo for `config delete`. Restores a trashed "
+        "Fix (#643): the config DELETE is no longer retried by the HTTP layer itself. `DELETE` sits in `RETRY_SAFE_METHODS`, so a read timeout or a 5xx made the transport repeat it automatically -- and for THIS endpoint the repeat is the purge. The server trashes the config, the response is lost, the retry lands on the now-trashed config and destroys it before any caller sees a result. The service-level locate-first guard runs once per call and cannot see inside that loop, so `client.delete_config` now passes a new per-call `retry_safe=False` override and a lost response surfaces as a TIMEOUT the caller decides about; re-running the command is safe because the guard catches the trashed state. Every other DELETE keeps the retry -- the opt-out is per endpoint, because idempotency is a property of the endpoint, not of the method.",
+        "Note (#643): `locate_config` no longer infers a live state from the absence of a 404 either. Every stack checked answers 404 for a trashed configuration (verified live on connection.keboola.com and the GCP stack), but a body carrying `isDeleted: true` is now read as trashed regardless of status code -- that flag decides whether a purge-capable DELETE goes out, so it is read rather than inferred.",
+        "New (#643): `kbagent config restore` -- the undo for `config delete`. Restores a trashed "
         "configuration with its versions, rows and metadata (`POST .../configs/{id}/restore`). "
         "Only works on a configuration currently in the trash.",
-        "New: `kbagent config trash-list` lists configurations in the trash, project-wide or "
+        "New (#643): `kbagent config trash-list` lists configurations in the trash, project-wide or "
         "narrowed by `--component-id`. Each row carries component_id, config_id, name, version "
         "and deleted_at -- exactly what `config restore` needs.",
-        "Note: all three are mirrored on `kbagent serve`. `DELETE /configs/...` gains "
+        "Note (#643): all three are mirrored on `kbagent serve`. `DELETE /configs/...` gains "
         "`dry_run`; `POST /configs/{p}/{c}/{id}/restore` and `GET /configs/trash/{p}` are new.",
-        "Plugin docs: `CLAUDE.md`'s command list had never included `config delete` at all. "
+        "Plugin docs (#643): `CLAUDE.md`'s command list had never included `config delete` at all. "
         "That silent drift made the command look nonexistent to AI agents reading it. "
         "Added alongside the new commands, with the double-delete trap recorded in gotchas.md.",
         "Fix (#599): `token create` on a non-master token now fails fast with "
@@ -75,6 +75,61 @@ CHANGELOG: dict[str, list[str]] = {
         "for `token create` -- the real requirement there is a master token. "
         "`canManageTokens` alone is necessary but not sufficient for the mint; it is "
         "sufficient for `token list` / `token delete` / `token refresh`.",
+        "Change (#645): `storage describe-batch --from-file` now rejects a malformed document "
+        "before the first write. A "
+        "`tables:` / `buckets:` / `columns:` section given as a list instead of a mapping of ID "
+        "to description, a column entry that is not a mapping, a `null` description, a document "
+        "that is not a mapping at all, or two keys that collide after `str()` coercion (`1` and "
+        '`"1"`) all fail the whole file up front with a structured `INVALID_ARGUMENT` error and '
+        "exit 2, naming the offending key, its actual type and "
+        "a copy-pasteable example. Until 0.88.0 the same input raised an `AttributeError` "
+        "traceback partway through -- after some items had already been applied -- so a "
+        "half-described project was the normal outcome of a typo. Empty sections (absent, "
+        "`null`, `[]`, `''`, `{}`) stay silent no-ops for backward compatibility, and per-item "
+        "API failures during application are still collected into `errors[]` (exit 1) rather "
+        "than aborting: shape is a usage error, an API refusal is not. Closes issue #640.",
+        "Fix (#620): `component sync-action` now forwards the root configuration's "
+        "`authorization` and `runtime` blocks into the `configData` it sends. "
+        "`authorization.oauth_api.id` is the broker reference the sync-actions service resolves "
+        "and decrypts before invoking the component, so omitting it made every sync action on "
+        "an OAuth / Service-Account component (`keboola.ex-linkedin-ads` among them) crash "
+        "before the component's own error handling could run -- the caller saw an opaque "
+        "empty-body 400 with nothing naming the missing credential. Both blocks are taken from "
+        "the ROOT configuration only (a `--row-id` never overrides them, per the docker-runner "
+        "contract) and are forwarded only when non-empty, so a component without them sends the "
+        "same body as before. Matches keboola-mcp-server's `run_sync_action`. "
+        "(AI-3757 / SUPPORT-17393.)",
+        "New (#642): `storage table-detail` human output shows column descriptions. 0.88.0 "
+        "(#624) moved the write to the native definition endpoint so the text reaches the "
+        "Keboola UI, the MCP server's `get_tables` and the warehouse `COMMENT`, and `--json` "
+        "carried it on `column_details[].description` -- kbagent's own Rich Columns table was "
+        "the one surface still showing nothing, which made `describe-column` followed by "
+        "`table-detail` (the obvious way to check your own work) the one way that did not work. "
+        "The `Description` column appears only when at least one column has one, so an "
+        "undocumented table's output is byte-identical to before; the cell wraps and is "
+        "width-capped rather than truncated (verifying what you just wrote is the point, so an "
+        "ellipsis would defeat it) and is escaped, because a description reading `[note]` is "
+        "user text, not Rich markup. All three resolution tiers render and `--json` is "
+        "unchanged.",
+        "Internal (#517): the generated command reference's option metavars are now a stable "
+        "contract. `scripts/gen_command_reference.py` rendered them through Click's "
+        "`make_metavar()`, whose output shifts between Click/Typer versions, so the downstream "
+        "connection-docs freshness gate parsed a shape that could change under it without a "
+        "single line of kbagent changing. A deterministic `_stable_option_metavar()` derives "
+        "`<str>` / `<int>` / `<a|b|c>` from `ParamType.name` instead, handling count flags (no "
+        "value span), composite/tuple types (`<str,int>`), nameless custom types (`<value>`) and "
+        "Enum-backed choices (member names). A grammar test validates every emitted option row "
+        "against the live command tree (1000+ rows); the generated output for the current CLI is "
+        "byte-identical. Closes issue #513.",
+        "Internal (#586): a test now gates the DOCUMENTED prompt budget against the enforced "
+        "one. `CONTRIBUTING.md` and `kbagent-pr-reviewer.md` must cite the same number as "
+        "`PROMPT_BYTE_BUDGET`, derived from the constant rather than hardcoded a second time, "
+        "with the regex tolerating `70 000` / `70,000` / `70000` and flagging the deprecated KB "
+        "unit as drift even when the digits match. It catches both directions -- the exact gap "
+        "that let 62 000-era prose linger after #629 raised the budget to 70 000. Fixes "
+        "issue #585.",
+        "Plugin docs (#641): a 0.88.0 audit's reference gaps are closed across the skill "
+        "references (no behaviour change).",
     ],
     "0.88.0": [
         "Fix (#624): column descriptions are now written where the Keboola UI and the "

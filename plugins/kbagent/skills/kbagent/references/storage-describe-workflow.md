@@ -174,6 +174,11 @@ Read back via `storage table-detail`:
 }
 ```
 
+Human mode shows the same text in a `Description` column of the Columns table
+*(since v0.89.0)* -- it appears only when at least one column has a description,
+so an undocumented table renders exactly as before. On 0.88.0 the human table
+had no such column at all, so use `--json` to verify a write on that version.
+
 Columns without a matching metadata entry simply omit `description`.
 
 ## Batch: YAML schema
