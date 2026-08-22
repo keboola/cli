@@ -25,6 +25,7 @@ from ..constants import (
     MANIFEST_VERSION,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..sync.branch_registry import ensure_branch_registered, register_branch_dir
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
@@ -2174,50 +2175,28 @@ class SyncService(BaseService):
             logger.warning("Failed to parse %s", config_file)
             return None
 
+    def register_branch_dir(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int,
+    ) -> str:
+        """Resolve (and register if needed) the on-disk directory for *branch_id*.
+
+        Thin wrapper over :func:`..sync.branch_registry.register_branch_dir`
+        (issue #644); see that module for the semantics.
+        """
+        projects = self.resolve_projects([alias])
+        return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
+
     def _ensure_branch_registered(
         self,
         manifest: Manifest,
         branch_id: int | None,
         client: Any,
     ) -> str | None:
-        """Ensure *branch_id* has an entry in ``manifest.branches``.
-
-        If *branch_id* is ``None`` (production) or already present, this is
-        a no-op.  Otherwise the branch name is fetched from the API and a
-        new :class:`ManifestBranch` is appended.
-
-        Returns:
-            The new branch path if one was added, ``None`` otherwise.
-        """
-        if branch_id is None:
-            return None
-
-        # Already registered?
-        for branch in manifest.branches:
-            if branch.id == branch_id:
-                return None
-
-        # Fetch branch info from API to get a human-readable name
-        all_branches = client.list_dev_branches()
-        branch_name = ""
-        for b in all_branches:
-            if b.get("id") == branch_id:
-                branch_name = b.get("name", "")
-                break
-
-        # Generate filesystem-safe path
-        path = sanitize_name(branch_name) if branch_name else ""
-        if not path:
-            path = f"branch-{branch_id}"
-
-        # Handle path uniqueness -- avoid collisions with existing entries
-        existing_paths = {br.path for br in manifest.branches}
-        if path in existing_paths:
-            path = f"{path}-{branch_id}"
-
-        manifest.branches.append(ManifestBranch(id=branch_id, path=path))
-        logger.info("Registered dev branch %d as '%s' in manifest", branch_id, path)
-        return path
+        """Delegate to :func:`..sync.branch_registry.ensure_branch_registered`."""
+        return ensure_branch_registered(manifest, branch_id, client)
 
     def _find_branch_path(self, manifest: Manifest, branch_id: int | None) -> str:
         """Find the branch directory name for a given branch ID.

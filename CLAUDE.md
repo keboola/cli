@@ -685,6 +685,13 @@ kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--c
 #   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
 kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
+# config new --push --output-dir (vNEXT, #644): the written scaffold now records the created
+#   config's ID (_keboola.config_id, quoted so numeric IDs stay strings) and is placed in the
+#   subtree of the branch the config was ACTUALLY created in (--branch or active branch;
+#   unregistered branches are added to the manifest like `sync pull --branch` would). Before,
+#   the scaffold had no ID and always landed in the default branch tree, so the next
+#   `sync push` created a DUPLICATE (34-config incident). With --configuration, the local file
+#   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
 kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]

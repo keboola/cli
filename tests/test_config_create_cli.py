@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import yaml
 from typer.testing import CliRunner, Result
 
 from keboola_agent_cli.cli import app
@@ -21,6 +22,7 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
+from keboola_agent_cli.services.sync_service import SyncService
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
@@ -66,6 +68,7 @@ def _invoke_push(
     *,
     config_service_mock: MagicMock | None = None,
     component_service_mock: MagicMock | None = None,
+    sync_service_mock: MagicMock | None = None,
     config_dir: Path | None = None,
     input_text: str | None = None,
 ) -> Result:
@@ -94,11 +97,13 @@ def _invoke_push(
         patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
         patch("keboola_agent_cli.cli.ComponentService") as MockCompService,
         patch("keboola_agent_cli.cli.ConfigService") as MockConfigService,
+        patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
     ):
         MockStore.return_value = store
         MockProjService.return_value = ProjectService(config_store=store)
         MockCompService.return_value = svc_component
         MockConfigService.return_value = svc_config
+        MockSyncService.return_value = sync_service_mock or SyncService(config_store=store)
         return runner.invoke(app, args, input=input_text)
 
 
@@ -692,3 +697,229 @@ class TestConfigNewPushErrors:
         assert result.exit_code == 1, result.output
         envelope = json.loads(result.output)
         assert envelope["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Scaffold stamping + branch-aware placement (issue #644)
+# ---------------------------------------------------------------------------
+
+_REALISTIC_SCAFFOLD = {
+    "component_id": "keboola.ex-http",
+    "component_name": "HTTP",
+    "component_type": "extractor",
+    "directory": "extractor/keboola.ex-http/test-config",
+    "files": [
+        {
+            "path": "_config.yml",
+            "content": (
+                "# NOTE: config_id will be assigned by Keboola on first push\n"
+                "version: 2\n"
+                'name: "test-config"\n'
+                "parameters: {}\n"
+                "\n"
+                "_keboola:\n"
+                "  component_id: keboola.ex-http\n"
+            ),
+        },
+    ],
+}
+
+
+def _write_manifest(output_dir: Path, branches: list[dict]) -> None:
+    """Materialize a minimal .keboola/manifest.json in *output_dir*."""
+    keboola_dir = output_dir / ".keboola"
+    keboola_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 2,
+        "project": {"id": 1234, "apiHost": "connection.keboola.com"},
+        "naming": {},
+        "branches": branches,
+        "configurations": [],
+    }
+    (keboola_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+class TestConfigNewPushScaffoldStamping:
+    """--push --output-dir must write a scaffold that carries the created
+    config's identity; otherwise the next ``sync push`` duplicates it
+    (issue #644)."""
+
+    def _component_mock(self) -> MagicMock:
+        svc = MagicMock()
+        svc.generate_scaffold.return_value = json.loads(json.dumps(_REALISTIC_SCAFFOLD))
+        return svc
+
+    def _run(self, tmp_path: Path, out_dir: Path, extra: list[str] | None = None, **kwargs):
+        args = [
+            "--json",
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            "prod",
+            "--name",
+            "test-config",
+            "--push",
+            "--output-dir",
+            str(out_dir),
+        ] + (extra or [])
+        return _invoke_push(args, config_dir=tmp_path / "config", **kwargs)
+
+    def test_written_scaffold_carries_created_config_id(self, tmp_path: Path) -> None:
+        out = tmp_path / "ws"
+        out.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = _push_result()
+
+        result = self._run(
+            tmp_path,
+            out,
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+        )
+
+        assert result.exit_code == 0, result.output
+        written = out / "extractor/keboola.ex-http/test-config/_config.yml"
+        parsed = yaml.safe_load(written.read_text(encoding="utf-8"))
+        assert parsed["_keboola"]["config_id"] == "12345"
+        assert isinstance(parsed["_keboola"]["config_id"], str)
+        assert "assigned by Keboola on first push" not in written.read_text(encoding="utf-8")
+
+    def test_envelope_reports_local_scaffold(self, tmp_path: Path) -> None:
+        out = tmp_path / "ws"
+        out.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = _push_result()
+
+        result = self._run(
+            tmp_path,
+            out,
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+        )
+
+        envelope = json.loads(result.output)
+        scaffold_info = envelope["data"]["local_scaffold"]
+        assert scaffold_info["files"] == ["_config.yml"]
+        assert scaffold_info["directory"].endswith("extractor/keboola.ex-http/test-config")
+
+    def test_branch_create_writes_into_registered_branch_dir(self, tmp_path: Path) -> None:
+        """A config created in a dev branch must scaffold into that branch's
+        subtree, never into the default branch's (main/) tree."""
+        out = tmp_path / "ws"
+        _write_manifest(out, [{"id": 10, "path": "main"}, {"id": 20, "path": "dev-x"}])
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
+
+        result = self._run(
+            tmp_path,
+            out,
+            extra=["--branch", "20"],
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+        )
+
+        assert result.exit_code == 0, result.output
+        expected = out / "dev-x/extractor/keboola.ex-http/test-config/_config.yml"
+        assert expected.exists(), (
+            f"expected scaffold under dev-x/, tree: {list(out.rglob('_config.yml'))}"
+        )
+        assert not (out / "main/extractor").exists(), "must not write into the default branch tree"
+
+    def test_branch_unknown_to_manifest_gets_registered(self, tmp_path: Path) -> None:
+        out = tmp_path / "ws"
+        _write_manifest(out, [{"id": 10, "path": "main"}])
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
+        sync_mock = MagicMock()
+        sync_mock.register_branch_dir.return_value = "issue-branch"
+
+        result = self._run(
+            tmp_path,
+            out,
+            extra=["--branch", "20"],
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+            sync_service_mock=sync_mock,
+        )
+
+        assert result.exit_code == 0, result.output
+        sync_mock.register_branch_dir.assert_called_once()
+        kwargs = sync_mock.register_branch_dir.call_args.kwargs
+        assert kwargs.get("branch_id") == 20
+        expected = out / "issue-branch/extractor/keboola.ex-http/test-config/_config.yml"
+        assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
+
+    def test_branch_registration_failure_falls_back_to_branch_dir(self, tmp_path: Path) -> None:
+        """Never fall back to the default-branch tree -- a wrong-branch file
+        is the exact duplicate factory this fix removes."""
+        out = tmp_path / "ws"
+        _write_manifest(out, [{"id": 10, "path": "main"}])
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
+        sync_mock = MagicMock()
+        sync_mock.register_branch_dir.side_effect = RuntimeError("api down")
+
+        result = self._run(
+            tmp_path,
+            out,
+            extra=["--branch", "20"],
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+            sync_service_mock=sync_mock,
+        )
+
+        assert result.exit_code == 0, result.output
+        expected = out / "branch-20/extractor/keboola.ex-http/test-config/_config.yml"
+        assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
+        assert not (out / "main/extractor").exists()
+
+    def test_branch_without_manifest_stays_flat(self, tmp_path: Path) -> None:
+        """No sync workspace in output_dir -> flat layout, no sync calls."""
+        out = tmp_path / "plain"
+        out.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {**_push_result(), "branch_id": 20}
+        sync_mock = MagicMock()
+
+        result = self._run(
+            tmp_path,
+            out,
+            extra=["--branch", "20"],
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+            sync_service_mock=sync_mock,
+        )
+
+        assert result.exit_code == 0, result.output
+        expected = out / "extractor/keboola.ex-http/test-config/_config.yml"
+        assert expected.exists(), f"tree: {list(out.rglob('_config.yml'))}"
+        sync_mock.register_branch_dir.assert_not_called()
+
+    def test_pushed_body_is_mirrored_not_placeholder(self, tmp_path: Path) -> None:
+        """--configuration: the local file mirrors the pushed (already
+        encrypted) body; placeholder scaffolding would make the next push
+        overwrite the real remote config with TODO templates."""
+        out = tmp_path / "ws"
+        out.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = {
+            **_push_result(),
+            "configuration": {"parameters": {"baseUrl": "https://real.example.com"}},
+        }
+
+        result = self._run(
+            tmp_path,
+            out,
+            extra=["--configuration", '{"parameters": {"baseUrl": "https://real.example.com"}}'],
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+        )
+
+        assert result.exit_code == 0, result.output
+        written = out / "extractor/keboola.ex-http/test-config/_config.yml"
+        parsed = yaml.safe_load(written.read_text(encoding="utf-8"))
+        assert parsed["parameters"] == {"baseUrl": "https://real.example.com"}
+        assert parsed["_keboola"]["config_id"] == "12345"
+        assert "TODO" not in written.read_text(encoding="utf-8")

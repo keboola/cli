@@ -427,7 +427,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {{}}
     (empty shell, validation auto-skipped). Works for ALL component types including
-    keboola.snowflake-transformation.
+    keboola.snowflake-transformation. With --push AND --output-dir the written scaffold
+    records the created config's identity (_keboola.config_id) and lands in the subtree
+    of the branch the config was created in (--branch or the active branch; the branch
+    is registered in the manifest if missing) -- the next sync push adopts the config
+    instead of creating a duplicate. With an explicit --configuration body the local
+    file mirrors the pushed (already encrypted) body instead of placeholder scaffolding.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]

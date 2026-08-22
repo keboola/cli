@@ -52,6 +52,13 @@ kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Co
   --push --no-files
 
 # Scaffold AND remote create in one step (writes files AND POSTs)
+# Since vNEXT the written scaffold records the created config's ID
+# (_keboola.config_id) and lands in the subtree of the branch the config was
+# created in -- the next `sync push` ADOPTS the config (reported as
+# `modified` until you edit + push) instead of creating a duplicate.
+# On older versions this combo wrote an ID-less scaffold: the next
+# `sync push` DUPLICATED the config (issue #644). There, use the two-step
+# path (scaffold without --push, edit, `sync push`) instead.
 kbagent config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" \
   --output-dir . --push
 ```
@@ -144,7 +151,9 @@ Rules:
 
 - `_config.yml` format follows the kbc CLI dev-friendly YAML structure
 - The `_keboola.component_id` field in `_config.yml` is required for push to work
-- `config_id` is assigned by Keboola on first push -- don't set it manually
+- `config_id` is assigned by Keboola on first push -- don't set it manually.
+  Exception: `config new --push --output-dir` (vNEXT+) writes it itself,
+  because on that path the config already exists remotely
 - Secret fields use Keboola convention: any key starting with `#` is a secret
 - Scaffold marks secret placeholders with `# encrypted by Keboola on push` comments
 - Encrypted values look like `KBC::ProjectSecure::...`

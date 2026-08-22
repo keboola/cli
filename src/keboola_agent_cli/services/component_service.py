@@ -13,9 +13,10 @@ import yaml
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
-from ..constants import SECRET_PLACEHOLDER
+from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
+from ..sync.config_format import api_config_to_local
 from .base import BaseService, ClientFactory
 from .org_service import slugify
 
@@ -291,6 +292,104 @@ def _build_pyproject_toml(component_id: str, name: str, packages: list[str] | No
         'requires-python = ">=3.11"\n'
         f"{deps_lines}"
     )
+
+
+_SCAFFOLD_ID_NOTE = "# NOTE: config_id will be assigned by Keboola on first push"
+_SCAFFOLD_ID_STAMPED_NOTE = (
+    "# NOTE: created remotely by 'config new --push'; config_id recorded below"
+)
+
+
+def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[str, Any]:
+    """Return a copy of *scaffold* whose ``_config.yml`` records *config_id*.
+
+    On the ``config new --push --output-dir`` path the configuration already
+    exists remotely by the time the scaffold hits the disk. Writing the file
+    without ``_keboola.config_id`` makes the next ``sync push`` classify the
+    directory as a brand-new configuration and create a duplicate
+    (issue #644). With the ID present, the sync diff's adopt-by-id guard
+    (issue #482) pairs the directory with the existing remote config instead.
+
+    The ID is emitted double-quoted so legacy numeric IDs stay YAML strings
+    (an unquoted ``12345`` would parse as ``int`` and never match the
+    string-keyed remote lookup). A ``_config.yml`` without a ``_keboola``
+    block (flow scaffolds, issue #650) gets one appended wholesale. Pure
+    function: the input scaffold is not mutated.
+    """
+    files: list[dict[str, Any]] = []
+    for entry in scaffold["files"]:
+        if entry["path"] != CONFIG_FILENAME:
+            files.append(entry)
+            continue
+        content: str = entry["content"]
+        out: list[str] = []
+        in_keboola = False
+        stamped = False
+        for line in content.splitlines():
+            if line == _SCAFFOLD_ID_NOTE:
+                out.append(_SCAFFOLD_ID_STAMPED_NOTE)
+                continue
+            out.append(line)
+            if line == "_keboola:":
+                in_keboola = True
+            elif in_keboola and line.startswith("  component_id:"):
+                out.append(f'  config_id: "{config_id}"')
+                stamped = True
+                in_keboola = False
+        if not stamped:
+            if out and out[-1] != "":
+                out.append("")
+            out.extend(
+                [
+                    "_keboola:",
+                    f"  component_id: {scaffold['component_id']}",
+                    f'  config_id: "{config_id}"',
+                ]
+            )
+        new_content = "\n".join(out)
+        if content.endswith("\n"):
+            new_content += "\n"
+        files.append({**entry, "content": new_content})
+    return {**scaffold, "files": files}
+
+
+def build_pushed_config_files(
+    component_id: str,
+    config_id: str,
+    name: str,
+    description: str,
+    configuration: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build the local file list mirroring an explicitly pushed config body.
+
+    Used by ``config new --push --output-dir`` when ``--configuration`` /
+    ``--configuration-file`` supplied a real body: the placeholder scaffold
+    would diverge from the remote, and the next ``sync push`` would overwrite
+    the freshly created configuration with TODO templates. The mirrored body
+    comes from the API response, so ``#``-secrets are already encrypted
+    (``KBC::...``) -- no plaintext ever reaches the disk. The YAML layout
+    matches what ``sync pull`` would materialize (same converter, same dump
+    settings), so the follow-up ``sync diff`` reports no spurious changes.
+    """
+    local = api_config_to_local(
+        component_id,
+        {"name": name, "description": description, "configuration": configuration},
+        str(config_id),
+    )
+    content = yaml.dump(
+        local,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=120,
+    )
+    return [
+        {
+            "path": CONFIG_FILENAME,
+            "content": content,
+            "description": "Configuration mirroring the pushed body",
+        }
+    ]
 
 
 def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str:

@@ -1152,6 +1152,32 @@ events and emits a final `done` SSE frame mirroring the same record.
   /openapi.json` returns the full schema, which lets the AI pick the
   right route + body shape without hard-coded knowledge.
 
+## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since vNEXT)
+
+- **Before vNEXT this combo was a duplicate factory** (issue #644): the
+  scaffold was written WITHOUT `_keboola.config_id` (the "assigned on first
+  push" comment was wrong on this path -- the config already existed), and it
+  always landed in the DEFAULT branch's tree even when the config was created
+  in a dev branch (`--branch`, or the active branch set by `branch create` /
+  `branch use`). The next `sync push` then classified the directory as a new
+  config and POSTed a duplicate -- a real incident created 34 duplicates.
+- **Since vNEXT** the written `_config.yml` records `_keboola.config_id`
+  (double-quoted, so legacy numeric IDs stay YAML strings) and the files are
+  written into the subtree of the branch the config was ACTUALLY created in;
+  an unregistered branch is added to `manifest.branches` exactly like
+  `sync pull --branch` would. If that registration fails, files fall back to
+  `branch-{id}/` -- never to the default tree -- with a warning in
+  `warnings[]`.
+- The follow-up `sync diff` reports the new config as `modified` (placeholder
+  scaffold vs the pushed empty body) -- that is the expected "now edit and
+  push" state, NOT drift. With an explicit `--configuration` body the local
+  file mirrors the pushed (already encrypted) body instead, so the diff is
+  clean and a later push cannot regress the remote to TODO placeholders.
+- `--json` gains an additive `local_scaffold: {directory, files}` key on this
+  path.
+- Agents on kbagent < vNEXT: do NOT recommend `--output-dir` + `--push`
+  together; use scaffold-only then `sync push`, or `--push --no-files`.
+
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
 - **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote

@@ -764,3 +764,126 @@ class TestGenerateFromSchema:
         schema = {"properties": {"threshold": {"type": "number", "default": 0.5}}}
         result = _generate_from_schema(schema)
         assert result["threshold"] == 0.5
+
+
+# ===========================================================================
+# stamp_scaffold_config_id + build_pushed_config_files (issue #644)
+# ===========================================================================
+
+
+_SCAFFOLD_YML = (
+    "# Component: HTTP (keboola.ex-http)\n"
+    "# Type: extractor\n"
+    "#\n"
+    "# NOTE: config_id will be assigned by Keboola on first push\n"
+    "version: 2\n"
+    'name: "test-config"\n'
+    "description: |\n"
+    "  TODO: describe this configuration\n"
+    "\n"
+    "parameters: {}\n"
+    "\n"
+    "_keboola:\n"
+    "  component_id: keboola.ex-http\n"
+    "\n"
+)
+
+
+class TestStampScaffoldConfigId:
+    """The --push path must record the created config's ID in the scaffold.
+
+    Without the ID the next ``sync push`` treats the directory as a brand-new
+    configuration and creates a duplicate (issue #644).
+    """
+
+    def _scaffold(self) -> dict[str, Any]:
+        return {
+            "component_id": "keboola.ex-http",
+            "component_name": "HTTP",
+            "component_type": "extractor",
+            "directory": "extractor/keboola.ex-http/test-config",
+            "files": [
+                {"path": "_config.yml", "content": _SCAFFOLD_YML},
+                {"path": "transform.sql", "content": "SELECT 1;\n"},
+            ],
+        }
+
+    def test_stamps_id_into_existing_keboola_block(self) -> None:
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        result = stamp_scaffold_config_id(self._scaffold(), "01m0njbrqwpyqbx0yqfqq9pyen")
+        content = result["files"][0]["content"]
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "01m0njbrqwpyqbx0yqfqq9pyen"
+        # The misleading "first push" note must be gone on this path.
+        assert "assigned by Keboola on first push" not in content
+
+    def test_numeric_id_stays_a_string(self) -> None:
+        """Legacy numeric config IDs must round-trip as YAML strings.
+
+        An unquoted ``config_id: 12345`` parses as int and then never matches
+        the string-keyed remote lookup in the sync diff adopt-by-id guard.
+        """
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        result = stamp_scaffold_config_id(self._scaffold(), "12345")
+        parsed = yaml.safe_load(result["files"][0]["content"])
+        assert parsed["_keboola"]["config_id"] == "12345"
+        assert isinstance(parsed["_keboola"]["config_id"], str)
+
+    def test_appends_block_when_keboola_missing(self) -> None:
+        """Flow scaffolds have no _keboola block (issue #650); stamping must
+        create one so the pushed flow is adoptable too."""
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        scaffold = self._scaffold()
+        scaffold["files"][0]["content"] = 'name: "my flow"\nphases: []\n'
+        result = stamp_scaffold_config_id(scaffold, "999")
+        parsed = yaml.safe_load(result["files"][0]["content"])
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "999"
+
+    def test_companion_files_untouched_and_input_not_mutated(self) -> None:
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        scaffold = self._scaffold()
+        original_yml = scaffold["files"][0]["content"]
+        result = stamp_scaffold_config_id(scaffold, "12345")
+        assert result["files"][1]["content"] == "SELECT 1;\n"
+        # Pure function: the input scaffold must not be mutated.
+        assert scaffold["files"][0]["content"] == original_yml
+
+
+class TestBuildPushedConfigFiles:
+    """When --configuration was pushed, the local file must mirror the pushed
+    body -- writing placeholder scaffolding instead would make the next
+    ``sync push`` overwrite the real remote config with TODO templates."""
+
+    def test_mirrors_pushed_body(self) -> None:
+        from keboola_agent_cli.services.component_service import build_pushed_config_files
+
+        files = build_pushed_config_files(
+            component_id="keboola.ex-http",
+            config_id="12345",
+            name="test-config",
+            description="desc",
+            configuration={
+                "parameters": {
+                    "baseUrl": "https://example.com",
+                    "#token": "KBC::ProjectSecure::abc",
+                },
+                "storage": {"input": {"tables": [{"source": "in.c-b.t"}]}},
+            },
+        )
+        assert [f["path"] for f in files] == ["_config.yml"]
+        parsed = yaml.safe_load(files[0]["content"])
+        assert parsed["name"] == "test-config"
+        assert parsed["parameters"]["baseUrl"] == "https://example.com"
+        # Encrypted value travels verbatim -- never decrypted, never a TODO.
+        assert parsed["parameters"]["#token"] == "KBC::ProjectSecure::abc"
+        assert parsed["input"] == {"tables": [{"source": "in.c-b.t"}]}
+        assert parsed["_keboola"] == {
+            "component_id": "keboola.ex-http",
+            "config_id": "12345",
+        }
