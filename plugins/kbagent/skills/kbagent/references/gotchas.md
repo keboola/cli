@@ -3515,7 +3515,7 @@ things to internalise:
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
 - Override files (`--bucket-map` / `--variable-values` / `--instance-rename`)
-  must be **flat `{id: scalar}` mappings** (since v0.89.1). A nested value —
+  must be **flat `{id: scalar}` mappings** (since v0.89.0). A nested value —
   one fat-fingered colon away from valid YAML, e.g. `in.c-old:` followed by an
   indented `new: in.c-new` — is rejected with `CONFIG_ERROR` (exit 5) naming
   the offending key and its actual type. Older versions silently stringified
