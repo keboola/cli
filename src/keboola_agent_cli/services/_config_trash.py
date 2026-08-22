@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 
 # States a delete/restore attempt can find the configuration in.
 STATE_LIVE = "live"
@@ -75,6 +75,94 @@ def already_trashed_result(
             "not deleting again (a second DELETE would purge it permanently). "
             "Use 'kbagent config restore' to bring it back."
         ),
+    }
+
+
+def execute_delete(
+    client: Any,
+    alias: str,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """The whole delete state machine, on an already-open client.
+
+    * live -> DELETE, status ``deleted``
+    * already in the trash -> NO second DELETE (it would purge permanently),
+      status ``already_in_trash``
+    * absent from both -> NOT_FOUND
+    * dry_run -> report the located state, write nothing
+    """
+    state = locate_config(client, component_id, config_id, branch_id)
+    if state == STATE_MISSING:
+        raise KeboolaApiError(
+            message=(
+                f"Configuration '{component_id}/{config_id}' not found -- "
+                "neither live nor in the trash."
+            ),
+            error_code=ErrorCode.NOT_FOUND,
+            status_code=404,
+        )
+    if state == STATE_TRASHED:
+        result = already_trashed_result(alias, component_id, config_id, branch_id)
+        result["dry_run"] = dry_run
+        return result
+    if dry_run:
+        return {
+            "status": "would_delete",
+            "dry_run": True,
+            "project_alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": branch_id,
+        }
+    client.delete_config(component_id=component_id, config_id=config_id, branch_id=branch_id)
+    return {
+        "status": "deleted",
+        "dry_run": False,
+        "project_alias": alias,
+        "component_id": component_id,
+        "config_id": config_id,
+        "branch_id": branch_id,
+    }
+
+
+def execute_restore(
+    client: Any,
+    alias: str,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+) -> dict[str, Any]:
+    """Restore a trashed configuration and shape the result envelope."""
+    restored = client.restore_config(
+        component_id=component_id, config_id=config_id, branch_id=branch_id
+    )
+    return {
+        "status": "restored",
+        "project_alias": alias,
+        "component_id": component_id,
+        "config_id": config_id,
+        "branch_id": branch_id,
+        "name": restored.get("name"),
+        "version": restored.get("version"),
+    }
+
+
+def execute_trash_list(
+    client: Any,
+    alias: str,
+    component_id: str | None,
+    branch_id: int | None,
+) -> dict[str, Any]:
+    """List the trash and shape one uniform row per configuration."""
+    raw = client.list_deleted_configs(component_id=component_id, branch_id=branch_id)
+    return {
+        "project_alias": alias,
+        "branch_id": branch_id,
+        "component_id": component_id,
+        "trash": [shape_trash_entry(cfg, component_id) for cfg in raw],
     }
 
 

@@ -142,3 +142,28 @@ def _fmt(value: Any) -> str:
         s = repr(value)
     max_len = 80
     return s if len(s) <= max_len else s[: max_len - 3] + "..."
+
+
+def find_matches_in_json(
+    obj: Any,
+    match_fn: Any,
+    path: str = "",
+) -> list[str]:
+    """Recursively walk a JSON-like object and return paths where match_fn(str_value) is True."""
+    paths: list[str] = []
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child_path = f"{path}.{key}" if path else key
+            paths.extend(find_matches_in_json(value, match_fn, child_path))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            child_path = f"{path}[{i}]"
+            paths.extend(find_matches_in_json(item, match_fn, child_path))
+    elif isinstance(obj, str):
+        if match_fn(obj):
+            paths.append(path)
+    else:
+        # Numbers, booleans -- convert to string for matching
+        if obj is not None and match_fn(str(obj)):
+            paths.append(path)
+    return paths

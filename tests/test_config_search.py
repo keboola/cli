@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from helpers import setup_single_project, setup_two_projects
-from keboola_agent_cli.services.config_service import ConfigService, _find_matches_in_json
+from keboola_agent_cli.json_utils import find_matches_in_json
+from keboola_agent_cli.services.config_service import ConfigService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -125,7 +126,7 @@ class TestFindMatchesInJson:
         obj = {"name": "My Extractor", "type": "extractor"}
         match_fn = lambda s: "Extractor" in s  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert "name" in paths
         assert len(paths) == 1
@@ -143,7 +144,7 @@ class TestFindMatchesInJson:
         }
         match_fn = lambda s: "snowflakecomputing" in s  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert paths == ["configuration.parameters.db.host"]
 
@@ -157,7 +158,7 @@ class TestFindMatchesInJson:
         }
         match_fn = lambda s: "ad_groups" in s  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert paths == ["tables[1].tableName"]
 
@@ -166,7 +167,7 @@ class TestFindMatchesInJson:
         obj = {"port": 443, "name": "test"}
         match_fn = lambda s: "443" in s  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert "port" in paths
 
@@ -178,7 +179,7 @@ class TestFindMatchesInJson:
         }
         match_fn = lambda s: "nonexistent_string_xyz" in s  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert paths == []
 
@@ -197,7 +198,7 @@ class TestFindMatchesInJson:
         }
         match_fn = lambda s: "snowflake" in s.lower()  # noqa: E731
 
-        paths = _find_matches_in_json(obj, match_fn)
+        paths = find_matches_in_json(obj, match_fn)
 
         assert len(paths) == 3
         assert "name" in paths
