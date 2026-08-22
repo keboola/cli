@@ -12,9 +12,11 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 
 def _fetch_releases() -> list[dict]:
@@ -98,12 +100,99 @@ def audit_changelog_coverage(
     return missing, checked, skipped
 
 
+# Changelog versions that were bumped into ``main`` but never published as a
+# GitHub release -- 18 of them, against 161 published releases. Their content
+# did reach users, folded into the next release's wheel, but that release's
+# notes never mentioned it, so those features shipped silently.
+#
+# Frozen rather than fixed: publishing a tag retroactively would advertise a
+# wheel nobody can install, and rewriting old release notes does not reach
+# anyone who already read them. The point of the check below is to stop this
+# list from growing -- do not add to it. If a version bump has landed with no
+# release, either publish it or fold its entry into the version being prepared.
+KNOWN_UNRELEASED: frozenset[str] = frozenset(
+    {
+        "0.47.0",
+        "0.47.2",
+        "0.48.0",
+        "0.51.1",
+        "0.60.1",
+        "0.60.2",
+        "0.60.3",
+        "0.60.4",
+        "0.63.3",
+        "0.63.4",
+        "0.67.0",
+        "0.68.0",
+        "0.69.0",
+        "0.70.0",
+        "0.70.1",
+        "0.78.0",
+        "0.81.0",
+        "0.83.0",
+    }
+)
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Sort/compare versions numerically (``0.9.0`` < ``0.10.0``)."""
+    return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
+def audit_release_coverage(
+    tags: list[dict], changelog: Mapping[str, object], current_version: str
+) -> list[str]:
+    """Return changelog versions that were never published as a release.
+
+    The inverse of :func:`audit_changelog_coverage`, and the direction that
+    actually bites. A version bump lands in ``main`` with every PR that touches
+    ``pyproject.toml``, but publishing is a separate manual step -- so a
+    merge-train can leave two changelog blocks behind and the next tag silently
+    absorbs both. Whoever writes that tag's release notes reads one block and
+    ships the other unannounced.
+
+    ``current_version`` (from ``pyproject.toml``) is the release being prepared
+    and is expected to have no tag yet, so it is never reported.
+
+    Pure (no I/O) so it is unit-testable.
+    """
+    published = {entry["tagName"].lstrip("v") for entry in tags}
+    if not published:
+        return []
+    # ``gh release list`` is windowed by ``--limit``. Auditing a changelog key
+    # older than the oldest tag that window contains would report every early
+    # release as unpublished, so the audit floor is that tag rather than the
+    # start of the changelog.
+    floor = min(_version_key(v) for v in published)
+    return sorted(
+        (
+            version
+            for version in changelog
+            if version not in published
+            and version != current_version
+            and version not in KNOWN_UNRELEASED
+            and _version_key(version) >= floor
+        ),
+        key=_version_key,
+    )
+
+
+def _read_current_version() -> str:
+    """Read ``version`` out of ``pyproject.toml`` without a TOML dependency."""
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    for line in pyproject.read_text().splitlines():
+        match = re.match(r'^version\s*=\s*"([^"]+)"', line)
+        if match:
+            return match.group(1)
+    raise RuntimeError("no version found in pyproject.toml")
+
+
 def _check_mode() -> None:
-    """Verify all stable GitHub releases have entries in changelog.py."""
+    """Verify releases and changelog entries cover each other, both ways."""
     from keboola_agent_cli.changelog import CHANGELOG
 
     result = subprocess.run(
-        ["gh", "release", "list", "--limit", "50", "--json", "tagName,isPrerelease"],
+        ["gh", "release", "list", "--limit", "500", "--json", "tagName,isPrerelease"],
         capture_output=True,
         text=True,
         check=True,
@@ -111,13 +200,27 @@ def _check_mode() -> None:
     tags = json.loads(result.stdout)
 
     missing, checked, skipped = audit_changelog_coverage(tags, CHANGELOG)
+    unreleased = audit_release_coverage(tags, CHANGELOG, _read_current_version())
 
     suffix = f" ({skipped} pre-release(s) skipped)" if skipped else ""
+    failed = False
     if missing:
         print(f"Missing changelog entries for: {', '.join(missing)}{suffix}")
+        failed = True
+    if unreleased:
+        print(
+            f"Changelog entries with no published release: {', '.join(unreleased)}\n"
+            "  Their content ships inside the NEXT release, whose notes will not\n"
+            "  mention it -- the features go out silently. Either publish these\n"
+            "  tags, or fold the entries into the version being prepared."
+        )
+        failed = True
+    if failed:
         sys.exit(1)
-    else:
-        print(f"All {checked} stable releases have changelog entries.{suffix}")
+    print(
+        f"All {checked} stable releases have changelog entries, "
+        f"and every changelog entry has a release.{suffix}"
+    )
 
 
 def main() -> None:

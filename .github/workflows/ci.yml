@@ -12,7 +12,7 @@ jobs:
   # interpreter-independent, so they run ONCE on the baseline interpreter
   # rather than across the test matrix. This job is the CI mirror of the
   # non-test half of `make check` (lint, format, ty, skill, version,
-  # command-sync, error-codes).
+  # version-gates, command-sync, error-codes).
   #
   # `changelog-check` is deliberately NOT here: it shells out to `gh release
   # list` (GitHub auth + network) and audits whether published GitHub
@@ -81,10 +81,20 @@ jobs:
         # registry keys. None of these have any other CI coverage (see
         # CONTRIBUTING.md "Plugin synchronization map") -- forgetting one
         # ships an AI agent that recommends commands the installed kbagent
-        # version does not have. (gotchas.md (since vX.Y.Z) tags and the
-        # server/routers REST mirror need judgement, so they're left to
-        # /kbagent:review, not gated here.)
+        # version does not have. (The server/routers REST mirror needs
+        # judgement, so it's left to /kbagent:review, not gated here.)
         run: uv run python scripts/check_command_sync.py
+
+      - name: Version-gate silent-drift check
+        # Every `(since vX.Y.Z)` / `X.Y.Z+` marker must name a version that has
+        # a CHANGELOG entry. `keboola-expert.md` turns these markers into a hard
+        # refusal rule, so one naming a version that never shipped makes the
+        # agent refuse a flag the user actually has -- and nothing else notices.
+        # Whether a marker names the RIGHT version still needs judgement and
+        # stays with /kbagent:review; that the version EXISTS does not, and a
+        # release renumber breaks exactly that half in bulk. Offline (reads the
+        # tree only), unlike changelog-check.
+        run: uv run python scripts/check_version_gates.py
 
       - name: Error-code enum check
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).
