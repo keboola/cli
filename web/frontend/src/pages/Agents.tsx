@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, ssePost, type SsePostHandle } from "../api/client";
 import {
   AgentRunRaw,
@@ -19,6 +20,7 @@ import {
   type AgentEvent,
   type RunSummary,
 } from "../components/AgentRunView";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -525,6 +527,10 @@ function NewTaskDrawer({
   const [testRunning, setTestRunning] = useState(false);
   const testHandleRef = useRef<SsePostHandle | null>(null);
 
+  // Open state of the "discard unsaved changes?" confirmation (rendered at the
+  // bottom of this component). Replaces the native window.confirm().
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
   // Dirty-form guard: snapshot the initial state on first render, then compare
   // on every render. If the user touched anything, Esc / backdrop / X clicks
   // ask for confirmation before discarding the form (drawer unmount = state loss).
@@ -563,7 +569,10 @@ function NewTaskDrawer({
   });
   const dirty = currentSnapshot !== initialSnapshot;
   const handleClose = () => {
-    if (dirty && !window.confirm("Discard unsaved changes?")) return;
+    if (dirty) {
+      setConfirmDiscard(true);
+      return;
+    }
     onClose();
   };
 
@@ -690,327 +699,352 @@ function NewTaskDrawer({
   });
 
   return (
-    <Drawer
-      open={true}
-      onClose={handleClose}
-      title={isEditing ? `Edit task: ${existing!.name}` : "New scheduled agent task"}
-      subtitle={
-        isEditing
-          ? "Modify the schedule or action. Save updates the task in-place; existing run history is preserved."
-          : "Pick a cron schedule and one of two actions: AI agent (claude/codex/gemini) or kbagent CLI command."
-      }
-      width={
-        testRunning || testEvents.length > 0 || testRun
-          ? "max-w-6xl"
-          : "max-w-3xl"
-      }
-      actions={
-        <>
-          {testRunning ? (
-            <button
-              type="button"
-              className="nerd-btn hover:text-red-400"
-              onClick={cancelTest}
-              title="Abort the running test"
-            >
-              <X className="w-3 h-3 inline mr-1" />
-              cancel ({testElapsed}s)
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="nerd-btn hover:text-neon-pink"
-              disabled={createMu.isPending}
-              onClick={startTest}
-              title="Run this action right now without saving the schedule"
-            >
-              <Play className="w-3 h-3 inline mr-1" />
-              Test now
-            </button>
-          )}
-          <button
-            type="button"
-            className="nerd-btn hover:text-keboola"
-            disabled={!name || createMu.isPending}
-            onClick={() => {
-              setError(null);
-              createMu.mutate();
-            }}
-          >
-            <Bot className="w-3 h-3 inline mr-1" />
-            {createMu.isPending
-              ? isEditing
-                ? "saving..."
-                : "creating..."
-              : isEditing
-                ? "Save"
-                : "Create"}
-          </button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <label className="text-xs text-zinc-400 block">
-          Name
-          <input
-            className="nerd-input w-full mt-1"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Nightly error-job triage"
-            required
-          />
-        </label>
-        <label className="text-xs text-zinc-400 block">
-          Description (optional)
-          <input
-            className="nerd-input w-full mt-1"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </label>
-
-        <div>
-          <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2">
-            <input
-              type="checkbox"
-              checked={manual}
-              onChange={(e) => setManual(e.target.checked)}
-            />
-            <span>
-              Manual trigger only{" "}
-              <span className="text-zinc-500">
-                (no schedule — runs only via Test now / Run, or as a chained downstream)
-              </span>
-            </span>
-          </label>
-          {/* Hide the cron block entirely when manual — the field stays in
-              state so the user can flip back without retyping, but showing
-              "0 0 * * *" next to a "Manual trigger only" checkbox is
-              confusing (user reported it). */}
-          {!manual ? (
-            <>
-              <div className="text-xs text-zinc-400 mb-1">Cron schedule</div>
-              <input
-                className="nerd-input w-full font-mono"
-                value={cron}
-                onChange={(e) => setCron(e.target.value)}
-              />
-              <div className="flex flex-wrap gap-1 mt-2">
-                {CRON_PRESETS.map((p) => (
-                  <button
-                    key={p.cron}
-                    type="button"
-                    className="nerd-pill hover:border-keboola hover:text-keboola"
-                    onClick={() => setCron(p.cron)}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : null}
-          {!manual && previewQ.data ? (
-            <div className="text-xs text-zinc-500 mt-2">
-              Next firings:{" "}
-              <span className="font-mono text-accent">
-                {previewQ.data.firings
-                  .slice(0, 3)
-                  .map((f) => new Date(f).toLocaleString())
-                  .join(" → ")}
-              </span>
-            </div>
-          ) : !manual && previewQ.error ? (
-            <div className="text-xs text-red-400 mt-2">Invalid cron expression</div>
-          ) : null}
-        </div>
-
-        {/* Chain configuration: after this task's run completes, optionally
-            fire another task with this run's id passed as upstream context. */}
-        <div>
-          <div className="text-xs text-zinc-400 mb-1">
-            Chain → run another task when this one completes
-          </div>
-          {chainCandidates.length === 0 ? (
-            <div className="text-xs text-zinc-500 italic">
-              No other tasks yet. Save this task first, then add another to chain to.
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                className="nerd-input"
-                value={trigger?.task_id ?? ""}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  if (!id) {
-                    setTrigger(null);
-                  } else {
-                    setTrigger({ on: trigger?.on ?? "success", task_id: id });
-                  }
-                }}
+    <>
+      <Drawer
+        open={true}
+        onClose={handleClose}
+        title={isEditing ? `Edit task: ${existing!.name}` : "New scheduled agent task"}
+        subtitle={
+          isEditing
+            ? "Modify the schedule or action. Save updates the task in-place; existing run history is preserved."
+            : "Pick a cron schedule and one of two actions: AI agent (claude/codex/gemini) or kbagent CLI command."
+        }
+        width={
+          testRunning || testEvents.length > 0 || testRun
+            ? "max-w-6xl"
+            : "max-w-3xl"
+        }
+        actions={
+          <>
+            {testRunning ? (
+              <button
+                type="button"
+                className="nerd-btn hover:text-red-400"
+                onClick={cancelTest}
+                title="Abort the running test"
               >
-                <option value="">— no chain —</option>
-                {chainCandidates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              {trigger ? (
-                <>
-                  <span className="text-xs text-zinc-500">on</span>
-                  {(["success", "error", "always"] as TriggerOn[]).map((opt) => (
+                <X className="w-3 h-3 inline mr-1" />
+                cancel ({testElapsed}s)
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="nerd-btn hover:text-neon-pink"
+                disabled={createMu.isPending}
+                onClick={startTest}
+                title="Run this action right now without saving the schedule"
+              >
+                <Play className="w-3 h-3 inline mr-1" />
+                Test now
+              </button>
+            )}
+            <button
+              type="button"
+              className="nerd-btn hover:text-keboola"
+              disabled={!name || createMu.isPending}
+              onClick={() => {
+                setError(null);
+                createMu.mutate();
+              }}
+            >
+              <Bot className="w-3 h-3 inline mr-1" />
+              {createMu.isPending
+                ? isEditing
+                  ? "saving..."
+                  : "creating..."
+                : isEditing
+                  ? "Save"
+                  : "Create"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <label className="text-xs text-zinc-400 block">
+            Name
+            <input
+              className="nerd-input w-full mt-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Nightly error-job triage"
+              required
+            />
+          </label>
+          <label className="text-xs text-zinc-400 block">
+            Description (optional)
+            <input
+              className="nerd-input w-full mt-1"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+
+          <div>
+            <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 mb-2">
+              <input
+                type="checkbox"
+                checked={manual}
+                onChange={(e) => setManual(e.target.checked)}
+              />
+              <span>
+                Manual trigger only{" "}
+                <span className="text-zinc-500">
+                  (no schedule — runs only via Test now / Run, or as a chained downstream)
+                </span>
+              </span>
+            </label>
+            {/* Hide the cron block entirely when manual — the field stays in
+                state so the user can flip back without retyping, but showing
+                "0 0 * * *" next to a "Manual trigger only" checkbox is
+                confusing (user reported it). */}
+            {!manual ? (
+              <>
+                <div className="text-xs text-zinc-400 mb-1">Cron schedule</div>
+                <input
+                  className="nerd-input w-full font-mono"
+                  value={cron}
+                  onChange={(e) => setCron(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {CRON_PRESETS.map((p) => (
                     <button
-                      key={opt}
+                      key={p.cron}
                       type="button"
-                      className={`nerd-pill ${
-                        trigger.on === opt ? "border-keboola text-keboola" : ""
-                      }`}
-                      onClick={() => setTrigger({ ...trigger, on: opt })}
+                      className="nerd-pill hover:border-keboola hover:text-keboola"
+                      onClick={() => setCron(p.cron)}
                     >
-                      {opt}
+                      {p.label}
                     </button>
                   ))}
-                </>
-              ) : null}
-            </div>
-          )}
-          {trigger ? (
-            <div className="text-xs text-zinc-500 mt-2">
-              After each run that ends with status{" "}
-              <span className="font-mono">{trigger.on}</span>, the downstream task
-              runs with <span className="font-mono">KBAGENT_UPSTREAM_RUN_ID</span> +{" "}
-              <span className="font-mono">KBAGENT_UPSTREAM_TASK_ID</span> in its env.
-            </div>
-          ) : null}
-        </div>
-
-        <div>
-          <div className="text-xs text-zinc-400 mb-1">Action type</div>
-          <div className="flex gap-2 flex-wrap">
-            <button
-              type="button"
-              className={`nerd-btn flex items-center gap-1 ${
-                actionType === "ai_agent" ? "border-neon-pink text-neon-pink" : ""
-              }`}
-              onClick={() => setActionType("ai_agent")}
-            >
-              <Brain className="w-3 h-3" /> AI agent
-            </button>
-            <button
-              type="button"
-              className={`nerd-btn flex items-center gap-1 ${
-                actionType === "cli_command" ? "border-keboola text-keboola" : ""
-              }`}
-              onClick={() => setActionType("cli_command")}
-            >
-              <Terminal className="w-3 h-3" /> CLI command
-            </button>
+                </div>
+              </>
+            ) : null}
+            {!manual && previewQ.data ? (
+              <div className="text-xs text-zinc-500 mt-2">
+                Next firings:{" "}
+                <span className="font-mono text-accent">
+                  {previewQ.data.firings
+                    .slice(0, 3)
+                    .map((f) => new Date(f).toLocaleString())
+                    .join(" → ")}
+                </span>
+              </div>
+            ) : !manual && previewQ.error ? (
+              <div className="text-xs text-red-400 mt-2">Invalid cron expression</div>
+            ) : null}
           </div>
-        </div>
 
-        {actionType === "ai_agent" ? (
-          <>
-            <div>
-              <div className="text-xs text-zinc-400 mb-1">AI CLI</div>
-              <div className="flex gap-2">
-                {(["claude", "codex", "gemini"] as const).map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`nerd-btn ${
-                      aiCli === c ? "border-neon-pink text-neon-pink" : ""
-                    }`}
-                    onClick={() => setAiCli(c)}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-              <div className="text-xs text-zinc-600 mt-2">
-                The CLI must be installed and authenticated on this machine.
-                The agent runs once with the prompt below and exits; its full
-                response is captured into the run history.
-              </div>
+          {/* Chain configuration: after this task's run completes, optionally
+              fire another task with this run's id passed as upstream context. */}
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">
+              Chain → run another task when this one completes
             </div>
-            <PromptHelperPanel
-              cli={aiCli}
-              draft={aiPrompt}
-              project={project}
-              onApply={(p) => setAiPrompt(p)}
-            />
-            <label className="text-xs text-zinc-400 block">
-              Prompt
-              <textarea
-                className="nerd-input w-full mt-1 font-mono h-40"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Check overnight error jobs and summarize the top 3 root causes"
+            {chainCandidates.length === 0 ? (
+              <div className="text-xs text-zinc-500 italic">
+                No other tasks yet. Save this task first, then add another to chain to.
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="nerd-input"
+                  value={trigger?.task_id ?? ""}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (!id) {
+                      setTrigger(null);
+                    } else {
+                      setTrigger({ on: trigger?.on ?? "success", task_id: id });
+                    }
+                  }}
+                >
+                  <option value="">— no chain —</option>
+                  {chainCandidates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                {trigger ? (
+                  <>
+                    <span className="text-xs text-zinc-500">on</span>
+                    {(["success", "error", "always"] as TriggerOn[]).map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        className={`nerd-pill ${
+                          trigger.on === opt ? "border-keboola text-keboola" : ""
+                        }`}
+                        onClick={() => setTrigger({ ...trigger, on: opt })}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+              </div>
+            )}
+            {trigger ? (
+              <div className="text-xs text-zinc-500 mt-2">
+                After each run that ends with status{" "}
+                <span className="font-mono">{trigger.on}</span>, the downstream task
+                runs with <span className="font-mono">KBAGENT_UPSTREAM_RUN_ID</span> +{" "}
+                <span className="font-mono">KBAGENT_UPSTREAM_TASK_ID</span> in its env.
+              </div>
+            ) : null}
+          </div>
+
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Action type</div>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                type="button"
+                className={`nerd-btn flex items-center gap-1 ${
+                  actionType === "ai_agent" ? "border-neon-pink text-neon-pink" : ""
+                }`}
+                onClick={() => setActionType("ai_agent")}
+              >
+                <Brain className="w-3 h-3" /> AI agent
+              </button>
+              <button
+                type="button"
+                className={`nerd-btn flex items-center gap-1 ${
+                  actionType === "cli_command" ? "border-keboola text-keboola" : ""
+                }`}
+                onClick={() => setActionType("cli_command")}
+              >
+                <Terminal className="w-3 h-3" /> CLI command
+              </button>
+            </div>
+          </div>
+
+          {actionType === "ai_agent" ? (
+            <>
+              <div>
+                <div className="text-xs text-zinc-400 mb-1">AI CLI</div>
+                <div className="flex gap-2">
+                  {(["claude", "codex", "gemini"] as const).map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`nerd-btn ${
+                        aiCli === c ? "border-neon-pink text-neon-pink" : ""
+                      }`}
+                      onClick={() => setAiCli(c)}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-zinc-600 mt-2">
+                  The CLI must be installed and authenticated on this machine.
+                  The agent runs once with the prompt below and exits; its full
+                  response is captured into the run history.
+                </div>
+              </div>
+              <PromptHelperPanel
+                cli={aiCli}
+                draft={aiPrompt}
+                project={project}
+                onApply={(p) => setAiPrompt(p)}
               />
-            </label>
+              <label className="text-xs text-zinc-400 block">
+                Prompt
+                <textarea
+                  className="nerd-input w-full mt-1 font-mono h-40"
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="Check overnight error jobs and summarize the top 3 root causes"
+                />
+              </label>
+              <label className="text-xs text-zinc-400 block">
+                Extra CLI args (optional, space-separated)
+                <input
+                  className="nerd-input w-full mt-1 font-mono"
+                  value={aiExtraArgs}
+                  onChange={(e) => setAiExtraArgs(e.target.value)}
+                  placeholder="--allowed-tools Read,Bash"
+                />
+              </label>
+            </>
+          ) : (
             <label className="text-xs text-zinc-400 block">
-              Extra CLI args (optional, space-separated)
+              Argv (will be prefixed with 'kbagent' if missing)
               <input
                 className="nerd-input w-full mt-1 font-mono"
-                value={aiExtraArgs}
-                onChange={(e) => setAiExtraArgs(e.target.value)}
-                placeholder="--allowed-tools Read,Bash"
+                value={argv}
+                onChange={(e) => setArgv(e.target.value)}
               />
+              <span className="text-zinc-600">
+                stdout/stderr is captured into the run history.
+              </span>
             </label>
-          </>
-        ) : (
-          <label className="text-xs text-zinc-400 block">
-            Argv (will be prefixed with 'kbagent' if missing)
-            <input
-              className="nerd-input w-full mt-1 font-mono"
-              value={argv}
-              onChange={(e) => setArgv(e.target.value)}
-            />
-            <span className="text-zinc-600">
-              stdout/stderr is captured into the run history.
-            </span>
-          </label>
-        )}
+          )}
 
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          Enable immediately (will start running per cron)
-        </label>
-        {error ? <ErrorBox message={error} /> : null}
-      </div>
-      {testRunning || testEvents.length > 0 ? (
-        <div className="mt-4 space-y-3">
-          <AgentRunView
-            events={testEvents}
-            running={testRunning}
-            elapsed={testElapsed}
-            onCancel={cancelTest}
-          />
-          <AgentRunRaw events={testEvents} />
-          {testRun?.output && ("stdout" in testRun.output || "results" in testRun.output) ? (
-            <div className="nerd-card">
-              <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-                Raw output (cli action)
-              </h3>
-              {testRun.output && "stdout" in testRun.output ? (
-                <pre
-                  className="nerd-code whitespace-pre-wrap"
-                  style={{ maxHeight: "240px" }}
-                >
-                  {String(testRun.output.stdout ?? "")}
-                </pre>
-              ) : null}
-              {testRun.output && "results" in testRun.output ? (
-                <JsonView data={testRun.output} maxHeight="320px" />
-              ) : null}
-            </div>
-          ) : null}
+          <label className="flex items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            Enable immediately (will start running per cron)
+          </label>
+          {error ? <ErrorBox message={error} /> : null}
         </div>
-      ) : null}
-    </Drawer>
+        {testRunning || testEvents.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            <AgentRunView
+              events={testEvents}
+              running={testRunning}
+              elapsed={testElapsed}
+              onCancel={cancelTest}
+            />
+            <AgentRunRaw events={testEvents} />
+            {testRun?.output && ("stdout" in testRun.output || "results" in testRun.output) ? (
+              <div className="nerd-card">
+                <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+                  Raw output (cli action)
+                </h3>
+                {testRun.output && "stdout" in testRun.output ? (
+                  <pre
+                    className="nerd-code whitespace-pre-wrap"
+                    style={{ maxHeight: "240px" }}
+                  >
+                    {String(testRun.output.stdout ?? "")}
+                  </pre>
+                ) : null}
+                {testRun.output && "results" in testRun.output ? (
+                  <JsonView data={testRun.output} maxHeight="320px" />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Drawer>
+      {/* Portaled straight to <body>. The Drawer itself portals to <body> at
+          z-50 and its backdrop-blur makes it a containing block, so a
+          fixed-position modal rendered among the drawer's children would be
+          clipped by the drawer's overflow-auto content area and would sit in
+          the same stacking context. Appending after the drawer's portal node
+          puts the confirm reliably on top. */}
+      {confirmDiscard
+        ? createPortal(
+            <ConfirmModal
+              danger
+              title="Discard unsaved changes?"
+              body="This form has unsaved edits. Closing it now throws them away — nothing is saved to the task."
+              confirmLabel="Discard"
+              cancelLabel="Keep editing"
+              onConfirm={() => {
+                setConfirmDiscard(false);
+                onClose();
+              }}
+              onCancel={() => setConfirmDiscard(false)}
+            />,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 

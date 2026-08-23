@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Download, Eye, Info, Layers, Loader2, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Download,
+  Eye,
+  Info,
+  Layers,
+  Loader2,
+  Pencil,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
@@ -40,6 +51,24 @@ interface TableDetail {
   last_change_date: string;
   created: string;
   metadata: Array<Record<string, unknown>>;
+  /**
+   * Raw Storage API `definition`, passed through verbatim (issue #621). On
+   * BigQuery it is the ONLY readable record of the registered partition /
+   * clustering layout. Present on EVERY response -- an untyped table gets one
+   * too -- so `null` means the stack omitted the key, never "untyped".
+   */
+  definition?: {
+    timePartitioning?: { type?: string; field?: string; expirationMs?: string | number } | null;
+    rangePartitioning?: {
+      field?: string;
+      range?: { start?: string | number; end?: string | number; interval?: string | number };
+    } | null;
+    clustering?: { fields?: string[] } | null;
+    requirePartitionFilter?: boolean | null;
+    partitions?: Array<Record<string, unknown>> | null;
+    [key: string]: unknown;
+  } | null;
+  legacy_column_descriptions?: string[];
 }
 
 interface BucketsResp {
@@ -774,6 +803,71 @@ function InfoTab({ d }: { d: TableDetail }) {
         <Field label="Created" value={d.created} mono />
         <Field label="Last import" value={d.last_import_date || "-"} mono />
       </div>
+      <TableLayout definition={d.definition} />
+    </div>
+  );
+}
+
+// Render the raw Storage API `definition` (issue #621). On BigQuery this object
+// is the only readable record of the registered partition/clustering layout, so
+// it is how a create-table + swap-tables repartition is VERIFIED -- the table id
+// is unchanged either way. Every sub-key is optional, and a table with no layout
+// at all must render NOTHING (not an empty heading), so each row is guarded and
+// the section is dropped when none of them produced anything.
+function TableLayout({ definition }: { definition: TableDetail["definition"] }) {
+  if (!definition) return null;
+
+  const rows: Array<{ label: string; value: string; mono?: boolean }> = [];
+
+  const tp = definition.timePartitioning;
+  if (tp) {
+    const type = tp.type ?? "?";
+    let value = tp.field ? `${type} on ${tp.field}` : `${type} (ingestion time)`;
+    if (tp.expirationMs !== undefined && tp.expirationMs !== null && tp.expirationMs !== "") {
+      value += ` ・ expires ${tp.expirationMs} ms`;
+    }
+    rows.push({ label: "Time partitioning", value, mono: true });
+  }
+
+  const rp = definition.rangePartitioning;
+  if (rp) {
+    const range = rp.range ?? {};
+    const bounds = `[${range.start ?? "?"}, ${range.end ?? "?"})`;
+    rows.push({
+      label: "Range partitioning",
+      value: `${rp.field ?? "?"} ${bounds} step ${range.interval ?? "?"}`,
+      mono: true,
+    });
+  }
+
+  const clusteringFields = definition.clustering?.fields;
+  if (clusteringFields && clusteringFields.length > 0) {
+    rows.push({ label: "Clustering", value: clusteringFields.join(", "), mono: true });
+  }
+
+  if (typeof definition.requirePartitionFilter === "boolean") {
+    rows.push({
+      label: "Partition filter required",
+      value: definition.requirePartitionFilter ? "yes" : "no",
+    });
+  }
+
+  // The COUNT only: `partitions` is unbounded (one entry per physical partition
+  // from INFORMATION_SCHEMA.PARTITIONS) and must never be dumped into the grid.
+  if (definition.partitions) {
+    rows.push({ label: "Partitions", value: definition.partitions.length.toLocaleString() });
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Table layout</div>
+      <div className="grid grid-cols-2 gap-3">
+        {rows.map((r) => (
+          <Field key={r.label} label={r.label} value={r.value} mono={r.mono} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -787,41 +881,172 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
   );
 }
 
+interface DescribeVars {
+  column: string;
+  description: string;
+  /** Override in effect before the optimistic write, for rollback on error. */
+  previous?: string;
+}
+
 function SchemaTab({ d }: { d: TableDetail }) {
+  const { project, branchId } = useUIState();
+  const qc = useQueryClient();
+
+  // Only one column is editable at a time; `overrides` is the optimistic layer
+  // merged over the server's `c.description` until the refetch lands.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
+  // Before 0.88.0 kbagent wrote a flat `KBC.column.{name}.description` key on the
+  // TABLE's metadata -- read by nothing but kbagent, so a documented column still
+  // looked blank in the UI, the MCP server and the warehouse. This route is the
+  // NATIVE write (PUT .../tables/{id}/definition, isDescriptionSystemManaged:
+  // false), which the backend mirrors into columnMetadata KBC.description -- so
+  // everything downstream sees it, and the next Output Mapping run does not
+  // overwrite it.
+  const describe = useMutation({
+    mutationFn: (vars: DescribeVars) =>
+      api.post(
+        `/storage/columns/${encodeURIComponent(project!)}/${encodeURIComponent(d.table_id)}/describe`,
+        { columns: { [vars.column]: vars.description }, branch_id: branchId ?? undefined },
+      ),
+    onError: (e, vars) => {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setOverrides((cur) => {
+        const next = { ...cur };
+        if (vars.previous === undefined) delete next[vars.column];
+        else next[vars.column] = vars.previous;
+        return next;
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["table-detail"] });
+    },
+  });
+
+  const save = (column: string) => {
+    const previous = overrides[column];
+    setOverrides((cur) => ({ ...cur, [column]: draft }));
+    setEditing(null);
+    setError(null);
+    describe.mutate({ column, description: draft, previous });
+  };
+
+  const legacyCount = d.legacy_column_descriptions?.length ?? 0;
+
   return (
-    <div className="overflow-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 uppercase tracking-wider">
-            <th className="px-3 py-2 text-left font-normal">Column</th>
-            <th className="px-3 py-2 text-left font-normal">Type</th>
-            <th className="px-3 py-2 text-left font-normal">Native</th>
-            <th className="px-3 py-2 text-left font-normal">Length</th>
-            <th className="px-3 py-2 text-center font-normal">Null</th>
-            <th className="px-3 py-2 text-center font-normal">PK</th>
-            <th className="px-3 py-2 text-left font-normal">Default</th>
-            <th className="px-3 py-2 text-left font-normal">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {d.column_details.map((c) => (
-            <tr key={c.name} className="border-b border-zinc-200 dark:border-zinc-900/50">
-              <td className="px-3 py-2 font-bold text-accent">{c.name}</td>
-              <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{c.type ?? "-"}</td>
-              <td className="px-3 py-2 text-zinc-500">{c.native_type ?? "-"}</td>
-              <td className="px-3 py-2 text-zinc-500">{c.length ?? "-"}</td>
-              <td className="px-3 py-2 text-center">
-                {c.nullable === undefined ? "-" : c.nullable ? "✓" : ""}
-              </td>
-              <td className="px-3 py-2 text-center">
-                {d.primary_key.includes(c.name) ? "🔑" : ""}
-              </td>
-              <td className="px-3 py-2 text-zinc-500">{c.default ?? "-"}</td>
-              <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 text-xs">{c.description ?? ""}</td>
+    <div className="space-y-2">
+      {legacyCount > 0 ? (
+        <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-neon-amber">
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          <span>
+            {legacyCount} column(s) still carry a legacy description key — run{" "}
+            <code className="px-1 py-0.5 rounded bg-zinc-100 border border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800">
+              kbagent storage describe-migrate
+            </code>
+            .
+          </span>
+        </div>
+      ) : null}
+      {error ? <ErrorBox message={error} /> : null}
+      <div className="overflow-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 uppercase tracking-wider">
+              <th className="px-3 py-2 text-left font-normal">Column</th>
+              <th className="px-3 py-2 text-left font-normal">Type</th>
+              <th className="px-3 py-2 text-left font-normal">Native</th>
+              <th className="px-3 py-2 text-left font-normal">Length</th>
+              <th className="px-3 py-2 text-center font-normal">Null</th>
+              <th className="px-3 py-2 text-center font-normal">PK</th>
+              <th className="px-3 py-2 text-left font-normal">Default</th>
+              <th className="px-3 py-2 text-left font-normal">Description</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {d.column_details.map((c) => {
+              const current = overrides[c.name] ?? c.description ?? "";
+              return (
+                <tr
+                  key={c.name}
+                  className="group border-b border-zinc-200 dark:border-zinc-900/50"
+                >
+                  <td className="px-3 py-2 font-bold text-accent">{c.name}</td>
+                  <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{c.type ?? "-"}</td>
+                  <td className="px-3 py-2 text-zinc-500">{c.native_type ?? "-"}</td>
+                  <td className="px-3 py-2 text-zinc-500">{c.length ?? "-"}</td>
+                  <td className="px-3 py-2 text-center">
+                    {c.nullable === undefined ? "-" : c.nullable ? "✓" : ""}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {d.primary_key.includes(c.name) ? "🔑" : ""}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-500">{c.default ?? "-"}</td>
+                  <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 text-xs">
+                    {editing === c.name ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          className={repartInputCls}
+                          value={draft}
+                          // Click-to-edit: put the caret straight in the cell the user just clicked.
+                          autoFocus
+                          placeholder="column description"
+                          onChange={(e) => setDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              save(c.name);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              setEditing(null);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="nerd-btn text-xs hover:text-keboola"
+                          title="Save"
+                          onClick={() => save(c.name)}
+                        >
+                          <Check className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          className="nerd-btn text-xs"
+                          title="Cancel"
+                          onClick={() => setEditing(null)}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="w-full text-left flex items-center gap-1.5 disabled:cursor-not-allowed"
+                        disabled={!project}
+                        title={project ? "Edit description" : "Select a project to edit"}
+                        onClick={() => {
+                          setEditing(c.name);
+                          setDraft(current);
+                        }}
+                      >
+                        <span className={current ? "" : "text-zinc-400 dark:text-zinc-600"}>
+                          {current || "—"}
+                        </span>
+                        {project ? (
+                          <Pencil className="w-3 h-3 shrink-0 text-zinc-400 dark:text-zinc-600 opacity-0 group-hover:opacity-100" />
+                        ) : null}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

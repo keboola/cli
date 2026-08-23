@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import {
   Activity,
   Bot,
+  Coins,
   Heart,
   Network,
   Play,
@@ -30,6 +32,26 @@ interface AgentTask {
 interface DoctorResp {
   checks: Array<{ name: string; status: string; message: string }>;
   summary: { total: number; passed: number; failed: number; warnings?: number };
+}
+
+/**
+ * PAYG credit balance for one project. A project without the
+ * `pay-as-you-go` owner feature never reaches the billing host at all -- it
+ * comes back as a per-project error with `error_code: "PAYG_NOT_AVAILABLE"`,
+ * which is a normal state on most stacks, not a failure worth shouting about.
+ */
+interface CreditRow {
+  project_alias: string;
+  remaining: number;
+  consumed: number;
+  total: number;
+  remaining_minutes: number;
+  consumed_minutes: number;
+}
+
+interface CreditsResp {
+  credits: CreditRow[];
+  errors: Array<{ project_alias: string; error_code: string; message: string }>;
 }
 
 function greeting(): string {
@@ -64,6 +86,15 @@ export function DashboardPage() {
     queryFn: () =>
       api.get("/jobs", { query: { project: project ?? undefined, limit: 5 } }),
     enabled: !!project,
+  });
+  // Scoped to the active project so the tile answers "how much is left HERE",
+  // and so a 30-project config does not fan out 30 billing calls on every
+  // dashboard visit.
+  const creditsQ = useQuery<CreditsResp>({
+    queryKey: ["billing-credits", project],
+    queryFn: () => api.get("/billing/credits", { query: { project: project ?? undefined } }),
+    enabled: !!project,
+    staleTime: 5 * 60_000,
   });
 
   /**
@@ -139,7 +170,7 @@ export function DashboardPage() {
       </form>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <StatTile
           label="Projects connected"
           value={`${onlineProjects} / ${projects.length}`}
@@ -167,6 +198,7 @@ export function DashboardPage() {
           icon={<PlayCircle className="w-4 h-4" />}
           onClick={() => setPage("jobs")}
         />
+        <CreditsTile project={project} q={creditsQ} />
       </div>
 
       {/* Two-column: agent activity + suggested actions */}
@@ -300,6 +332,59 @@ export function DashboardPage() {
   );
 }
 
+/**
+ * Fifth stat tile: PAYG credit balance for the active project.
+ *
+ * Degrades quietly by design. Most stacks are not pay-as-you-go, so the
+ * common outcome is a per-project `PAYG_NOT_AVAILABLE` -- that renders as a
+ * muted "n/a" pill, never as a red error, because there is nothing for the
+ * user to fix. Any other per-project error gets the same muted treatment with
+ * the server message in the tooltip: a billing hiccup must not make the whole
+ * dashboard look broken.
+ */
+function CreditsTile({
+  project,
+  q,
+}: {
+  project: string | null;
+  q: UseQueryResult<CreditsResp>;
+}) {
+  const row = q.data?.credits?.[0];
+  const err = q.data?.errors?.[0];
+  const unavailable = !row && !!err;
+
+  let value: React.ReactNode;
+  let subtle: string | undefined;
+  if (!project) {
+    value = <span className="nerd-pill">n/a</span>;
+    subtle = "(no project)";
+  } else if (q.isLoading) {
+    value = <span className="text-zinc-500 text-base">…</span>;
+  } else if (row) {
+    value = row.remaining.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    // The Keboola UI shows the same balance in minutes (1 credit = 60 min);
+    // the API's native unit is credits, so we surface both.
+    subtle = `${Math.round(row.remaining_minutes).toLocaleString()} min remaining`;
+  } else if (unavailable) {
+    value = <span className="nerd-pill">n/a</span>;
+    subtle = err?.error_code === "PAYG_NOT_AVAILABLE" ? "not a PAYG project" : "unavailable";
+  } else {
+    value = <span className="nerd-pill">n/a</span>;
+    subtle = "no balance reported";
+  }
+
+  return (
+    <StatTile
+      label="PAYG credits"
+      value={value}
+      subtle={subtle}
+      icon={<Coins className="w-4 h-4" />}
+      tone={row && row.remaining <= 0 ? "amber" : "default"}
+      title={err?.message ?? (row ? `${row.consumed} of ${row.total} credits consumed` : undefined)}
+    />
+  );
+}
+
 function StatTile({
   label,
   value,
@@ -307,10 +392,12 @@ function StatTile({
   icon,
   tone = "default",
   onClick,
+  title,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   subtle?: string;
+  title?: string;
   icon?: React.ReactNode;
   tone?: "default" | "red" | "amber" | "green";
   onClick?: () => void;
@@ -327,7 +414,12 @@ function StatTile({
     <button
       type="button"
       onClick={onClick}
-      className={`nerd-card text-left hover:border-keboola/40 transition-colors ${toneClass}`}
+      title={title}
+      // Tiles without an onClick are read-only readouts (e.g. credits): drop
+      // the pointer affordance so they do not look clickable.
+      className={`nerd-card text-left transition-colors ${
+        onClick ? "hover:border-keboola/40" : "cursor-default"
+      } ${toneClass}`}
     >
       <div className="flex items-center justify-between mb-1 text-[10px] uppercase tracking-wider text-zinc-500">
         <span>{label}</span>

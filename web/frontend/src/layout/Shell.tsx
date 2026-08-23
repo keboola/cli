@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { CommandPalette } from "../components/CommandPalette";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { TopBar } from "./TopBar";
@@ -14,6 +15,9 @@ export function Shell({ children }: { children: ReactNode }) {
         </main>
       </div>
       <StatusBar />
+      {/* Mounted at the shell so Ctrl/Cmd+K works from every page. Renders
+          null until opened, so it costs nothing while closed. */}
+      <CommandPalette />
     </div>
   );
 }
