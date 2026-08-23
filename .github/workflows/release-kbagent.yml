@@ -151,7 +151,10 @@ jobs:
           done
           if [ "$IS_PRERELEASE" = "true" ]; then args+=(--allow-missing); fi
           uv run python scripts/gen_release_notes.py "${args[@]}"
-      - uses: actions/upload-artifact@v4
+      # v6 is the first upload-artifact major whose runtime is Node 24 (v5 only
+      # carried "preliminary" Node 24 support and still declared `using: node20`),
+      # so a v4 -> v5 bump would keep emitting the Node 20 deprecation annotation.
+      - uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.md
@@ -257,7 +260,7 @@ jobs:
         shell: bash
         run: bash build/package/zip_binary.sh "$PKG_NAME" "$VERSION" "${{ matrix.platform }}" "${{ matrix.arch }}" "$BIN_NAME"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -279,7 +282,11 @@ jobs:
           curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_amd64.deb" -o /tmp/nfpm.deb
           echo "0a188f8bcf4ba4ba6414a514bc1f1d59f5cc92ba86160462d7aa7dab5930d327  /tmp/nfpm.deb" | sha256sum -c -
           sudo dpkg -i /tmp/nfpm.deb
-      - uses: actions/download-artifact@v4
+      # v7 is the first download-artifact major whose runtime is Node 24 (both v5
+      # and v6 still declare `using: node20`). v8 additionally turns a download
+      # digest mismatch into a hard failure instead of a warning — the right
+      # default for a release pipeline that signs and ships these bytes.
+      - uses: actions/download-artifact@v8
         with: { pattern: bin-linux-*, path: artifacts }
       - name: Write package signing keys
         env:
@@ -295,7 +302,7 @@ jobs:
           printf '%s' "$RPM_KEY_PRIVATE" > /tmp/keys/rpm.key && chmod 600 /tmp/keys/rpm.key
       - name: Build deb/rpm for each arch
         run: bash build/package/linux/build_packages.sh "$VERSION" artifacts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: linux-packages, path: dist/* }
 
   # ── Create the GitHub Release with every binary + package attached (directly
@@ -312,14 +319,14 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: artifacts }
       - name: Collect release assets
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} release/ \;
           ls -al release/
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ env.VERSION }}
           files: release/*
@@ -404,7 +411,7 @@ jobs:
       PUBLISH_PREFIX: ${{ needs.version.outputs.PUBLISH_PREFIX }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: artifacts }
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -441,7 +448,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: artifacts }
       - name: Render formula
         run: |
