@@ -14,15 +14,13 @@ The two bugs are reproduced *without a Windows machine*:
   ``force-include`` then failed the whole build. We assert every code path
   leaves ``_ui_dist/`` existing on disk.
 
-Also covers a gap where the CI wheel build always runs inside a checkout that
-has a ``.gitignore``, so it never exercised the case where hatchling cannot
-reach one -- notably an sdist build, since the sdist ``include`` list does not
-ship ``.gitignore``. Hatchling's default exclusion parses the ``.gitignore``
-*file* it locates by walking up from the project root (stopping at a ``.git``
-boundary); with no such file in reach, nothing excludes the (gitignored)
-``_ui_dist/`` the hook just populated, so it got picked up by BOTH the default
-package globbing and ``force-include``, and the wheel build aborted with "A
-second file is being added to the wheel archive at the same path". See
+Also covers the duplicate-path failure that the wheel ``exclude`` in
+``pyproject.toml`` guards against: with ``_ui_dist/`` populated at collection
+time, hatchling's ``packages`` selection picks it up alongside the
+``force-include`` and the build aborts with "A second file is being added to
+the wheel archive at the same path". That reproduces on an ordinary checkout
+(``.git`` and ``.gitignore`` both present) from hatchling 1.30.0 onwards --
+1.29.0 and earlier build fine -- so it is not tied to any VCS layout. See
 ``TestForceIncludeNoDuplicate`` below for the end-to-end regression test.
 """
 
@@ -318,16 +316,22 @@ class TestCheckWheelUiHelper:
 
 
 class TestForceIncludeNoDuplicate:
-    """Building with no reachable ``.gitignore`` must not duplicate ``_ui_dist/``.
+    """A populated ``_ui_dist/`` must not land in the wheel twice.
 
     Reproduces the real failure end-to-end (not mocked): a minimal project
-    laid out with the actual ``pyproject.toml`` / ``hatch_build.py``, a
-    prebuilt SPA dist on disk (so the hook populates ``_ui_dist/`` with a real
-    file), and deliberately no ``.gitignore`` for hatchling to find -- the
-    shape of an sdist build, whose ``include`` list omits ``.gitignore``.
+    laid out with the actual ``pyproject.toml`` / ``hatch_build.py`` and a
+    prebuilt SPA dist on disk, so the hook populates ``_ui_dist/`` with a real
+    file.
+
+    The fixture also puts hatchling's .gitignore-based exclusion deliberately
+    out of reach. That exclusion is *not* what ``exclude`` stands in for --
+    the duplicate reproduces in a normal checkout too on hatchling >= 1.30 --
+    but pinning it here stops the assertion from passing for an incidental
+    reason, e.g. under a ``TMPDIR`` that happens to sit below some other
+    ``.gitignore``.
     """
 
-    def test_wheel_builds_without_reachable_gitignore(self, tmp_path: Path) -> None:
+    def test_wheel_build_does_not_duplicate_ui_dist(self, tmp_path: Path) -> None:
         if shutil.which("uv") is None:
             pytest.skip("uv not on PATH")
 
@@ -348,10 +352,10 @@ class TestForceIncludeNoDuplicate:
         (dist / "index.html").write_text("<html>app</html>", encoding="utf-8")
 
         # An empty ``.git`` dir is the boundary that halts hatchling's upward
-        # ``.gitignore`` search, pinning the no-exclusion state regardless of
-        # what sits above ``tmp_path``. Without it, a ``TMPDIR`` located inside
-        # any checkout lets an ancestor ``.gitignore`` supply the exclusion and
-        # this test passes even with the ``exclude`` fix reverted.
+        # ``.gitignore`` search, so no ancestor ``.gitignore`` can quietly
+        # supply an exclusion. Verified load-bearing: without it, a ``TMPDIR``
+        # below any tree carrying a matching ``.gitignore`` makes this test
+        # pass even with the ``exclude`` fix reverted.
         (project / ".git").mkdir()
         assert not (project / ".gitignore").exists()
 
