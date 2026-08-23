@@ -854,7 +854,9 @@ function TableLayout({ definition }: { definition: TableDetail["definition"] }) 
 
   // The COUNT only: `partitions` is unbounded (one entry per physical partition
   // from INFORMATION_SCHEMA.PARTITIONS) and must never be dumped into the grid.
-  if (definition.partitions) {
+  // Non-empty only, matching the CLI's `render_table_layout`: an empty list is
+  // "no physical partitions reported", not a meaningful count of zero.
+  if (definition.partitions && definition.partitions.length > 0) {
     rows.push({ label: "Partitions", value: definition.partitions.length.toLocaleString() });
   }
 

@@ -43,6 +43,16 @@ const STATUS_COLORS: Record<string, string> = {
  */
 const TERMINABLE_STATUSES = new Set(["created", "waiting", "processing"]);
 
+/**
+ * Human label for a job's target: `component ・ config <id>`, dropping the
+ * config half entirely when the job carries none. A job run from an inline
+ * `configData` payload has no stored configuration, and rendering the raw
+ * value there produced a literal "config undefined" in the drawer header.
+ */
+function jobLabel(job: Job): string {
+  return job.config ? `${job.component} ・ config ${job.config}` : job.component;
+}
+
 export function JobsPage() {
   const { project } = useUIState();
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
@@ -102,7 +112,10 @@ export function JobsPage() {
               ),
             },
             { header: "Component", cell: (j) => <span className="text-accent">{j.component}</span> },
-            { header: "Config", cell: (j) => <span className="text-zinc-500">{j.configId}</span> },
+            {
+              header: "Config",
+              cell: (j) => <span className="text-zinc-500">{j.config ?? "—"}</span>,
+            },
             {
               header: "Created",
               cell: (j) => <span className="text-zinc-500 text-xs">{j.createdTime}</span>,
@@ -157,7 +170,7 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
     mutationFn: () =>
       api.post(`/jobs/${encodeURIComponent(job.project_alias)}/run`, {
         component_id: job.component,
-        config_id: job.configId,
+        config_id: job.config,
       }),
     onError: (e) => setError((e as Error).message),
     onSuccess: () => {
@@ -180,7 +193,9 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
     },
   });
 
-  const canRerun = !!job.component && !!job.configId;
+  // A job started from an inline `configData` payload has no stored
+  // configuration to re-run, so `config` is null and the button is hidden.
+  const canRerun = !!job.component && !!job.config;
   const canTerminate = TERMINABLE_STATUSES.has(job.status);
   const btn = `nerd-btn ${compact ? "text-[10px] py-0.5 px-1.5" : "text-xs"} flex items-center gap-1 disabled:opacity-50`;
 
@@ -202,7 +217,7 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
           className={`${btn} hover:text-keboola`}
           disabled={rerun.isPending}
           onClick={() => rerun.mutate()}
-          title={`Start a new job for ${job.component} / ${job.configId}`}
+          title={`Start a new job for ${job.component} / ${job.config}`}
         >
           <RotateCw className={`w-3 h-3 ${rerun.isPending ? "animate-spin" : ""}`} />
           {rerun.isPending ? "starting…" : "re-run"}
@@ -227,7 +242,7 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
           body={
             <>
               Job <span className="font-mono text-accent">{String(job.id)}</span> (
-              {job.component} / {job.configId}) is <span className="font-mono">{job.status}</span>.
+              {jobLabel(job)}) is <span className="font-mono">{job.status}</span>.
               Terminating stops it where it is — partially written output stays written.
             </>
           }
@@ -303,7 +318,7 @@ function JobDetailDrawer({ job, onClose }: { job: Job; onClose: () => void }) {
       open={true}
       onClose={onClose}
       title={`Job ${job.id}`}
-      subtitle={`${job.component} ・ config ${job.configId}`}
+      subtitle={jobLabel(job)}
       width="max-w-5xl"
       actions={
         <>
@@ -373,7 +388,9 @@ function JobCards({
     (detail.token as { description?: string } | undefined)?.description ??
     "";
   const url = (detail.url as string | undefined) ?? "";
-  const config = (detail.config as string | undefined) ?? job.configId;
+  // Empty string, not null: KV drops a falsy value, so a configData-only job
+  // renders no "Config ID" row at all instead of a literal "null".
+  const config = (detail.config as string | undefined) ?? job.config ?? "";
   const branchId = (detail.branchId as number | undefined) ?? null;
   const params = (detail.params as Record<string, unknown> | undefined) ?? {};
   const backendSize = String(
