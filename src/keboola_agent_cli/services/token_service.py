@@ -177,8 +177,16 @@ class TokenService(BaseService):
                 thread-multiplication note on :meth:`_fetch_project_tokens`.
 
         Returns:
-            ``{"tokens": [...], "count": len(tokens), "errors": [...]}``. Every
-            token row and every error entry carries ``project_alias``.
+            ``{"tokens": [...], "count": len(tokens), "errors": [...],
+            "token_errors": [...]}``. The two error lists are semantically
+            different and deliberately kept apart: ``errors`` holds
+            project-level failures (that project could not be listed at all),
+            while ``token_errors`` holds per-token ``with_last_used`` lookup
+            failures (the project listed fine; one token's event feed did
+            not, and its row degraded). Merging them would make a healthy
+            project with one degraded token read as unlistable. Every token
+            row and every error entry carries ``project_alias``; entries in
+            ``token_errors`` also carry ``token_id``.
             Ordering: without ``with_last_used``, tokens are grouped by
             ``project_alias`` (stable sort -- the per-project order
             :meth:`list_tokens` produced is preserved within each group). With
@@ -194,17 +202,24 @@ class TokenService(BaseService):
         successes, errors = self._run_parallel(projects, worker)
 
         all_tokens: list[dict[str, Any]] = []
+        token_errors: list[dict[str, Any]] = []
         for _alias, tokens, inner_errors, _ok in successes:
             all_tokens.extend(tokens)
-            errors.extend(inner_errors)
+            token_errors.extend(inner_errors)
 
         if with_last_used:
             all_tokens.sort(key=dormancy_rank)
         else:
             all_tokens.sort(key=lambda t: t.get("project_alias", ""))
-        errors.sort(key=lambda e: (e.get("project_alias", ""), e.get("token_id", "")))
+        errors.sort(key=lambda e: e.get("project_alias", ""))
+        token_errors.sort(key=lambda e: (e.get("project_alias", ""), str(e.get("token_id", ""))))
 
-        return {"tokens": all_tokens, "count": len(all_tokens), "errors": errors}
+        return {
+            "tokens": all_tokens,
+            "count": len(all_tokens),
+            "errors": errors,
+            "token_errors": token_errors,
+        }
 
     def _fetch_project_tokens(self, alias: str, with_last_used: bool) -> tuple[Any, ...]:
         """Fetch + stamp one project's token listing for the cross-project fan-out.

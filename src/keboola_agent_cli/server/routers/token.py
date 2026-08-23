@@ -44,7 +44,10 @@ def list_tokens_all(
     for the web UI's cross-project token audit. `project` is repeatable
     (`?project=a&project=b`); omitting it queries every registered project,
     matching the `GET /jobs` / `GET /billing/credits` convention. Every token
-    row and every error entry carries `project_alias`.
+    row and every error entry carries `project_alias`. Failures come back in
+    two separate lists: `errors` (a project could not be listed at all) and
+    `token_errors` (the project listed fine, but one token's last-used lookup
+    failed and its row degraded).
 
     `with_last_used` mirrors the single-project flag, but the per-token cost
     now multiplies: one extra Storage API call PER TOKEN PER PROJECT. It also

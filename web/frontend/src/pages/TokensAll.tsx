@@ -18,8 +18,9 @@ import {
 /**
  * Cross-project token audit: one `GET /token/list` call with no `project`
  * param, the server fans out over every registered project in parallel and
- * returns the merged `{tokens, errors}` envelope with `project_alias` stamped
- * on each row.
+ * returns the merged `{tokens, errors, token_errors}` envelope with
+ * `project_alias` stamped on each row (`errors` = whole project unlistable,
+ * `token_errors` = one token's last-used lookup degraded).
  *
  * **Deliberately READ-ONLY.** Minting, rotating and revoking stay on the
  * per-project page. Two reasons: every one of those calls needs a single
@@ -37,10 +38,20 @@ interface TokenProjectError {
   message: string;
 }
 
+/** A last-used lookup that failed for ONE token while its project listed fine. */
+interface TokenLookupError {
+  project_alias: string;
+  token_id?: string | number;
+  message: string;
+}
+
 interface TokensAllResp {
   tokens: TokenEntry[];
   count: number;
+  /** Project-level failures: that project could not be listed at all. */
   errors?: TokenProjectError[];
+  /** Per-token `with_last_used` lookup failures: the row degraded, the project did not. */
+  token_errors?: TokenLookupError[];
 }
 
 /** Tone -> NERD pill/text classes for the Expires cell. */
@@ -146,6 +157,7 @@ export function TokensAllPage() {
   }
 
   const projectErrors = q.data?.errors ?? [];
+  const tokenErrors = q.data?.token_errors ?? [];
   const rows = q.data?.tokens ?? [];
 
   return (
@@ -192,6 +204,27 @@ export function TokensAllPage() {
               <li key={`${e.project_alias}-${e.error_code ?? ""}-${e.message}`}>
                 <span className="font-mono">{e.project_alias}</span> — {e.message}
                 {e.error_code ? <span className="text-zinc-500"> ({e.error_code})</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {tokenErrors.length > 0 ? (
+        // Kept apart from the project banner above: these projects DID list --
+        // only single tokens' last-used lookups failed and degraded their rows.
+        <div className="nerd-card border-amber-300 text-amber-700 dark:border-amber-700/40 dark:text-neon-amber">
+          <div className="font-bold text-sm mb-1">
+            {tokenErrors.length} token last-used lookup(s) failed
+          </div>
+          <ul className="text-xs space-y-0.5">
+            {tokenErrors.map((e) => (
+              <li key={`${e.project_alias}-${String(e.token_id ?? "")}-${e.message}`}>
+                <span className="font-mono">{e.project_alias}</span>
+                {e.token_id != null ? (
+                  <span className="font-mono"> / token {String(e.token_id)}</span>
+                ) : null}{" "}
+                — {e.message}
               </li>
             ))}
           </ul>

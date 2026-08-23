@@ -621,15 +621,19 @@ class TestListTokensAll:
 
         result = TokenService(store, client_factory=factory).list_tokens_all(with_last_used=True)
 
-        assert len(result["errors"]) == 1
-        assert result["errors"][0]["token_id"] == "1"
-        assert result["errors"][0]["project_alias"] == "prod"
+        # Per-token lookup failures land in token_errors, NOT errors: the
+        # project itself listed fine, so reporting it as unlistable (the
+        # errors[] meaning) would be wrong.
+        assert result["errors"] == []
+        assert len(result["token_errors"]) == 1
+        assert result["token_errors"][0]["token_id"] == "1"
+        assert result["token_errors"][0]["project_alias"] == "prod"
 
     def test_no_projects_configured_returns_empty(self, tmp_config_dir: Path) -> None:
         store = ConfigStore(config_dir=tmp_config_dir)
         service = TokenService(store, client_factory=MagicMock())
         result = service.list_tokens_all()
-        assert result == {"tokens": [], "count": 0, "errors": []}
+        assert result == {"tokens": [], "count": 0, "errors": [], "token_errors": []}
 
     def test_clients_are_closed_for_every_project(self, tmp_config_dir: Path) -> None:
         store = self._store_with_two_projects(tmp_config_dir)
