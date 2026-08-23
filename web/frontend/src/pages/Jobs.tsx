@@ -101,21 +101,32 @@ export function JobsPage() {
     if (q.isLoading) return;
     restoredRef.current = true;
     const hit = q.data?.jobs.find((j) => String(j.id) === sel);
-    // The list is capped at 100 rows, so a shared link to an older job will
-    // miss. The drawer fetches its own detail by id anyway, so fall back to a
-    // minimal row: the header stays sparse until that detail lands, and the
-    // row-level actions (which need the component/config) stay hidden.
-    setSelected(
-      hit ?? {
+    if (hit) {
+      setSelected(hit);
+      return;
+    }
+    if (q.data) {
+      // The list is capped at 100 rows, so a shared link to an older job will
+      // miss. The drawer fetches its own detail by id anyway, so fall back to a
+      // minimal row: the header stays sparse until that detail lands, and the
+      // row-level actions (which need the component/config) stay hidden.
+      setSelected({
         project_alias: project,
         id: sel,
         status: "",
         component: "",
         config: null,
         createdTime: "",
-      },
-    );
-  }, [sel, project, q.isLoading, q.data]);
+      });
+    } else {
+      // The list itself errored -- typically a foreign link whose project
+      // alias this install does not know (TopBar is about to fall back to
+      // the default project). Opening the synthetic drawer here would pin an
+      // errored detail fetch to a project that is being swapped away, so
+      // drop the deep link instead.
+      setSel(null);
+    }
+  }, [sel, setSel, project, q.isLoading, q.data]);
 
   const openJob = (j: Job) => {
     setSelected(j);
