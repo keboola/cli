@@ -747,19 +747,26 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
        (auth doesn't care about path, but PUBLIC_PATHS exact-matches do).
     2) **Cookie-setting** ``GET /`` and ``GET /index.html``: read the built
        ``index.html``, return it with a ``Set-Cookie: kbagent_session=<token>;
-       HttpOnly; SameSite=Strict; Path=/`` header. Public (no auth) so the
-       SPA can bootstrap. The browser then attaches the cookie to every
-       same-origin REST + SSE request automatically. The token is HttpOnly
-       (no JS access -- XSS-resistant), SameSite=Strict (no cross-origin
-       sends -- CSRF-resistant), and lives only for the browser session.
+       HttpOnly; SameSite=Strict; Path=/`` header and ``Cache-Control:
+       no-cache`` (revalidate-always -- a cached shell served without a
+       request would keep a stale cookie alive across server restarts).
+       Public (no auth) so the SPA can bootstrap. The browser then attaches
+       the cookie to every same-origin REST + SSE request automatically. The
+       token is HttpOnly (no JS access -- XSS-resistant), SameSite=Strict
+       (no cross-origin sends -- CSRF-resistant), and lives only for the
+       browser session.
 
        This replaces the older "inject ``window.__KBAGENT_TOKEN`` into a
        ``<script>`` tag" approach. The injected token landed in the JS heap
        (XSS-readable) and the EventSource fallback (``?_kbagent_token=...``
        query param) put it into uvicorn's access log -- both attack surfaces
        are gone with the cookie-only design.
-    3) **StaticFiles mount at ``/``** with ``html=True`` so missing paths fall
-       through to ``index.html`` for SPA client-side routing.
+    3) **StaticFiles mount at ``/``** serving the built assets. The SPA is
+       hash-routed (deep links are ``/#/jobs/...``), so every shell load goes
+       through the ``GET /`` route above; the mount only ever serves real
+       files. (``html=True`` is kept for directory-index behavior -- note
+       Starlette's not-found fallback serves ``404.html``, which a Vite build
+       does not emit, so unknown non-API paths answer 404, not the shell.)
 
     The mount is appended *after* all API routers, so any registered route
     (``/projects``, ``/configs``, ``/agents``, ...) wins over a hypothetical
@@ -811,6 +818,15 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     async def _serve_ui_index() -> HTMLResponse:
         html = (dist / "index.html").read_text(encoding="utf-8")
         response = HTMLResponse(html)
+        # The shell is the cookie-delivery vehicle, so a browser must never
+        # satisfy a reload from its cache without asking the server: after a
+        # `kbagent serve` restart (new bearer token) a heuristically-cached
+        # index.html boots the SPA with the stale cookie and every /api/*
+        # call answers 401 with nothing visibly wrong. `no-cache` means
+        # "store, but revalidate every time" -- and since this route
+        # implements no conditional-request handling, revalidation is always
+        # a full 200 that re-sets the cookie below.
+        response.headers["Cache-Control"] = "no-cache"
         # Browser session cookie: HttpOnly + SameSite=Strict + Path=/. No
         # ``Secure`` flag because kbagent serve defaults to plain http on
         # 127.0.0.1; setting Secure would prevent the cookie from ever being
@@ -828,9 +844,9 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
         )
         return response
 
-    # SPA fallback + assets. ``html=True`` makes StaticFiles serve index.html
-    # for unknown paths (so /workspaces, /jobs, etc. client-side routes work
-    # on direct navigation). The auth middleware will still gate API calls;
+    # Assets + directory-index. The SPA is hash-routed, so client-side
+    # routes never reach this mount as paths -- it serves the built files
+    # only. The auth middleware will still gate API calls;
     # static files are served before it sees them only because StaticFiles
     # is the LAST mount and middleware runs on the unified scope -- so we
     # widen PUBLIC_PATHS via prefix logic in the auth middleware itself.

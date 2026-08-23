@@ -315,6 +315,29 @@ stdout, and refuses any request that does not present it as
 `Authorization: Bearer <token>`. Public paths: `/health/ping`,
 `/health/auth-info`, `/openapi.json`, `/docs`, `/redoc`.
 
+### Session cookie in single-process UI mode
+
+With `kbagent serve --ui`, the browser never sees the bearer token:
+`GET /` (and `GET /index.html`) answers the SPA shell with a
+`Set-Cookie: kbagent_session=<token>; HttpOnly; SameSite=Strict; Path=/`
+session cookie, and the auth middleware accepts that cookie whenever no
+`Authorization` header is present. Scripted callers keep using the header.
+
+Two layers keep that cookie from going stale across server restarts
+*(since vNEXT)* — previously a restart (new token) could leave a tab that
+reloaded from the browser cache silently 401-ing on every API call, with
+each list rendering as empty:
+
+- The shell is served with `Cache-Control: no-cache`, so a reload always
+  revalidates against the server — and the bootstrap route always answers
+  a full `200` with a fresh `Set-Cookie`.
+- The SPA's API client treats a `401` as "cookie may be stale": it
+  re-fetches `/` once with `cache: "reload"` (bypassing every cache
+  layer), retries the request, and only if the retry still answers `401`
+  shows a visible **Session expired** banner (for `SESSION_EXPIRED` /
+  `SESSION_NOT_FOUND` the banner carries the server message, which names
+  the on-host `kbagent auth login` remedy).
+
 ### What's-new popup *(since vNEXT)*
 
 The web UI shows a curated per-version highlights modal on load, once per
