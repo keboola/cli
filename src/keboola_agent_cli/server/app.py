@@ -28,10 +28,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
-from ..permissions import PermissionEngine
+from ..permissions import PermissionEngine, apply_firewall_flags
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
-from .dependencies import ServiceRegistry, install_registry
+from .dependencies import ServiceRegistry, install_permission_engine, install_registry
 from .routers import (
     agents,
     ai_chat,
@@ -557,21 +557,38 @@ def _resolve_cors_origins(cors_origins: list[str] | None) -> list[str]:
     return origins
 
 
-def _default_permission_engine(config_store: ConfigStore) -> PermissionEngine:
-    """Build the REST surface's permission engine from the persisted policy.
+def _default_permission_engine(
+    config_store: ConfigStore,
+    *,
+    deny_writes: bool = False,
+    deny_destructive: bool = False,
+) -> PermissionEngine:
+    """Build the REST surface's permission engine for the config dir being served.
 
     Mirrors the CLI's own bootstrap (``cli.py``): the ``permissions`` block of
-    config.json is the policy, and an unreadable/corrupted config degrades to
-    "no policy" rather than refusing to start -- a broken config file must not
-    take the server down. Session-only deny flags (``--deny-writes`` /
-    ``--deny-destructive``) are NOT applied here; they live on the CLI context
-    and reach the app through ``create_app(permission_engine=...)``.
+    config.json is the policy, the session flags are merged on top through the
+    shared :func:`~keboola_agent_cli.permissions.apply_firewall_flags`, and an
+    unreadable/corrupted config degrades to "no policy" rather than refusing to
+    start -- a broken config file must not take the server down.
+
+    The policy deliberately comes from ``config_store`` -- the store
+    ``create_app`` resolved -- and never from the CLI callback's own store.
+    ``kbagent --config-dir A serve --config-dir B`` serves B, so B's persisted
+    policy is the one that must apply; only the two session flags travel from
+    the CLI invocation, because they are a property of the invocation rather
+    than of a directory.
     """
     try:
         persisted_policy = config_store.load().permissions
     except Exception:
         persisted_policy = None
-    return PermissionEngine(persisted_policy)
+    return PermissionEngine(
+        apply_firewall_flags(
+            persisted_policy,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
+        )
+    )
 
 
 def create_app(
@@ -582,6 +599,8 @@ def create_app(
     serve_url: str | None = None,
     ui_dist: str | None = None,
     ui_banner: bool = True,
+    deny_writes: bool = False,
+    deny_destructive: bool = False,
     permission_engine: PermissionEngine | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI application.
@@ -614,11 +633,19 @@ def create_app(
         ui_banner: Whether the web UI may show its unsolicited "What's new"
             popup. Surfaced to the SPA over ``GET /ui-config`` rather than
             injected into the page -- see that endpoint's docstring.
-        permission_engine: Session firewall enforced by routes that declare
-            ``Depends(require_permission(...))``. ``kbagent serve`` passes the
-            CLI's own engine so ``--deny-writes`` / ``--deny-destructive``
-            apply to the REST surface too. When None, one is built from the
-            persisted ``config.permissions`` policy of the resolved config dir.
+        deny_writes: Apply the ``--deny-writes`` session flag to the engine
+            built for the resolved config dir. ``kbagent serve`` forwards the
+            CLI invocation's own flag here (not a pre-built engine) so the
+            persisted policy that applies is always the SERVED directory's --
+            ``kbagent --config-dir A serve --config-dir B`` serves B, and B's
+            policy is the one a route is checked against.
+        deny_destructive: Same, for ``--deny-destructive``.
+        permission_engine: Explicit override for embedders and tests. When
+            given it wins outright: the persisted policy of the resolved config
+            dir and both ``deny_*`` flags are ignored, and this engine is what
+            routes declaring ``Depends(require_permission(...))`` are checked
+            against. Leave it None (the ``kbagent serve`` path) to get the
+            served directory's policy plus the flags above.
 
     Returns:
         Configured FastAPI app ready for uvicorn.
@@ -686,9 +713,24 @@ def create_app(
         config_store=config_store,
         serve_url=serve_url,
         serve_token=resolved_token,
-        permission_engine=permission_engine or _default_permission_engine(config_store),
     )
     install_registry(app, registry)
+
+    # The engine lives on app.state, NOT on the registry: server tests routinely
+    # override `get_registry` with a hand-built mock, and an engine reachable
+    # only through the registry would be silently dropped by every such test --
+    # enforcement that disappears under a test override is enforcement nobody
+    # can trust. `require_permission` reads it from `request.app.state` and
+    # fails closed when it is absent, so the attribute must always be set here.
+    install_permission_engine(
+        app,
+        permission_engine
+        or _default_permission_engine(
+            config_store,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
+        ),
+    )
 
     app.state.agent_store = AgentStore(resolved_dir)
 

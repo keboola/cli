@@ -37,6 +37,7 @@ from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.permissions import PermissionEngine
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+from keboola_agent_cli.services._auth_registration import SESSION_UNSUPPORTED_FEATURES
 from keboola_agent_cli.services.auth_service import (
     AuthStatusResult,
     ProjectCandidate,
@@ -52,9 +53,9 @@ STACK = "https://connection.keboola.com"
 def _mock_registry(**services: Any) -> ServiceRegistry:
     """Bare ServiceRegistry with only the given service mocks attached.
 
-    No `permission_engine` attribute at all -- matching the established
-    pattern in test_server_router_calls.py, which relies on
-    `require_permission`'s defensive `getattr` (no engine -> no policy).
+    Matches the established pattern in test_server_router_calls.py. The
+    permission engine is deliberately NOT here: it lives on ``app.state``, so
+    overriding ``get_registry`` with this stub leaves enforcement intact.
     """
     registry = ServiceRegistry.__new__(ServiceRegistry)
     for name, mock in services.items():
@@ -69,7 +70,7 @@ def _make_app_with_registry(tmp_path: Path, registry: ServiceRegistry) -> Any:
 
 
 def _status_result(**overrides: Any) -> AuthStatusResult:
-    base = dict(
+    base: dict[str, Any] = dict(
         status="live",
         stack_url=STACK,
         session_id="sess-1",
@@ -284,47 +285,66 @@ class TestErrorTranslation:
 
 
 class TestPermissionEnforcement:
-    def _deny_writes_registry(self) -> tuple[ServiceRegistry, PermissionEngine]:
-        from keboola_agent_cli.cli import apply_firewall_flags
-
-        engine = PermissionEngine(
-            apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
-        )
+    def _registry(self) -> ServiceRegistry:
         auth_svc = MagicMock()
         auth_svc.list_project_candidates.return_value = _candidates_result()
         auth_svc.status.return_value = _status_result()
         auth_svc.register_projects.return_value = _register_result()
-        registry = _mock_registry(auth=auth_svc)
-        # Per Task 1's review warning: require_permission resolves the engine
-        # via getattr(registry, "permission_engine", None) and fails OPEN when
-        # it is missing. A MagicMock-registry app with no engine attribute
-        # would enforce nothing, so the registry used here carries a REAL
-        # engine, and the app is built via create_app(permission_engine=...)
-        # too (belt and suspenders -- either wiring path must enforce).
-        registry.permission_engine = engine
-        return registry, engine
+        return _mock_registry(auth=auth_svc)
 
-    def test_post_register_projects_is_denied(self, tmp_path: Path) -> None:
-        registry, engine = self._deny_writes_registry()
+    def _deny_writes_app(self, tmp_path: Path) -> Any:
+        """App whose session policy denies writes, with the mock registry bound.
+
+        The engine is passed explicitly (the embedder/test escape hatch) and
+        lives on ``app.state``, so the ``get_registry`` override below cannot
+        take enforcement with it.
+        """
+        from keboola_agent_cli.permissions import apply_firewall_flags
+
+        engine = PermissionEngine(
+            apply_firewall_flags(None, deny_writes=True, deny_destructive=False)
+        )
         app = create_app(
             config_dir=str(tmp_path), auth_token="test-token", permission_engine=engine
         )
-        app.dependency_overrides[get_registry] = lambda: registry
+        app.dependency_overrides[get_registry] = lambda: self._registry()
+        return app
 
-        with TestClient(app) as client:
+    def test_post_register_projects_is_denied(self, tmp_path: Path) -> None:
+        with TestClient(self._deny_writes_app(tmp_path)) as client:
             resp = client.post("/auth/register-projects", headers=AUTH, json={"all": True})
 
         assert resp.status_code == 403, resp.text
         assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
     def test_get_projects_and_status_pass_through(self, tmp_path: Path) -> None:
-        registry, engine = self._deny_writes_registry()
-        app = create_app(
-            config_dir=str(tmp_path), auth_token="test-token", permission_engine=engine
-        )
-        app.dependency_overrides[get_registry] = lambda: registry
+        with TestClient(self._deny_writes_app(tmp_path)) as client:
+            assert client.get("/auth/projects", headers=AUTH).status_code == 200
+            assert client.get("/auth/status", headers=AUTH).status_code == 200
+
+    def test_persisted_policy_in_the_served_dir_blocks_only_the_write(self, tmp_path: Path) -> None:
+        """The reachable enforcement recipe, end to end.
+
+        `kbagent --deny-writes serve` cannot start (`serve` is admin-class and
+        `cli:write` spans admin), so a narrow persisted policy in the SERVED
+        config dir is what an operator actually uses. No engine is passed here
+        -- `create_app` must load this policy from disk itself.
+        """
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.models import PermissionPolicy
+
+        store = ConfigStore(config_dir=tmp_path)
+        config = store.load()
+        config.permissions = PermissionPolicy(mode="allow", deny=["auth.register-projects"])
+        store.save(config)
+
+        app = create_app(config_dir=str(tmp_path), auth_token="test-token")
+        app.dependency_overrides[get_registry] = lambda: self._registry()
 
         with TestClient(app) as client:
+            denied = client.post("/auth/register-projects", headers=AUTH, json={"all": True})
+            assert denied.status_code == 403, denied.text
+            assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
             assert client.get("/auth/projects", headers=AUTH).status_code == 200
             assert client.get("/auth/status", headers=AUTH).status_code == 200
 
@@ -363,6 +383,27 @@ class TestTokenFreeSerialization:
         assert resp.status_code == 200, resp.text
         for needle in ("kbc-session://", "kbc_at_", "kbc_rt_"):
             assert needle not in resp.text
+
+    def test_session_unsupported_features_survives_the_rest_boundary(self, tmp_path: Path) -> None:
+        """`session_unsupported_features` is the caller's authoritative list.
+
+        It rides `RegisterProjectsResult` via a default factory, so a REST
+        caller that just registered session projects learns which surfaces will
+        fail on them WITHOUT re-deriving the list by hand. `asdict` must carry
+        it through unchanged -- dropping it would silently push every caller
+        back to hard-coding a copy.
+        """
+        auth_svc = MagicMock()
+        auth_svc.register_projects.return_value = _register_result()
+        app = _make_app_with_registry(tmp_path, _mock_registry(auth=auth_svc))
+
+        with TestClient(app) as client:
+            resp = client.post("/auth/register-projects", headers=AUTH, json={"all": True})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["session_unsupported_features"] == list(SESSION_UNSUPPORTED_FEATURES)
+        assert body["session_unsupported_features"], "the list must not be empty"
 
     def test_projects_response_carries_no_token_material(self, tmp_path: Path) -> None:
         auth_svc = MagicMock()

@@ -398,10 +398,19 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   command of its own). `login` / `login-password` / `logout` deliberately have NO endpoint -- a
 #   browser login only completes on the host, a password grant must never sit behind the serve
 #   bearer token, and revoking the session is a host-operator action, not a remote one. `/auth/*`
-#   is also the FIRST router to enforce the `permissions` policy (`--deny-writes` /
-#   `--deny-destructive` included): every route declares `Depends(require_permission(...))`, so a
-#   denial answers HTTP 403 `PERMISSION_DENIED` over REST exactly as on the CLI. The other ~30
-#   routers do not check the engine yet. See docs/web-server.md.
+#   is also the FIRST router to enforce the `permissions` policy: every route declares
+#   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
+#   exactly as on the CLI. The other ~30 routers do not check the engine yet.
+#   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then
+#   KBAGENT_CONFIG_DIR, then the local/global chain) -- not from the root callback's `--config-dir`
+#   -- plus the session flags of the invocation. Reachable ways to enforce: a persisted narrow
+#   policy (`kbagent permissions set --mode allow --deny auth.register-projects`, needs a real
+#   terminal for the confirmation code), or `--mode deny` with `serve` (and the reads you want) in
+#   the allow list. `kbagent --deny-writes serve` does NOT work: `serve` is admin-class and
+#   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so the CLI callback
+#   blocks the `serve` command itself (exit 6) and no server ever starts. `--deny-destructive`
+#   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
+#   See docs/web-server.md.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

@@ -46,9 +46,12 @@ from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
 from .errors import ErrorCode, PermissionDeniedError
-from .models import PermissionPolicy
 from .output import OutputFormatter, force_utf8_when_redirected
-from .permissions import PermissionEngine
+
+# `apply_firewall_flags` lives in permissions.py so `server/app.py` composes the
+# very same policy for the REST surface; re-exported here because callers (and
+# tests) have imported it from `cli` since 0.22.0.
+from .permissions import PermissionEngine, apply_firewall_flags
 from .services.agent_service import AgentService
 from .services.auth_service import AuthService
 from .services.billing_service import BillingService
@@ -153,57 +156,6 @@ app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
 app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
-
-
-def apply_firewall_flags(
-    persisted: PermissionPolicy | None,
-    *,
-    deny_writes: bool,
-    deny_destructive: bool,
-) -> PermissionPolicy | None:
-    """Merge --deny-writes / --deny-destructive into the active policy for this invocation.
-
-    Session-only: does NOT touch config.json. If neither flag is set, the
-    persisted policy is returned unchanged (possibly None).
-
-    Merge semantics:
-    - A fresh session policy synthesized from the flags uses mode='allow'
-      so everything is allowed unless matched by the deny list.
-    - When a persisted policy already exists, the flag-implied deny patterns
-      are appended to its deny list (dedup); the mode is preserved. This is
-      strictly additive -- adding a flag never relaxes the persisted policy.
-    """
-    if not deny_writes and not deny_destructive:
-        return persisted
-
-    extra_deny: list[str] = []
-    if deny_writes:
-        # The cli:write pattern intentionally spans write+destructive+admin
-        # (see permissions._matches_pattern). Wide net: --deny-writes blocks
-        # anything that mutates state.
-        extra_deny.append("cli:write")
-    if deny_destructive:
-        # cli:destructive narrowly matches only ops categorized 'destructive'
-        # (data destruction). Admin and pure-write are left allowed by design:
-        # the two flags exist precisely so callers can opt into the narrower
-        # block without forfeiting writes (e.g. allow create-bucket, block
-        # delete-bucket).
-        extra_deny.append("cli:destructive")
-
-    if persisted is None:
-        return PermissionPolicy(mode="allow", allow=[], deny=extra_deny)
-
-    # Preserve persisted mode, allow list; extend deny list without duplicates.
-    merged_deny = list(persisted.deny)
-    for pattern in extra_deny:
-        if pattern not in merged_deny:
-            merged_deny.append(pattern)
-
-    return PermissionPolicy(
-        mode=persisted.mode,
-        allow=list(persisted.allow),
-        deny=merged_deny,
-    )
 
 
 def _version_callback(value: bool) -> None:

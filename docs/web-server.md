@@ -486,13 +486,40 @@ None of the three response shapes (`ProjectCandidatesResult`,
 including the `kbc-session://` sentinel.
 
 `/auth/*` is also the **first router to enforce the permission policy**: every
-route above declares `Depends(require_permission(...))`, so a `--deny-writes`
-session (or a persisted `permissions set --mode deny` policy) blocks `POST
-/auth/register-projects` over REST exactly as it blocks the CLI command. A
-denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` — same code
-the CLI exits on. The other ~30 routers do not check the engine yet; see the
+route above declares `Depends(require_permission(...))`, so a denied operation
+answers **HTTP 403** with `error_code: PERMISSION_DENIED` — the same code the
+CLI exits on. The other ~30 routers do not check the engine yet; see the
 gotchas entry on this before assuming a deny policy firewalls the whole REST
 surface.
+
+The policy in force is the **persisted `permissions` block of the config dir
+`serve` resolves**, plus whichever session flags the `kbagent` invocation
+carried. Two consequences worth knowing before you reach for a flag:
+
+- **`kbagent --deny-writes serve` never starts the server.** `serve` is
+  classified `admin`, and `--deny-writes` appends `cli:write`, which spans
+  write + destructive + admin — so the CLI callback blocks the `serve` command
+  itself (exit code 6, `Operation 'serve' is blocked by the active permission
+  policy`). `--deny-destructive` does start the server, but no `/auth/*`
+  operation is destructive, so it changes nothing here.
+- **Use a persisted policy instead.** Run, on the host, in a real terminal
+  (`permissions set` requires a typed confirmation code — there is no `--yes`):
+
+  ```bash
+  kbagent --config-dir /path/to/cfg permissions set \
+      --mode allow --deny auth.register-projects
+  kbagent serve --config-dir /path/to/cfg --port 8001
+  ```
+
+  `POST /auth/register-projects` then answers 403 `PERMISSION_DENIED` while
+  `GET /auth/projects` and `GET /auth/status` stay reachable. A `--mode deny`
+  policy works too, but its allow list must then include `serve` (and the reads
+  you want to keep), or the server will not start for the same reason as above.
+
+  Pass `--config-dir` **to `serve`**: the server resolves its own config dir
+  (`--config-dir` on the `serve` command, then `KBAGENT_CONFIG_DIR`, then the
+  local/global chain), so a root-level `kbagent --config-dir ... serve` sets the
+  directory for the CLI invocation, not for the served process.
 
 A missing or expired session reaches `GET /auth/projects` and `POST
 /auth/register-projects` as a **thrown error**, both funnelled through
@@ -506,10 +533,20 @@ out* whether a session is dead, so it must not itself fail that way.
 reporting session health in the response body's `status` field instead —
 `"missing"` (no stored session), `"expired"` (refresh failed),
 `"degraded"` (the auth service was unreachable; locally stored data is shown),
-`"refreshed"` (introspection rotated the access token), or `"live"`. A client
-that wants to detect a dead session by branching on the HTTP status code must
-call `/auth/projects` or `/auth/register-projects`, not `/auth/status` — the
-latter always answers 200 and the caller must read `status` from the body.
+`"refreshed"` (introspection rotated the access token), or `"live"`.
+
+Scope that exactly: **for a missing or expired session `/auth/status` answers
+200 and reports health in `status`; an unresolvable stack (4xx) or an
+unexpected auth-service failure (502) still surface as errors.** The stack must
+resolve before any session is looked at — with no `?stack=` and no default
+project to fall back on, `AuthService.status()` raises `ConfigError` and the
+route answers 4xx — and any `KeboolaApiError` that is neither
+`SESSION_EXPIRED` nor a network code is re-raised rather than swallowed, so it
+reaches the central handler (502, or 401 for a session-credential code such as
+`SESSION_NOT_FOUND`). So a client detecting a dead session by HTTP status alone
+must call `/auth/projects` or `/auth/register-projects`; on `/auth/status` a
+200 is the normal answer for a dead session and the caller must read `status`
+from the body.
 
 Registering a project through `POST /auth/register-projects` writes the same
 `kbc-session://<project_id>` sentinel `auth login --register-projects` would —

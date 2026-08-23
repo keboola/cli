@@ -5,8 +5,9 @@ The CLI has always had a session firewall (`--deny-writes` /
 now it stopped at the terminal: every route on the same process was wide
 open. These tests pin the seam that closes that gap:
 
-* ``ServiceRegistry.permission_engine`` -- built by ``create_app`` from the
-  persisted policy, or handed in by ``kbagent serve``.
+* ``app.state.permission_engine`` -- built by ``create_app`` from the persisted
+  policy of the config dir it SERVES, plus the ``--deny-writes`` /
+  ``--deny-destructive`` flags ``kbagent serve`` forwards.
 * ``require_permission(operation)`` -- the FastAPI dependency routes declare.
 * ``PermissionDeniedError`` -> HTTP 403 with ``error_code: PERMISSION_DENIED``,
   the same code the CLI prints for the same denial.
@@ -32,6 +33,7 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
 from keboola_agent_cli.models import PermissionPolicy
 from keboola_agent_cli.permissions import (
     OPERATION_REGISTRY,
@@ -163,37 +165,88 @@ class TestErrorEnvelope:
 class TestRequirePermissionDependency:
     """Behaviour of the dependency itself, independent of ``create_app``."""
 
-    def test_registry_without_engine_allows(self, tmp_path: Path) -> None:
+    def test_registry_override_cannot_disable_enforcement(self, tmp_path: Path) -> None:
         # Server tests routinely override `get_registry` with a registry built
-        # via `__new__` (no `__init__`), which has no `permission_engine`
-        # attribute at all. That must not explode -- it means "no policy".
+        # via `__new__` (no `__init__`). The engine lives on app.state, not on
+        # the registry, precisely so such an override cannot silently switch
+        # the firewall off.
         _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:destructive"]))
         app = create_app(config_dir=str(tmp_path), auth_token=TOKEN)
         _install_probes(app)
         bare = ServiceRegistry.__new__(ServiceRegistry)
         app.dependency_overrides[get_registry] = lambda: bare
-        assert TestClient(app).get(DESTRUCTIVE_PROBE, headers=AUTH).status_code == 200
+        client = TestClient(app)
+        assert client.get(DESTRUCTIVE_PROBE, headers=AUTH).status_code == 403
+        assert client.get(READ_PROBE, headers=AUTH).status_code == 200
+
+    def test_app_without_an_engine_fails_closed(self, tmp_path: Path) -> None:
+        # An app assembled some other way than create_app has no engine, so it
+        # cannot say whether an operation is permitted -- it must refuse rather
+        # than treat the missing attribute as "no policy".
+        from fastapi import FastAPI
+
+        from keboola_agent_cli.server.auth import AuthSettings, install_auth
+
+        app = FastAPI()
+        install_auth(app, AuthSettings(token=TOKEN))
+        _install_probes(app)
+        resp = TestClient(app, raise_server_exceptions=False).get(READ_PROBE, headers=AUTH)
+        assert resp.status_code != 200
 
 
 class TestRegistryWiring:
-    """The registry exposes AuthService and the engine ``create_app`` resolved."""
+    """The registry exposes AuthService; the engine lives on app.state."""
 
     def test_auth_service_is_registered(self, tmp_path: Path) -> None:
         app = create_app(config_dir=str(tmp_path), auth_token=TOKEN)
         assert isinstance(app.state.registry.auth, AuthService)
 
-    def test_engine_is_stored_on_the_registry(self, tmp_path: Path) -> None:
+    def test_explicit_engine_is_stored_on_app_state(self, tmp_path: Path) -> None:
         engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["cli:destructive"]))
         app = create_app(config_dir=str(tmp_path), auth_token=TOKEN, permission_engine=engine)
-        assert app.state.registry.permission_engine is engine
+        assert app.state.permission_engine is engine
+        # Not on the registry: one source of truth, and a registry override in
+        # a test must not be able to drop it.
+        assert not hasattr(app.state.registry, "permission_engine")
 
 
-class TestServeCommandCarriesTheEngine:
+class TestServedConfigDirPolicyWins:
+    """`create_app` reads the policy of the dir it SERVES, not the caller's.
+
+    `kbagent --config-dir A serve --config-dir B` serves B. Before this, the
+    CLI callback's pre-built engine (policy of A) was handed to `create_app`
+    while every service read B -- so B's persisted deny policy was silently
+    ignored whenever the two dirs diverged.
+    """
+
+    def test_served_dir_policy_applies_when_dirs_diverge(self, tmp_path: Path) -> None:
+        caller_dir = tmp_path / "caller"
+        served_dir = tmp_path / "served"
+        # The caller's own dir allows everything; only the SERVED dir denies.
+        _persist_policy(caller_dir, PermissionPolicy(mode="allow", deny=[]))
+        _persist_policy(served_dir, PermissionPolicy(mode="allow", deny=["cli:destructive"]))
+
+        client = _client(served_dir)
+        assert client.get(DESTRUCTIVE_PROBE, headers=AUTH).status_code == 403
+        assert client.get(READ_PROBE, headers=AUTH).status_code == 200
+
+    def test_session_flags_merge_onto_the_served_dir_policy(self, tmp_path: Path) -> None:
+        # The flags are a property of the invocation, so they travel; the
+        # persisted policy is the served dir's. Both must end up in force.
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["config.list"]))
+        client = _client(tmp_path, deny_destructive=True)
+        assert client.get(READ_PROBE, headers=AUTH).status_code == 403  # persisted
+        assert client.get(DESTRUCTIVE_PROBE, headers=AUTH).status_code == 403  # flag
+
+
+class TestServeCommandCarriesTheFlags:
     """`kbagent --deny-destructive serve` must reach the REST surface."""
 
-    def test_cli_engine_is_passed_to_create_app(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def _invoke_serve(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        argv: list[str],
+    ) -> tuple[Any, dict[str, Any]]:
         import uvicorn
         from typer.testing import CliRunner
 
@@ -212,17 +265,47 @@ class TestServeCommandCarriesTheEngine:
 
         monkeypatch.setattr(server_pkg, "create_app", _fake_create_app)
         monkeypatch.setattr(uvicorn, "run", _fake_run)
+        return CliRunner().invoke(cli_app, argv), captured
 
-        result = CliRunner().invoke(
-            cli_app,
-            ["--config-dir", str(tmp_path), "--deny-destructive", "serve"],
+    def test_deny_destructive_flag_is_forwarded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, captured = self._invoke_serve(
+            monkeypatch, ["--config-dir", str(tmp_path), "--deny-destructive", "serve"]
         )
         assert result.exit_code == 0, result.output
+        assert captured["deny_destructive"] is True
+        assert captured["deny_writes"] is False
+        # The CLI must NOT hand over a pre-built engine any more -- that engine
+        # carried the caller's config dir, not the served one.
+        assert captured.get("permission_engine") is None
 
-        engine = captured["permission_engine"]
-        assert isinstance(engine, PermissionEngine)
-        assert engine.is_allowed("config.delete") is False
-        assert engine.is_allowed("config.list") is True
+    def test_no_flags_forwards_false(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        result, captured = self._invoke_serve(monkeypatch, ["--config-dir", str(tmp_path), "serve"])
+        assert result.exit_code == 0, result.output
+        assert captured["deny_writes"] is False
+        assert captured["deny_destructive"] is False
+
+
+class TestDenyWritesBlocksTheServeCommandItself:
+    """`kbagent --deny-writes serve` never starts the server.
+
+    `serve` is classified `admin` in OPERATION_REGISTRY and `--deny-writes`
+    appends `cli:write`, which spans write+destructive+admin -- so the CLI
+    callback denies the `serve` command before uvicorn is ever reached. Every
+    doc surface that recommends enforcement over REST must therefore recommend
+    a persisted policy (or `--deny-destructive`), never `--deny-writes`.
+    """
+
+    def test_deny_writes_serve_exits_permission_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, captured = TestServeCommandCarriesTheFlags()._invoke_serve(
+            monkeypatch, ["--config-dir", str(tmp_path), "--deny-writes", "serve"]
+        )
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        # create_app was never called: the command itself was blocked.
+        assert captured == {}
 
 
 class TestOperationRegistryEntry:

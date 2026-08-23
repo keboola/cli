@@ -108,11 +108,20 @@ def find_drift(
     groups: list[CommandPath],
     *,
     registry_keys: set[str],
+    serve_only_keys: frozenset[str] = frozenset(),
     claude_text: str,
     context_text: str,
     reference_text: str,
 ) -> list[str]:
-    """Return a human-readable block per drifted surface (empty list == clean)."""
+    """Return a human-readable block per drifted surface (empty list == clean).
+
+    ``serve_only_keys`` are registry entries with no CLI leaf command by design
+    (they guard `kbagent serve` routes). They are exempt from the DEAD-key check
+    only. Subtracting them from ``registry_keys`` at the call site instead would
+    also feed the MISSING-key check, so the day a CLI leaf command is added for
+    one of them (e.g. `auth projects`), the gate would report it as missing from
+    OPERATION_REGISTRY while the key sat right there.
+    """
     leaf_keys = {".".join(p) for p in leaves}
     all_keys = leaf_keys | {".".join(p) for p in groups}
     two_segment = {" ".join(p[:2]) for p in leaves}
@@ -129,7 +138,7 @@ def find_drift(
             "fail-closed default 'write' hides their true risk category):\n" + entries
         )
 
-    dead_registry = sorted(registry_keys - all_keys)
+    dead_registry = sorted(registry_keys - all_keys - serve_only_keys)
     if dead_registry:
         keys = "\n".join(f"    {k}" for k in dead_registry)
         problems.append(
@@ -171,9 +180,12 @@ def main() -> int:
     problems = find_drift(
         leaves,
         groups,
+        registry_keys=set(OPERATION_REGISTRY),
         # Serve-only operations have no CLI leaf command by design (they are
-        # enforced on `kbagent serve` routes), so they are not dead keys.
-        registry_keys=set(OPERATION_REGISTRY) - SERVE_ONLY_OPERATIONS,
+        # enforced on `kbagent serve` routes), so they are not dead keys. They
+        # stay in `registry_keys` so a future CLI leaf command with the same
+        # name still counts as categorised.
+        serve_only_keys=SERVE_ONLY_OPERATIONS,
         claude_text=CLAUDE_MD.read_text(encoding="utf-8"),
         context_text=AGENT_CONTEXT,
         reference_text=COMMANDS_REFERENCE_MD.read_text(encoding="utf-8"),

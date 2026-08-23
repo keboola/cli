@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, Request
 
 from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
+from ..errors import PermissionDeniedError
 from ..permissions import PermissionEngine
 from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
@@ -99,13 +100,6 @@ class ServiceRegistry:
     # Populated by ``create_app`` once uvicorn binding is known.
     serve_url: str | None = None
     serve_token: str | None = None
-    # Session firewall for the REST surface (since vNEXT). Built by
-    # ``create_app`` from the persisted ``config.permissions`` policy, or
-    # handed in by ``kbagent serve`` so the process-global ``--deny-writes`` /
-    # ``--deny-destructive`` flags reach the routes too. ``None`` means "no
-    # policy configured" -- exactly what ``PermissionEngine(None)`` means on
-    # the CLI side.
-    permission_engine: PermissionEngine | None = None
     project: ProjectService = field(init=False)
     config: ConfigService = field(init=False)
     component: ComponentService = field(init=False)
@@ -201,7 +195,39 @@ def get_registry(request: Request) -> ServiceRegistry:
     return request.app.state.registry  # type: ignore[no-any-return]
 
 
-def require_permission(operation: str) -> Callable[[ServiceRegistry], None]:
+def install_permission_engine(app: FastAPI, engine: PermissionEngine) -> None:
+    """Attach the REST surface's session firewall to the FastAPI app state.
+
+    Called exactly once by ``create_app``. The engine deliberately does NOT
+    live on :class:`ServiceRegistry`: server tests routinely replace the
+    registry via ``dependency_overrides[get_registry]``, and an engine reachable
+    only through the registry would vanish with it -- enforcement that a test
+    override can silently switch off is not enforcement. ``app.state`` also
+    survives a second registry-construction site being added later.
+    """
+    app.state.permission_engine = engine
+
+
+def get_permission_engine(request: Request) -> PermissionEngine:
+    """Return the app's permission engine, failing CLOSED when it is missing.
+
+    ``create_app`` always calls :func:`install_permission_engine`, so an absent
+    attribute means the app was assembled some other way. Treating that as "no
+    policy" would turn an assembly bug into a silently open firewall, so it
+    raises instead -- an app that cannot say whether an operation is permitted
+    must not perform it. "No policy configured" is expressed by an engine
+    wrapping a ``None`` policy, exactly as on the CLI side.
+    """
+    engine = getattr(request.app.state, "permission_engine", None)
+    if engine is None:
+        raise PermissionDeniedError(
+            "Permission engine unavailable: this app was not built by create_app(), "
+            "so no policy can be evaluated. Refusing the operation."
+        )
+    return engine  # type: ignore[no-any-return]
+
+
+def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
     """Build a FastAPI dependency enforcing the permission policy for ``operation``.
 
     ``operation`` is an :data:`~keboola_agent_cli.permissions.OPERATION_REGISTRY`
@@ -216,16 +242,15 @@ def require_permission(operation: str) -> Callable[[ServiceRegistry], None]:
     ``error_code: PERMISSION_DENIED`` -- the same code and message the CLI
     prints, so a caller can branch on one value across both surfaces.
 
-    No engine on the registry means no policy is configured and every
-    operation passes, matching ``PermissionEngine(None)`` on the CLI side. The
-    attribute is read defensively because server tests routinely override
-    ``get_registry`` with a hand-built registry that skips ``__init__``.
+    The engine comes from :func:`get_permission_engine` (app state), never from
+    the registry, so overriding ``get_registry`` in a test cannot disable the
+    check.
     """
 
-    def _check_permission(registry: ServiceRegistry = Depends(get_registry)) -> None:
-        engine = getattr(registry, "permission_engine", None)
-        if engine is not None:
-            engine.check_or_raise(operation)
+    def _check_permission(
+        engine: PermissionEngine = Depends(get_permission_engine),
+    ) -> None:
+        engine.check_or_raise(operation)
 
     return _check_permission
 
