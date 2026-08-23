@@ -1388,7 +1388,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --branch (since 0.47.0): per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
-    Branch-scoped (since vNEXT, #649): the local side is read from exactly ONE tree --
+    Branch-scoped (since v0.89.0, #649): the local side is read from exactly ONE tree --
     the target branch's subtree, or main/ when the target has none. `sync pull --branch
     <dev>` re-targets the WHOLE manifest to that branch, so a later production diff
     reads a main/ tree the manifest no longer tracks. Entries belonging to another
@@ -1426,7 +1426,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
-    Branch-scoped (since vNEXT, #649): push consumes the diff's changeset, so configs
+    Branch-scoped (since v0.89.0, #649): push consumes the diff's changeset, so configs
     tracked on another branch's tree are never planned as creates -- they ride along on
     the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 

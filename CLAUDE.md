@@ -731,7 +731,7 @@ kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--c
 #   an opaque empty-body 400. MCP run_sync_action parity.
 kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
-# config new --push --output-dir (vNEXT, #644): the written scaffold now records the created
+# config new --push --output-dir (0.89.0+, #644): the written scaffold now records the created
 #   config's ID (_keboola.config_id, quoted so numeric IDs stay strings) and is placed in the
 #   subtree of the branch the config was ACTUALLY created in (--branch or active branch;
 #   unregistered branches are added to the manifest like `sync pull --branch` would). Before,

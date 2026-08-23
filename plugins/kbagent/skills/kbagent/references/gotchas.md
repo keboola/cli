@@ -1165,16 +1165,16 @@ events and emits a final `done` SSE frame mirroring the same record.
   /openapi.json` returns the full schema, which lets the AI pick the
   right route + body shape without hard-coded knowledge.
 
-## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since vNEXT)
+## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since v0.89.0)
 
-- **Before vNEXT this combo was a duplicate factory** (issue #644): the
+- **Before 0.89.0 this combo was a duplicate factory** (issue #644): the
   scaffold was written WITHOUT `_keboola.config_id` (the "assigned on first
   push" comment was wrong on this path -- the config already existed), and it
   always landed in the DEFAULT branch's tree even when the config was created
   in a dev branch (`--branch`, or the active branch set by `branch create` /
   `branch use`). The next `sync push` then classified the directory as a new
   config and POSTed a duplicate -- a real incident created 34 duplicates.
-- **Since vNEXT** the written `_config.yml` records `_keboola.config_id`
+- **Since 0.89.0** the written `_config.yml` records `_keboola.config_id`
   (double-quoted, so legacy numeric IDs stay YAML strings) and the files are
   written into the subtree of the branch the config was ACTUALLY created in;
   an unregistered branch is added to `manifest.branches` exactly like
@@ -1191,7 +1191,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   regress the remote to TODO placeholders.
 - `--json` gains an additive `local_scaffold: {directory, files, config_id}`
   key on this path.
-- Agents on kbagent < vNEXT: do NOT recommend `--output-dir` + `--push`
+- Agents on kbagent < 0.89.0: do NOT recommend `--output-dir` + `--push`
   together; use scaffold-only then `sync push`, or `--push --no-files`.
 
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
@@ -4318,7 +4318,7 @@ The log tail is off by default so a plain `job detail` stays one API call.
 that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
 maximum as `job detail`'s.
 
-## A scaffolded `keboola.flow` config can now be pushed from disk (since vNEXT)
+## A scaffolded `keboola.flow` config can now be pushed from disk (since v0.89.0)
 
 `config new --component-id keboola.flow` (no `--push`) used to write a
 `_config.yml` with no `_keboola` block at all -- every other scaffold
@@ -4334,7 +4334,7 @@ No CLI behavior change beyond the file content -- if you were hand-patching
 scaffolded flow files with a `_keboola` block as a workaround, that step is
 no longer necessary.
 
-## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since vNEXT)
+## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since v0.89.0)
 
 `sync pull --branch <dev>` re-targets EVERY `manifest.configurations` entry to
 that dev branch. The `main/` tree stays on disk and stops being tracked, so a
