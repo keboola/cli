@@ -552,6 +552,10 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
+    Without --project the fan-out over every registered project is merged GLOBALLY by
+    --sort-by/--sort-order (default startTime desc), missing values last, deterministic
+    (project_alias, id) tiebreak -- since 0.90.1 it is one chronological feed, NOT rows
+    grouped per project. Group them yourself if you need per-project blocks.
 
   kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
     Full job detail including result message and timing.

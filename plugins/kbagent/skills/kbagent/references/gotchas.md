@@ -4435,7 +4435,7 @@ fallback (`config examples` already resolved it correctly).
 - `component sync-action` is unaffected: its `--project` is genuinely required
   (exit 2 without it) on every version.
 
-## Multi-project `job list` now merges chronologically, not grouped by project (since vNEXT)
+## Multi-project `job list` now merges chronologically, not grouped by project (since v0.90.1)
 
 `kbagent job list` without `--project` (and `kbagent serve`'s `GET /jobs`) fans
 out to every resolved project's Queue API in parallel. Each project's own page
@@ -4472,7 +4472,7 @@ though single-project `job list` looked correctly time-ordered.
   already server-sorted); the fix only changes behavior once 2+ projects are
   queried together.
 
-## `kbagent serve` permission enforcement is `/auth/*`-only so far (since vNEXT)
+## `kbagent serve` permission enforcement is `/auth/*`-only so far (since v0.90.1)
 
 `create_app` builds a `PermissionEngine` from the persisted `permissions`
 policy of **the config dir `serve` resolves** (its own `--config-dir`, then
