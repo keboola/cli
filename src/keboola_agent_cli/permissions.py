@@ -323,7 +323,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.delete": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. The serve's own routes enforce their own permissions on top.
+    # = write. These keys are the ONLY firewall an `http.*` call meets for
+    # most routes: on the serve side only `/auth/*` re-checks the policy
+    # (since vNEXT) -- every other router is still unguarded, so a deny
+    # policy does not survive the REST boundary there (issue #655).
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
