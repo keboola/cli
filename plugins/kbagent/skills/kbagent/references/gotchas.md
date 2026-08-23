@@ -2765,10 +2765,10 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   always returns `legacy_column_descriptions`, and warns in human mode when
   legacy keys remain (it never writes -- safe under a read-only token or
   `--deny-writes`). Its human-mode Columns table shows a `Description`
-  column. On 0.88.0 it did NOT -- there the descriptions were readable only
-  through `--json` `column_details[].description`, so a blank-looking terminal
-  table on that version does not mean the write failed. (Release step: once this
-  ships, tag this sentence `(since vX.Y.Z)` with the version that carried it.) Unknown column names now fail fast BEFORE any write; the old
+  column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
+  readable only through `--json` `column_details[].description`, so a
+  blank-looking terminal table on that version does not mean the write
+  failed. Unknown column names now fail fast BEFORE any write; the old
   flat write accepted typos silently. Table and bucket descriptions are
   unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
@@ -2780,10 +2780,9 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
   entry that is not a mapping, a document that is not a mapping at all) is a
-  usage error — the whole file is rejected before the first write with
-  `INVALID_ARGUMENT` and exit 2, naming the offending key and its actual type.
-  Nothing is half-applied. (Release step: once this ships, tag this sentence
-  `(since vX.Y.Z)` with the version that carried it.)
+  usage error *(since v0.89.0)* — the whole file is rejected before the first
+  write with `INVALID_ARGUMENT` and exit 2, naming the offending key and its
+  actual type. Nothing is half-applied.
 - **Description-field precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
   metadata entry are present, `storage bucket-detail` / `storage table-detail`
