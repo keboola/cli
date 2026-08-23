@@ -94,6 +94,14 @@ exclude = [
     "web/frontend/dist",
     "web/frontend/tsconfig.tsbuildinfo",
     "web/backend",
+    # Generated SPA output must never ship as *source*. ``include`` above has
+    # ``src/``, and the same VCS-state dependence described on the wheel
+    # target's ``exclude`` applies here: with no reachable ``.gitignore`` and a
+    # ``_ui_dist/`` already on disk (an earlier editable install), the sdist
+    # would carry a prebuilt SPA. Harmless downstream -- ``_bundle_ui``
+    # rmtree's the dir before every build, so a stale copy can never reach a
+    # wheel -- but it bloats the sdist with bytes that are not source.
+    "src/keboola_agent_cli/_ui_dist",
 ]
 
 [tool.pytest.ini_options]

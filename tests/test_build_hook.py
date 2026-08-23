@@ -55,12 +55,13 @@ _spec.loader.exec_module(hatch_build)
 def _neutralize_skip_ui_build(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the ambient ``KBAGENT_SKIP_UI_BUILD`` knob for every test here.
 
-    It is a documented flag exported by parts of CI (see
-    ``.github/workflows/ci.yml``). Left set, ``_bundle_ui`` ships an EMPTY
-    ``_ui_dist/``, so every test that asserts real bundle contents -- including
-    the end-to-end wheel build, which inherits this environment through
-    ``uv build`` -- fails for a reason unrelated to what it covers. Tests that
-    exercise the skip path opt in explicitly with ``monkeypatch.setenv``.
+    Not a CI concern: ``ci.yml`` scopes that flag to a single step's ``env:``,
+    so it never reaches the pytest step. This guards the developer who
+    exported it in their shell. Left set, ``_bundle_ui`` ships an EMPTY
+    ``_ui_dist/``, and 5 tests in this module then fail with messages about
+    bundle contents instead of naming the env var -- including the end-to-end
+    wheel build, which inherits this environment through ``uv build``. Tests
+    that exercise the skip path opt in explicitly with ``monkeypatch.setenv``.
     """
     monkeypatch.delenv(hatch_build.SKIP_UI_BUILD_ENV, raising=False)
 
@@ -326,7 +327,7 @@ class TestForceIncludeNoDuplicate:
     shape of an sdist build, whose ``include`` list omits ``.gitignore``.
     """
 
-    def test_wheel_builds_without_git_directory(self, tmp_path: Path) -> None:
+    def test_wheel_builds_without_reachable_gitignore(self, tmp_path: Path) -> None:
         if shutil.which("uv") is None:
             pytest.skip("uv not on PATH")
 
