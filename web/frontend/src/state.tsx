@@ -46,6 +46,12 @@ interface UIState {
   // Avoids re-typing while keeping all chat plumbing on a single page.
   pendingLocalAiMessage: string | null;
   setPendingLocalAiMessage: (m: string | null) => void;
+  // Force-open slot: the command palette's "What's new" action flips this to
+  // true, and the WhatsNew modal reads it on render, shows itself regardless
+  // of the seen-marker, and clears the slot when dismissed. Same hand-off
+  // shape as pendingLocalAiMessage -- one writer, one reader, self-clearing.
+  whatsNewForced: boolean;
+  setWhatsNewForced: (v: boolean) => void;
 }
 
 const UIStateContext = createContext<UIState | null>(null);
@@ -56,6 +62,7 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [branchId, setBranchId] = useState<number | null>(null);
   const [manageToken, setManageToken] = useState<string | null>(null);
   const [pendingLocalAiMessage, setPendingLocalAiMessage] = useState<string | null>(null);
+  const [whatsNewForced, setWhatsNewForced] = useState(false);
 
   return (
     <UIStateContext.Provider
@@ -70,6 +77,8 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
         setManageToken,
         pendingLocalAiMessage,
         setPendingLocalAiMessage,
+        whatsNewForced,
+        setWhatsNewForced,
       }}
     >
       {children}

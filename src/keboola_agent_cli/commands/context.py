@@ -1837,6 +1837,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload]
                 [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+                [--no-banner]
     Launch the FastAPI HTTP server backing the web UI. Two modes:
 
     - `--ui` (single-process, recommended): bundles the built React SPA from
@@ -1851,6 +1852,13 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Prints the bearer token to stdout on startup (use it for `kbagent http`
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
+
+    --no-banner (since vNEXT) suppresses the web UI's "What's new" popup --
+    a curated per-version highlights modal the UI shows once per version
+    (dismissal persisted in localStorage `kbagent.whatsnew.seen`). The SPA
+    reads the switch from `GET /ui-config` -> {{"banner": bool}}; nothing is
+    injected into index.html. It governs only the UNSOLICITED popup: the
+    command palette's "What's new" action still opens it on request.
 
   kbagent doctor
     Health checks (no --fix since 0.85.0 -- it only installed the MCP server).

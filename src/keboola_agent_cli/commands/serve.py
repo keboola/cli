@@ -184,6 +184,11 @@ def serve_command(
             "Implies --ui."
         ),
     ),
+    no_banner: bool = typer.Option(
+        False,
+        "--no-banner",
+        help="Suppress the What's-new popup in the web UI.",
+    ),
 ) -> None:
     """Launch the kbagent HTTP API server.
 
@@ -273,6 +278,9 @@ def serve_command(
         cors_origins=cors,
         serve_url=serve_url,
         ui_dist=resolved_ui_dist,
+        # Inverted at the boundary: the CLI flag is opt-OUT ("--no-banner"),
+        # the app-level switch is a plain positive ("is the banner allowed").
+        ui_banner=not no_banner,
     )
 
     if resolved_ui_dist:

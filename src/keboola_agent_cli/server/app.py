@@ -549,6 +549,7 @@ def create_app(
     cors_origins: list[str] | None = None,
     serve_url: str | None = None,
     ui_dist: str | None = None,
+    ui_banner: bool = True,
 ) -> FastAPI:
     """Build and configure the FastAPI application.
 
@@ -569,12 +570,17 @@ def create_app(
                we do it server-side via an ASGI path-rewrite middleware),
             2) mounts the dist directory at ``/`` so static assets and the
                SPA fallback are served by uvicorn directly,
-            3) intercepts ``GET /`` to inject ``window.__KBAGENT_TOKEN`` into
-               ``index.html`` so the SPA boots already authenticated -- no
-               BFF and no manual paste step.
+            3) intercepts ``GET /`` to set the HttpOnly ``kbagent_session``
+               cookie so the SPA boots already authenticated -- no BFF and no
+               manual paste step. Nothing is injected into ``index.html``;
+               see :func:`_install_ui` for why the older
+               ``window.__KBAGENT_TOKEN`` script injection was removed.
 
             If the path does not exist, the UI mount is skipped silently and
             a warning is logged so ``--ui`` typos don't break the API path.
+        ui_banner: Whether the web UI may show its unsolicited "What's new"
+            popup. Surfaced to the SPA over ``GET /ui-config`` rather than
+            injected into the page -- see that endpoint's docstring.
 
     Returns:
         Configured FastAPI app ready for uvicorn.
@@ -710,6 +716,10 @@ def create_app(
     app.include_router(agents.router)
 
     app.state.auth_token = resolved_token
+    # Read back by GET /ui-config. Set unconditionally (not only under
+    # ``ui_dist``) because the SPA also runs against a bare `kbagent serve`
+    # through the Vite dev server / Node BFF, where no UI is mounted here.
+    app.state.ui_banner = ui_banner
 
     if ui_dist:
         _install_ui(app, ui_dist=ui_dist, token=resolved_token)

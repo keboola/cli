@@ -121,8 +121,12 @@ and `next_run_at` so re-runs after restarts pick up where they left off.
 A NERD-themed React SPA that drives the API:
 
 - **Command palette** — `Ctrl+K` / `Cmd+K` anywhere: fuzzy jump to any
-  page, switch the active project, toggle the theme, open Swagger `/docs`.
-  Arrows + enter, esc closes.
+  page, switch the active project, toggle the theme, open Swagger `/docs`,
+  reopen **What's new**. Arrows + enter, esc closes.
+- **What's new popup** *(since vNEXT)* — a curated per-version highlights
+  modal, shown once per version. See
+  [What's-new popup](#whats-new-popup-since-vnext) below for the curated
+  list's location, the storage key, and the `--no-banner` opt-out.
 - **Dashboard** — greeting, big Kai chat input, stat tiles (projects /
   agents / doctor / recent jobs / PAYG credits), scheduled-agent
   activity, suggested next steps, recent jobs panel. The credits tile
@@ -279,6 +283,54 @@ The BFF then serves the React build statically and proxies `/api/*`.
 stdout, and refuses any request that does not present it as
 `Authorization: Bearer <token>`. Public paths: `/health/ping`,
 `/health/auth-info`, `/openapi.json`, `/docs`, `/redoc`.
+
+### What's-new popup *(since vNEXT)*
+
+The web UI shows a curated per-version highlights modal on load, once per
+version, so features like the command palette get discovered instead of
+waiting to be stumbled upon.
+
+**Curated list — `web/frontend/src/whatsnew.ts`.** A hand-maintained
+`WhatsNewRelease[]`, deliberately *not* the raw `changelog.py` output: the
+changelog records everything, this reel records the handful of things a UI
+user should look at. **Release PRs that ship user-visible UI features must
+add an entry here** — same pass that resolves `vNEXT` placeholders. Adding
+one is a single array element:
+
+```ts
+{ version: "0.90.0", items: [{ title: "…", body: "…", hint: "ctrl+k" }] }
+```
+
+A release with no entry of its own is **not** silent: the UI falls back to
+the newest entry at or below the running version, so users still see the
+most recent curated reel (each shown at most once). Exact matching would
+make the feature ship dark — the popup first runs in the release *after*
+the one whose highlights seeded the list. Silence happens only when no
+entry is `<=` the running version.
+
+**Mechanics.**
+
+- Dismissal is persisted to `localStorage["kbagent.whatsnew.seen"]` as the
+  release version string; the popup reappears only when the running version
+  moves to another curated entry. A PEP 440 pre-release suffix is stripped
+  before matching, so `0.90.0b1` sees the `0.90.0` reel.
+- Esc, a backdrop click, and the "got it" button all dismiss and persist.
+- The command palette's **What's new** action reopens it on demand,
+  ignoring both the seen marker and `--no-banner`.
+
+**Opt-out — `kbagent serve --no-banner`.** Suppresses the *unsolicited*
+popup fleet-wide (an explicit palette request still works). The SPA reads
+the switch from `GET /ui-config` -> `{"banner": bool}`, and fails **closed**
+— while that request is in flight or if it fails, no popup.
+
+It is an endpoint rather than something injected into `index.html`, for two
+reasons. There is no injection point to extend: the one that existed
+(`window.__KBAGENT_TOKEN`) was removed in favour of the session cookie, and
+`tests/test_serve_ui.py` asserts it stays gone. And injection would only
+cover `GET /` and `GET /index.html` — the SPA shell is *also* served by the
+StaticFiles `html=True` fallback for any unmatched path, and that copy would
+carry no config, silently re-enabling the popup an operator had suppressed.
+For a suppression flag, failing open is the wrong direction.
 
 ### Session-registered projects
 

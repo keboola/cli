@@ -99,7 +99,7 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { project, setProject, setBranchId, setPage } = useUIState();
+  const { project, setProject, setBranchId, setPage, setWhatsNewForced } = useUIState();
   const { theme, toggle } = useTheme();
 
   // Projects are already cached by the top bar under this exact key, so
@@ -183,8 +183,17 @@ export function CommandPalette() {
       icon: ArrowRight,
       run: () => window.open("/docs", "_blank", "noopener,noreferrer"),
     });
+    out.push({
+      id: "action:whatsnew",
+      kind: "action",
+      label: "What's new",
+      hint: "release highlights",
+      keywords: "changelog release highlights whatsnew version news",
+      icon: Sparkles,
+      run: () => setWhatsNewForced(true),
+    });
     return out;
-  }, [projectsQ.data, setPage, setProject, setBranchId, theme, toggle]);
+  }, [projectsQ.data, setPage, setProject, setBranchId, theme, toggle, setWhatsNewForced]);
 
   const results = useMemo(() => {
     const q = query.trim();
