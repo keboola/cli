@@ -75,6 +75,11 @@ interface UIState {
   // shape as pendingLocalAiMessage -- one writer, one reader, self-clearing.
   whatsNewForced: boolean;
   setWhatsNewForced: (v: boolean) => void;
+  // Hand-off slot: dropped by the command palette's "Search '...' across
+  // projects" escape row. The Search page reads it on mount, auto-runs the
+  // search, then clears it.
+  pendingSearchQuery: string | null;
+  setPendingSearchQuery: (q: string | null) => void;
 }
 
 const UIStateContext = createContext<UIState | null>(null);
@@ -103,6 +108,7 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [manageToken, setManageToken] = useState<string | null>(null);
   const [pendingLocalAiMessage, setPendingLocalAiMessage] = useState<string | null>(null);
   const [whatsNewForced, setWhatsNewForced] = useState(false);
+  const [pendingSearchQuery, setPendingSearchQuery] = useState<string | null>(null);
 
   // Navigating to another page drops the previous page's selection: `sel` is
   // page-owned, so carrying it across would hand one page another's cookie.
@@ -188,6 +194,8 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
         setPendingLocalAiMessage,
         whatsNewForced,
         setWhatsNewForced,
+        pendingSearchQuery,
+        setPendingSearchQuery,
       }}
     >
       {children}

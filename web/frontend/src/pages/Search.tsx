@@ -1,9 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { Search as SearchIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { ErrorBox, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
+import { useUIState } from "../state";
 
 interface SearchResp {
   results: Array<{
@@ -19,22 +20,41 @@ interface SearchResp {
 }
 
 export function SearchPage() {
+  const { pendingSearchQuery, setPendingSearchQuery } = useUIState();
   const [query, setQuery] = useState("");
   const [searchType, setSearchType] = useState<"textual" | "config-based">("textual");
   const [types, setTypes] = useState<string[]>([]);
   const [result, setResult] = useState<SearchResp | null>(null);
 
+  // The mutation takes the query as an argument (rather than closing over
+  // `query` state) so the hand-off effect below can fire it with a value
+  // that bypasses the async setState -- an immediate mu.mutate() right
+  // after setQuery(q) would otherwise still see the stale (pre-update)
+  // query state, same stale-closure trap the LocalAi consumer documents.
   const mu = useMutation({
-    mutationFn: () =>
+    mutationFn: (q: string) =>
       api.get<SearchResp>("/search", {
         query: {
-          query,
+          query: q,
           search_type: searchType,
           type: types.length ? types : undefined,
         },
       }),
     onSuccess: (data) => setResult(data),
   });
+
+  // Hand-off slot from the command palette's "Search '...' across projects"
+  // escape row: adopt the query into local state, clear the slot so a
+  // remount can't re-fire, and run the search immediately with the value
+  // passed directly.
+  useEffect(() => {
+    if (!pendingSearchQuery) return;
+    const q = pendingSearchQuery;
+    setQuery(q);
+    setPendingSearchQuery(null);
+    mu.mutate(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSearchQuery]);
 
   return (
     <div className="space-y-4">
@@ -43,7 +63,7 @@ export function SearchPage() {
         className="nerd-card flex gap-2 flex-wrap"
         onSubmit={(e) => {
           e.preventDefault();
-          if (query.trim()) mu.mutate();
+          if (query.trim()) mu.mutate(query);
         }}
       >
         <input
