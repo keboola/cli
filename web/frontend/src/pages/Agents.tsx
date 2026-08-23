@@ -12,7 +12,6 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { api, ssePost, type SsePostHandle } from "../api/client";
 import {
   AgentRunRaw,
@@ -1021,29 +1020,23 @@ function NewTaskDrawer({
           </div>
         ) : null}
       </Drawer>
-      {/* Portaled straight to <body>. The Drawer itself portals to <body> at
-          z-50 and its backdrop-blur makes it a containing block, so a
-          fixed-position modal rendered among the drawer's children would be
-          clipped by the drawer's overflow-auto content area and would sit in
-          the same stacking context. Appending after the drawer's portal node
-          puts the confirm reliably on top. */}
-      {confirmDiscard
-        ? createPortal(
-            <ConfirmModal
-              danger
-              title="Discard unsaved changes?"
-              body="This form has unsaved edits. Closing it now throws them away — nothing is saved to the task."
-              confirmLabel="Discard"
-              cancelLabel="Keep editing"
-              onConfirm={() => {
-                setConfirmDiscard(false);
-                onClose();
-              }}
-              onCancel={() => setConfirmDiscard(false)}
-            />,
-            document.body,
-          )
-        : null}
+      {/* ConfirmModal portals itself to <body>, so declaring it as a sibling
+          of the Drawer here is purely for readability -- placement and
+          stacking do not depend on where it sits in this tree. */}
+      {confirmDiscard ? (
+        <ConfirmModal
+          danger
+          title="Discard unsaved changes?"
+          body="This form has unsaved edits. Closing it now throws them away — nothing is saved to the task."
+          confirmLabel="Discard"
+          cancelLabel="Keep editing"
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            onClose();
+          }}
+          onCancel={() => setConfirmDiscard(false)}
+        />
+      ) : null}
     </>
   );
 }

@@ -921,8 +921,17 @@ function SchemaTab({ d }: { d: TableDetail }) {
         return next;
       });
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["table-detail"] });
+    onSuccess: async (_data, vars) => {
+      // Drop the optimistic entry only AFTER the refetch lands, otherwise the
+      // cell flashes the stale server description for a render. Leaving it in
+      // place is worse still: it would mask every later server value for that
+      // column for as long as the drawer stays mounted.
+      await qc.invalidateQueries({ queryKey: ["table-detail"] });
+      setOverrides((cur) => {
+        const next = { ...cur };
+        delete next[vars.column];
+        return next;
+      });
     },
   });
 

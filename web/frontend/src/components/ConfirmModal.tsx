@@ -1,6 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Lightweight confirmation dialog matching the app's modal style (see
@@ -8,6 +9,14 @@ import type { ReactNode } from "react";
  * deserve a clearer, on-brand prompt. Esc or a backdrop click cancels. On open
  * we focus Cancel for ``danger`` modals (so a stray Enter does NOT fire the
  * destructive action) and the confirm button otherwise.
+ *
+ * Rendered through a portal into ``document.body``, for the same reason
+ * ``Drawer`` is: most confirms are raised from INSIDE a drawer, whose
+ * ``backdrop-blur`` establishes a containing block for fixed-position
+ * descendants and whose body scrolls under ``overflow-auto``. Portaling makes
+ * the confirm's placement and stacking independent of wherever it was
+ * declared, and puts it after the drawer's own portal node so it always
+ * paints on top. Callers just render ``<ConfirmModal .../>`` inline.
  */
 export function ConfirmModal({
   title,
@@ -45,7 +54,7 @@ export function ConfirmModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [danger, busy, onCancel]);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={() => {
@@ -109,6 +118,7 @@ export function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
