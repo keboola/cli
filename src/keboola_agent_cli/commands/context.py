@@ -773,8 +773,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;
     absent or empty sections are skipped). Columns go through the same native write as describe-column.
     File shape is validated BEFORE any write: a section that is not a mapping of ID to description, a null
-    description, or a non-mapping columns entry aborts with INVALID_ARGUMENT and exit 2, naming the offending
-    key -- nothing is half-applied. During application, per-item API failures are collected and reported
+    description, a non-mapping columns entry, or two keys colliding after str() coercion (1 vs "1") aborts
+    with INVALID_ARGUMENT and exit 2, naming the offending key -- nothing is half-applied. During application, per-item API failures are collected and reported
     (one error does not abort the remaining items); the command exits 1 when error_count > 0.
 
   kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
@@ -1435,6 +1435,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
     reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
+    value -> CONFIG_ERROR naming the key + type.
     Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
     but does not push.
 

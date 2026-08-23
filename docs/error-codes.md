@@ -19,7 +19,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `INVALID_TOKEN` | Storage API token is invalid or expired |
 | `ACCESS_DENIED` | Token lacks the required permission for this API call |
 | `PERMISSION_DENIED` | Operation blocked by the active kbagent permission policy |
-| `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `config oauth-url` pre-flight); maps to exit 3 |
+| `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `token create`, `config oauth-url` pre-flight); maps to exit 3 |
 | `UNAUTHORIZED` | `kbagent serve` rejected the request's Bearer token |
 
 ### Network / transport

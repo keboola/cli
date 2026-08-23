@@ -4330,9 +4330,19 @@ one. `sync push` resolves the component of an untracked local config from
 without it the config resolved to `"unknown"`, so a scaffolded flow could
 never be pushed via the documented scaffold -> edit -> `sync push` workflow
 (issue #650). Fixed by appending the same footer the other categories get.
-No CLI behavior change beyond the file content -- if you were hand-patching
-scaffolded flow files with a `_keboola` block as a workaround, that step is
-no longer necessary.
+If you were hand-patching scaffolded flow files with a `_keboola` block as a
+workaround, that step is no longer necessary.
+
+Mind the shape of the scaffolded file when you edit it: the flow definition
+sits under `_configuration_extra:` in `_config.yml`, not at the top level.
+`sync push` converts a local file back to an API body with
+`local_config_to_api`, which promotes only `parameters` / `input` / `output` /
+`processors` from the top level (everything else rides along from
+`_configuration_extra`). A `phases:` / `tasks:` block added by hand at the top
+level is therefore **silently dropped** on push -- no error, no diff entry, a
+flow that pushes empty. This is the opposite of the `flow new --file` body
+shape, where `phases` / `tasks` ARE top-level; the two formats are not
+interchangeable.
 
 ## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since v0.89.0)
 

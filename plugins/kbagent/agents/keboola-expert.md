@@ -245,7 +245,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   overwrites local edits, restores deleted files, resolves conflicts) -- NEVER
   hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted dirs;
   `is_disabled: true` in `_config.yml` = config disabled (absent = enabled); a
-  `never_fetched` warning on diff/push = run `sync pull` first. `sync status`
+  `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
+  `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
+  branch's tree -- `sync pull` to re-target, never push. `sync status`
   is local-only -- audit real drift with `sync diff`.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
@@ -266,6 +268,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   forecloses restores; the source table is untouched.
 - **Column descriptions** (0.88.0+, #624): native endpoint; legacy
   `KBC.column.*` invisible to UI/MCP; `describe-migrate`. gotchas.md.
+- **`describe-batch --from-file`** -- whole-file shape check + exit 2 only on
+  **0.89.0+**; below that a malformed file half-applies before the traceback.
+  gotchas.md.
 - **`bucket-detail` is dialect-aware**: read `sql_dialect` + per-table
   `sql_path` (already correctly quoted) -- don't branch on the backend yourself.
 
