@@ -89,7 +89,7 @@ kbagent serve --ui
 # Open the URL printed at startup -> sidebar "Agent Tasks" -> "+ New task".
 ```
 
-Keep `kbagent serve` running for the scheduler to fire CRON triggers. Run history is persisted (JSONL on disk), so closing the server doesn't lose past runs -- it just pauses future scheduling until you restart. Architecture detail and the full endpoint reference live in [`docs/web-server.md`](docs/web-server.md).
+Keep `kbagent serve` running for the scheduler to fire CRON triggers. Run history is persisted (JSONL on disk), so closing the server doesn't lose past runs -- it just pauses future scheduling until you restart. Architecture detail lives in [`docs/web-server.md`](docs/web-server.md); the full endpoint reference -- generated from the running app, so it cannot go stale -- is [`docs/web-server-endpoints.md`](docs/web-server-endpoints.md).
 
 ## For AI agents
 

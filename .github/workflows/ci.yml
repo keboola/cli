@@ -85,6 +85,32 @@ jobs:
         # judgement, so it's left to /kbagent:review, not gated here.)
         run: uv run python scripts/check_command_sync.py
 
+      - name: Serve endpoint reference freshness check
+        # docs/web-server-endpoints.md is generated from create_app().openapi().
+        # The hand-maintained table it replaced drifted to claiming "150+
+        # endpoints" over 17 rows while the app served 226 operations across 29
+        # routers, with ten routers undocumented entirely (issue #656) -- no
+        # OpenAPI spec is committed, so only a running server showed the truth
+        # and nothing in CI could notice. Adding a route now fails here until
+        # the reference is regenerated.
+        #
+        # Two conditions: `git diff --quiet` reports nothing for an UNTRACKED
+        # path (a doc dropped from the index would pass while documenting
+        # nothing), so tracking is asserted separately rather than by switching
+        # to `git status --porcelain` -- that flags a staged-new file whose
+        # content is correct, which is the normal state of the PR adding one.
+        run: |
+          if ! git ls-files --error-unmatch docs/web-server-endpoints.md > /dev/null 2>&1; then
+            echo "::error::docs/web-server-endpoints.md is untracked -- the endpoint reference must be committed."
+            exit 1
+          fi
+          uv run python scripts/gen_endpoint_reference.py > /dev/null 2>&1
+          if ! git diff --quiet docs/web-server-endpoints.md; then
+            echo "::error::docs/web-server-endpoints.md is out-of-date. Run 'make endpoints-gen' and commit."
+            git diff docs/web-server-endpoints.md
+            exit 1
+          fi
+
       - name: Version-gate silent-drift check
         # Every `(since vX.Y.Z)` / `X.Y.Z+` marker must name a version that has
         # a CHANGELOG entry. `keboola-expert.md` turns these markers into a hard
