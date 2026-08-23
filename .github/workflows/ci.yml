@@ -96,6 +96,27 @@ jobs:
         # tree only), unlike changelog-check.
         run: uv run python scripts/check_version_gates.py
 
+      - name: Unresolved vNEXT placeholder check (release PRs only)
+        # A feature PR tags new behavior `(since vNEXT)` because it cannot know
+        # its release version; the release PR rewrites every one. Miss one and
+        # the plugin -- served to agents from the repo -- carries a gate no
+        # installed version can satisfy, so the agent refuses a command the
+        # user has. That rewrite was checklist-only, and its grep could never
+        # come back empty (the process docs must mention the placeholder they
+        # describe); the script separates the two by backticks instead.
+        #
+        # Armed only for a PR that RAISES the version. A two-dot diff is used
+        # deliberately -- a shallow checkout has no merge base -- and the
+        # script's PEP 440 comparison is what keeps a stale branch behind a
+        # released main from being mistaken for a release PR.
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          base=$(git show "origin/$GITHUB_BASE_REF:pyproject.toml" 2>/dev/null \
+                 | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+          echo "base branch version: ${base:-<unreadable>}"
+          uv run python scripts/check_version_gates.py --release-if-newer-than "$base"
+
       - name: Error-code enum check
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).
         run: uv run python scripts/check_error_codes.py

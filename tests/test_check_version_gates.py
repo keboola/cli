@@ -21,6 +21,7 @@ sys.modules["check_version_gates"] = check_version_gates
 _spec.loader.exec_module(check_version_gates)
 
 collect = check_version_gates.collect_gates
+residue = check_version_gates.find_vnext_residue
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -92,3 +93,144 @@ class TestLiveRepository:
         """Guards the guard: a broken glob would make the check vacuously pass."""
         gates = collect(check_version_gates.resolve_paths())
         assert len(gates) > 50
+
+
+class TestVnextResidue:
+    """``vNEXT`` is legal in a feature PR and fatal in a release PR.
+
+    The separator is backticks: a placeholder quoted as inline code is prose
+    *about* the mechanism, which is why the old release-checklist grep could
+    never come back empty.
+    """
+
+    def test_bare_placeholder_is_a_gate(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "- `--flag` (since vNEXT) does a thing\n")
+        found = residue([f])
+        assert len(found) == 1
+        assert found[0][1] == 1
+
+    def test_plus_form_is_a_gate(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "intro\n- **vNEXT+**: resolves to the first project\n")
+        assert len(residue([f])) == 1
+
+    def test_inline_code_mention_is_prose(self, tmp_path: Path) -> None:
+        """The exact shapes CLAUDE.md / CONTRIBUTING.md use to teach the rule."""
+        f = _write(
+            tmp_path,
+            "process.md",
+            "tag it with the literal placeholder **`vNEXT`** -- `(since vNEXT)` / `vNEXT+`.\n"
+            "the release PR replaces every `vNEXT` placeholder with the real version\n",
+        )
+        assert residue([f]) == []
+
+    def test_gate_and_prose_on_the_same_line_still_flags(self, tmp_path: Path) -> None:
+        """One quoted mention must not launder a live gate sharing the line."""
+        f = _write(tmp_path, "mixed.md", "`vNEXT` is the placeholder; (since vNEXT) is live\n")
+        assert len(residue([f])) == 1
+
+    def test_numeric_gate_is_not_residue(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "n.md", "- `--flag` (since v0.90.0)\n- other 0.73.0+\n")
+        assert residue([f]) == []
+
+    def test_backticks_do_not_hide_numeric_gates(self, tmp_path: Path) -> None:
+        """The asymmetry is deliberate: docs/sdk.md writes real gates as `0.66.0+`."""
+        f = _write(tmp_path, "sdk.md", "### Device-enrollment primitives (`0.66.0+`)\n")
+        assert list(collect([f])) == ["0.66.0"]
+
+    def test_reports_path_line_and_text(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "d.md", "x\ny\n### What's-new popup *(since vNEXT)*\n")
+        _rel, lineno, text = residue([f])[0]
+        assert lineno == 3
+        assert "What's-new popup" in text
+
+
+class TestLiveRepositoryVnext:
+    def test_no_unresolved_placeholder_survives_a_release(self) -> None:
+        """``main`` carries a released version, so every placeholder must be rewritten.
+
+        This is the check that used to be a hand-run grep the release
+        checklist admitted could never come back empty.
+        """
+        found = residue(check_version_gates.resolve_paths())
+        assert found == [], (
+            "unresolved vNEXT gate(s) shipped -- an agent cannot satisfy them: "
+            f"{[(rel, line) for rel, line, _ in found[:3]]}"
+        )
+
+    def test_prose_mentions_are_still_present_and_ignored(self) -> None:
+        """Guards the guard: a rule that matched nothing would pass vacuously."""
+        paths = check_version_gates.resolve_paths()
+        mentions = sum(
+            line.count(check_version_gates.VNEXT_TOKEN)
+            for path in paths
+            for line in path.read_text(errors="replace").splitlines()
+        )
+        assert mentions > 0, "no vNEXT mentions at all -- the scan globs are probably broken"
+
+
+class TestReleaseModeSelection:
+    """Only a version-RAISING branch is a release PR.
+
+    CI hands the base branch's version to ``--release-if-newer-than``. A
+    two-dot diff also fires for a stale feature branch whose base has since
+    been released; arming there would demand a contributor delete a
+    placeholder the process requires them to write.
+    """
+
+    def test_explicit_flag_forces_release_mode(self) -> None:
+        assert check_version_gates.is_release_mode(["--release"]) is True
+
+    def test_no_flag_is_not_release_mode(self) -> None:
+        assert check_version_gates.is_release_mode([]) is False
+
+    def test_higher_than_base_arms(self) -> None:
+        """The release PR: pyproject moved above the base branch."""
+        base = check_version_gates._pyproject_version()
+        lower = f"0.0.{int(base.split('.')[-1].rstrip('abrc0123456789') or 0)}"
+        assert check_version_gates.is_release_mode(["--release-if-newer-than", lower]) is True
+
+    def test_equal_to_base_does_not_arm(self) -> None:
+        """The ordinary feature PR -- it must stay free to write vNEXT."""
+        base = check_version_gates._pyproject_version()
+        assert check_version_gates.is_release_mode(["--release-if-newer-than", base]) is False
+
+    def test_lower_than_base_does_not_arm(self) -> None:
+        """A stale branch behind a released main -- the false positive to avoid."""
+        assert check_version_gates.is_release_mode(["--release-if-newer-than", "99.0.0"]) is False
+
+    def test_leading_v_is_tolerated(self) -> None:
+        base = check_version_gates._pyproject_version()
+        assert check_version_gates.is_release_mode(["--release-if-newer-than", f"v{base}"]) is False
+
+    def test_empty_base_does_not_arm(self) -> None:
+        """An unreadable base must neither disarm silently nor fail a normal PR."""
+        assert check_version_gates.is_release_mode(["--release-if-newer-than", ""]) is False
+
+    def test_missing_argument_is_an_error(self) -> None:
+        import pytest
+
+        with pytest.raises(SystemExit):
+            check_version_gates.is_release_mode(["--release-if-newer-than"])
+
+
+class TestVnextFencedBlocks:
+    """Fenced blocks are deliberately NOT exempt -- this pins the trade-off.
+
+    ``CLAUDE.md``'s ``## All CLI Commands`` section is one giant fence carrying
+    real gates: exempting fences dropped 2 of 16 live gates in the pre-0.90.0
+    tree, silently. A doc wanting to SHOW the placeholder uses inline backticks.
+    """
+
+    def test_gate_inside_a_fence_is_still_a_gate(self) -> None:
+        """The CLAUDE.md shape: a command list fenced whole, with gates inside."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "commands.md"
+            f.write_text("```\n# component detail (since vNEXT): falls back to ...\n```\n")
+            found = residue([f])
+        assert len(found) == 1, "a fenced gate must not be exempt -- see the class docstring"
+
+    def test_inline_backticks_remain_the_escape_hatch(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "doc.md", "Resolve them: run `grep -rn '(since vNEXT)' docs/`\n")
+        assert residue([f]) == []

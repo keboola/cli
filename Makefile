@@ -116,6 +116,9 @@ command-sync-check: ## Verify every CLI command is registered + documented (sile
 version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unreleased version
 	uv run python scripts/check_version_gates.py
 
+vnext-check: ## Reject an unresolved version-gate placeholder -- run in the RELEASE PR
+	uv run python scripts/check_version_gates.py --release
+
 check-sentinel-guards: ## Reject an unguarded kbc-session:// sentinel path (silent-drift gate)
 	uv run python scripts/check_sentinel_guards.py
 
