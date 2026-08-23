@@ -178,7 +178,15 @@ class TestLiveRepositoryVnext:
         it depends on where in the release cycle the tree happens to be.
         """
         for gate in residue(check_version_gates.resolve_paths()):
-            lines = Path(gate.path).read_text(errors="replace").splitlines()
+            # `gate.path` is REPO-ROOT-RELATIVE (find_vnext_residue stores
+            # `path.relative_to(REPO_ROOT)`), so it must be re-anchored rather
+            # than resolved against the cwd -- otherwise this only works when
+            # pytest happens to be invoked from the repo root. Its one fallback
+            # branch stores an absolute path instead; `REPO_ROOT / <absolute>`
+            # yields that path unchanged, so both cases are covered.
+            lines = (
+                (check_version_gates.REPO_ROOT / gate.path).read_text(errors="replace").splitlines()
+            )
             assert 1 <= gate.line <= len(lines), f"{gate.path}:{gate.line} is out of range"
             assert check_version_gates.VNEXT_TOKEN in lines[gate.line - 1], (
                 f"{gate.path}:{gate.line} was reported but does not carry the placeholder"
