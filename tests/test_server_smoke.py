@@ -427,6 +427,31 @@ def test_non_session_api_error_keeps_502(tmp_path: Path) -> None:
     assert "host running `kbagent serve`" not in res.json()["error"]["message"]
 
 
+def test_not_found_api_error_maps_to_404(tmp_path: Path) -> None:
+    """A NOT_FOUND KeboolaApiError answers 404, not 502.
+
+    An upstream "no such resource" is a statement about the request, not about
+    the gateway: 502 told callers to retry something that can never succeed.
+    """
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    exc = KeboolaApiError(
+        message="Resource not found: job 123 does not exist.",
+        status_code=404,
+        error_code=ErrorCode.NOT_FOUND,
+        retryable=False,
+    )
+    with _client_with_failing_job_service(tmp_path, exc) as test_client:
+        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+
+    assert res.status_code == 404, res.text
+    body = res.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    # No session remedy is appended -- that branch stays exclusive to 401.
+    assert "host running `kbagent serve`" not in body["error"]["message"]
+
+
 def test_config_error_keeps_400(tmp_path: Path) -> None:
     """`ConfigError` keeps its own 400 mapping, unaffected by the 401 branch."""
     from keboola_agent_cli.errors import ConfigError

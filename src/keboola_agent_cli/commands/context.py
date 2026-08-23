@@ -341,6 +341,15 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
+    (since vNEXT) The AI Service indexes the PUBLIC catalog only, so a private
+    or deprecated component the project can run (keboola.mcp-server-tool,
+    keboola.data-apps) used to 404 here while `component list` showed it. A
+    NOT_FOUND now falls back to the project's Storage component catalog.
+    documentation_source ("ai_service" vs "storage_catalog") is present on BOTH
+    paths and tells them apart; the fallback carries NO configuration examples
+    (examples_count / row_examples_count always 0), so check
+    documentation_source before reading 0 as "this component ships none".
+    NOT_FOUND is still raised when both sources miss.
 
   kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
     (since 0.73.0) Run a synchronous component action (testConnection, getTables,

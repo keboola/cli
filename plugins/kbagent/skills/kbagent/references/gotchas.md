@@ -4384,3 +4384,31 @@ documented multi-branch pull was enough (issue #649).
   manifest to the branch you are actually on. `--json` callers should treat a
   non-zero `summary.orphaned` as "the manifest is pointing at another branch",
   not as a per-config problem.
+
+## `component detail` falls back to the Storage catalog for un-indexed components (since vNEXT)
+
+`component detail` reads the AI Service (`/docs/components/{id}`), which indexes
+the **public** component catalog only. A private or deprecated component the
+project can actually run -- `keboola.mcp-server-tool`, `keboola.data-apps` --
+is listed by `component list` (Storage API) yet missing from that index, so the
+command used to fail with `NOT_FOUND` for exactly the components an operator is
+least likely to know by heart. Over `kbagent serve` it was worse: the global
+handler mapped it to **HTTP 502**, so `GET /components/keboola.mcp-server-tool`
+looked like an upstream outage worth retrying.
+
+- **An AI Service `NOT_FOUND` now falls back to the project's Storage component
+  catalog** and returns the same response shape filled from the catalog entry.
+- **`documentation_source` is the discriminator**: `"ai_service"` (full detail)
+  vs `"storage_catalog"` (fallback). It is present on BOTH paths, so a `--json`
+  consumer can branch on it without a version check once it is on vNEXT+.
+- **The fallback carries no configuration examples.** `examples_count` /
+  `row_examples_count` are always `0` there, and `schema_summary` counts are `0`
+  unless the catalog entry itself ships a `configurationSchema`. Read
+  `documentation_source` before concluding "this component has no examples" --
+  use `config examples` / the component's own docs instead.
+- **A NOT_FOUND is still raised when both sources miss** -- that is the case
+  where the component id really is wrong. Any non-404 AI Service failure (auth,
+  network, 5xx) is re-raised as itself and never masked by a catalog hit.
+- **Over `serve`, a `KeboolaApiError` with code `NOT_FOUND` now answers HTTP
+  404, not 502** (all routers, not just components). Branch on
+  `error.code`, not on the HTTP status alone.
