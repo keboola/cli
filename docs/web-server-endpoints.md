@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**227 operations** across **198 paths** and **29 routers**.
+**228 operations** across **199 paths** and **29 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -78,12 +78,13 @@ PAYG credit balance across projects (read-only). Purchase history / Stripe invoi
 |---|---|---|
 | `GET` | `/billing/credits` | PAYG credit balance across projects |
 
-### `token` (4 operations)
+### `token` (5 operations)
 
 Scoped Storage API tokens -- mint (bucket read/write + component access + expiry), rotate, and revoke. A minted/rotated token's secret is returned ONCE; the acting token needs canManageTokens. Mirrors `kbagent token create|delete|refresh`.
 
 | Method | Path | Summary |
 |---|---|---|
+| `GET` | `/token/list` | List Storage tokens across projects |
 | `GET` | `/token/{project}/list` | List the project's Storage tokens |
 | `POST` | `/token/{project}/create` | Mint a scoped Storage token |
 | `POST` | `/token/{project}/delete` | Revoke a Storage token (destructive) |

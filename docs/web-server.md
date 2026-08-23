@@ -175,7 +175,12 @@ A NERD-themed React SPA that drives the API:
   (`/token/{p}/list`): create / rotate / revoke, with the secret revealed
   ONCE in a copy-to-clipboard block, and an opt-in "derive last-used"
   toggle (`with_last_used=true`) that sorts dormant tokens first and
-  renders `never` / `unknown` / `error` as distinct pills.
+  renders `never` / `unknown` / `error` as distinct pills. A cross-project
+  **All Tokens** view reads `GET /token/list` (repeatable `?project=`,
+  same convention as `/jobs` and `/billing/credits`; omitted = every
+  registered project) — every row carries `project_alias`, and
+  `with_last_used=true` sorts dormant-first across every project's tokens
+  together rather than grouped per project.
 - **Configs, Components (AI search), Storage (with per-column data
   preview), Jobs (cards layout + SSE log stream), Search** — browse a
   selected project.

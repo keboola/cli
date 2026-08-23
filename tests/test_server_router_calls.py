@@ -2220,6 +2220,44 @@ def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
     assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False
 
 
+# ---------------------------------------------------------------------------
+# token.py  GET /list?project=&project=&with_last_used=
+# Service: token.list_tokens_all(aliases=..., with_last_used=...)
+# Cross-project token audit for the web UI's "All Tokens" page -- mirrors the
+# `/jobs` and `/billing/credits` repeatable-`project` convention.
+# ---------------------------------------------------------------------------
+
+
+def test_token_list_all_forwards_repeated_project_and_with_last_used(tmp_path: Path) -> None:
+    """`?project=a&project=b&with_last_used=true` must reach `list_tokens_all`."""
+    token_svc = MagicMock()
+    token_svc.list_tokens_all.return_value = {"tokens": [], "count": 0, "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/token/list",
+            headers=AUTH,
+            params=[("project", "a"), ("project", "b"), ("with_last_used", "true")],
+        )
+
+    assert res.status_code == 200, res.text
+    token_svc.list_tokens_all.assert_called_once_with(aliases=["a", "b"], with_last_used=True)
+
+
+def test_token_list_all_defaults_to_none_aliases_and_false_last_used(tmp_path: Path) -> None:
+    """A bare `GET /token/list` must forward `aliases=None, with_last_used=False`."""
+    token_svc = MagicMock()
+    token_svc.list_tokens_all.return_value = {"tokens": [], "count": 0, "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/token/list", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    token_svc.list_tokens_all.assert_called_once_with(aliases=None, with_last_used=False)
+
+
 # 0.88.0 MCP-parity flags: every one must be reachable over `kbagent serve`,
 # not just from the CLI. Each router docstring claims it "Mirrors" its command,
 # so a flag the router cannot express makes that claim false (PR #632 review).

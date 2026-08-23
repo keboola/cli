@@ -4434,3 +4434,40 @@ fallback (`config examples` already resolved it correctly).
   text's "first available" promise does not work there.
 - `component sync-action` is unaffected: its `--project` is genuinely required
   (exit 2 without it) on every version.
+
+## Multi-project `job list` now merges chronologically, not grouped by project (since vNEXT)
+
+`kbagent job list` without `--project` (and `kbagent serve`'s `GET /jobs`) fans
+out to every resolved project's Queue API in parallel. Each project's own page
+already comes back sorted server-side by `--sort-by`/`--sort-order`, but the
+old aggregation step then re-sorted the MERGED list by
+`(project_alias, str(id))` regardless of what sort the caller asked for -- so
+the output read as "every job from project A, then every job from project B",
+never interleaved by time. That made the aggregate view useless for "what ran
+most recently across all my projects" (the driving use case for a cross-project
+"All Jobs" feed) and made multi-project `job list` non-chronological even
+though single-project `job list` looked correctly time-ordered.
+
+- **Fixed**: the merged `jobs` list is now sorted globally by the SAME
+  `sort_by`/`sort_order` passed to (and already applied per-project by) the
+  Queue API -- default `startTime desc`, so the default view is one
+  chronological feed interleaved across every project. `sort_by` accepts the
+  same `JOB_SORT_FIELDS` as before (`startTime`, `endTime`, `createdTime`,
+  `durationSeconds`, `id`).
+- **Missing values always sort last, in both `asc` and `desc`.** A job with no
+  `startTime` yet (e.g. still `waiting`) is "not yet comparable", not "the
+  oldest job" -- it never gets pulled to the front of a `desc` sort just
+  because the field is absent. Same rule for `endTime`/`createdTime` (empty or
+  absent) and `durationSeconds` (`None`, not `0` -- a genuine `0`-second job is
+  a real value and sorts normally).
+- **Deterministic tiebreak**: ties on the sort field -- including the entire
+  missing-value group, and jobs that happen to share the exact same
+  timestamp across projects -- break on `(project_alias, str(id))` ascending.
+  The result never depends on which project's worker thread happened to
+  finish first.
+- `id` sorts numerically when the value coerces to a number, else falls back
+  to string comparison (defensive only -- Queue API ids are numeric in
+  practice).
+- Single-project `job list` is unaffected in practice (its one page was
+  already server-sorted); the fix only changes behavior once 2+ projects are
+  queried together.

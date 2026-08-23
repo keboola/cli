@@ -23,6 +23,7 @@ export const PAGE_IDS = [
   "storage",
   "stream",
   "jobs",
+  "jobs-all",
   "branches",
   "workspaces",
   "flows",
@@ -39,6 +40,7 @@ export const PAGE_IDS = [
   "org",
   "members",
   "tokens",
+  "tokens-all",
   "doctor",
   "changelog",
 ] as const;

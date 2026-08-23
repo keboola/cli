@@ -10,6 +10,7 @@ import { DoctorPage } from "./pages/Doctor";
 import { EncryptPage } from "./pages/Encrypt";
 import { FlowsPage } from "./pages/Flows";
 import { JobsPage } from "./pages/Jobs";
+import { JobsAllPage } from "./pages/JobsAll";
 import { LineagePage } from "./pages/Lineage";
 import { LocalAiPage } from "./pages/LocalAi";
 import { SemanticLayerPage } from "./pages/SemanticLayer";
@@ -22,6 +23,7 @@ import { SharingPage } from "./pages/Sharing";
 import { StoragePage } from "./pages/Storage";
 import { StreamsPage } from "./pages/Streams";
 import { TokensPage } from "./pages/Tokens";
+import { TokensAllPage } from "./pages/TokensAll";
 import { WorkspacesPage } from "./pages/Workspaces";
 import { UIStateProvider, useUIState } from "./state";
 import { ThemeProvider } from "./theme";
@@ -43,6 +45,8 @@ function Router() {
       return <StreamsPage />;
     case "jobs":
       return <JobsPage />;
+    case "jobs-all":
+      return <JobsAllPage />;
     case "branches":
       return <BranchesPage />;
     case "workspaces":
@@ -73,6 +77,8 @@ function Router() {
       return <MembersPage />;
     case "tokens":
       return <TokensPage />;
+    case "tokens-all":
+      return <TokensAllPage />;
     case "doctor":
       return <DoctorPage />;
     case "changelog":
