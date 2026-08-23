@@ -718,7 +718,7 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
-# component detail (since vNEXT): the AI Service indexes the PUBLIC catalog only, so a private/
+# component detail (since 0.90.0): the AI Service indexes the PUBLIC catalog only, so a private/
 #   deprecated component the project can run (keboola.mcp-server-tool, keboola.data-apps) 404'd
 #   there while `component list` showed it -- over `serve` as an HTTP 502. A NOT_FOUND now falls
 #   back to the project's Storage component catalog; `documentation_source` ("ai_service" vs
@@ -965,7 +965,7 @@ kbagent update [--beta]
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
-# `--no-banner` (since vNEXT): suppress the web UI's "What's new" popup. The UI shows a curated
+# `--no-banner` (since 0.90.0): suppress the web UI's "What's new" popup. The UI shows a curated
 #   per-version highlights modal once per version (localStorage `kbagent.whatsnew.seen`); this flag
 #   turns the UNSOLICITED popup off fleet-wide. Surfaced to the SPA via `GET /ui-config`
 #   ({"banner": bool}) -- NOT injected into index.html: that injection point was removed in favour of

@@ -341,7 +341,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
-    (since vNEXT) The AI Service indexes the PUBLIC catalog only, so a private
+    (since 0.90.0) The AI Service indexes the PUBLIC catalog only, so a private
     or deprecated component the project can run (keboola.mcp-server-tool,
     keboola.data-apps) used to 404 here while `component list` showed it. A
     NOT_FOUND now falls back to the project's Storage component catalog.
@@ -1862,7 +1862,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
 
-    --no-banner (since vNEXT) suppresses the web UI's "What's new" popup --
+    --no-banner (since 0.90.0) suppresses the web UI's "What's new" popup --
     a curated per-version highlights modal the UI shows once per version
     (dismissal persisted in localStorage `kbagent.whatsnew.seen`). The SPA
     reads the switch from `GET /ui-config` -> {{"banner": bool}}; nothing is

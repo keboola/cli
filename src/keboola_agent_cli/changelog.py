@@ -24,6 +24,105 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.90.0": [
+        "New (#658): the `kbagent serve --ui` web UI caught up with the CLI -- jobs, "
+        "configs, tokens and storage are now actionable, not just readable. Jobs gained "
+        "per-row and in-drawer re-run and terminate (terminate is offered only for "
+        "`created` / `waiting` / `processing`; a re-run starts from the config as it stands "
+        "now, because the Queue API offers no replay of the historical `configData`). The "
+        "config detail view became a drawer with a Run job action, a Delete behind a "
+        "confirm modal, and a Trash tab with per-row Restore (#643). A new Tokens page "
+        "creates, rotates and revokes scoped Storage tokens, shows the secret once at mint, "
+        "and offers the opt-in derive-last-used pass with `never` / `unknown` / `error` "
+        "rendered as distinct states. Storage gained the BigQuery table `definition` panel "
+        "(#621) and click-to-edit column descriptions (#624). Everything here is wired to "
+        "serve routes that already existed -- no new Python surface.",
+        "New (#658, #664): a Ctrl+K / Cmd+K command palette. It jumps to any page, switches "
+        "the active project, toggles the theme, opens the Swagger docs or the What's new "
+        "reel -- and finds storage buckets and tables across every registered project. "
+        "Nothing waits on the network while you type: the three data layers are fetched "
+        "once on open and matched client-side, deliberately not through `/search` (which "
+        "needs the `global-search` project feature many projects do not have). Enter on a "
+        "bucket or table lands on the Storage page with the filter applied and the drawer "
+        "open, switching the active project first when the object is foreign.",
+        "New (#665): every UI state is now a shareable link. A hash router encodes page, "
+        "project, branch and selected object -- "
+        "`#/p/alias/storage?sel=tables%2Fin.c-foo.bar` reopens that table's drawer on a "
+        "cold load. Hash-based by design: the REST API owns the root paths, so "
+        "history-mode routing would collide with `GET /projects`. Page changes push "
+        "history, selection changes replace it, and a link naming an alias this install "
+        "does not know falls back to the default project instead of erroring on every page.",
+        "New (#665): detail views render their payload instead of dumping it. Projects, "
+        "configs, components, data apps and the rest answer a click with a structured "
+        "Overview -- metadata grids, pills, tables -- and keep the untouched JSON one tab "
+        "away, so nothing the API returned is hidden.",
+        "New (#663): a curated What's new popup, shown once per version, with "
+        "`kbagent serve --no-banner` to turn it off fleet-wide. The switch reaches the SPA "
+        "through the new `GET /ui-config` endpoint and the UI fails closed -- no popup "
+        "while that request is in flight, on error, or on anything but `banner: true`. The "
+        "flag governs only what appears uninvited: the command palette's What's new action "
+        "still opens it on request. The reel is hand-maintained in "
+        "`web/frontend/src/whatsnew.ts`, separate from this changelog on purpose.",
+        "Change (#665): on `kbagent serve`, `ErrorCode.NOT_FOUND` now answers HTTP 404 on "
+        "every route. It used to answer 502, which told callers the upstream was broken "
+        "when the truth was that the thing they asked for does not exist. Any consumer "
+        "branching on the status code alone needs updating -- branch on `error.code`, which "
+        "was correct before this change and still is.",
+        "Fix (#665): `component detail` no longer fails for a component the AI Service does "
+        "not index. The AI Service covers the PUBLIC catalog only, so a private or "
+        "deprecated component the project can actually run -- `keboola.mcp-server-tool`, "
+        "`keboola.data-apps` -- returned NOT_FOUND there while `component list` happily "
+        "showed it, surfacing over `serve` as an HTTP 502. A 404 now falls back to the "
+        "project's Storage component catalog. The new `documentation_source` field "
+        "(`ai_service` vs `storage_catalog`) is present on both paths and tells them apart; "
+        "the fallback carries no configuration examples, so check it before reading "
+        '`examples_count: 0` as "this component ships none". A non-404 AI Service failure '
+        "is never masked.",
+        "Fix (#668): the web UI session now survives a server restart. `serve --ui` "
+        "authenticates the browser with an HttpOnly cookie set on `GET /`, but a reload "
+        "could be served from the browser cache -- no request, no fresh cookie -- so every "
+        "`/api/*` call 401d and the SPA rendered empty lists with no visible auth error. "
+        "The shell routes now answer `Cache-Control: no-cache` (hashed build assets keep "
+        "their caching), and the API client treats a 401 as a possibly-stale cookie: it "
+        're-fetches the shell once with `cache: "reload"`, single-flight across concurrent '
+        "401s, and retries the request exactly once. Only if that retry still fails does a "
+        "session-expired banner appear, carrying the server's own message when it names a "
+        "remedy.",
+        "Fix (#666): `component detail` and `config new` now really do fall back to the "
+        "first configured project when `--project` is omitted. Both commands document that "
+        "flag as optional, and both broke the promise: they passed `alias=None` into a "
+        "resolver that only falls back on an EMPTY "
+        "alias list -- and `[None]` is not empty -- so the documented-as-optional flag "
+        "failed with `CONFIG_ERROR: Project 'None' not found`. An empty config now raises "
+        'an actionable "No projects configured" error instead.',
+        "Fix (#662): the Config column in `kbagent job list`'s human-mode table is no longer "
+        "always empty. The renderer read `configId`, but the Queue API job resource names "
+        "that field `config` and the service returns the API row verbatim, so the key never "
+        "existed. The fixtures hand-wrote the same invented key, which is why the tests "
+        "passed while real output was blank.",
+        'Fix (#623): `uv build --wheel` no longer aborts with "A second file is being added '
+        'to the wheel archive at the same path" when the bundled SPA is present. Hatchling '
+        "has two independent paths that add files to a wheel -- `packages` collection and "
+        "`force-include` -- and from hatchling 1.30.0 the .gitignore-based exclusion stops "
+        "suppressing the first one for a directory-shaped force-include, so "
+        '`_ui_dist/` is added twice. `requires = ["hatchling"]` is unpinned, so this hits '
+        "the ordinary release path rather than an edge case. Fixed with an unconditional "
+        "`exclude` glob on the wheel target, verified across hatchling 1.27 through 1.32; "
+        "the sdist target gained the symmetric guard so generated SPA output can never ship "
+        "as source. README now documents the Python >=3.12 install floor.",
+        "New (#661): frontend PRs are gated on CI. A new path-filtered `frontend.yml` "
+        "workflow runs `tsc --noEmit`, `npm test` and the production `vite build` on any "
+        "change under `web/**`, so a type error can no longer reach `main` undetected -- "
+        "#658 carried three commits of frontend bugs caught only by hand. Python-only PRs "
+        "never schedule the runner. This is safe only while the `main` ruleset has no "
+        "required status checks; if frontend checks ever become required, the path filter "
+        "needs rethinking.",
+        'Note (#667): the docs\' claim that `config new` makes "zero API calls" in scaffold '
+        "mode was never true. Corrected in all three surfaces that carried it: the scaffold "
+        "reads the component schema from the AI Service -- which is exactly "
+        "what `--project` authenticates without `--push`. An agent reading the old wording "
+        "would wrongly conclude the scaffold works offline.",
+    ],
     "0.89.0": [
         "Fix (#646): `sync clone` now rejects a malformed override file instead of "
         "silently pushing garbage IDs. The `--bucket-map` / `--variable-values` / "
