@@ -6,6 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# One in-flight run per PR. Pushing again to an open PR supersedes the previous
+# run, which used to keep burning a full ~39 billed minutes (a Windows job bills
+# 2x) on a commit nobody would ever look at again. Measured over 13 days: 29 of
+# 219 PR runs (13%) were still executing when the next push landed, and a single
+# iterating branch racked up 23 runs.
+#
+# `cancel-in-progress` is deliberately PR-ONLY. A push to main is the
+# post-merge verification of a commit that is already shipped -- cancelling it
+# because the next merge arrived would silently drop the signal for the commit
+# in between, which is exactly when you want it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ────────────────────────────────────────────────────────────────────────
   # Static analysis + silent-drift gates. These are deterministic and
@@ -31,6 +45,8 @@ jobs:
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
           version: "0.11.16"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/setup-python@v6
         with:
@@ -171,22 +187,35 @@ jobs:
         run: uv run python scripts/check_file_size.py
 
   # ────────────────────────────────────────────────────────────────────────
-  # Test suite across every supported interpreter. pyproject declares
-  # `requires-python = ">=3.12"`, so the matrix is 3.12 + 3.13 (3.10/3.11 are
-  # intentionally out of scope). `integration` tests are deselected; `e2e`
-  # tests self-skip without credentials (the dedicated e2e.yml workflow runs
-  # them nightly against a real project). Coverage is INFORMATIONAL: the
-  # term-missing report is printed for visibility but NO --cov-fail-under
-  # threshold is enforced, so it never blocks a merge.
+  # Test suite. pyproject declares `requires-python = ">=3.12"`, so the
+  # supported interpreters are 3.12 + 3.13 (3.10/3.11 are intentionally out of
+  # scope). `integration` tests are deselected; `e2e` tests self-skip without
+  # credentials (the dedicated e2e.yml workflow runs them nightly against a
+  # real project).
+  #
+  # WHICH interpreters run depends on the event:
+  #   * pull_request -> 3.12 only (the floor, and what the wheel is built on)
+  #   * push to main -> 3.12 + 3.13
+  # A 3.13-only regression is therefore caught on main rather than on the PR.
+  # That is an accepted trade: the two interpreters differ in nothing this
+  # codebase touches, a PR-time 3.13 job cost ~8 billed minutes of the ~39 a PR
+  # used to spend, and main runs unattended anyway. If 3.13 ever starts
+  # diverging in practice, put it back in the PR matrix -- that is a one-word
+  # change to the expression below.
+  #
+  # Coverage is INFORMATIONAL -- no --cov-fail-under threshold is enforced, so
+  # it can never block a merge. It also costs ~50% extra wall clock (measured:
+  # 152s -> 230s sequentially), so it is collected on main pushes only. Locally
+  # it stays one `make test-cov` away.
   # ────────────────────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     strategy:
       # Don't cancel 3.12 just because 3.13 tripped (or vice versa) -- we want
-      # to see which interpreters pass on a given PR, not just the first failure.
+      # to see which interpreters pass on a given run, not just the first failure.
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.12", "3.13"]') }}
     env:
       # Pin uv's interpreter to the matrix version for BOTH `sync` and `run`,
       # so the suite is actually exercised on each interpreter instead of
@@ -198,6 +227,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.11.16"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/setup-python@v6
         with:
@@ -206,8 +237,23 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra server
 
+      # `-n auto` fans the ~6k tests across the runner's cores (4 on a standard
+      # GitHub-hosted runner). Every HTTP call in this suite is mocked and the
+      # tests hold no shared mutable state, so it parallelises cleanly --
+      # measured locally at 152s -> 37s on 4 workers, byte-identical results
+      # over repeated runs. `-v` is dropped: under xdist it interleaves 6k
+      # lines from four workers into unreadable output, and a failure prints
+      # its own node id anyway.
+      - name: Tests
+        if: github.event_name != 'push'
+        run: uv run pytest tests/ -m "not integration" -n auto
+
+      # Same run, plus the informational coverage report. pytest-cov combines
+      # the per-worker data files automatically, so the totals match a
+      # sequential run exactly (verified: 31296/5405/9186/1121, 80%).
       - name: Tests (with coverage report)
-        run: uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
+        if: github.event_name == 'push'
+        run: uv run pytest tests/ -m "not integration" -n auto --cov --cov-report=term-missing
 
   # Real wheel build and focused export regression on Windows -- the only
   # place the issue #320 and #529 fixes can be verified against real Windows
@@ -228,6 +274,8 @@ jobs:
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
           version: "0.11.16"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/setup-python@v6
         with:
@@ -247,29 +295,6 @@ jobs:
       - name: Build wheel WITH bundled UI
         run: uv build --wheel
 
-      # Windows does not expose os.O_NOFOLLOW. Exercise the focused export
-      # regression here, where the portable flags run on the real platform.
-      - name: Test semantic-layer export on Windows (issue #529)
-        run: uv run pytest tests/test_semantic_layer_service.py -k "export" -v
-
-      # The self-update helper is a PowerShell script authored on machines that
-      # cannot execute it. This suite runs it for real: it proves the script
-      # parses, that it records the installer's exit code, and -- the branch
-      # that actually protects the environment -- that it installs NOTHING
-      # while a watched process is still alive (issue #528). The rest of the
-      # suite also runs here with `should_defer()` returning its real Windows
-      # default and a real detached spawn.
-      - name: Test the deferred self-update helper on Windows (issue #528)
-        run: uv run pytest tests/test_update_runner.py -v
-
-      # `os.replace()` cannot rename over a file Windows still holds open, so a
-      # store that locks its own state file dies with WinError 5 on every write
-      # while passing everywhere on POSIX. That shipped: `job run
-      # --idempotency-key` was unusable on Windows for a full release. Anything
-      # doing lock-then-atomic-replace has to prove it here.
-      - name: Test lock-then-replace file stores on Windows (issue #427)
-        run: uv run pytest tests/test_job_idempotency_store.py -v
-
       # The whole suite, as a gate. It never ran here before: a real run was 55
       # failures, and nobody can gate on that, so nothing did -- which let real
       # Windows defects sit in the noise for entire releases. Two of them did:
@@ -281,20 +306,50 @@ jobs:
       # fcntl does not exist there). Keeping this green is the point: a red
       # suite nobody can act on is worse than no suite, because it reads as
       # coverage while hiding things.
-      # The targeted steps above run against the default dependency set, but
-      # the full suite imports the `serve` tests, so it needs the same extras
+      # The specific regressions this job exists to hold down are all inside the
+      # suite below, and used to ALSO run as three separate named steps before
+      # it (`-k export` for #529, test_update_runner.py for #528,
+      # test_job_idempotency_store.py for #427). Those were strict subsets of
+      # this run -- duplicated Windows minutes, billed at 2x -- so they are
+      # gone. What they covered has not changed:
+      #   * #529: Windows has no os.O_NOFOLLOW, so semantic-layer export must
+      #           prove its portable flags on the real platform.
+      #   * #528: the deferred self-update helper is a PowerShell script
+      #           authored on machines that cannot run it; here it really
+      #           executes, with a real detached spawn, and must install
+      #           NOTHING while a watched process is still alive.
+      #   * #427: os.replace() cannot rename over a file Windows still holds
+      #           open, so lock-then-atomic-replace stores die with WinError 5
+      #           on every write while passing everywhere on POSIX. That
+      #           shipped once -- `job run --idempotency-key` was unusable on
+      #           Windows for a full release.
+      # A failure now names the test node id instead of the step, which is the
+      # same information.
+      #
+      # The full suite imports the `serve` tests, so it needs the same extras
       # the Linux job installs. Without this the gate fails on
       # `ModuleNotFoundError: No module named 'fastapi'` -- an artefact of the
       # job's own setup rather than anything about Windows.
       - name: Install server extras for the full run
         run: uv sync --extra server
 
+      # `-n auto`, same as the Linux jobs: this step was 477s of the job's 568s,
+      # and Windows minutes bill at 2x, so it was the single most expensive
+      # thing in the whole PR pipeline.
+      #
+      # If this ever turns flaky on Windows specifically, drop back to
+      # sequential by replacing `-n auto` with `-p no:xdist` -- do NOT disable
+      # the suite. Windows-only file-locking and atomic-replace semantics are
+      # exactly what it is here to catch, and parallel workers touching the
+      # same tmp paths are the plausible failure mode. The Linux jobs are
+      # unaffected either way.
       - name: Full test suite on Windows
         run: >
           uv run pytest tests/
           --ignore=tests/test_e2e.py
           --ignore=tests/test_e2e_auth.py
           --ignore=tests/test_server_semantic_layer_routes_e2e.py
+          -n auto
           -q
 
       - name: Assert the SPA is bundled (Bug 1 fixed)

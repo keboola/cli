@@ -14,11 +14,16 @@ install-server: ## Install FastAPI/uvicorn for `kbagent serve` (web UI backend)
 sync: ## Sync dependencies from lockfile
 	uv sync
 
+# `-n auto` fans the suite across every core (~6k tests, all HTTP mocked, no
+# shared mutable state). Measured 152s -> 29s on an 11-core machine. `-v` is
+# dropped with it: interleaved per-worker output is unreadable, and a failing
+# test prints its own node id. Use `make test-file FILE=...` for a sequential,
+# verbose run while debugging a single file.
 test: ## Run all tests (excluding e2e — use test-e2e separately)
-	uv run pytest tests/ -v -m "not e2e"
+	uv run pytest tests/ -m "not e2e" -n auto
 
 test-unit: ## Run unit tests only (exclude integration and e2e)
-	uv run pytest tests/ -v -m "not integration and not e2e"
+	uv run pytest tests/ -m "not integration and not e2e" -n auto
 
 test-integration: ## Run integration tests only
 	uv run pytest tests/ -v -m integration
@@ -46,7 +51,7 @@ test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v
 
 test-cov: ## Run the unit suite with a coverage report (informational; no threshold gate)
-	uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
+	uv run pytest tests/ -m "not integration" -n auto --cov --cov-report=term-missing
 
 lint: ## Run ruff linter
 	uv run ruff check src/ tests/ scripts/

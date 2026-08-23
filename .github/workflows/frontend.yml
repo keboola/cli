@@ -35,6 +35,13 @@ on:
       - "web/**"
       - ".github/workflows/frontend.yml"
 
+# Same rationale as ci.yml: supersede an in-flight PR run when the branch is
+# pushed again, but never cancel a main push (that run is the post-merge
+# verification of an already-shipped commit).
+concurrency:
+  group: frontend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   frontend:
     name: Type check + test + build (web/frontend)

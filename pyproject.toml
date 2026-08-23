@@ -138,6 +138,12 @@ dev = [
     "pytest-cov>=5",
     "pytest-httpx>=0.30",
     "pytest-asyncio>=0.23",
+    # Parallel test execution. The suite is ~6k tests of in-process CliRunner
+    # invocations with every HTTP call mocked -- CPU-bound, no shared mutable
+    # state, so it scales almost linearly across workers. Sequentially it took
+    # ~8.5 min per interpreter in CI (three such runs per PR, one of them on a
+    # 2x-billed Windows runner) purely because nothing ever ran concurrently.
+    "pytest-xdist>=3.6",
     "ruff>=0.8",
     "ty>=0.0.33",
     "bandit>=1.9.4",
