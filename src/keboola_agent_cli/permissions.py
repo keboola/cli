@@ -26,6 +26,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
+    # Serve-only (since vNEXT): `GET /auth/projects` lists the session's
+    # registerable project candidates. It has no CLI leaf command -- the
+    # terminal equivalent is the interactive picker inside
+    # `auth register-projects` -- so it is exempted from the dead-key check
+    # in scripts/check_command_sync.py via SERVE_ONLY_OPERATIONS below.
+    "auth.projects": "read",
     # Project management
     "project.add": "admin",
     "project.list": "read",
@@ -381,6 +387,13 @@ OPERATION_REGISTRY: dict[str, str] = {
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
 }
+
+# Operations that exist ONLY on the `kbagent serve` REST surface. They are real
+# OPERATION_REGISTRY entries (a policy must be able to name and deny them), but
+# they have no CLI leaf command, so the command-sync gate would otherwise report
+# them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
+# its "key matching no live command" check.
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects"})
 
 
 # The operation namespace that disappeared with the MCP passthrough, and the

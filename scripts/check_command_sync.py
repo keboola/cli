@@ -52,7 +52,7 @@ import typer.main
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands.context import AGENT_CONTEXT
 from keboola_agent_cli.commands.repl import _is_group
-from keboola_agent_cli.permissions import OPERATION_REGISTRY
+from keboola_agent_cli.permissions import OPERATION_REGISTRY, SERVE_ONLY_OPERATIONS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
@@ -171,7 +171,9 @@ def main() -> int:
     problems = find_drift(
         leaves,
         groups,
-        registry_keys=set(OPERATION_REGISTRY),
+        # Serve-only operations have no CLI leaf command by design (they are
+        # enforced on `kbagent serve` routes), so they are not dead keys.
+        registry_keys=set(OPERATION_REGISTRY) - SERVE_ONLY_OPERATIONS,
         claude_text=CLAUDE_MD.read_text(encoding="utf-8"),
         context_text=AGENT_CONTEXT,
         reference_text=COMMANDS_REFERENCE_MD.read_text(encoding="utf-8"),

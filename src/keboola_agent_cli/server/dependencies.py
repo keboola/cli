@@ -8,13 +8,16 @@ per request.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 
 from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
+from ..permissions import PermissionEngine
+from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
 from ..services.component_service import ComponentService
@@ -96,6 +99,13 @@ class ServiceRegistry:
     # Populated by ``create_app`` once uvicorn binding is known.
     serve_url: str | None = None
     serve_token: str | None = None
+    # Session firewall for the REST surface (since vNEXT). Built by
+    # ``create_app`` from the persisted ``config.permissions`` policy, or
+    # handed in by ``kbagent serve`` so the process-global ``--deny-writes`` /
+    # ``--deny-destructive`` flags reach the routes too. ``None`` means "no
+    # policy configured" -- exactly what ``PermissionEngine(None)`` means on
+    # the CLI side.
+    permission_engine: PermissionEngine | None = None
     project: ProjectService = field(init=False)
     config: ConfigService = field(init=False)
     component: ComponentService = field(init=False)
@@ -130,6 +140,7 @@ class ServiceRegistry:
     docs: DocsService = field(init=False)
     transformation: TransformationService = field(init=False)
     billing: BillingService = field(init=False)
+    auth: AuthService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -173,6 +184,11 @@ class ServiceRegistry:
         self.docs = DocsService(config_store=cs)
         self.transformation = TransformationService(config_store=cs)
         self.billing = BillingService(config_store=cs)
+        # AuthService's browser-facing seams (client factory, browser opener,
+        # sleep) all have safe defaults and are never reached by the read-only
+        # session/project methods the REST surface exposes -- a browser login
+        # only ever completes on the host, never for a REST caller.
+        self.auth = AuthService(config_store=cs)
 
 
 def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:
@@ -183,6 +199,35 @@ def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:
 def get_registry(request: Request) -> ServiceRegistry:
     """FastAPI dependency: return the registry from app state."""
     return request.app.state.registry  # type: ignore[no-any-return]
+
+
+def require_permission(operation: str) -> Callable[[ServiceRegistry], None]:
+    """Build a FastAPI dependency enforcing the permission policy for ``operation``.
+
+    ``operation`` is an :data:`~keboola_agent_cli.permissions.OPERATION_REGISTRY`
+    key (``"auth.register-projects"``, ``"config.delete"``, ...). Use it as a
+    route dependency::
+
+        @router.post("/auth/register-projects",
+                     dependencies=[Depends(require_permission("auth.register-projects"))])
+
+    A denial raises :class:`~keboola_agent_cli.errors.PermissionDeniedError`,
+    which ``server/app.py`` maps centrally to HTTP 403 with
+    ``error_code: PERMISSION_DENIED`` -- the same code and message the CLI
+    prints, so a caller can branch on one value across both surfaces.
+
+    No engine on the registry means no policy is configured and every
+    operation passes, matching ``PermissionEngine(None)`` on the CLI side. The
+    attribute is read defensively because server tests routinely override
+    ``get_registry`` with a hand-built registry that skips ``__init__``.
+    """
+
+    def _check_permission(registry: ServiceRegistry = Depends(get_registry)) -> None:
+        engine = getattr(registry, "permission_engine", None)
+        if engine is not None:
+            engine.check_or_raise(operation)
+
+    return _check_permission
 
 
 def get_manage_token(request: Request) -> str | None:

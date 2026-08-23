@@ -27,7 +27,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..permissions import PermissionEngine
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_registry
@@ -545,6 +546,23 @@ def _resolve_cors_origins(cors_origins: list[str] | None) -> list[str]:
     return origins
 
 
+def _default_permission_engine(config_store: ConfigStore) -> PermissionEngine:
+    """Build the REST surface's permission engine from the persisted policy.
+
+    Mirrors the CLI's own bootstrap (``cli.py``): the ``permissions`` block of
+    config.json is the policy, and an unreadable/corrupted config degrades to
+    "no policy" rather than refusing to start -- a broken config file must not
+    take the server down. Session-only deny flags (``--deny-writes`` /
+    ``--deny-destructive``) are NOT applied here; they live on the CLI context
+    and reach the app through ``create_app(permission_engine=...)``.
+    """
+    try:
+        persisted_policy = config_store.load().permissions
+    except Exception:
+        persisted_policy = None
+    return PermissionEngine(persisted_policy)
+
+
 def create_app(
     *,
     config_dir: str | None = None,
@@ -553,6 +571,7 @@ def create_app(
     serve_url: str | None = None,
     ui_dist: str | None = None,
     ui_banner: bool = True,
+    permission_engine: PermissionEngine | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI application.
 
@@ -584,6 +603,11 @@ def create_app(
         ui_banner: Whether the web UI may show its unsolicited "What's new"
             popup. Surfaced to the SPA over ``GET /ui-config`` rather than
             injected into the page -- see that endpoint's docstring.
+        permission_engine: Session firewall enforced by routes that declare
+            ``Depends(require_permission(...))``. ``kbagent serve`` passes the
+            CLI's own engine so ``--deny-writes`` / ``--deny-destructive``
+            apply to the REST surface too. When None, one is built from the
+            persisted ``config.permissions`` policy of the resolved config dir.
 
     Returns:
         Configured FastAPI app ready for uvicorn.
@@ -651,6 +675,7 @@ def create_app(
         config_store=config_store,
         serve_url=serve_url,
         serve_token=resolved_token,
+        permission_engine=permission_engine or _default_permission_engine(config_store),
     )
     install_registry(app, registry)
 
@@ -681,6 +706,14 @@ def create_app(
             # page on-call for) a request that can never succeed.
             return _format_error(msg, code, http_status=404)
         return _format_error(msg, code, http_status=502)
+
+    @app.exception_handler(PermissionDeniedError)
+    async def _permission_denied_handler(_request, exc: PermissionDeniedError):
+        # 403, not 401: the caller authenticated fine (the bearer token was
+        # accepted) -- the operation itself is what the active policy blocks.
+        # Same `PERMISSION_DENIED` code the CLI prints for the same denial, so
+        # a caller can branch on one value across both surfaces.
+        return _format_error(exc.message, ErrorCode.PERMISSION_DENIED, http_status=403)
 
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(_request, exc: StarletteHTTPException):
