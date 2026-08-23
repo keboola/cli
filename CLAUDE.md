@@ -170,14 +170,25 @@ The flow is instead:
    the literal placeholder **`vNEXT`** -- `(since vNEXT)` / `vNEXT+`.
    `make version-gate-check` ignores the placeholder (it only matches numeric
    versions) but rejects a guessed numeric version with no changelog entry,
-   so a numeric future tag cannot even pass CI.
+   so a numeric future tag cannot even pass CI. Writing `vNEXT` in a feature
+   PR is correct and stays green -- the placeholder only becomes fatal in a
+   version-raising PR (below).
 2. **Release PR** (its only job): bump `pyproject.toml`, review everything
    merged since the last release (`git log v<last>..origin/main`), write ONE
    changelog entry covering all of it (one bullet per logical change, with
    `(#PR)` references), replace every `vNEXT` placeholder with the real
-   version, run `make version-sync`. Merge, then tag -- the release pipeline
-   renders the GitHub release notes from the changelog entry
-   (`scripts/gen_release_notes.py`). Full checklist: `CONTRIBUTING.md` >
+   version (`make vnext-check` verifies it -- CI runs the same check
+   automatically on any PR that raises the version, so a missed placeholder
+   is a red build, not a silent ship), add the curated What's-new entry to
+   `web/frontend/src/whatsnew.ts` when the release ships UI-visible features
+   (skipping it errors nowhere -- the popup falls back to the previous reel
+   and the release's UI work ships dark), run `make version-sync`. Merge,
+   then tag the merge commit -- **the tag push is the ONLY manual action**:
+   the pipeline renders the release notes from the changelog entry
+   (`scripts/gen_release_notes.py`; never write them by hand), publishes
+   PyPI + native binaries, and creates + fills the GitHub Release. Verify
+   afterwards: pipeline green, `gh release view` shows a non-empty body and
+   both wheels. Full checklist: `CONTRIBUTING.md` >
    "Releasing a new version".
 
 **Inside the release PR**: edit `pyproject.toml`, add the changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. `make changelog-check` (release-time, needs `gh`) enforces changelog completeness in both directions.
@@ -268,7 +279,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
-    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR)
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR; the *replacement* is now CI-enforced on any version-raising PR, the *tagging* still is not)
     - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
