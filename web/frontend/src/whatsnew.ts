@@ -37,6 +37,60 @@ export interface WhatsNewRelease {
 
 export const WHATS_NEW: WhatsNewRelease[] = [
   {
+    version: "0.90.0",
+    items: [
+      {
+        title: "Every view has a link",
+        body:
+          "The URL now tracks the page, project, branch and whatever you have open, so the " +
+          "exact state you are looking at can be pasted to a colleague. Back and Forward " +
+          "walk pages, and a shared link reopens the drawer on a cold load.",
+      },
+      {
+        title: "The palette finds your data",
+        body:
+          "Ctrl+K searches storage buckets and tables across every registered project, not " +
+          "just pages and actions. Enter lands on the object with its filter applied, " +
+          "switching project first if it lives elsewhere. Still nothing waits on the network " +
+          "while you type.",
+        hint: "ctrl+k / \u2318k",
+      },
+      {
+        title: "Details you can read",
+        body:
+          "Projects, configs, components, data apps and jobs answer a click with a rendered " +
+          "overview instead of a JSON dump \u2014 and keep the untouched payload one tab away, " +
+          "so nothing is hidden.",
+      },
+      {
+        title: "Run and terminate jobs",
+        body:
+          "Re-run a job or start one straight from a configuration, and terminate anything " +
+          "still queued or running. A re-run uses the configuration as it stands now.",
+      },
+      {
+        title: "Deleting a config is undoable",
+        body:
+          "Configs now have a Trash tab listing what was deleted, with per-row restore. " +
+          "Delete is soft, and the confirm dialog says so.",
+      },
+      {
+        title: "Tokens, without the web UI",
+        body:
+          "A new Tokens page creates, rotates and revokes scoped Storage tokens. The secret " +
+          "is shown once at mint; the opt-in last-used pass sorts dormant tokens first, so " +
+          "reading order is cleanup order.",
+      },
+      {
+        title: "Your session survives a restart",
+        body:
+          "Restarting the server no longer leaves a tab quietly showing empty lists. The UI " +
+          "now re-authenticates itself on the first rejected request, and tells you plainly " +
+          "when it genuinely cannot.",
+      },
+    ],
+  },
+  {
     version: "0.89.0",
     items: [
       {

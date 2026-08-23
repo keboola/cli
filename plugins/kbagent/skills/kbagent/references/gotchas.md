@@ -4387,7 +4387,7 @@ documented multi-branch pull was enough (issue #649).
   non-zero `summary.orphaned` as "the manifest is pointing at another branch",
   not as a per-config problem.
 
-## `component detail` falls back to the Storage catalog for un-indexed components (since vNEXT)
+## `component detail` falls back to the Storage catalog for un-indexed components (since 0.90.0)
 
 `component detail` reads the AI Service (`/docs/components/{id}`), which indexes
 the **public** component catalog only. A private or deprecated component the
@@ -4402,7 +4402,7 @@ looked like an upstream outage worth retrying.
   catalog** and returns the same response shape filled from the catalog entry.
 - **`documentation_source` is the discriminator**: `"ai_service"` (full detail)
   vs `"storage_catalog"` (fallback). It is present on BOTH paths, so a `--json`
-  consumer can branch on it without a version check once it is on vNEXT+.
+  consumer can branch on it without a version check once it is on 0.90.0+.
 - **The fallback carries no configuration examples.** `examples_count` /
   `row_examples_count` are always `0` there, and `schema_summary` counts are `0`
   unless the catalog entry itself ships a `configurationSchema`. Read
@@ -4415,18 +4415,18 @@ looked like an upstream outage worth retrying.
   404, not 502** (all routers, not just components). Branch on
   `error.code`, not on the HTTP status alone.
 
-## `component detail` / `config new` without `--project` really uses the first project (since vNEXT)
+## `component detail` / `config new` without `--project` really uses the first project (since 0.90.0)
 
 `component detail --component-id ID` and `config new --component-id ID`
 (scaffold-only, no `--push`) have always documented `--project` as optional
 ("uses first available if not set" / "for AI Service auth; required with
---push"). On every version before vNEXT that promise was broken: omitting the
+--push"). On every version before 0.90.0 that promise was broken: omitting the
 flag failed with `CONFIG_ERROR: Project 'None' not found ...`, because the
 omitted alias was passed into project resolution as a literal `None` element
 and took the strict-lookup path instead of the "first available project"
 fallback (`config examples` already resolved it correctly).
 
-- **vNEXT+**: omitting `--project` resolves to the first configured project;
+- **0.90.0+**: omitting `--project` resolves to the first configured project;
   `component detail`'s `project_alias` reports the alias actually used (never
   `None`). With NO projects configured at all, the failure is an actionable
   `CONFIG_ERROR: No projects configured. Use 'kbagent project add' ...`.

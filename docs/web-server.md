@@ -99,7 +99,7 @@ else lives here, with their own agents that know their projects.
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
 An upstream Keboola failure surfaces through one global handler: a
-`NOT_FOUND` answers **404** (since vNEXT — it used to be 502, which told
+`NOT_FOUND` answers **404** (since 0.90.0 — it used to be 502, which told
 callers to retry a request that can never succeed), an expired/missing browser
 session answers **401**, and every other `KeboolaApiError` answers **502**. The
 body is always the `{"status": "error", "error": {"code", "message"}}`
@@ -133,9 +133,9 @@ A NERD-themed React SPA that drives the API:
 - **Command palette** — `Ctrl+K` / `Cmd+K` anywhere: fuzzy jump to any
   page, switch the active project, toggle the theme, open Swagger `/docs`,
   reopen **What's new**. Arrows + enter, esc closes.
-- **What's new popup** *(since vNEXT)* — a curated per-version highlights
+- **What's new popup** *(since 0.90.0)* — a curated per-version highlights
   modal, shown once per version. See
-  [What's-new popup](#whats-new-popup-since-vnext) below for the curated
+  [What's-new popup](#whats-new-popup) below for the curated
   list's location, the storage key, and the `--no-banner` opt-out.
 - **Dashboard** — greeting, big Kai chat input, stat tiles (projects /
   agents / doctor / recent jobs / PAYG credits), scheduled-agent
@@ -324,7 +324,7 @@ session cookie, and the auth middleware accepts that cookie whenever no
 `Authorization` header is present. Scripted callers keep using the header.
 
 Two layers keep that cookie from going stale across server restarts
-*(since vNEXT)* — previously a restart (new token) could leave a tab that
+*(since 0.90.0)* — previously a restart (new token) could leave a tab that
 reloaded from the browser cache silently 401-ing on every API call, with
 each list rendering as empty:
 
@@ -338,11 +338,11 @@ each list rendering as empty:
   `SESSION_NOT_FOUND` the banner carries the server message, which names
   the on-host `kbagent auth login` remedy).
 
-### What's-new popup *(since vNEXT)*
+### What's-new popup
 
-The web UI shows a curated per-version highlights modal on load, once per
-version, so features like the command palette get discovered instead of
-waiting to be stumbled upon.
+*(since 0.90.0)* The web UI shows a curated per-version highlights modal on
+load, once per version, so features like the command palette get discovered
+instead of waiting to be stumbled upon.
 
 **Curated list — `web/frontend/src/whatsnew.ts`.** A hand-maintained
 `WhatsNewRelease[]`, deliberately *not* the raw `changelog.py` output: the
