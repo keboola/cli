@@ -4471,3 +4471,52 @@ though single-project `job list` looked correctly time-ordered.
 - Single-project `job list` is unaffected in practice (its one page was
   already server-sorted); the fix only changes behavior once 2+ projects are
   queried together.
+
+## `kbagent serve` permission enforcement is `/auth/*`-only so far (since vNEXT)
+
+`create_app` builds a `PermissionEngine` from the persisted `permissions`
+policy of **the config dir `serve` resolves** (its own `--config-dir`, then
+`KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
+forwards only the session FLAGS of the invocation on top. But of the ~30
+routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
+`Depends(require_permission(...))` -- see `docs/web-server.md` for the endpoint
+shapes.
+
+- **`kbagent --deny-writes serve` cannot start the server** -- do not
+  recommend it. `serve` is classified `admin` in `permissions.py`, and
+  `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so
+  the CLI callback blocks the `serve` command itself: `Error: Operation
+  'serve' is blocked by the active permission policy.`, exit code 6, no
+  uvicorn. `--deny-destructive` does start the server, but no `/auth/*`
+  operation is destructive, so it changes nothing on this router.
+- **The reachable recipe is a persisted policy in the SERVED config dir.**
+  Verified live:
+
+  ```bash
+  # in a real terminal: `permissions set` demands a typed confirmation code
+  kbagent --config-dir /path/to/cfg permissions set \
+      --mode allow --deny auth.register-projects
+  kbagent serve --config-dir /path/to/cfg --port 8001
+  # POST /auth/register-projects -> 403 {"error":{"code":"PERMISSION_DENIED"}}
+  # GET  /auth/status            -> 200
+  # GET  /auth/projects          -> 200 (401 SESSION_NOT_FOUND when no session)
+  ```
+
+  A `--mode deny` policy works too, but then `serve` (and the reads you want to
+  keep) must be in its allow list, or the server will not start either.
+  Pass `--config-dir` to `serve` itself: the root-level `kbagent --config-dir
+  ... serve` sets the dir for the CLI invocation, not for the server process.
+- **A deny policy does NOT firewall the whole REST surface.**
+  `permissions set --mode deny --deny cli:write` blocks `POST
+  /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
+  does nothing to `POST /storage/tables/{project}` (create a table) or any
+  other write route on any other router -- those still execute unchecked.
+- `GET /auth/projects` backs a registry key (`auth.projects`) with no CLI leaf
+  command -- `auth register-projects`'s interactive picker is its terminal
+  equivalent. It is exempted from `scripts/check_command_sync.py`'s dead-key
+  check via `SERVE_ONLY_OPERATIONS` in `permissions.py`; see CONTRIBUTING.md's
+  command-sync gate section for the general rule when adding another
+  serve-only operation.
+- Treat this as a gap being closed incrementally, not the design end state:
+  today a deny policy gates only `/auth/*`, not the ~30 other routers a
+  session token can otherwise reach.

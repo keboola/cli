@@ -134,6 +134,7 @@ def _write_banner(text: str) -> None:
 
 
 def serve_command(
+    ctx: typer.Context,
     host: str = typer.Option(
         "127.0.0.1",
         "--host",
@@ -281,6 +282,16 @@ def serve_command(
         # Inverted at the boundary: the CLI flag is opt-OUT ("--no-banner"),
         # the app-level switch is a plain positive ("is the banner allowed").
         ui_banner=not no_banner,
+        # Carry the process-global session firewall flags into the REST
+        # surface; without them the flags would guard the CLI while every route
+        # on the same process stayed wide open. Only the FLAGS travel -- the
+        # persisted policy is loaded by create_app from the config dir it
+        # actually serves, because `--config-dir` here may point somewhere else
+        # than the root callback's own `--config-dir`, and the served
+        # directory's policy is the one that must apply. `ctx.obj` is None when
+        # the callback never ran (direct invocation in tests).
+        deny_writes=bool((ctx.obj or {}).get("deny_writes")),
+        deny_destructive=bool((ctx.obj or {}).get("deny_destructive")),
     )
 
     if resolved_ui_dist:
