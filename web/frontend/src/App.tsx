@@ -21,6 +21,7 @@ import { SearchPage } from "./pages/Search";
 import { SharingPage } from "./pages/Sharing";
 import { StoragePage } from "./pages/Storage";
 import { StreamsPage } from "./pages/Streams";
+import { TokensPage } from "./pages/Tokens";
 import { WorkspacesPage } from "./pages/Workspaces";
 import { UIStateProvider, useUIState } from "./state";
 import { ThemeProvider } from "./theme";
@@ -70,6 +71,8 @@ function Router() {
       return <OrgPage />;
     case "members":
       return <MembersPage />;
+    case "tokens":
+      return <TokensPage />;
     case "doctor":
       return <DoctorPage />;
     case "changelog":

@@ -71,7 +71,22 @@ export interface Job {
   id: string | number;
   status: string;
   component: string;
-  configId: string;
+  /**
+   * Configuration id. The Queue API resource names this `config` (NOT
+   * `configId`), and `JobService.list_jobs` adds only `project_alias` to the
+   * row -- everything else is the API resource verbatim. It is null/absent on
+   * a job started from an inline `configData` payload rather than a stored
+   * configuration, so every consumer must handle the empty case.
+   */
+  config: string | null;
+  /**
+   * Branch the job ran against. Null / absent means the default (production)
+   * branch. Typed loosely because the Queue API is inconsistent about the
+   * numeric-vs-string form -- `JobService._fetch_project_jobs` compares it as
+   * `str(j.get("branchId"))` for exactly that reason -- so coerce before
+   * sending it back to a router that declares `branch_id: int | None`.
+   */
+  branchId?: number | string | null;
   createdTime: string;
   startTime?: string;
   endTime?: string;

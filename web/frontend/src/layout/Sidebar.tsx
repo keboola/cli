@@ -9,6 +9,7 @@ import {
   Database,
   GitBranch,
   Heart,
+  KeyRound,
   Layers,
   LayoutDashboard,
   Lock,
@@ -24,10 +25,23 @@ import {
 import { clsx } from "clsx";
 import { type PageId, useUIState } from "../state";
 
-const SECTIONS: Array<{
+export interface NavItem {
+  id: PageId;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+export interface NavSection {
   title: string;
-  items: Array<{ id: PageId; label: string; icon: React.ComponentType<{ className?: string }> }>;
-}> = [
+  items: NavItem[];
+}
+
+/**
+ * Single source of truth for the app's navigable pages. The sidebar renders
+ * it grouped; the command palette (Ctrl/Cmd+K) flattens it into jump targets.
+ * Exported so a new page can never appear in one surface and not the other.
+ */
+export const SECTIONS: NavSection[] = [
   {
     title: "Home",
     items: [{ id: "dashboard", label: "Dashboard", icon: LayoutDashboard }],
@@ -37,6 +51,7 @@ const SECTIONS: Array<{
     items: [
       { id: "projects", label: "Projects", icon: Boxes },
       { id: "branches", label: "Branches", icon: GitBranch },
+      { id: "tokens", label: "Tokens", icon: KeyRound },
       { id: "doctor", label: "Doctor", icon: Heart },
       { id: "changelog", label: "Changelog", icon: Activity },
     ],

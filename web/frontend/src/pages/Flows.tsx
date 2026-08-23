@@ -32,6 +32,34 @@ interface FlowsResp {
   errors: ProjectError[];
 }
 
+interface NotificationSubscription {
+  project_alias: string;
+  subscription_id: string;
+  /** kebab-case event name, e.g. "job-failed". */
+  event: string;
+  /** "" when the subscription carries no component filter. */
+  component_id: string;
+  /** "" when the subscription is project-wide (no config filter). */
+  config_id: string;
+  branch_id: string;
+  phase_id: string;
+  /** "email" | "webhook" | ... */
+  channel: string;
+  /** Email address OR webhook URL, depending on `channel`. */
+  address: string;
+  expires_at: string;
+  config_name: string;
+  filters: Array<Record<string, unknown>>;
+  /** "config" | "project-wide" */
+  scope: string;
+}
+
+interface NotificationsResp {
+  subscriptions: NotificationSubscription[];
+  errors: ProjectError[];
+  project_wide_excluded: number;
+}
+
 export function FlowsPage() {
   const { project, branchId } = useUIState();
   const [selected, setSelected] = useState<Flow | null>(null);
@@ -87,7 +115,7 @@ export function FlowsPage() {
 
 function FlowDrawer({ flow, onClose }: { flow: Flow; onClose: () => void }) {
   const { branchId } = useUIState();
-  const [tab, setTab] = useState<"builder" | "raw">("builder");
+  const [tab, setTab] = useState<"builder" | "raw" | "notifications">("builder");
   const q = useQuery<FlowDetail>({
     queryKey: ["flow-detail", flow.project_alias, flow.component_id, flow.config_id, branchId],
     queryFn: () =>
@@ -119,11 +147,26 @@ function FlowDrawer({ flow, onClose }: { flow: Flow; onClose: () => void }) {
         >
           Raw JSON
         </button>
+        <button
+          type="button"
+          className={`nerd-btn text-xs ${tab === "notifications" ? "border-keboola text-keboola" : ""}`}
+          onClick={() => setTab("notifications")}
+        >
+          Notifications
+        </button>
       </div>
-      {q.isLoading ? <Loading /> : null}
-      {q.error ? <ErrorBox message={(q.error as Error).message} /> : null}
-      {q.data && tab === "builder" ? <FlowBuilder detail={q.data} /> : null}
-      {q.data && tab === "raw" ? <JsonView data={q.data} /> : null}
+      {/* The Notifications tab owns its own query (a different platform
+          service), so it must not be gated on the flow-detail request. */}
+      {tab === "notifications" ? (
+        <FlowNotifications flow={flow} />
+      ) : (
+        <>
+          {q.isLoading ? <Loading /> : null}
+          {q.error ? <ErrorBox message={(q.error as Error).message} /> : null}
+          {q.data && tab === "builder" ? <FlowBuilder detail={q.data} /> : null}
+          {q.data && tab === "raw" ? <JsonView data={q.data} /> : null}
+        </>
+      )}
     </Drawer>
   );
 }
@@ -197,6 +240,131 @@ function FlowBuilder({ detail }: { detail: FlowDetail }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** Pill styling per event name. Exact matches win before the substring rules
+ *  so "job-succeeded-with-warning" reads amber, not green. */
+function eventPillClass(event: string): string {
+  if (event === "job-failed") return "nerd-pill-red";
+  if (event === "job-succeeded") return "nerd-pill-green";
+  if (event.includes("warning") || event.includes("long")) return "nerd-pill-amber";
+  return "nerd-pill";
+}
+
+const BRANCH_NOTE =
+  "Branch: the UI always writes a branch.id filter, and for production that value is the " +
+  "DEFAULT branch's numeric id — so a value here does NOT by itself mean the subscription is " +
+  "dev-branch-only. Compare it against the project's branch list.";
+
+function NotificationTable({ rows }: { rows: NotificationSubscription[] }) {
+  return (
+    <DataTable
+      rows={rows}
+      rowKey={(s) => s.subscription_id}
+      columns={[
+        {
+          header: "Event",
+          cell: (s) => <span className={eventPillClass(s.event)}>{s.event}</span>,
+        },
+        { header: "Channel", cell: (s) => <span className="text-xs">{s.channel || "—"}</span> },
+        {
+          header: "Address",
+          cell: (s) => (
+            <span className="font-mono text-xs text-accent break-all">{s.address || "—"}</span>
+          ),
+        },
+        {
+          header: "Branch",
+          cell: (s) => (
+            <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">
+              {s.branch_id || "—"}
+            </span>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
+/**
+ * Read-only "Notifications" tab — who actually gets paged about this flow.
+ *
+ * These recipients are the ones behind the Flow Builder's Notifications tab
+ * (bell icon). They live in a SEPARATE platform service
+ * (notification.{stack}) and are NOT part of the flow's configuration JSON,
+ * which is why `flow detail` — and therefore the Builder and Raw JSON tabs —
+ * never showed them. (The in-flow `type: "notification"` TASK is a different
+ * mechanism and stays visible in the Builder.)
+ *
+ * We deliberately fetch the project's subscriptions UNFILTERED (only
+ * `project`) and split them client-side. Passing `config_id` to the API drops
+ * the filter-less, project-wide catch-alls SERVER-SIDE — and those fire for
+ * every job in the project, this flow included — so a filtered fetch would
+ * silently under-report the recipient list.
+ */
+function FlowNotifications({ flow }: { flow: Flow }) {
+  // Keyed by project only: the response is the project's full, unfiltered
+  // subscription list, so every flow in the project shares one cache entry.
+  const q = useQuery<NotificationsResp>({
+    queryKey: ["flow-notifications", flow.project_alias],
+    queryFn: () => api.get("/notifications", { query: { project: [flow.project_alias] } }),
+  });
+
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <ErrorBox message={(q.error as Error).message} />;
+
+  const subs = q.data?.subscriptions ?? [];
+  const errors = q.data?.errors ?? [];
+  // Mutually exclusive by construction: a subscription either carries a
+  // config filter (scoped) or carries none at all (project-wide catch-all).
+  const forThisFlow = subs.filter((s) => s.config_id && s.config_id === flow.config_id);
+  const projectWide = subs.filter((s) => !s.config_id);
+
+  return (
+    <div className="space-y-6">
+      {errors.map((e) => (
+        <ErrorBox
+          key={`${e.project_alias}/${e.error_code}`}
+          message={`${e.project_alias}: ${e.error_code} — ${e.message}`}
+        />
+      ))}
+
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-bold text-keboola">This flow</h4>
+          <span className="ml-auto text-xs text-zinc-500">
+            {forThisFlow.length} recipient(s)
+          </span>
+        </div>
+        {forThisFlow.length === 0 ? (
+          <Empty
+            title="No notification recipients for this flow."
+            hint="Nothing is subscribed to this flow's own jobs. Check the project-wide group below — those fire for it too."
+          />
+        ) : (
+          <NotificationTable rows={forThisFlow} />
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-bold text-zinc-700 dark:text-zinc-300">Project-wide</h4>
+          <span className="nerd-pill-amber">project-wide</span>
+          <span className="ml-auto text-xs text-zinc-500">{projectWide.length} recipient(s)</span>
+        </div>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          No config filter — these fire for every job in the project, this flow included.
+        </p>
+        {projectWide.length === 0 ? (
+          <Empty title="No project-wide notification recipients." />
+        ) : (
+          <NotificationTable rows={projectWide} />
+        )}
+      </section>
+
+      <p className="text-[11px] text-zinc-500 dark:text-zinc-600">{BRANCH_NOTE}</p>
     </div>
   );
 }
