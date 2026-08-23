@@ -8,8 +8,9 @@ import pytest
 import yaml
 
 from helpers import setup_single_project
+from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SECRET_PLACEHOLDER
-from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.services.component_service import (
     DOCUMENTATION_SOURCE_AI_SERVICE,
     DOCUMENTATION_SOURCE_STORAGE_CATALOG,
@@ -518,6 +519,38 @@ class TestGetComponentDetail:
         mock_storage.list_components.assert_not_called()
         mock_ai.close.assert_called_once()
 
+    def test_alias_none_uses_first_project(self, tmp_config_dir: Path) -> None:
+        """When alias is None the first configured project is used.
+
+        The `component detail` CLI documents --project as "uses first
+        available if not set"; passing the omitted alias through as [None]
+        used to hit resolve_projects' strict path and raise
+        "Project 'None' not found".
+        """
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.get_component_detail(alias=None, component_id="keboola.ex-http")
+
+        assert result["component_id"] == "keboola.ex-http"
+        assert result["project_alias"] == "prod"
+        mock_ai.get_component_detail.assert_called_once_with("keboola.ex-http")
+        mock_ai.close.assert_called_once()
+
+    def test_alias_none_no_projects_raises_config_error(self, tmp_config_dir: Path) -> None:
+        """Without any configured project a ConfigError is raised, not a crash."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = ComponentService(
+            config_store=store,
+            ai_client_factory=lambda url, token: mock_ai,
+        )
+
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.get_component_detail(alias=None, component_id="keboola.ex-http")
+
+        mock_ai.get_component_detail.assert_not_called()
+
 
 # ===========================================================================
 # generate_scaffold
@@ -549,6 +582,37 @@ class TestGenerateScaffold:
         assert parsed["name"] == "HTTP Configuration"
 
         mock_ai.close.assert_called_once()
+
+    def test_scaffold_alias_none_uses_first_project(self, tmp_config_dir: Path) -> None:
+        """When alias is None the first configured project is used.
+
+        `config new` without --push documents --project as optional (only the
+        AI Service auth is derived from it) and passes alias=None through.
+        """
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias=None, component_id="keboola.ex-http")
+
+        assert result["component_id"] == "keboola.ex-http"
+        assert result["config_name"] == "HTTP Configuration"
+        mock_ai.get_component_detail.assert_called_once_with("keboola.ex-http")
+
+    def test_scaffold_alias_none_no_projects_raises_config_error(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Without any configured project a ConfigError is raised, not a crash."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = ComponentService(
+            config_store=store,
+            ai_client_factory=lambda url, token: mock_ai,
+        )
+
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.generate_scaffold(alias=None, component_id="keboola.ex-http")
+
+        mock_ai.get_component_detail.assert_not_called()
 
     def test_scaffold_sql_transformation(self, tmp_config_dir: Path) -> None:
         """SQL transformation generates _config.yml and transform.sql."""

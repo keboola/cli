@@ -7,6 +7,7 @@ local-first development workflows.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,20 @@ from .org_service import slugify
 logger = logging.getLogger(__name__)
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
+
+
+@dataclass(frozen=True)
+class ResolvedProject:
+    """A project resolved together with the alias it was resolved under.
+
+    ``alias`` is the caller's alias when one was given, otherwise the first
+    configured project's -- the value response payloads report as
+    ``project_alias``. A dataclass rather than a bare 2-tuple per
+    CONTRIBUTING.md's multi-value-return rule.
+    """
+
+    alias: str
+    project: ProjectConfig
 
 
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
@@ -522,7 +537,29 @@ class ComponentService(BaseService):
             return self._list_via_ai(aliases, component_type, query)
         return self._list_via_storage(aliases, component_type)
 
-    def get_component_detail(self, alias: str, component_id: str) -> dict[str, Any]:
+    def _resolve_alias_or_first(self, alias: str | None) -> ResolvedProject:
+        """Resolve *alias* to a project, defaulting to the first configured one.
+
+        :meth:`BaseService.resolve_projects` falls back to "all projects" only
+        when the alias LIST itself is empty/None -- a ``[None]`` element goes
+        down its strict lookup and raises "Project 'None' not found". Commands
+        that document ``--project`` as optional (``component detail``,
+        ``config examples``, ``config new`` without ``--push``) must therefore
+        normalise an omitted alias here instead of passing it through.
+
+        Raises:
+            ConfigError: If *alias* is given but unknown, or when no projects
+                are configured at all.
+        """
+        projects = self.resolve_projects([alias] if alias else None)
+        if not projects:
+            raise ConfigError(
+                "No projects configured. Use 'kbagent project add' to connect a project first."
+            )
+        resolved_alias = alias or next(iter(projects))
+        return ResolvedProject(alias=resolved_alias, project=projects[resolved_alias])
+
+    def get_component_detail(self, alias: str | None, component_id: str) -> dict[str, Any]:
         """Fetch detailed component documentation, AI Service first.
 
         The AI Service (``/docs/components/{id}``) indexes the PUBLIC component
@@ -546,7 +583,8 @@ class ComponentService(BaseService):
         itself -- only the ambiguous 404 is worth a second lookup.
 
         Args:
-            alias: Project alias (used to derive stack URL and token).
+            alias: Project alias (used to derive stack URL and token). When
+                None, the first available project is used.
             component_id: The component identifier (e.g. 'keboola.ex-aws-s3').
 
         Returns:
@@ -554,13 +592,14 @@ class ComponentService(BaseService):
             counts, ``documentation_source``, and full documentation.
 
         Raises:
-            ConfigError: If the alias is not found.
+            ConfigError: If the alias is not found or no projects are
+                configured.
             KeboolaApiError: If the AI Service call fails; a NOT_FOUND is
                 re-raised unchanged only when the Storage catalog does not know
                 the component either (i.e. the id really is wrong).
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        resolved = self._resolve_alias_or_first(alias)
+        project = resolved.project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         not_found: KeboolaApiError | None = None
@@ -578,7 +617,7 @@ class ComponentService(BaseService):
             catalog_entry = self._find_catalog_component(project, component_id)
             if catalog_entry is None:
                 raise not_found
-            return self._catalog_detail_payload(catalog_entry, alias)
+            return self._catalog_detail_payload(catalog_entry, resolved.alias)
 
         detail = ComponentDetail(**raw)
 
@@ -603,7 +642,7 @@ class ComponentService(BaseService):
             },
             "examples_count": len(detail.root_configuration_examples),
             "row_examples_count": len(detail.row_configuration_examples),
-            "project_alias": alias,
+            "project_alias": resolved.alias,
             "documentation_source": DOCUMENTATION_SOURCE_AI_SERVICE,
         }
 
@@ -683,13 +722,7 @@ class ComponentService(BaseService):
             ConfigError: If the alias is not found or no projects are configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        projects = self.resolve_projects([alias] if alias else None)
-        if not projects:
-            raise ConfigError(
-                "No projects configured. Use 'kbagent project add' to connect a project first."
-            )
-        resolved_alias = alias or next(iter(projects))
-        project = projects[resolved_alias]
+        project = self._resolve_alias_or_first(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
@@ -812,7 +845,7 @@ class ComponentService(BaseService):
 
     def generate_scaffold(
         self,
-        alias: str,
+        alias: str | None,
         component_id: str,
         name: str | None = None,
     ) -> dict[str, Any]:
@@ -822,7 +855,9 @@ class ComponentService(BaseService):
         configuration files based on component type and schema.
 
         Args:
-            alias: Project alias (used to derive stack URL and token).
+            alias: Project alias (used to derive stack URL and token). When
+                None, the first available project is used (`config new`
+                without --push documents --project as optional).
             component_id: The component identifier.
             name: Configuration name. If None, defaults to
                 "{component_name} Configuration".
@@ -831,11 +866,11 @@ class ComponentService(BaseService):
             Dict with scaffold metadata and generated files list.
 
         Raises:
-            ConfigError: If the alias is not found.
+            ConfigError: If the alias is not found or no projects are
+                configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        project = self._resolve_alias_or_first(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
