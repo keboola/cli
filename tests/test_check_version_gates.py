@@ -107,7 +107,7 @@ class TestVnextResidue:
         f = _write(tmp_path, "g.md", "- `--flag` (since vNEXT) does a thing\n")
         found = residue([f])
         assert len(found) == 1
-        assert found[0][1] == 1
+        assert found[0].line == 1
 
     def test_plus_form_is_a_gate(self, tmp_path: Path) -> None:
         f = _write(tmp_path, "g.md", "intro\n- **vNEXT+**: resolves to the first project\n")
@@ -139,9 +139,9 @@ class TestVnextResidue:
 
     def test_reports_path_line_and_text(self, tmp_path: Path) -> None:
         f = _write(tmp_path, "d.md", "x\ny\n### What's-new popup *(since vNEXT)*\n")
-        _rel, lineno, text = residue([f])[0]
-        assert lineno == 3
-        assert "What's-new popup" in text
+        gate = residue([f])[0]
+        assert gate.line == 3
+        assert "What's-new popup" in gate.text
 
 
 class TestLiveRepositoryVnext:
@@ -154,7 +154,7 @@ class TestLiveRepositoryVnext:
         found = residue(check_version_gates.resolve_paths())
         assert found == [], (
             "unresolved vNEXT gate(s) shipped -- an agent cannot satisfy them: "
-            f"{[(rel, line) for rel, line, _ in found[:3]]}"
+            f"{[(gate.path, gate.line) for gate in found[:3]]}"
         )
 
     def test_prose_mentions_are_still_present_and_ignored(self) -> None:

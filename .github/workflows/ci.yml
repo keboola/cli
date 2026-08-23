@@ -115,6 +115,14 @@ jobs:
           base=$(git show "origin/$GITHUB_BASE_REF:pyproject.toml" 2>/dev/null \
                  | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           echo "base branch version: ${base:-<unreadable>}"
+          if [ -z "$base" ]; then
+            # Deliberately fail-open (an unreadable base must never block an
+            # ordinary PR), but LOUDLY: on a release PR this would mean the
+            # placeholder gate silently never armed. Verified live on PR #670
+            # that the fetch above populates the ref under the default shallow
+            # checkout, so reaching this line means something changed.
+            echo "::warning title=vNEXT gate disarmed::could not read pyproject version from origin/$GITHUB_BASE_REF; the unresolved-placeholder check will not arm. If this is a release PR, run 'make vnext-check' locally."
+          fi
           uv run python scripts/check_version_gates.py --release-if-newer-than "$base"
 
       - name: Error-code enum check

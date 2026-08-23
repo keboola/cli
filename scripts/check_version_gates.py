@@ -61,6 +61,7 @@ from __future__ import annotations
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.version import Version
@@ -99,13 +100,22 @@ INLINE_CODE_RE = re.compile(r"`[^`]*`")
 # check exists to prevent. Use inline backticks for such an example instead.
 
 
-def find_vnext_residue(paths: list[Path]) -> list[tuple[str, int, str]]:
-    """Return every unresolved ``vNEXT`` gate as ``(relative path, line, text)``.
+@dataclass(frozen=True)
+class VnextResidue:
+    """One unresolved ``vNEXT`` gate: where it is and what the line says."""
+
+    path: str
+    line: int
+    text: str
+
+
+def find_vnext_residue(paths: list[Path]) -> list[VnextResidue]:
+    """Return every unresolved ``vNEXT`` gate in the given files.
 
     A ``vNEXT`` that survives only inside an inline-code span is prose about
     the placeholder and is skipped. Pure apart from reading the given files.
     """
-    residue: list[tuple[str, int, str]] = []
+    residue: list[VnextResidue] = []
     for path in paths:
         try:
             rel = path.relative_to(REPO_ROOT).as_posix()
@@ -115,7 +125,7 @@ def find_vnext_residue(paths: list[Path]) -> list[tuple[str, int, str]]:
             if VNEXT_TOKEN not in line:
                 continue
             if VNEXT_TOKEN in INLINE_CODE_RE.sub("", line):
-                residue.append((rel, lineno, line.strip()))
+                residue.append(VnextResidue(path=rel, line=lineno, text=line.strip()))
     return residue
 
 
@@ -225,9 +235,9 @@ def main() -> int:
             "Left in, the plugin ships agents a gate no installed version can satisfy,\n"
             "so they refuse commands the user actually has. Rewrite these, then re-run:\n"
         )
-        for rel, lineno, text in residue:
-            print(f"    {rel}:{lineno}")
-            print(f"        {text[:100]}")
+        for gate in residue:
+            print(f"    {gate.path}:{gate.line}")
+            print(f"        {gate.text[:100]}")
         return 1
 
     total = sum(len(locs) for locs in gates.values())
