@@ -2,20 +2,21 @@
 name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
-  Covers: exploring and searching configurations, job history and runs,
-  cross-project data lineage, dev branches, workspace SQL
-  debugging, GitOps config sync (pull/push/diff/clone), bucket sharing and
-  linking, encrypting secrets, Storage tables, files, and snapshots
-  (backup/restore), data apps (create/deploy/logs/secrets), flows and
-  schedules, members and invitations, feature flags, OTLP data streams,
-  scoped Storage tokens, the semantic layer (models, metrics, constraints),
-  the Developer Portal, browser login. Triggers: kbagent, Keboola, keboola
+  Covers: exploring and searching configurations, job history, data
+  lineage, dev branches, workspace SQL debugging, GitOps config sync
+  (pull/push/diff/clone), bucket sharing and linking, encrypting secrets,
+  Storage tables, files, and snapshots (backup/restore), data apps
+  (deploy/logs/secrets), flows and schedules, members and invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, the semantic
+  layer (models, metrics), the Developer Portal, browser login.
+  Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  workspace SQL, data app, streamlit deploy, semantic layer, sl, dev-portal,
-  data stream, OTLP, scoped token, bucket sharing, encrypt secrets,
+  data app, streamlit deploy, semantic layer, sl, dev-portal,
+  data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
-  PAYG credits, flow notifications, alert recipients.
+  PAYG credits, flow notifications, alert recipients, config trash,
+  restore config, undelete config.
 ---
 
 # kbagent -- Keboola Agent CLI

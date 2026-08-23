@@ -351,6 +351,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     MCP run_sync_action parity). --config-data sends explicit configData
     verbatim and skips the config fetch. Response shape is action-specific
     (opaque pass-through).
+    (since 0.89.0) The ROOT configuration's authorization and runtime blocks
+    are forwarded into configData as well -- root only (a --row-id never
+    overrides them) and only when non-empty. authorization.oauth_api.id is the
+    OAuth broker reference the sync-actions service resolves and decrypts, so
+    before 0.89.0 sync actions on OAuth / Service-Account components (e.g.
+    keboola.ex-linkedin-ads) failed with an opaque empty-body 400.
 
 ### Configuration Browsing
 
@@ -620,6 +626,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     physical partition -- thousands on a long-lived daily table). `definition` is present on
     EVERY response, untyped tables included, so null means the stack omitted it, NOT "untyped".
     `storage tables` (the list endpoint) has no layout: the API offers no `definition` include.
+    Human mode also renders a Description column in the Columns table (0.89.0+, #642), shown only
+    when at least one column carries a description; long text wraps instead of truncating. On
+    0.88.0 column descriptions were readable through --json column_details[].description only.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -757,14 +766,15 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
     any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
     (conflict/orphan entries skipped) and the migrated flat keys deleted.
-    Readable via table-detail --json .data.column_details[].description.
+    Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the
+    human table-detail Columns table, which grows a Description column when any column has one.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
     Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;
     absent or empty sections are skipped). Columns go through the same native write as describe-column.
     File shape is validated BEFORE any write: a section that is not a mapping of ID to description, a null
-    description, or a non-mapping columns entry aborts with INVALID_ARGUMENT and exit 2, naming the offending
-    key -- nothing is half-applied. During application, per-item API failures are collected and reported
+    description, a non-mapping columns entry, or two keys colliding after str() coercion (1 vs "1") aborts
+    with INVALID_ARGUMENT and exit 2, naming the offending key -- nothing is half-applied. During application, per-item API failures are collected and reported
     (one error does not abort the remaining items); the command exits 1 when error_count > 0.
 
   kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
@@ -1378,7 +1388,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --branch (since 0.47.0): per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
-    Branch-scoped (since vNEXT, #649): the local side is read from exactly ONE tree --
+    Branch-scoped (since v0.89.0, #649): the local side is read from exactly ONE tree --
     the target branch's subtree, or main/ when the target has none. `sync pull --branch
     <dev>` re-targets the WHOLE manifest to that branch, so a later production diff
     reads a main/ tree the manifest no longer tracks. Entries belonging to another
@@ -1416,7 +1426,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
-    Branch-scoped (since vNEXT, #649): push consumes the diff's changeset, so configs
+    Branch-scoped (since v0.89.0, #649): push consumes the diff's changeset, so configs
     tracked on another branch's tree are never planned as creates -- they ride along on
     the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 
@@ -1425,6 +1435,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
     reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
+    value -> CONFIG_ERROR naming the key + type.
     Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
     but does not push.
 

@@ -174,6 +174,11 @@ Read back via `storage table-detail`:
 }
 ```
 
+Human mode shows the same text in a `Description` column of the Columns table
+*(since v0.89.0)* -- it appears only when at least one column has a description,
+so an undocumented table renders exactly as before. On 0.88.0 the human table
+had no such column at all, so use `--json` to verify a write on that version.
+
 Columns without a matching metadata entry simply omit `description`.
 
 ## Batch: YAML schema
@@ -263,9 +268,14 @@ without issues (it means there were no partial failures). A non-zero exit
 means *some* items failed; the successful items still landed.
 
 This tolerance applies to **API** failures. A malformed file is a usage error
-instead: if a section is not a mapping of ID to description (a `tables:` list,
-a scalar under a `columns:` table ID, a document that is not a mapping at all),
-the whole file is rejected **before the first write** with
+instead *(since v0.89.0 -- on 0.88.0 and earlier the same input raised an
+`AttributeError` partway through, leaving the batch half-applied)*: if a
+section is not a mapping of ID to description (a `tables:` list, a scalar
+under a `columns:` table ID, a document that is not a mapping at all), if a
+description is `null` (a bare `in.c-sales.orders:` with no text), or if two
+keys collide after `str()` coercion (`1:` and `"1":` are distinct YAML keys
+that resolve to the same ID, so the second would silently overwrite the
+first), the whole file is rejected **before the first write** with
 `INVALID_ARGUMENT` and exit **2**, and the message names the offending key plus
 its actual type. Nothing is half-applied, so fixing the file and re-running is
 always safe.

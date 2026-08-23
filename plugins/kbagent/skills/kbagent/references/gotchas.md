@@ -274,6 +274,19 @@ Versioning convention:
   `parameters`/`storage` top-level keys replace the root's wholesale -- a row
   that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
   deep-merge into it.
+- **`component sync-action` forwards the root `authorization` and `runtime`
+  blocks** *(since v0.89.0)*. `authorization.oauth_api.id` is the OAuth broker
+  reference the sync-actions service resolves and decrypts before invoking the
+  component. Below 0.89.0 kbagent sent only `parameters` + `storage`, so EVERY
+  sync action on an OAuth / Service-Account component (`keboola.ex-linkedin-ads`
+  and friends) died with an opaque **empty-body 400** -- the component crashed
+  before its own error handling could name the missing credential, so the
+  failure looked like a broken action rather than a missing block. If you see
+  that empty 400 on an OAuth component, check the kbagent version first. Both
+  blocks are taken from the ROOT configuration only -- a `--row-id` never
+  overrides them (docker-runner contract) -- and are forwarded only when
+  non-empty, so a component without them sends exactly the same body as before.
+  Matches keboola-mcp-server's `run_sync_action`.
 - **`transformation edit` ids are positional and renumber** after every
   structural op -- always `transformation show` immediately before `edit`
   (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
@@ -1152,16 +1165,16 @@ events and emits a final `done` SSE frame mirroring the same record.
   /openapi.json` returns the full schema, which lets the AI pick the
   right route + body shape without hard-coded knowledge.
 
-## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since vNEXT)
+## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since v0.89.0)
 
-- **Before vNEXT this combo was a duplicate factory** (issue #644): the
+- **Before 0.89.0 this combo was a duplicate factory** (issue #644): the
   scaffold was written WITHOUT `_keboola.config_id` (the "assigned on first
   push" comment was wrong on this path -- the config already existed), and it
   always landed in the DEFAULT branch's tree even when the config was created
   in a dev branch (`--branch`, or the active branch set by `branch create` /
   `branch use`). The next `sync push` then classified the directory as a new
   config and POSTed a duplicate -- a real incident created 34 duplicates.
-- **Since vNEXT** the written `_config.yml` records `_keboola.config_id`
+- **Since 0.89.0** the written `_config.yml` records `_keboola.config_id`
   (double-quoted, so legacy numeric IDs stay YAML strings) and the files are
   written into the subtree of the branch the config was ACTUALLY created in;
   an unregistered branch is added to `manifest.branches` exactly like
@@ -1178,7 +1191,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   regress the remote to TODO placeholders.
 - `--json` gains an additive `local_scaffold: {directory, files, config_id}`
   key on this path.
-- Agents on kbagent < vNEXT: do NOT recommend `--output-dir` + `--push`
+- Agents on kbagent < 0.89.0: do NOT recommend `--output-dir` + `--push`
   together; use scaffold-only then `sync push`, or `--push --no-files`.
 
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
@@ -2767,8 +2780,8 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--deny-writes`). Its human-mode Columns table shows a `Description`
   column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
   readable only through `--json` `column_details[].description`, so a
-  blank-looking terminal table on that version does not mean the write
-  failed. Unknown column names now fail fast BEFORE any write; the old
+  blank-looking terminal table on that version does not mean the write failed.
+  Unknown column names now fail fast BEFORE any write; the old
   flat write accepted typos silently. Table and bucket descriptions are
   unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
@@ -2782,7 +2795,9 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   entry that is not a mapping, a document that is not a mapping at all) is a
   usage error *(since v0.89.0)* — the whole file is rejected before the first
   write with `INVALID_ARGUMENT` and exit 2, naming the offending key and its
-  actual type. Nothing is half-applied.
+  actual type. Nothing is half-applied. On 0.88.0 and earlier the same input
+  raised an `AttributeError` traceback partway through, after some items had
+  already been applied.
 - **Description-field precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
   metadata entry are present, `storage bucket-detail` / `storage table-detail`
@@ -4303,7 +4318,7 @@ The log tail is off by default so a plain `job detail` stays one API call.
 that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
 maximum as `job detail`'s.
 
-## A scaffolded `keboola.flow` config can now be pushed from disk (since vNEXT)
+## A scaffolded `keboola.flow` config can now be pushed from disk (since v0.89.0)
 
 `config new --component-id keboola.flow` (no `--push`) used to write a
 `_config.yml` with no `_keboola` block at all -- every other scaffold
@@ -4315,11 +4330,21 @@ one. `sync push` resolves the component of an untracked local config from
 without it the config resolved to `"unknown"`, so a scaffolded flow could
 never be pushed via the documented scaffold -> edit -> `sync push` workflow
 (issue #650). Fixed by appending the same footer the other categories get.
-No CLI behavior change beyond the file content -- if you were hand-patching
-scaffolded flow files with a `_keboola` block as a workaround, that step is
-no longer necessary.
+If you were hand-patching scaffolded flow files with a `_keboola` block as a
+workaround, that step is no longer necessary.
 
-## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since vNEXT)
+Mind the shape of the scaffolded file when you edit it: the flow definition
+sits under `_configuration_extra:` in `_config.yml`, not at the top level.
+`sync push` converts a local file back to an API body with
+`local_config_to_api`, which promotes only `parameters` / `input` / `output` /
+`processors` from the top level (everything else rides along from
+`_configuration_extra`). A `phases:` / `tasks:` block added by hand at the top
+level is therefore **silently dropped** on push -- no error, no diff entry, a
+flow that pushes empty. This is the opposite of the `flow new --file` body
+shape, where `phases` / `tasks` ARE top-level; the two formats are not
+interchangeable.
+
+## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since v0.89.0)
 
 `sync pull --branch <dev>` re-targets EVERY `manifest.configurations` entry to
 that dev branch. The `main/` tree stays on disk and stops being tracked, so a

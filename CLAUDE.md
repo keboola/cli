@@ -483,7 +483,7 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   --if-not-exists skip path nulls the layout keys outright). Human mode adds Time
 #   partitioning / Range partitioning / Clustering / Partition filter required / Partitions
 #   (a COUNT) and prints nothing new when there is no layout. The human
-#   Columns table also carries a Description column (NOT on 0.88.0), populated from
+#   Columns table also carries a Description column (0.89.0+, #642; NOT on 0.88.0), populated from
 #   `column_details[].description` and shown only when some column has one -- the one
 #   surface #624 left blank, so `describe-column` then `table-detail` now verifies
 #   itself (long text wraps, never truncates). --json passes `definition`
@@ -532,6 +532,15 @@ kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-i
 #   skipped as `conflict` (newer value wins), an entry for a dropped column is skipped as `orphan`
 #   unless --prune-orphans. Migrated flat entries are DELETED so a later clear cannot be resurrected
 #   by the read fallback.
+# describe-batch --from-file shape check (0.89.0+, #645, issue #640): the WHOLE file is validated
+#   before the first write. A tables:/buckets:/columns: section given as a list instead of a mapping
+#   of ID to description, a column entry that is not a mapping, a null description, a non-mapping
+#   document, or two keys colliding after str() coercion (1 vs "1") -> structured INVALID_ARGUMENT,
+#   exit 2, naming the key and its actual type; nothing is half-applied. Behavior change: before
+#   0.89.0 the same input raised an AttributeError traceback PARTWAY THROUGH the batch. Empty
+#   sections (absent, null, [], '', {}) stay silent no-ops; per-item API failures during
+#   application are still accumulated into errors[] (exit 1) -- shape is a usage error, an API
+#   refusal is not.
 kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
 kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
 kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
@@ -714,9 +723,15 @@ kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--c
 #   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
 #   parameters/storage keys replace root wholesale, MCP parity -- NOT deep merge); --config-data
 #   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
+# sync-action (0.89.0+, #620): the ROOT configuration's `authorization` and `runtime` blocks are
+#   forwarded into configData too (root only -- a --row-id never overrides them; only when
+#   non-empty, so a component without them sends the pre-0.89.0 body). authorization.oauth_api.id
+#   is the broker reference the sync-actions service resolves + decrypts, so before 0.89.0 every
+#   sync action on an OAuth/Service-Account component (e.g. keboola.ex-linkedin-ads) failed with
+#   an opaque empty-body 400. MCP run_sync_action parity.
 kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
-# config new --push --output-dir (vNEXT, #644): the written scaffold now records the created
+# config new --push --output-dir (0.89.0+, #644): the written scaffold now records the created
 #   config's ID (_keboola.config_id, quoted so numeric IDs stay strings) and is placed in the
 #   subtree of the branch the config was ACTUALLY created in (--branch or active branch;
 #   unregistered branches are added to the manifest like `sync pull --branch` would). Before,
@@ -732,6 +747,7 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]

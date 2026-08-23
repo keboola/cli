@@ -145,7 +145,7 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
-## Switching back to production after a `--branch` pull (since vNEXT)
+## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the
 `<branch_name>/` subtree **and** it re-targets every `manifest.configurations`

@@ -129,8 +129,9 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | -- | acting on `main` when a dev branch exists |
 | Audit project capabilities / features | `kbagent project info --project P` -- project id, name, backend, enabled features, quota limits, metrics | -- | inspecting the UI project settings manually |
 | Manage feature flags (stack / project / user) | `kbagent feature list\|project-show\|project-add\|project-remove\|user-show\|user-add\|user-remove --project P [--email E] [--feature NAME] [--dry-run]` -- Manage API, needs a SUPER-ADMIN token (interactive prompt; `--allow-env-manage-token` for CI) | `kbagent project info` for a project's *enabled* features (read-only, no super-admin) | raw `/manage/...` calls; a manage token passed as a CLI flag |
-| Create a new config (one-shot remote, no scaffold to disk) | `kbagent config new --project P --component-id C --name N --push --no-files [--configuration @body.json]` -- default body `{}` skips validation; an explicit body is schema-validated (`--no-validate` opts out); works for every component type. `--output-dir` + `--push` together is safe only on vNEXT+ (scaffold records `_keboola.config_id`, lands in the created branch's subtree); older kbagent writes an ID-less scaffold that the next `sync push` DUPLICATES (issue #644) -- there, scaffold and push in two steps | `kbagent config new --output-dir D` then edit + `kbagent sync push` | raw `POST /v2/storage/components/.../configs` (no schema validation, no encryption) |
+| Create a new config (one-shot remote, no scaffold to disk) | `kbagent config new --project P --component-id C --name N --push --no-files [--configuration @body.json]` -- default body `{}` skips validation; an explicit body is schema-validated (`--no-validate` opts out); works for every component type. `--output-dir` + `--push` together is safe only on 0.89.0+ (scaffold records `_keboola.config_id`, lands in the created branch's subtree); older kbagent writes an ID-less scaffold that the next `sync push` DUPLICATES (issue #644) -- there, scaffold and push in two steps | `kbagent config new --output-dir D` then edit + `kbagent sync push` | raw `POST /v2/storage/components/.../configs` (no schema validation, no encryption) |
 | Create / update / delete a config row | `kbagent config row-create\|row-update\|row-delete --project P --component-id C --config-id K [--row-id R] [--yes]` -- `row-delete` is destructive; all three are branch-aware | -- | raw REST against `/configs/K/rows` |
+| Delete / undelete a whole configuration | `kbagent config delete --project P --component-id C --config-id K [--dry-run]` (0.89.0+) -- SOFT-deletes into the trash and locates the config first, so a repeat answers `already_in_trash` (exit 0) instead of purging; undo with `config restore`, browse with `config trash-list` | -- | a blind retry on <= 0.88.x kbagent or raw REST: a second `DELETE .../configs/{id}` PURGES the config permanently, versions, rows and metadata included (the direct-API safe path is `POST .../purge`, which 400s unless already trashed) |
 | Read or write a config's runtime state | `kbagent config state-get` / `config state-set --state JSON` (0.84.2+) -- the dedicated state endpoint | -- | `config update --set 'state...'` (hard error since 0.84.2; before that it silently wrote `configuration.state.*` and left runtime state untouched) |
 | Get OAuth authorization URL | `kbagent config oauth-url --project P --component-id C --config-id K` | -- | raw `GET .../oauth/authorize` |
 | Inventory data apps | `kbagent data-app list --project P` | `kbagent config list --component-id keboola.data-apps` (Storage view only -- no state/URL/configVersion) | hand-joining Storage configs to Data Science per project |
@@ -172,6 +173,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `docs query`, `config examples`, `semantic-layer schema`, `component
   sync-action`, `transformation create|show|edit`, `flow examples`,
   `workspace query` (was `query_data`).
+- `component sync-action` forwards the root config's `authorization` / `runtime`
+  blocks only on **0.89.0+**. Below that, a sync action on an OAuth /
+  Service-Account component (`keboola.ex-linkedin-ads`, ...) fails with an
+  opaque empty-body 400 -- check the version before blaming the action or the
+  credentials.
 
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
@@ -239,7 +245,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   overwrites local edits, restores deleted files, resolves conflicts) -- NEVER
   hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted dirs;
   `is_disabled: true` in `_config.yml` = config disabled (absent = enabled); a
-  `never_fetched` warning on diff/push = run `sync pull` first. `sync status`
+  `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
+  `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
+  branch's tree -- `sync pull` to re-target, never push. `sync status`
   is local-only -- audit real drift with `sync diff`.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
@@ -260,6 +268,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   forecloses restores; the source table is untouched.
 - **Column descriptions** (0.88.0+, #624): native endpoint; legacy
   `KBC.column.*` invisible to UI/MCP; `describe-migrate`. gotchas.md.
+- **`describe-batch --from-file`** -- whole-file shape check + exit 2 only on
+  **0.89.0+**; below that a malformed file half-applies before the traceback.
+  gotchas.md.
 - **`bucket-detail` is dialect-aware**: read `sql_dialect` + per-table
   `sql_path` (already correctly quoted) -- don't branch on the backend yourself.
 
