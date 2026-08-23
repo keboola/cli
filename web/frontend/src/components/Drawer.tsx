@@ -1,6 +1,17 @@
-import { X } from "lucide-react";
-import { type ReactNode, useEffect } from "react";
+import { Maximize2, Minimize2, X } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+
+/** Default panel width — unchanged from before ``wide`` existed. */
+const DEFAULT_WIDTH = "75vw";
+/** ``wide`` preset: roomier for JSON-heavy detail bodies. */
+const WIDE_WIDTH = "min(1400px, 90vw)";
+/**
+ * Expanded (header toggle) width. ``14rem`` is the Sidebar's ``w-56`` — the
+ * panel stops short of it so the nav stays visible and the user keeps their
+ * bearings instead of getting a full-screen modal.
+ */
+const EXPANDED_WIDTH = "calc(100vw - 14rem)";
 
 /**
  * Right-side slide-over drawer. Fixed-position, full viewport height,
@@ -24,7 +35,11 @@ export function Drawer({
   // the viewport (``vw`` units) and sidesteps a Tailwind JIT quirk where
   // arbitrary ``max-w-[…]`` values declared as default-parameter literals
   // can silently be dropped by the content scanner.
-  width = "75vw",
+  width,
+  // Shorthand for the roomier preset. Takes precedence over ``width`` so a
+  // legacy call site can be opted into the wider panel without hunting down
+  // its width literal.
+  wide = false,
   onClose,
   actions,
   children,
@@ -33,10 +48,19 @@ export function Drawer({
   title: string;
   subtitle?: string;
   width?: string;
+  wide?: boolean;
   onClose: () => void;
   actions?: ReactNode;
   children: ReactNode;
 }) {
+  // Expand/collapse is per-open state on purpose: nothing is persisted, so a
+  // drawer always opens at its declared size.
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!open) setExpanded(false);
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onEsc = (e: KeyboardEvent) => {
@@ -55,9 +79,14 @@ export function Drawer({
   // utilities are detected by the ``max-w-`` prefix so legacy callers that
   // pass ``"max-w-3xl"`` keep working; everything else (``75vw``, ``50rem``,
   // ``800px``) flows through ``style.maxWidth``.
-  const isTailwindClass = width.startsWith("max-w-");
-  const widthClass = isTailwindClass ? width : "";
-  const widthStyle = isTailwindClass ? undefined : { maxWidth: width };
+  const effectiveWidth = expanded
+    ? EXPANDED_WIDTH
+    : wide
+      ? WIDE_WIDTH
+      : (width ?? DEFAULT_WIDTH);
+  const isTailwindClass = effectiveWidth.startsWith("max-w-");
+  const widthClass = isTailwindClass ? effectiveWidth : "";
+  const widthStyle = isTailwindClass ? undefined : { maxWidth: effectiveWidth };
   // Semi-transparent scrim. The earlier 90% opacity looked like the left half
   // of the screen had crashed (#286) — Vojta reported the page felt broken,
   // not modal. Dropping to 50% (light) / 70% (dark) + blur restores the "I
@@ -80,6 +109,15 @@ export function Drawer({
           </div>
           <div className="flex items-center gap-2">
             {actions}
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="text-zinc-500 hover:text-keboola p-1"
+              aria-label={expanded ? "Collapse drawer" : "Expand drawer"}
+              title={expanded ? "Collapse drawer" : "Expand drawer"}
+            >
+              {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
             <button
               type="button"
               onClick={onClose}

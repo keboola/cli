@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, Plus, Radio, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { DataStreamDetail, DataStreamSource } from "../types";
 
 /**
@@ -37,6 +38,8 @@ function branchRef(branchId: number | null): string | undefined {
 export function StreamsPage() {
   const { project, branchId } = useUIState();
   const qc = useQueryClient();
+  // Deep link: `?sel=<sourceId>` opens that source's detail drawer.
+  const [sel, setSel] = useHashSelection();
   const [selected, setSelected] = useState<DataStreamSource | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -49,6 +52,30 @@ export function StreamsPage() {
     enabled: !!project,
   });
 
+  // Restore a deep-linked source ONCE, after the first list load. A link to a
+  // deleted source just leaves the list open.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (!sel) {
+      restoredRef.current = true;
+      return;
+    }
+    if (!q.data) return;
+    restoredRef.current = true;
+    const hit = q.data.sources.find((s) => s.source_id === sel);
+    if (hit) setSelected(hit);
+  }, [sel, q.data]);
+
+  const openSource = (s: DataStreamSource) => {
+    setSelected(s);
+    setSel(s.source_id);
+  };
+  const closeSource = () => {
+    setSelected(null);
+    setSel(null);
+  };
+
   const deleteMu = useMutation({
     // `stream delete` is exposed as POST /delete (not HTTP DELETE) so the
     // dry-run flag can ride in the body alongside the source id.
@@ -59,7 +86,7 @@ export function StreamsPage() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["streams"] });
-      setSelected(null);
+      closeSource();
     },
   });
 
@@ -92,7 +119,7 @@ export function StreamsPage() {
         <DataTable
           rows={q.data?.sources ?? []}
           rowKey={(s) => s.source_id}
-          onRowClick={(s) => setSelected(s)}
+          onRowClick={openSource}
           emptyMessage="No Data Streams sources yet. Create one to get an OTLP ingest endpoint."
           columns={[
             {
@@ -152,7 +179,7 @@ export function StreamsPage() {
             // Open the detail drawer for the new source. If the list hasn't
             // refetched yet we synthesize a minimal row -- the drawer fetches
             // its own full detail by source_id regardless.
-            setSelected(
+            openSource(
               created ?? {
                 source_id: sourceId,
                 name: sourceId,
@@ -169,7 +196,7 @@ export function StreamsPage() {
           project={project}
           branchId={branchId}
           source={selected}
-          onClose={() => setSelected(null)}
+          onClose={closeSource}
           onDelete={(sourceId) => {
             if (confirm(`Delete Data Stream source '${sourceId}'?`)) {
               deleteMu.mutate(sourceId);

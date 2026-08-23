@@ -11,14 +11,45 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { Branch, Bucket, ProjectError, Table as TableT } from "../types";
+
+type StorageTab = "buckets" | "tables" | "files";
+
+const STORAGE_TABS: readonly StorageTab[] = ["buckets", "tables", "files"];
+
+/**
+ * This page's `?sel=` grammar: `<tab>` or `tables/<tableId>`.
+ *
+ * The tab is part of the selection because it is what the link has to restore
+ * before anything can be opened -- the tables query is gated on it. Only the
+ * tables tab has a detail view (the table drawer), so it is the only one that
+ * carries an object id. The bucket FILTER is deliberately not encoded: it is a
+ * transient narrowing of the same list, not a selected object.
+ */
+function parseStorageSel(sel: string | null): { tab: StorageTab; tableId: string | null } {
+  if (!sel) return { tab: "buckets", tableId: null };
+  const slash = sel.indexOf("/");
+  const head = slash === -1 ? sel : sel.slice(0, slash);
+  const rest = slash === -1 ? "" : sel.slice(slash + 1);
+  const tab = (STORAGE_TABS as readonly string[]).includes(head)
+    ? (head as StorageTab)
+    : "buckets";
+  return { tab, tableId: tab === "tables" && rest ? rest : null };
+}
+
+function buildStorageSel(tab: StorageTab, tableId: string | null): string | null {
+  if (tab === "tables" && tableId) return `tables/${tableId}`;
+  // The landing view needs no `sel` at all -- keeps a plain project link clean.
+  return tab === "buckets" ? null : tab;
+}
 
 interface TablePreview {
   header: string[];
@@ -89,9 +120,26 @@ function formatBytes(n: number): string {
 
 export function StoragePage() {
   const { project, branchId } = useUIState();
-  const [tab, setTab] = useState<"buckets" | "tables" | "files">("buckets");
+  // Deep link: `?sel=tables/<tableId>` restores the tab AND opens the drawer.
+  const [sel, setSel] = useHashSelection();
+  const [tab, setTabState] = useState<StorageTab>(() => parseStorageSel(sel).tab);
   const [bucketFilter, setBucketFilter] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<TableT | null>(null);
+
+  // Switching tabs drops the open table: the drawer belongs to the tables tab.
+  const setTab = (t: StorageTab) => {
+    setTabState(t);
+    setSelectedTable(null);
+    setSel(buildStorageSel(t, null));
+  };
+  const openTable = (t: TableT) => {
+    setSelectedTable(t);
+    setSel(buildStorageSel("tables", t.id));
+  };
+  const closeTable = () => {
+    setSelectedTable(null);
+    setSel(buildStorageSel(tab, null));
+  };
 
   const bucketsQ = useQuery<BucketsResp>({
     queryKey: ["buckets", project, branchId],
@@ -112,6 +160,23 @@ export function StoragePage() {
     enabled: !!project && tab === "tables",
   });
 
+  // Restore a deep-linked table ONCE, after the first tables load. The list is
+  // unfiltered, so every table in the project is a candidate; a link to a table
+  // that no longer exists simply leaves the list open.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    const wanted = parseStorageSel(sel).tableId;
+    if (!wanted) {
+      restoredRef.current = true;
+      return;
+    }
+    if (!tablesQ.data) return;
+    restoredRef.current = true;
+    const hit = tablesQ.data.tables.find((t) => t.id === wanted);
+    if (hit) setSelectedTable(hit);
+  }, [sel, tablesQ.data]);
+
   return (
     <div className="space-y-4">
       <PageTitle
@@ -119,7 +184,7 @@ export function StoragePage() {
         description={`Buckets, tables and files in ${project ?? "(no project)"}`}
       />
       <div className="flex gap-2">
-        {(["buckets", "tables", "files"] as const).map((t) => (
+        {STORAGE_TABS.map((t) => (
           <button
             key={t}
             type="button"
@@ -180,7 +245,7 @@ export function StoragePage() {
           <DataTable
             rows={tablesQ.data?.tables ?? []}
             rowKey={(t) => `${t.project_alias}/${t.id}`}
-            onRowClick={(t) => setSelectedTable(t)}
+            onRowClick={openTable}
             columns={[
               { header: "Table", cell: (t) => <span className="text-accent">{t.id}</span> },
               { header: "Name", cell: (t) => t.display_name },
@@ -195,10 +260,7 @@ export function StoragePage() {
         <FilesTab />
       )}
 
-      <TableDetailDrawer
-        table={selectedTable}
-        onClose={() => setSelectedTable(null)}
-      />
+      <TableDetailDrawer table={selectedTable} onClose={closeTable} />
     </div>
   );
 }

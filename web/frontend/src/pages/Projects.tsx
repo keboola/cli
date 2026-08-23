@@ -1,12 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  Flag,
+  Gauge,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+  XCircle,
+} from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api/client";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
-import { JsonView } from "../components/JsonView";
+import { KeyValueGrid } from "../components/KeyValueGrid";
+import { PillList } from "../components/PillList";
+import { RawDetail } from "../components/RawDetail";
 import { DataTable } from "../components/Table";
 import type { Project, ProjectStatus } from "../types";
+import { useHashSelection } from "../useHashSelection";
 
 interface BulkDeleteResult {
   removed: string[];
@@ -14,9 +28,35 @@ interface BulkDeleteResult {
   dry_run: boolean;
 }
 
+/**
+ * `GET /projects/{alias}/info` — mirrors `ProjectService.get_info`, which
+ * reshapes `/v2/storage/tokens/verify`. Everything past `stack_url` comes
+ * straight from the stack, so each field is optional: an older stack may omit
+ * it entirely and the overview must degrade rather than render "undefined".
+ */
+interface ProjectInfoPayload {
+  alias?: string;
+  project_id?: number | null;
+  project_name?: string;
+  stack_url?: string;
+  auth_mode?: string;
+  default_backend?: string;
+  features?: string[];
+  // Storage returns each limit as `{name, value}`, but older stacks (and some
+  // limits) send the bare scalar — both shapes are unpacked by `limitValue`.
+  limits?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+  token_id?: string;
+  token_description?: string;
+  is_master_token?: boolean;
+  token_expires?: string | null;
+}
+
 export function ProjectsPage() {
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  // Deep link: `?sel=<alias>` opens that project's detail drawer.
+  const [sel, setSel] = useHashSelection();
   const [selected, setSelected] = useState<Project | null>(null);
   const [selectedAliases, setSelectedAliases] = useState<Set<string>>(new Set());
   // Aliases pending a remove-confirmation (single trash button or bulk action).
@@ -52,7 +92,10 @@ export function ProjectsPage() {
     onSuccess: (res) => {
       setSelectedAliases(new Set());
       // The detail pane may be showing a project that was just removed.
-      if (selected && res.removed.includes(selected.alias)) setSelected(null);
+      if (selected && res.removed.includes(selected.alias)) {
+        setSelected(null);
+        setSel(null);
+      }
       qc.invalidateQueries({ queryKey: ["projects"] });
       if (res.failed.length > 0) {
         const lines = res.failed.map((f) => `${f.alias} (${f.error})`).join(", ");
@@ -71,6 +114,32 @@ export function ProjectsPage() {
   });
 
   const projects = projectsQ.data?.projects ?? [];
+
+  // Restore a deep-linked selection ONCE, after the first list load. Guarded
+  // by a ref rather than by `selected`, so closing the drawer is not undone
+  // by a later refetch. An alias this config does not know clears the link.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (!sel) {
+      restoredRef.current = true;
+      return;
+    }
+    if (projectsQ.isLoading) return;
+    restoredRef.current = true;
+    const hit = projects.find((p) => p.alias === sel);
+    if (hit) setSelected(hit);
+    else setSel(null);
+  }, [sel, setSel, projects, projectsQ.isLoading]);
+
+  const openProject = (p: Project) => {
+    setSelected(p);
+    setSel(p.alias);
+  };
+  const closeProject = () => {
+    setSelected(null);
+    setSel(null);
+  };
 
   // Keep the selection in sync with the live project list: drop any alias that
   // no longer exists (e.g. removed in another tab) so stale keys never linger.
@@ -178,7 +247,7 @@ export function ProjectsPage() {
         <DataTable
           rows={projects}
           rowKey={(p) => p.alias}
-          onRowClick={(p) => setSelected(p)}
+          onRowClick={openProject}
           selectedKeys={selectedAliases}
           onToggleRow={toggleRow}
           onToggleAll={toggleAll}
@@ -284,15 +353,7 @@ export function ProjectsPage() {
       )}
 
       {selected ? (
-        <div className="nerd-card">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-keboola">Project: {selected.alias}</h3>
-            <button type="button" className="nerd-btn text-xs" onClick={() => setSelected(null)}>
-              Close
-            </button>
-          </div>
-          <ProjectInfo alias={selected.alias} />
-        </div>
+        <ProjectDetailDrawer project={selected} onClose={closeProject} />
       ) : null}
 
       {confirmAliases ? (
@@ -322,14 +383,169 @@ export function ProjectsPage() {
   );
 }
 
-function ProjectInfo({ alias }: { alias: string }) {
-  const infoQ = useQuery<Record<string, unknown>>({
-    queryKey: ["project-info", alias],
-    queryFn: () => api.get(`/projects/${encodeURIComponent(alias)}/info`),
+function ProjectDetailDrawer({
+  project,
+  onClose,
+}: {
+  project: Project;
+  onClose: () => void;
+}) {
+  const infoQ = useQuery<ProjectInfoPayload>({
+    queryKey: ["project-info", project.alias],
+    queryFn: () => api.get(`/projects/${encodeURIComponent(project.alias)}/info`),
   });
-  if (infoQ.isLoading) return <Loading />;
-  if (infoQ.error) return <ErrorBox message={(infoQ.error as Error).message} />;
-  return <JsonView data={infoQ.data} />;
+
+  const subtitle = [project.project_name, project.project_id != null ? `#${project.project_id}` : null]
+    .filter(Boolean)
+    .join(" ・ ");
+
+  return (
+    <Drawer open wide title={project.alias} subtitle={subtitle} onClose={onClose}>
+      {infoQ.isLoading ? <Loading /> : null}
+      {infoQ.error ? <ErrorBox message={(infoQ.error as Error).message} /> : null}
+      {infoQ.data ? (
+        <RawDetail
+          data={infoQ.data}
+          overview={<ProjectOverview info={infoQ.data} project={project} />}
+        />
+      ) : null}
+    </Drawer>
+  );
+}
+
+function ProjectOverview({
+  info,
+  project,
+}: {
+  info: ProjectInfoPayload;
+  project: Project;
+}) {
+  const stackUrl = info.stack_url ?? project.stack_url;
+  const projectId = info.project_id ?? project.project_id;
+  // The admin URL only resolves with a numeric id; a project registered
+  // against a stack that never returned one gets no link rather than a 404.
+  const adminUrl =
+    stackUrl && projectId != null
+      ? `${stackUrl.replace(/\/+$/, "")}/admin/projects/${projectId}`
+      : null;
+  const limits = Object.entries(info.limits ?? {});
+
+  return (
+    <div className="space-y-4">
+      <Section icon={<Server className="w-3.5 h-3.5" />} label="Project">
+        <KeyValueGrid
+          columns={3}
+          items={[
+            { label: "Alias", value: info.alias ?? project.alias, mono: true },
+            { label: "Project ID", value: projectId != null ? String(projectId) : "", mono: true },
+            { label: "Name", value: info.project_name ?? project.project_name },
+            {
+              label: "Stack URL",
+              value: stackUrl ? (
+                <a href={stackUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                  {stackUrl}
+                </a>
+              ) : (
+                ""
+              ),
+              mono: true,
+            },
+            { label: "Auth mode", value: info.auth_mode },
+            { label: "Default backend", value: info.default_backend },
+            { label: "Organization", value: project.org_name ?? orgLabel(project.org_id) },
+          ]}
+        />
+        {adminUrl ? (
+          <a
+            href={adminUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block mt-3 text-xs text-accent hover:underline"
+          >
+            open in Keboola UI →
+          </a>
+        ) : null}
+      </Section>
+
+      <Section icon={<KeyRound className="w-3.5 h-3.5" />} label="Token">
+        <KeyValueGrid
+          columns={3}
+          items={[
+            { label: "Token ID", value: info.token_id, mono: true },
+            { label: "Description", value: info.token_description },
+            {
+              label: "Scope",
+              value: info.is_master_token ? (
+                <span className="nerd-pill-green text-[10px]">master</span>
+              ) : (
+                <span className="nerd-pill text-[10px]">scoped</span>
+              ),
+            },
+            { label: "Expires", value: info.token_expires ?? "never", mono: true },
+            { label: "Masked value", value: project.token, mono: true },
+          ]}
+        />
+      </Section>
+
+      <Section icon={<Flag className="w-3.5 h-3.5" />} label={`Features (${info.features?.length ?? 0})`}>
+        <PillList items={info.features} empty="No features enabled on this project." />
+      </Section>
+
+      {limits.length > 0 ? (
+        <Section icon={<Gauge className="w-3.5 h-3.5" />} label={`Limits (${limits.length})`}>
+          <table className="w-full text-xs">
+            <tbody>
+              {limits.map(([name, raw]) => (
+                <tr key={name} className="border-b border-zinc-100 last:border-0 dark:border-zinc-900">
+                  <td className="py-1 pr-3 text-zinc-600 break-all dark:text-zinc-400">{name}</td>
+                  <td className="py-1 text-right font-mono text-zinc-800 dark:text-zinc-200">
+                    {limitValue(raw)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      ) : null}
+    </div>
+  );
+}
+
+/** Card with the icon + micro-label header used by the Jobs detail drawer. */
+function Section({
+  icon,
+  label,
+  children,
+}: {
+  icon?: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="nerd-card">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1 mb-2">
+        {icon}
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function orgLabel(orgId: number | null): string {
+  return orgId != null ? `#${orgId}` : "";
+}
+
+/** Storage sends a limit as either `{name, value}` or the bare scalar. */
+function limitValue(raw: unknown): string {
+  const value =
+    raw !== null && typeof raw === "object" && "value" in raw
+      ? (raw as { value: unknown }).value
+      : raw;
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number") return value.toLocaleString();
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function AddProject({ onDone }: { onDone: () => void }) {

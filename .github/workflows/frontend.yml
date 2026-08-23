@@ -15,11 +15,11 @@
 # rethought (change-detection inside an always-running job, or a paths-ignore
 # mirror that reports success).
 #
-# Deliberately NO `vitest` step: there are zero *.test.* / *.spec.* files
-# under web/frontend/src, and `vitest run` on an empty suite exits 1
-# ("No test files found"), which would fail every frontend PR. When the first
-# test lands, add `npm test` here -- vitest's fail-on-empty default then
-# guards against the suite silently vanishing.
+# The `vitest` step arrived with the first test file (`src/router.test.ts`,
+# the hash-router parse/build contract). It was deliberately absent before
+# that: `vitest run` on an empty suite exits 1 ("No test files found"), which
+# would have failed every frontend PR. That same fail-on-empty default now
+# works FOR us -- it guards against the suite silently vanishing.
 # ──────────────────────────────────────────────────────────────────────────
 name: Frontend
 
@@ -37,7 +37,7 @@ on:
 
 jobs:
   frontend:
-    name: Type check + build (web/frontend)
+    name: Type check + test + build (web/frontend)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -61,6 +61,11 @@ jobs:
         # dedicated step pins a type error to a "Type check" failure
         # annotation instead of burying it inside the build step.
         run: npx tsc --noEmit
+
+      - name: Test
+        # `vitest run` -- exits 1 on an empty suite, so this also fails if the
+        # test files are ever removed.
+        run: npm test
 
       - name: Build
         # The same command hatch_build.py runs when bundling the SPA into the
