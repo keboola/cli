@@ -718,6 +718,16 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
+# component detail (since vNEXT): the AI Service indexes the PUBLIC catalog only, so a private/
+#   deprecated component the project can run (keboola.mcp-server-tool, keboola.data-apps) 404'd
+#   there while `component list` showed it -- over `serve` as an HTTP 502. A NOT_FOUND now falls
+#   back to the project's Storage component catalog; `documentation_source` ("ai_service" vs
+#   "storage_catalog") tells the two apart and is present on BOTH paths. The fallback has NO
+#   configuration examples (examples_count/row_examples_count always 0, schema_summary counts 0
+#   unless the catalog entry ships a configurationSchema) -- check documentation_source before
+#   reading 0 as "this component has none". NOT_FOUND still raised when both sources miss; a
+#   non-404 AI Service failure is never masked. Over `serve`, ErrorCode.NOT_FOUND now maps to
+#   HTTP 404 (was 502) on EVERY route -- branch on error.code, not on the status alone.
 kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
 # sync-action (0.73.0+): POST sync-actions.{stack}/actions; ACTION_NAME freeform (component-defined,
 #   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row

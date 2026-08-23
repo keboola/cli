@@ -7,6 +7,7 @@ import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { Flow, ProjectError } from "../types";
 
 interface Phase {
@@ -62,6 +63,8 @@ interface NotificationsResp {
 
 export function FlowsPage() {
   const { project, branchId } = useUIState();
+  // Deep link: `?sel=<flowConfigId>` opens that flow's drawer.
+  const [sel, setSel] = useHashSelection();
   const [selected, setSelected] = useState<Flow | null>(null);
   const q = useQuery<FlowsResp>({
     queryKey: ["flows", project, branchId],
@@ -71,6 +74,32 @@ export function FlowsPage() {
       }),
     enabled: !!project,
   });
+
+  // Restore a deep-linked flow ONCE, after the first list load. A link to a
+  // flow that no longer exists (or lives on another branch) leaves the list
+  // open rather than erroring.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (!sel) {
+      restoredRef.current = true;
+      return;
+    }
+    if (!q.data) return;
+    restoredRef.current = true;
+    const hit = q.data.flows.find((f) => f.config_id === sel);
+    if (hit) setSelected(hit);
+  }, [sel, q.data]);
+
+  const openFlow = (f: Flow) => {
+    setSelected(f);
+    setSel(f.config_id);
+  };
+  const closeFlow = () => {
+    setSelected(null);
+    setSel(null);
+  };
+
   return (
     <div className="space-y-4">
       <PageTitle title="Flows" description="Orchestrator and flow component configurations." />
@@ -84,7 +113,7 @@ export function FlowsPage() {
         <DataTable
           rows={q.data?.flows ?? []}
           rowKey={(f) => `${f.project_alias}/${f.component_id}/${f.config_id}`}
-          onRowClick={(f) => setSelected(f)}
+          onRowClick={openFlow}
           columns={[
             { header: "Name", cell: (f) => <span className="font-bold">{f.name}</span> },
             { header: "Component", cell: (f) => <span className="text-accent text-xs">{f.component_id}</span> },
@@ -107,7 +136,7 @@ export function FlowsPage() {
         />
       )}
       {selected ? (
-        <FlowDrawer flow={selected} onClose={() => setSelected(null)} />
+        <FlowDrawer flow={selected} onClose={closeFlow} />
       ) : null}
     </div>
   );

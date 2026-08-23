@@ -98,6 +98,16 @@ else lives here, with their own agents that know their projects.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
+An upstream Keboola failure surfaces through one global handler: a
+`NOT_FOUND` answers **404** (since vNEXT — it used to be 502, which told
+callers to retry a request that can never succeed), an expired/missing browser
+session answers **401**, and every other `KeboolaApiError` answers **502**. The
+body is always the `{"status": "error", "error": {"code", "message"}}`
+envelope, so the `error.code` — not the HTTP status alone — is what a client
+should branch on. `GET /components/{id}` in particular no longer 404s for a
+component the AI Service does not index: it falls back to the project's Storage
+catalog and marks the response `documentation_source: "storage_catalog"`.
+
 ### Streaming endpoints (Server-Sent Events)
 
 - `/jobs/{project}/{job_id}/stream` — live job status transitions + log tail.
@@ -170,6 +180,27 @@ A NERD-themed React SPA that drives the API:
 - **Org Setup, Members, Encrypt** — admin / write actions that need a
   Manage API token. The UI prompts for it per-action via a hidden modal,
   forwards as `X-Manage-Token` for that one request, never persists.
+
+**Shareable deep links.** Every view is addressable, so a URL copied out
+of the address bar reopens exactly what the sender was looking at. The
+whole navigation state lives in the location hash: `#/<page>` for a page
+with no project context, `#/p/<project>/<page>` once a project is
+selected, `?branch=<id>` for a dev branch, and `?sel=<object>` for the
+page's selected object — a job id on Jobs, `<component>/<config>` on
+Configs, and so on. The hash rather than a path, because the SPA is
+mounted at the **root** of the same FastAPI app that serves the REST API:
+a history-mode `/projects` would collide with the endpoint that returns
+JSON, while everything after `#` is never sent to the server at all.
+`sel` is opaque to the router — the page that writes it defines its
+shape, and it is dropped on any page / project / branch change, since an
+object id from one context means nothing in the next. A link whose object
+no longer resolves in the current project simply opens the page with no
+drawer.
+
+Detail drawers render an **Overview** tab (the payload's fields as
+labelled sections, with pills for status and nested blobs kept verbatim)
+and keep the untouched response one click away under **Raw JSON** with a
+copy button, so nothing the API returned is ever hidden.
 
 ## Architecture
 

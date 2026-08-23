@@ -15,6 +15,7 @@ from rich.table import Table
 from ..config_store import ConfigStore
 from ..constants import VALID_COMPONENT_TYPES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -129,6 +130,16 @@ def _format_component_detail(console: Console, data: dict) -> None:
     examples_count = data.get("examples_count", 0)
     if examples_count:
         lines.append(f"[bold]Examples:[/bold] {examples_count} root config example(s)")
+
+    # Say so when the AI Service did not index this component: otherwise the
+    # missing schema/examples read as "this component has none" rather than
+    # "this view cannot show them".
+    if data.get("documentation_source") == DOCUMENTATION_SOURCE_STORAGE_CATALOG:
+        lines.append(
+            "\n[yellow]Source:[/yellow] project Storage catalog -- the Keboola AI Service "
+            "has no documentation indexed for this component, so its configuration schema "
+            "and examples are unavailable."
+        )
 
     panel = Panel("\n".join(lines), title=f"Component - {name}", expand=False)
     console.print(panel)

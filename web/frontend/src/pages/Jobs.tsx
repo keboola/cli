@@ -20,6 +20,7 @@ import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { Job, ProjectError } from "../types";
 
 interface JobsResp {
@@ -68,6 +69,8 @@ function jobBranchId(job: Job): number | undefined {
 
 export function JobsPage() {
   const { project } = useUIState();
+  // Deep link: `?sel=<jobId>` opens that job's detail drawer.
+  const [sel, setSel] = useHashSelection();
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [selected, setSelected] = useState<Job | null>(null);
 
@@ -84,6 +87,55 @@ export function JobsPage() {
     enabled: !!project,
     refetchInterval: 8000,
   });
+
+  // Restore a deep-linked selection ONCE, after the first list load. Guarded
+  // by a ref rather than by `selected`, so closing the drawer does not
+  // immediately re-open it on the next poll.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (!sel || !project) {
+      restoredRef.current = true;
+      return;
+    }
+    if (q.isLoading) return;
+    restoredRef.current = true;
+    const hit = q.data?.jobs.find((j) => String(j.id) === sel);
+    if (hit) {
+      setSelected(hit);
+      return;
+    }
+    if (q.data) {
+      // The list is capped at 100 rows, so a shared link to an older job will
+      // miss. The drawer fetches its own detail by id anyway, so fall back to a
+      // minimal row: the header stays sparse until that detail lands, and the
+      // row-level actions (which need the component/config) stay hidden.
+      setSelected({
+        project_alias: project,
+        id: sel,
+        status: "",
+        component: "",
+        config: null,
+        createdTime: "",
+      });
+    } else {
+      // The list itself errored -- typically a foreign link whose project
+      // alias this install does not know (TopBar is about to fall back to
+      // the default project). Opening the synthetic drawer here would pin an
+      // errored detail fetch to a project that is being swapped away, so
+      // drop the deep link instead.
+      setSel(null);
+    }
+  }, [sel, setSel, project, q.isLoading, q.data]);
+
+  const openJob = (j: Job) => {
+    setSelected(j);
+    setSel(String(j.id));
+  };
+  const closeJob = () => {
+    setSelected(null);
+    setSel(null);
+  };
 
   return (
     <div className="space-y-4">
@@ -115,7 +167,7 @@ export function JobsPage() {
         <DataTable
           rows={q.data?.jobs ?? []}
           rowKey={(j) => String(j.id)}
-          onRowClick={(j) => setSelected(j)}
+          onRowClick={openJob}
           columns={[
             { header: "Job ID", cell: (j) => <span className="text-zinc-600 dark:text-zinc-400">{j.id}</span> },
             {
@@ -151,7 +203,7 @@ export function JobsPage() {
         />
       )}
 
-      {selected ? <JobDetailDrawer job={selected} onClose={() => setSelected(null)} /> : null}
+      {selected ? <JobDetailDrawer job={selected} onClose={closeJob} /> : null}
     </div>
   );
 }

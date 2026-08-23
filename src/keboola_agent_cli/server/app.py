@@ -485,9 +485,11 @@ def _format_error(
 
 # A browser-login session backing a session-registered project is USER-scoped
 # and lives on the host, so its failures are the caller's authentication
-# problem rather than an upstream fault: they answer 401, not the 502 every
-# other `KeboolaApiError` maps to. The server cannot renew such a session
-# itself -- a browser login only completes where a human sits.
+# problem rather than an upstream fault: they answer 401, not the 502 a
+# `KeboolaApiError` maps to by default (NOT_FOUND is the other exception --
+# it answers 404; an upstream "no such resource" is not a Bad Gateway). The
+# server cannot renew such a session itself -- a browser login only completes
+# where a human sits.
 _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
 
 _SESSION_REMEDY_ON_HOST = (
@@ -672,6 +674,11 @@ def create_app(
         msg = getattr(exc, "message", str(exc)) or str(exc)
         if code in _SESSION_CREDENTIAL_CODES:
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
+        if code == ErrorCode.NOT_FOUND:
+            # An upstream 404 is a statement about the requested resource, not
+            # about the gateway: reporting it as 502 made callers retry (and
+            # page on-call for) a request that can never succeed.
+            return _format_error(msg, code, http_status=404)
         return _format_error(msg, code, http_status=502)
 
     @app.exception_handler(StarletteHTTPException)

@@ -26,14 +26,25 @@ export function TopBar() {
     enabled: !!project,
   });
 
-  // Auto-select default project on load
+  // Auto-select the default project on load.
+  //
+  // A project pinned by the URL (`#/p/<alias>/...`) WINS: the UI state is
+  // seeded from the hash before the first render, so `project` is already set
+  // by the time this effect runs and the early return leaves it alone. The one
+  // exception is an alias this installation does not know -- a link shared from
+  // someone else's machine, or a project since renamed/removed. Every page
+  // keys its queries off the alias, so keeping it would render nothing but
+  // errors; fall back to the default and drop the branch/selection that were
+  // scoped to it.
   useEffect(() => {
-    if (project) return;
     const projects = projectsQ.data?.projects;
     if (!projects?.length) return;
+    if (project && projects.some((p) => p.alias === project)) return;
     const def = projects.find((p) => p.is_default) ?? projects[0];
+    // `setProject` clears the selection; the branch id is project-scoped too.
     setProject(def.alias);
-  }, [project, projectsQ.data, setProject]);
+    if (project) setBranchId(null);
+  }, [project, projectsQ.data, setProject, setBranchId]);
 
   const branches = branchesQ.data?.branches ?? [];
   const branchLabel = branchId

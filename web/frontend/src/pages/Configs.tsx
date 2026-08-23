@@ -1,18 +1,54 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PlayCircle, RotateCcw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { FileCode, Layers, PlayCircle, RotateCcw, SlidersHorizontal, Trash2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
+import { type KeyValueItem, KeyValueGrid } from "../components/KeyValueGrid";
+import { PillList } from "../components/PillList";
+import { RawDetail } from "../components/RawDetail";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { ConfigSummary, ProjectError } from "../types";
 
 interface ConfigsResp {
   configs: ConfigSummary[];
   errors: ProjectError[];
+}
+
+/**
+ * `GET /configs/{project}/{component}/{config}` — the Storage API's own
+ * configuration payload, flattened with `project_alias` + `branch_id` by
+ * `ConfigService.get_config_detail`.
+ *
+ * Every field is optional on purpose: the body below `configuration` is
+ * component-defined and older stacks omit blocks entirely, so the overview has
+ * to degrade to an em dash rather than render "undefined".
+ */
+interface ConfigDetailPayload {
+  id?: string;
+  name?: string;
+  description?: string;
+  created?: string;
+  creatorToken?: { id?: number | string; description?: string };
+  version?: number;
+  changeDescription?: string;
+  isDisabled?: boolean;
+  isDeleted?: boolean;
+  configuration?: unknown;
+  rows?: Array<Record<string, unknown>>;
+  state?: unknown;
+  currentVersion?: {
+    created?: string;
+    creatorToken?: { id?: number | string; description?: string };
+    changeDescription?: string;
+    versionIdentifier?: string;
+  };
+  project_alias?: string;
+  branch_id?: number | null;
 }
 
 /** One row of `GET /configs/trash/{project}` (mirrors `shape_trash_entry`). */
@@ -36,6 +72,8 @@ type ConfigsTab = "configs" | "trash";
 
 export function ConfigsPage() {
   const { project, branchId } = useUIState();
+  // Deep link: `?sel=<componentId>/<configId>` opens that config's drawer.
+  const [sel, setSel] = useHashSelection();
   const [tab, setTab] = useState<ConfigsTab>("configs");
   const [filterText, setFilterText] = useState("");
   const [selected, setSelected] = useState<ConfigSummary | null>(null);
@@ -48,6 +86,45 @@ export function ConfigsPage() {
       }),
     enabled: !!project && tab === "configs",
   });
+
+  // Restore a deep-linked selection ONCE, after the first list load. Guarded
+  // by a ref rather than by `selected`, so closing the drawer does not
+  // immediately re-open it on the next render.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (!sel || !project) {
+      restoredRef.current = true;
+      return;
+    }
+    if (q.isLoading) return;
+    restoredRef.current = true;
+    const hit = q.data?.configs.find((c) => selKey(c.component_id, c.config_id) === sel);
+    // Unlike a job id, a config drawer cannot be opened from the id alone:
+    // the row carries the project alias the detail request is addressed to.
+    // A link to a config this project/branch does not have therefore drops
+    // the selection instead of opening a drawer that could only 404.
+    if (hit) setSelected(hit);
+    else setSel(null);
+  }, [sel, project, q.isLoading, q.data, setSel]);
+
+  const openConfig = (c: ConfigSummary) => {
+    setSelected(c);
+    setSel(selKey(c.component_id, c.config_id));
+  };
+  const closeConfig = () => {
+    setSelected(null);
+    setSel(null);
+  };
+  const switchTab = (t: ConfigsTab) => {
+    setTab(t);
+    // The trash rows are a different id space (and open no drawer), so a
+    // configs selection must not survive into that tab's URL.
+    if (t === "trash") {
+      setSelected(null);
+      setSel(null);
+    }
+  };
 
   const filtered =
     q.data?.configs.filter((c) =>
@@ -70,7 +147,7 @@ export function ConfigsPage() {
             key={t}
             type="button"
             className={`nerd-btn ${tab === t ? "border-keboola text-keboola" : ""}`}
-            onClick={() => setTab(t)}
+            onClick={() => switchTab(t)}
           >
             {t === "trash" ? (
               <>
@@ -108,7 +185,7 @@ export function ConfigsPage() {
           <DataTable
             rows={filtered}
             rowKey={(c) => `${c.project_alias}/${c.component_id}/${c.config_id}`}
-            onRowClick={(c) => setSelected(c)}
+            onRowClick={openConfig}
             columns={[
               { header: "Component", cell: (c) => <span className="text-accent">{c.component_id}</span> },
               { header: "Config ID", cell: (c) => <span className="text-zinc-500">{c.config_id}</span> },
@@ -126,11 +203,22 @@ export function ConfigsPage() {
           componentId={selected.component_id}
           configId={selected.config_id}
           name={selected.config_name}
-          onClose={() => setSelected(null)}
+          onClose={closeConfig}
         />
       ) : null}
     </div>
   );
+}
+
+/**
+ * The `?sel=` value for one configuration. A component id contains dots but
+ * never a slash, and neither does a config id, so a single `/` is an
+ * unambiguous separator. Restore compares whole keys built by this function
+ * rather than splitting the URL value, so an unexpected extra `/` can only
+ * fail to match — never silently address a different configuration.
+ */
+function selKey(componentId: string, configId: string): string {
+  return `${componentId}/${configId}`;
 }
 
 /**
@@ -246,7 +334,7 @@ function ConfigDetail({
   const [actionError, setActionError] = useState<string | null>(null);
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
 
-  const detailQ = useQuery({
+  const detailQ = useQuery<ConfigDetailPayload>({
     queryKey: ["config-detail", alias, componentId, configId, branchId],
     queryFn: () =>
       api.get(
@@ -344,7 +432,12 @@ function ConfigDetail({
         ) : null}
         {detailQ.isLoading ? <Loading /> : null}
         {detailQ.error ? <ErrorBox message={(detailQ.error as Error).message} /> : null}
-        {detailQ.data ? <JsonView data={detailQ.data} maxHeight="60vh" /> : null}
+        {detailQ.data ? (
+          <RawDetail
+            data={detailQ.data}
+            overview={<ConfigOverview detail={detailQ.data} componentId={componentId} />}
+          />
+        ) : null}
       </div>
 
       {confirmDelete ? (
@@ -368,4 +461,147 @@ function ConfigDetail({
       ) : null}
     </Drawer>
   );
+}
+
+/**
+ * Rendered body of a configuration detail.
+ *
+ * The metadata (who changed it, when, which version, is it disabled) is what a
+ * reader is usually after, and it used to be buried at the top of a raw JSON
+ * dump next to a component-defined `configuration` blob of arbitrary size.
+ * That blob stays visible verbatim -- it is inherently freeform, so summarizing
+ * it beyond naming its top-level blocks would be guessing -- but it no longer
+ * hides the fields around it. The untouched payload is one tab away.
+ */
+function ConfigOverview({
+  detail,
+  componentId,
+}: {
+  detail: ConfigDetailPayload;
+  componentId: string;
+}) {
+  const configuration = isRecord(detail.configuration) ? detail.configuration : {};
+  const configurationKeys = Object.keys(configuration);
+  const rows = detail.rows ?? [];
+  const state = isRecord(detail.state) ? detail.state : {};
+  const hasState = Object.keys(state).length > 0;
+
+  // `currentVersion` describes the version actually served; the top-level
+  // `changeDescription` is the same text on a fresh config but goes stale on
+  // older stacks, so it is only the fallback.
+  const lastChange = detail.currentVersion?.changeDescription ?? detail.changeDescription ?? "";
+  const lastChangeAt = detail.currentVersion?.created ?? "";
+
+  const items: KeyValueItem[] = [
+    { label: "Name", value: detail.name },
+    { label: "Config ID", value: detail.id, mono: true },
+    { label: "Component ID", value: componentId, mono: true },
+    { label: "Version", value: detail.version != null ? `v${detail.version}` : "", mono: true },
+    { label: "Created", value: detail.created },
+    { label: "Created by", value: detail.creatorToken?.description },
+    {
+      label: "Last change",
+      value: lastChange ? (
+        <>
+          {lastChange}
+          {lastChangeAt ? <span className="text-zinc-500"> ・ {lastChangeAt}</span> : null}
+        </>
+      ) : (
+        ""
+      ),
+    },
+    {
+      label: "Branch",
+      value: detail.branch_id != null ? `#${detail.branch_id}` : "production",
+      mono: true,
+    },
+  ];
+  // Only when it carries something: an empty description is the norm, and a
+  // permanent em-dash cell would read as a missing field rather than a blank.
+  if (detail.description) items.push({ label: "Description", value: detail.description });
+
+  return (
+    <div className="space-y-4">
+      <Section icon={<FileCode className="w-3.5 h-3.5" />} label="Configuration">
+        <KeyValueGrid columns={3} items={items} />
+        {detail.isDisabled || detail.isDeleted ? (
+          <div className="flex flex-wrap items-center gap-1.5 mt-3">
+            {detail.isDisabled ? <PillList items={["disabled"]} tone="amber" /> : null}
+            {detail.isDeleted ? <PillList items={["deleted"]} tone="red" /> : null}
+          </div>
+        ) : null}
+      </Section>
+
+      <Section icon={<SlidersHorizontal className="w-3.5 h-3.5" />} label="Parameters">
+        <PillList
+          items={configurationKeys}
+          empty="Empty configuration body — this config carries no parameters."
+        />
+        {configurationKeys.length > 0 ? (
+          <div className="mt-2">
+            <JsonView data={configuration} maxHeight="40vh" />
+          </div>
+        ) : null}
+      </Section>
+
+      {rows.length > 0 ? (
+        <Section icon={<Layers className="w-3.5 h-3.5" />} label={`Rows (${rows.length})`}>
+          <DataTable
+            rows={rows}
+            rowKey={(r) => String(r.id ?? "")}
+            columns={[
+              { header: "Row ID", cell: (r) => <span className="text-accent">{String(r.id ?? "")}</span> },
+              {
+                header: "Name",
+                cell: (r) => <span className="font-medium">{String(r.name ?? "")}</span>,
+              },
+              {
+                header: "Status",
+                align: "right",
+                cell: (r) =>
+                  r.isDisabled ? (
+                    <span className="nerd-pill-amber">disabled</span>
+                  ) : (
+                    <span className="nerd-pill-green">enabled</span>
+                  ),
+              },
+            ]}
+          />
+        </Section>
+      ) : null}
+
+      {hasState ? (
+        <details>
+          <summary className="text-xs text-zinc-500 cursor-pointer">state</summary>
+          <JsonView data={state} maxHeight="40vh" />
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+/** Card with the icon + micro-label header used by the other detail drawers. */
+function Section({
+  icon,
+  label,
+  children,
+}: {
+  icon?: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="nerd-card">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1 mb-2">
+        {icon}
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** A JSON object (not an array, not null) — the shape both blobs must be. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
