@@ -954,5 +954,12 @@ kbagent update [--beta]
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
-kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# `--no-banner` (since vNEXT): suppress the web UI's "What's new" popup. The UI shows a curated
+#   per-version highlights modal once per version (localStorage `kbagent.whatsnew.seen`); this flag
+#   turns the UNSOLICITED popup off fleet-wide. Surfaced to the SPA via `GET /ui-config`
+#   ({"banner": bool}) -- NOT injected into index.html: that injection point was removed in favour of
+#   the session cookie, and an injected copy would miss the StaticFiles fallback that serves the shell
+#   for deep links, silently re-enabling the popup the operator suppressed. The command palette's
+#   "What's new" action still opens it on request -- the flag governs what appears uninvited.
 ```
