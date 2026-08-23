@@ -179,10 +179,16 @@ The flow is instead:
    `(#PR)` references), replace every `vNEXT` placeholder with the real
    version (`make vnext-check` verifies it -- CI runs the same check
    automatically on any PR that raises the version, so a missed placeholder
-   is a red build, not a silent ship), run `make version-sync`. Merge, then
-   tag -- the release pipeline
-   renders the GitHub release notes from the changelog entry
-   (`scripts/gen_release_notes.py`). Full checklist: `CONTRIBUTING.md` >
+   is a red build, not a silent ship), add the curated What's-new entry to
+   `web/frontend/src/whatsnew.ts` when the release ships UI-visible features
+   (skipping it errors nowhere -- the popup falls back to the previous reel
+   and the release's UI work ships dark), run `make version-sync`. Merge,
+   then tag the merge commit -- **the tag push is the ONLY manual action**:
+   the pipeline renders the release notes from the changelog entry
+   (`scripts/gen_release_notes.py`; never write them by hand), publishes
+   PyPI + native binaries, and creates + fills the GitHub Release. Verify
+   afterwards: pipeline green, `gh release view` shows a non-empty body and
+   both wheels. Full checklist: `CONTRIBUTING.md` >
    "Releasing a new version".
 
 **Inside the release PR**: edit `pyproject.toml`, add the changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. `make changelog-check` (release-time, needs `gh`) enforces changelog completeness in both directions.
