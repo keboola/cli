@@ -40,7 +40,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api/client";
-import { SECTIONS } from "../layout/Sidebar";
+import { PALETTE_ONLY_PAGES, SECTIONS } from "../layout/Sidebar";
 import { buildStorageSel } from "../pages/Storage";
 import { type PageId, useUIState } from "../state";
 import { useTheme } from "../theme";
@@ -233,6 +233,17 @@ export function CommandPalette() {
           run: () => setPage(item.id as PageId),
         });
       }
+    }
+    for (const item of PALETTE_ONLY_PAGES) {
+      out.push({
+        id: `page:${item.id}`,
+        kind: "page",
+        label: item.label,
+        hint: "All projects",
+        keywords: item.id,
+        icon: item.icon,
+        run: () => setPage(item.id as PageId),
+      });
     }
     for (const p of projectsQ.data?.projects ?? []) {
       out.push({
