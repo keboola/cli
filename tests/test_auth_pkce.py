@@ -195,18 +195,36 @@ class TestPkceCallbackServerTimeout:
     def test_pkce_callback_timeout_is_fallback_eligible(self) -> None:
         assert issubclass(PkceCallbackTimeout, PkceSetupError)
 
-    def test_callback_arriving_just_before_timeout_succeeds(self) -> None:
+    def test_callback_arriving_before_timeout_succeeds(self) -> None:
+        """A callback that lands inside the deadline resolves the wait.
+
+        The margin between the callback (0.05s) and the deadline is deliberately
+        wide. It used to be 0.3s, which passed on an idle machine and failed on a
+        busy one: under parallel CI workers on Windows a 250ms scheduling stall
+        is ordinary, and the test then reported a callback-handling bug that did
+        not exist. A generous deadline costs nothing here -- wait() returns the
+        moment the callback arrives, not when the timeout expires -- and nothing
+        is lost by widening it, because that the deadline is HONOURED is what
+        test_timeout_raises_pkce_callback_timeout and the sibling below assert.
+        """
         with PkceCallbackServer(expected_state="expected-state") as server:
             _get_after(0.05, server.redirect_uri, {"code": "on-time", "state": "expected-state"})
-            result = server.wait(timeout=0.3)
+            result = server.wait(timeout=5.0)
 
         assert result.code == "on-time"
 
-    def test_callback_arriving_just_after_timeout_is_not_observed(self) -> None:
+    def test_callback_arriving_after_timeout_is_not_observed(self) -> None:
         """A callback scheduled to land after the (short, injected) timeout must
-        not be picked up -- wait() raises PkceCallbackTimeout on schedule."""
+        not be picked up -- wait() raises PkceCallbackTimeout on schedule.
+
+        Same widened margin, for the same reason, in the other direction: the
+        callback must be comfortably later than the deadline even when the box
+        stalls. This does NOT make the test slow -- wait() raises after 0.1s and
+        the block exits; the pending callback then fires from a daemon timer
+        against a closed server, which `_get` swallows by design.
+        """
         with PkceCallbackServer(expected_state="expected-state") as server:
-            _get_after(0.4, server.redirect_uri, {"code": "too-late", "state": "expected-state"})
+            _get_after(5.0, server.redirect_uri, {"code": "too-late", "state": "expected-state"})
 
             with pytest.raises(PkceCallbackTimeout):
                 server.wait(timeout=0.1)
