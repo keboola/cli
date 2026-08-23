@@ -145,17 +145,44 @@ class TestVnextResidue:
 
 
 class TestLiveRepositoryVnext:
-    def test_no_unresolved_placeholder_survives_a_release(self) -> None:
-        """``main`` carries a released version, so every placeholder must be rewritten.
+    """The live tree is scanned -- but a placeholder found in it is NOT a failure.
 
-        This is the check that used to be a hand-run grep the release
-        checklist admitted could never come back empty.
+    Between releases ``main`` legitimately carries `(since vNEXT)` markers. The
+    #648 process has every feature PR write the placeholder and ONLY the release
+    PR rewrite them; CLAUDE.md states it outright ("Writing `vNEXT` in a feature
+    PR is correct and stays green"), and TestReleaseModeSelection below spells
+    out why arming outside a release PR "would demand a contributor delete a
+    placeholder the process requires them to write".
+
+    An unconditional "the live tree has no placeholders" assertion contradicts
+    exactly that. It is green only in the window right after a release, and goes
+    red for main AND for every open PR the moment the first feature PR of the
+    next cycle lands. That is not hypothetical: it was added in #670 days after
+    0.90.0 shipped -- tree empty, so it passed -- and detonated on #675, taking
+    main and every in-flight PR with it.
+
+    The release-time requirement is real, but deciding whether the gate arms
+    needs the BASE branch's version, which a unit test cannot see. That check
+    already exists where it can: the "Unresolved vNEXT placeholder check" step
+    in .github/workflows/ci.yml passes `--release-if-newer-than`, and
+    `make vnext-check` is its local twin. What is left for a test is that the
+    live scan actually WORKS -- which is what the two below assert.
+    """
+
+    def test_live_scan_reports_well_formed_gates(self) -> None:
+        """Whatever the tree currently carries, every hit must be real.
+
+        This is the half that has a stable answer: the globs resolve, the files
+        are readable, and each reported gate points at a line that genuinely
+        contains the placeholder. A hit count of zero is just as valid as ten --
+        it depends on where in the release cycle the tree happens to be.
         """
-        found = residue(check_version_gates.resolve_paths())
-        assert found == [], (
-            "unresolved vNEXT gate(s) shipped -- an agent cannot satisfy them: "
-            f"{[(gate.path, gate.line) for gate in found[:3]]}"
-        )
+        for gate in residue(check_version_gates.resolve_paths()):
+            lines = Path(gate.path).read_text(errors="replace").splitlines()
+            assert 1 <= gate.line <= len(lines), f"{gate.path}:{gate.line} is out of range"
+            assert check_version_gates.VNEXT_TOKEN in lines[gate.line - 1], (
+                f"{gate.path}:{gate.line} was reported but does not carry the placeholder"
+            )
 
     def test_prose_mentions_are_still_present_and_ignored(self) -> None:
         """Guards the guard: a rule that matched nothing would pass vacuously."""
