@@ -337,9 +337,16 @@ jobs:
       # and Windows minutes bill at 2x, so it was the single most expensive
       # thing in the whole PR pipeline.
       #
-      # If this ever turns flaky on Windows specifically, drop back to
-      # sequential by replacing `-n auto` with `-p no:xdist` -- do NOT disable
-      # the suite. Windows-only file-locking and atomic-replace semantics are
+      # Read a Windows-only flake here carefully before blaming xdist. The
+      # first run of this change surfaced exactly one failure, and it was a
+      # test asserting a 250ms wall-clock margin (test_auth_pkce), not a
+      # parallelism-safety bug -- four busy workers just made the stall that
+      # the margin never tolerated actually happen. That test was widened;
+      # check for the same shape first.
+      #
+      # If something genuinely does turn out to be parallel-unsafe, drop back
+      # to sequential by replacing `-n auto` with `-p no:xdist` -- do NOT
+      # disable the suite. Windows-only file-locking and atomic-replace semantics are
       # exactly what it is here to catch, and parallel workers touching the
       # same tmp paths are the plausible failure mode. The Linux jobs are
       # unaffected either way.
