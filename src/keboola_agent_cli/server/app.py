@@ -862,8 +862,10 @@ def _allow_static_through_auth(app: FastAPI) -> None:
 
     The auth middleware exempts ``PUBLIC_PATHS`` (docs, openapi, health). In UI
     mode the SPA also needs ``GET /``, ``GET /index.html``, ``GET /assets/*``,
-    favicons, and the SPA's client-side routes (which resolve to index.html via
-    the StaticFiles ``html=True`` fallback) to load without a token.
+    favicons, and any path matching no registered endpoint to load without a
+    token. (The SPA is hash-routed, so its client-side routes never reach the
+    server as paths; an unknown path 404s from the static mount -- the property
+    that matters here is that it is *not* auth-walled into a 401.)
 
     Route-aware (GHSA-ffpq-prmh-3gx2): a real endpoint must authenticate; only
     genuine client-side SPA routes fall through to the public index.html shell.
