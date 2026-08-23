@@ -85,6 +85,38 @@ jobs:
         # judgement, so it's left to /kbagent:review, not gated here.)
         run: uv run python scripts/check_command_sync.py
 
+      - name: Serve endpoint reference freshness check
+        # docs/web-server-endpoints.md is generated from create_app().openapi().
+        # The hand-maintained table it replaced drifted to claiming "150+
+        # endpoints" over 17 rows while the app served 226 operations across 29
+        # routers, with ten routers undocumented entirely (issue #656) -- no
+        # OpenAPI spec is committed, so only a running server showed the truth
+        # and nothing in CI could notice. Adding a route now fails here until
+        # the reference is regenerated.
+        #
+        # Two conditions: `git diff --quiet` reports nothing for an UNTRACKED
+        # path (a doc dropped from the index would pass while documenting
+        # nothing), so tracking is asserted separately rather than by switching
+        # to `git status --porcelain` -- that flags a staged-new file whose
+        # content is correct, which is the normal state of the PR adding one.
+        run: |
+          if ! git ls-files --error-unmatch docs/web-server-endpoints.md > /dev/null 2>&1; then
+            echo "::error::docs/web-server-endpoints.md is untracked -- the endpoint reference must be committed."
+            exit 1
+          fi
+          # `--extra server` even though the install step already synced it:
+          # `uv run` re-resolves per invocation, so naming the extra here is
+          # what actually guarantees fastapi is importable, and it keeps this
+          # identical to `make endpoints-check`. stdout is dropped but stderr
+          # is NOT -- the step already fails on a crash (`bash -e`), and
+          # swallowing the traceback would leave no way to see why.
+          uv run --extra server python scripts/gen_endpoint_reference.py > /dev/null
+          if ! git diff --quiet docs/web-server-endpoints.md; then
+            echo "::error::docs/web-server-endpoints.md is out-of-date. Run 'make endpoints-gen' and commit."
+            git diff docs/web-server-endpoints.md
+            exit 1
+          fi
+
       - name: Version-gate silent-drift check
         # Every `(since vX.Y.Z)` / `X.Y.Z+` marker must name a version that has
         # a CHANGELOG entry. `keboola-expert.md` turns these markers into a hard
@@ -95,6 +127,35 @@ jobs:
         # release renumber breaks exactly that half in bulk. Offline (reads the
         # tree only), unlike changelog-check.
         run: uv run python scripts/check_version_gates.py
+
+      - name: Unresolved vNEXT placeholder check (release PRs only)
+        # A feature PR tags new behavior `(since vNEXT)` because it cannot know
+        # its release version; the release PR rewrites every one. Miss one and
+        # the plugin -- served to agents from the repo -- carries a gate no
+        # installed version can satisfy, so the agent refuses a command the
+        # user has. That rewrite was checklist-only, and its grep could never
+        # come back empty (the process docs must mention the placeholder they
+        # describe); the script separates the two by backticks instead.
+        #
+        # Armed only for a PR that RAISES the version. A two-dot diff is used
+        # deliberately -- a shallow checkout has no merge base -- and the
+        # script's PEP 440 comparison is what keeps a stale branch behind a
+        # released main from being mistaken for a release PR.
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          base=$(git show "origin/$GITHUB_BASE_REF:pyproject.toml" 2>/dev/null \
+                 | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+          echo "base branch version: ${base:-<unreadable>}"
+          if [ -z "$base" ]; then
+            # Deliberately fail-open (an unreadable base must never block an
+            # ordinary PR), but LOUDLY: on a release PR this would mean the
+            # placeholder gate silently never armed. Verified live on PR #670
+            # that the fetch above populates the ref under the default shallow
+            # checkout, so reaching this line means something changed.
+            echo "::warning title=vNEXT gate disarmed::could not read pyproject version from origin/$GITHUB_BASE_REF; the unresolved-placeholder check will not arm. If this is a release PR, run 'make vnext-check' locally."
+          fi
+          uv run python scripts/check_version_gates.py --release-if-newer-than "$base"
 
       - name: Error-code enum check
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).

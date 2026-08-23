@@ -17,7 +17,7 @@ process, localhost-only, bearer-auth, scoped to one config directory.
 │   │  injects bearer token                                   │
 │   ▼                                                         │
 │ kbagent serve (Python FastAPI :8001)                        │
-│   ├─ 150+ REST endpoints over every kbagent service         │
+│   ├─ REST endpoints over every kbagent service              │
 │   ├─ asyncio cron scheduler (agent_runner)                  │
 │   └─ subprocesses: kbagent CLI / claude / codex / gemini    │
 │       └─ they call back via `kbagent http` to *this* serve  │
@@ -74,27 +74,37 @@ else lives here, with their own agents that know their projects.
 
 ### REST API (`/api/*` after BFF, `/` directly on serve)
 
-150+ endpoints, one router per kbagent service area:
+One router per kbagent service area, each mirroring that area's CLI
+commands. **The endpoint list is not maintained here** — it lives in
+[`web-server-endpoints.md`](web-server-endpoints.md), generated from the
+running app's own OpenAPI spec and gated in CI by `make endpoints-check`,
+so it cannot drift from the server. This section describes the shape of
+the surface; that file is the inventory.
 
-| Surface | Routes | What it covers |
-|---|---|---|
-| `/projects` | CRUD, status, `use`, info, description | All `kbagent project *` commands |
-| `/configs` | list, search, detail, update (dry-run / merge / set-paths), variables, metadata, rows, OAuth URL | All `kbagent config *` commands |
-| `/components` | list (AI-assisted), detail, scaffold | Component catalog browsing |
-| `/storage/{buckets,tables,files,…}` | CRUD, upload, **synchronous data preview**, async download, swap, describe, columns | All `kbagent storage *` commands |
-| `/jobs` | list, detail, run (with `--wait`), terminate, **SSE log stream** | All `kbagent job *` commands |
-| `/branches` | lifecycle (create/use/reset/delete/merge), metadata | All `kbagent branch *` commands |
-| `/workspaces` | CRUD, password reset, load tables, **SQL query** | All `kbagent workspace *` commands |
-| `/flows` `/schedules` | CRUD, schedules, find by cron / inactivity | All `kbagent flow|schedule *` |
-| `/lineage` | sharing graph, deep-lineage `build` + `show` | `lineage *` + `sync pull` wrapper |
-| `/sharing` | share/unshare/link/unlink | `kbagent sharing *` |
-| `/data-apps` | CRUD, deploy, start/stop, **secrets** | `kbagent data-app *` |
-| `/kai/*` | ping, ask, chat, history | `kbagent kai *` |
-| `/encrypt` | encrypt secret values | `kbagent encrypt values` |
-| `/search` | textual + config-based cross-project search | `kbagent search` |
-| `/org` `/members` | bulk org setup, invite, remove, role (manage token) | `kbagent org|project member-* *` |
-| `/agents` | **scheduled tasks** CRUD, run-now, history, cron preview, ad-hoc test | NEW (no CLI counterpart yet) |
-| `/health` `/version` `/changelog` `/doctor` | readiness, version info, doctor checks | Top-level CLI commands |
+The routers group into the categories declared in
+`server/app.py::OPENAPI_TAGS` (which is also what tabs the Swagger UI):
+
+| Category | Routers |
+|---|---|
+| Project Management | `projects` `members` `org` `feature` `billing` `token` |
+| Configurations | `configs` `components` `transformations` `encrypt` |
+| Data | `storage` `stream` `search` `sharing` |
+| Execution | `jobs` `flows` `schedules` `notifications` `data-apps` `workspaces` |
+| Development | `branches` `lineage` `semantic-layer` |
+| AI & Tools | `kai` `documentation` `ai-chat` `agents` |
+| Read-only | `dev-portal` |
+| System | `health` (plus `/version`, `/changelog`, `/doctor`, `/ui-config`) |
+
+`ai-chat` is the one router with no CLI counterpart — it exists to stream
+the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
+same `agents.json`); what is serve-only there is the cron loop, so a
+scheduled task fires only while the server runs.
+
+Going the other way, several CLI surfaces are deliberately CLI-only:
+`auth` (see "The `auth` command group has no REST router" below), `sync`
+(filesystem-local by design), `permissions`, and `init`. The mirrors still
+considered missing are tracked in #657, and the fact that `permissions`
+does not constrain serve at all is #655.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
@@ -110,9 +120,26 @@ catalog and marks the response `documentation_source: "storage_catalog"`.
 
 ### Streaming endpoints (Server-Sent Events)
 
-- `/jobs/{project}/{job_id}/stream` — live job status transitions + log tail.
-- (designed-for, not yet wired) `/branches/{project}/reset/stream`,
-  `/lineage/build/stream`, `/kai/chat/stream`.
+Six routes stream instead of returning a body. They are ordinary entries in
+the generated reference, so this list is about *why* each one streams:
+
+- `GET /jobs/{project}/{job_id}/stream` — live job status transitions + log
+  tail. The only one using `sse_starlette`'s `EventSourceResponse`; the rest
+  return a `StreamingResponse` with `media_type="text/event-stream"`.
+- `POST /agents/{task_id}/run/stream` — a scheduled task run, streamed as it
+  happens rather than polled.
+- `POST /agents/test/stream` — the same for an ad-hoc (unsaved) action.
+- `POST /agents/prompt/improve/stream` — AI prompt rewriting; streams because
+  the underlying AI CLI does.
+- `POST /ai/chat/stream` — local AI chat responses, token by token.
+- `POST /workspaces/sql/improve/stream` — AI SQL helper over a workspace.
+
+Note that `GET /agents/{task_id}/runs/{run_id}/events` looks like a stream but
+is not: it replays a finished run's event timeline as one JSON response.
+
+Never wired (no route exists): `/branches/{project}/reset/stream`,
+`/lineage/build/stream`, `/kai/chat/stream` — all three remain plain
+request/response despite being long-running.
 
 ### Agent scheduler
 
@@ -218,11 +245,17 @@ touching the others.
 `src/keboola_agent_cli/server/`:
 
 ```
-__init__.py        FastAPI app factory, lifespan that starts the scheduler
+app.py             create_app() factory, lifespan that starts the scheduler,
+                   OPENAPI_TAGS, global exception handlers, UI mount
+__init__.py        PEP 562 lazy re-export of create_app, so importing a
+                   pure-logic sibling does not drag in FastAPI
 auth.py            BearerAuthMiddleware (random token on startup)
 dependencies.py    ServiceRegistry — singleton holding every kbagent service
 agents_store.py    AgentTask / AgentRun + JSON file persistence
 agent_runner.py    cron loop + per-action-type dispatch + subprocess env
+run_broadcaster.py one live run per task, fanned out to every watching tab
+                   (late attach replays what earlier viewers already saw)
+pricing.py         per-model USD cost + token breakdown on each persisted run
 sse.py             SSE helpers
 routers/           one file per service area (jobs.py, storage.py, …)
 ```
@@ -467,8 +500,8 @@ that is the preferred path because it shares state with this very
 process, instead of forking a CLI tree against possibly stale config."
 
 This is what lets a midnight agent task do meaningful work: it has
-the same view of Keboola the operator does, it can call any of the
-150 endpoints, and its full response (including any tools it called)
+the same view of Keboola the operator does, it can call any endpoint in
+the reference, and its full response (including any tools it called)
 is captured into the run history.
 
 ### State on disk
@@ -494,7 +527,11 @@ the personal-control-plane vision; multi-tenant comes later if at all.
 ## Where to look next
 
 - `src/keboola_agent_cli/commands/serve.py` — CLI entry point, argv parsing.
-- `src/keboola_agent_cli/server/__init__.py` — `create_app()` + lifespan.
+- [`web-server-endpoints.md`](web-server-endpoints.md) — every route, generated.
+- `src/keboola_agent_cli/server/app.py` — `create_app()` + lifespan +
+  `OPENAPI_TAGS` (the router categories above).
+- `scripts/gen_endpoint_reference.py` — generates the endpoint reference;
+  `make endpoints-gen` after adding a route, or CI fails.
 - `src/keboola_agent_cli/server/agent_runner.py` — scheduler + dispatch.
 - `src/keboola_agent_cli/server/routers/agents.py` — agent-tasks API.
 - `src/keboola_agent_cli/commands/http_client.py` — `kbagent http` subcommand

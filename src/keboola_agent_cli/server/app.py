@@ -337,10 +337,11 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "agents",
         "description": (
             "**AI & Tools.** "
-            "Scheduled / on-demand AI agent tasks. Server-only feature "
-            "(no CLI equivalent) -- the scheduler loop runs inside "
-            "`kbagent serve` and persists tasks + runs to the config "
-            "directory."
+            "Scheduled / on-demand AI agent tasks. Mirrors `kbagent agent "
+            "list|show|create|update|delete|run|runs|test`, which reads and "
+            "writes the same `agents.json` offline. What is server-only is "
+            "the CRON LOOP: it runs inside `kbagent serve`, so a task with a "
+            "schedule only fires while the server is up."
         ),
     },
     # ---- System ----
