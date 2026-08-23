@@ -35,11 +35,13 @@ on:
       - "web/**"
       - ".github/workflows/frontend.yml"
 
-# Same rationale as ci.yml: supersede an in-flight PR run when the branch is
-# pushed again, but never cancel a main push (that run is the post-merge
-# verification of an already-shipped commit).
+# Same rationale, and the same pending-run caveat, as ci.yml: supersede an
+# in-flight PR run when the branch is pushed again, but never drop a main push.
+# Pushes are keyed on the SHA rather than the ref because `cancel-in-progress:
+# false` only protects a RUNNING run -- a PENDING one is cancelled when a newer
+# run queues into the same group. See the longer note in ci.yml.
 concurrency:
-  group: frontend-${{ github.workflow }}-${{ github.ref }}
+  group: frontend-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

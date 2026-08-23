@@ -12,12 +12,25 @@ on:
 # 219 PR runs (13%) were still executing when the next push landed, and a single
 # iterating branch racked up 23 runs.
 #
-# `cancel-in-progress` is deliberately PR-ONLY. A push to main is the
-# post-merge verification of a commit that is already shipped -- cancelling it
-# because the next merge arrived would silently drop the signal for the commit
-# in between, which is exactly when you want it.
+# A push to main is the post-merge verification of a commit that is already
+# shipped, so it must never be dropped: losing the signal for the commit in
+# between two merges is exactly when you want it.
+#
+# `cancel-in-progress: false` is NOT enough to guarantee that. It protects a
+# RUNNING run; GitHub keeps at most one running plus one PENDING run per group
+# and, quoting the workflow-syntax docs, "any existing `pending` job or workflow
+# in the same concurrency group will be canceled and the new queued job or
+# workflow will take its place". So with every main push sharing one
+# ref-keyed group, three merges landing inside one run duration silently cancel
+# the middle commit's queued run. Not hypothetical here: 6 of the last 120 main
+# pushes sat in a 3-merges-within-5-minutes window, one burst landing five
+# merges ~15s apart.
+#
+# Keying pushes on the SHA gives every main commit its own group, so it can
+# never be the pending run that gets displaced. PRs stay keyed on the ref, which
+# is what makes a new push supersede the previous run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
