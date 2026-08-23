@@ -279,7 +279,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
-    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR; the *replacement* is now CI-enforced on any version-raising PR, the *tagging* still is not)
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since v0.90.1)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR; the *replacement* is now CI-enforced on any version-raising PR, the *tagging* still is not)
     - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
@@ -392,7 +392,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   applies retroactively to `auth login --register-projects` (now suffixes on an alias collision
 #   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
 #   section 4.5 for the full design.
-# `auth` over `kbagent serve` (since vNEXT): `register-projects` / `status` / the project-candidate
+# `auth` over `kbagent serve` (since v0.90.1): `register-projects` / `status` / the project-candidate
 #   listing get a `server/routers/auth.py` counterpart -- `POST /auth/register-projects`,
 #   `GET /auth/status`, `GET /auth/projects` (the interactive picker's data source; no CLI leaf
 #   command of its own). `login` / `login-password` / `logout` deliberately have NO endpoint -- a
@@ -497,6 +497,11 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
 kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
+# job list (0.90.1+, #675): without --project the multi-project fan-out is merged GLOBALLY by
+#   --sort-by/--sort-order (default startTime desc), missing values last in both directions,
+#   deterministic (project_alias, id) tiebreak. Before 0.90.1 rows came back grouped alias-then-id,
+#   which destroyed the chronological order the fan-out exists to produce. Same change applies to
+#   `kbagent serve`'s GET /jobs. Anything relying on per-project blocks must group them itself.
 kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]

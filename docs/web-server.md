@@ -99,7 +99,7 @@ The routers group into the categories declared in
 the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
 same `agents.json`); what is serve-only there is the cron loop, so a
 scheduled task fires only while the server runs. `auth` mirrors only the
-read/audit half of `kbagent auth` *(since vNEXT)* — `login` /
+read/audit half of `kbagent auth` *(since v0.90.1)* — `login` /
 `login-password` / `logout` deliberately have no endpoint — and it is so far
 the only router that enforces the permission policy; see "`/auth/*` — three
 read/audit endpoints, three deliberate gaps" below.
@@ -465,10 +465,10 @@ a session-backed project from the web UI at all:
 For a project you would rather not expose this way, register it with a static
 Storage token (`kbagent project add --token`) — that path has neither property.
 
-### `/auth/*` — three read/audit endpoints, three deliberate gaps *(since vNEXT)*
+### `/auth/*` — three read/audit endpoints, three deliberate gaps
 
-`kbagent auth` now has a `server/routers/auth.py` counterpart, but it mirrors
-only the read/audit half of the CLI group:
+*(since v0.90.1)* `kbagent auth` now has a `server/routers/auth.py` counterpart,
+but it mirrors only the read/audit half of the CLI group:
 
 | Endpoint | CLI equivalent | Permission op |
 |---|---|---|

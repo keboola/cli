@@ -37,6 +37,41 @@ export interface WhatsNewRelease {
 
 export const WHATS_NEW: WhatsNewRelease[] = [
   {
+    version: "0.90.1",
+    items: [
+      {
+        title: "All your jobs, one feed",
+        body:
+          "The Jobs page now has an All projects button that merges every registered " +
+          "project into a single chronological feed \u2014 with a project column, credit " +
+          "estimates per row and a running total over whatever the filter is showing. " +
+          "The detail drawer, re-run and terminate all work from there.",
+      },
+      {
+        title: "Audit every token at once",
+        body:
+          "Tokens gained the same cross-project view: one read-only list over all projects, " +
+          "dormant tokens sorted first so reading order is cleanup order. Click a row to " +
+          "jump into that project, where mint, rotate and revoke live.",
+      },
+      {
+        title: "Search that says what it skipped",
+        body:
+          "The Search page is now a proper console \u2014 one input, a names/config-bodies " +
+          "toggle and type filter pills. Projects it could not search (expired session, " +
+          "missing feature) are called out instead of silently rendering zero hits, and " +
+          "every result deep-links to where it lives.",
+      },
+      {
+        title: "A changelog you can skim",
+        body:
+          "The Changelog page reads as a release timeline: each note collapses to its " +
+          "headline, badges tell New from Fix from BREAKING at a glance, PR numbers link " +
+          "out, and the version you are running is marked on the rail.",
+      },
+    ],
+  },
+  {
     version: "0.90.0",
     items: [
       {
