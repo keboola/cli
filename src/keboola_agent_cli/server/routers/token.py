@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..dependencies import ServiceRegistry, get_registry
@@ -30,6 +30,28 @@ class CreateTokenBody(BaseModel):
 
 class TokenIdBody(BaseModel):
     token_id: str
+
+
+@router.get("/list", summary="List Storage tokens across projects")
+def list_tokens_all(
+    project: list[str] | None = Query(None),
+    with_last_used: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List tokens across one, many, or all registered projects.
+
+    No CLI counterpart (`kbagent token list` is single-project); this exists
+    for the web UI's cross-project token audit. `project` is repeatable
+    (`?project=a&project=b`); omitting it queries every registered project,
+    matching the `GET /jobs` / `GET /billing/credits` convention. Every token
+    row and every error entry carries `project_alias`.
+
+    `with_last_used` mirrors the single-project flag, but the per-token cost
+    now multiplies: one extra Storage API call PER TOKEN PER PROJECT. It also
+    switches the tokens' sort order from "grouped by project" to a single
+    dormant-first order spanning every project's tokens together.
+    """
+    return registry.token.list_tokens_all(aliases=project, with_last_used=with_last_used)
 
 
 @router.get("/{project}/list", summary="List the project's Storage tokens")

@@ -1,13 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, Globe, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import type { Column } from "../components/Table";
 import { useUIState } from "../state";
+import {
+  errMessage,
+  LAST_USED_CAVEAT,
+  ScopeCell,
+  StatusCell,
+  type TokenEntry,
+} from "./tokensShared";
 
 /**
  * Scoped Storage tokens -- the UI half of `kbagent token list|create|delete|refresh`.
@@ -27,25 +34,11 @@ import { useUIState } from "../state";
  * 2. **The secret is shown exactly once.** `create` and `refresh` are the only
  *    responses that ever carry a `token` value; the listing strips it. Nothing
  *    persists it, so the reveal panel is the user's single chance to copy it.
+ *
+ * The read-only vocabulary this page shares with the cross-project audit view
+ * (`TokensAll`) lives in `tokensShared.tsx`; the mutations below stay here,
+ * because each of them is scoped to one project's token.
  */
-
-interface TokenEntry {
-  id: string | number;
-  description?: string;
-  created?: string;
-  refreshed?: string;
-  expires?: string | null;
-  isMasterToken?: boolean;
-  canManageTokens?: boolean;
-  canReadAllFileUploads?: boolean;
-  bucketPermissions?: Record<string, string>;
-  componentAccess?: string[];
-  // present only with with_last_used=true
-  lastUsed?: string | null;
-  lastUsedEvent?: string | null;
-  lastUsedStatus?: "used" | "never" | "unknown" | "error";
-  [key: string]: unknown;
-}
 
 interface TokenListResp {
   alias: string;
@@ -70,24 +63,6 @@ interface RevealedSecret {
   subtitle: string;
 }
 
-const LAST_USED_CAVEAT =
-  "one extra API call per token ・ dev-branch activity is invisible (the events endpoint always resolves to the default branch)";
-
-const STATUS_TITLES: Record<string, string> = {
-  used: "This token performed at least one event -- the date is its most recent one.",
-  never:
-    "Minted INSIDE the ~6-month event retention window with no activity since -- proven unused.",
-  unknown:
-    "Older than the ~6-month event retention window -- the API cannot say whether it was used.",
-  error: "The per-token lookup failed; this row degraded so the rest of the audit could complete.",
-};
-
-function errMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 /** "a, b , ,c" -> ["a","b","c"]; empty input -> undefined (key omitted from the body). */
 function splitList(raw: string): string[] | undefined {
   const items = raw
@@ -97,44 +72,8 @@ function splitList(raw: string): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
-function ScopeCell({ t }: { t: TokenEntry }) {
-  const buckets = Object.keys(t.bucketPermissions ?? {}).length;
-  const components = (t.componentAccess ?? []).length;
-  if (t.isMasterToken) return <span className="nerd-pill-amber">master</span>;
-  if (t.canManageTokens) return <span className="nerd-pill-amber">manage tokens</span>;
-  if (buckets === 0 && components === 0) {
-    return <span className="text-zinc-500 dark:text-zinc-600">—</span>;
-  }
-  return (
-    <span className="text-xs text-zinc-600 dark:text-zinc-400">
-      {buckets > 0 ? `${buckets} bucket(s)` : "—"}
-      {components > 0 ? ` ・ ${components} component(s)` : ""}
-    </span>
-  );
-}
-
-function StatusCell({ t }: { t: TokenEntry }) {
-  // A real date (or an explicit "used") is the only green case. `never` and
-  // `unknown` are deliberately NOT collapsed -- "proven unused, safe to revoke"
-  // and "the API cannot say" lead to opposite decisions.
-  const status = t.lastUsedStatus ?? (t.lastUsed ? "used" : "unknown");
-  const cls =
-    status === "used"
-      ? "nerd-pill-green"
-      : status === "never"
-        ? "nerd-pill-amber"
-        : status === "error"
-          ? "nerd-pill-red"
-          : "nerd-pill";
-  return (
-    <span className={cls} title={STATUS_TITLES[status] ?? status}>
-      {status}
-    </span>
-  );
-}
-
 export function TokensPage() {
-  const { project } = useUIState();
+  const { project, setPage } = useUIState();
   const qc = useQueryClient();
   const [withLastUsed, setWithLastUsed] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -269,17 +208,27 @@ export function TokensPage() {
         title="Tokens"
         description={`Scoped Storage API tokens in ${project ?? "(no project)"}. Secrets are revealed once, at mint -- kbagent never stores them.`}
         actions={
-          <button
-            type="button"
-            className="nerd-btn flex items-center gap-1 hover:text-keboola"
-            disabled={!project}
-            onClick={() => {
-              setSecret(null);
-              setShowCreate(true);
-            }}
-          >
-            <Plus className="w-3 h-3" /> Create token
-          </button>
+          <>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1"
+              title="Audit tokens across every registered project (read-only)"
+              onClick={() => setPage("tokens-all")}
+            >
+              <Globe className="w-3 h-3" /> All projects
+            </button>
+            <button
+              type="button"
+              className="nerd-btn flex items-center gap-1 hover:text-keboola"
+              disabled={!project}
+              onClick={() => {
+                setSecret(null);
+                setShowCreate(true);
+              }}
+            >
+              <Plus className="w-3 h-3" /> Create token
+            </button>
+          </>
         }
       />
 

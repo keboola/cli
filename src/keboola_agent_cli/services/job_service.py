@@ -33,6 +33,103 @@ logger = logging.getLogger(__name__)
 # Terminal statuses for which we surface a log-tail.
 _LOG_TAIL_STATUSES: frozenset[str] = frozenset({"error", "warning", "terminated"})
 
+# Time-valued Queue API sort fields; compare lexicographically as ISO 8601
+# strings, so plain string ordering already yields chronological order.
+_TIME_SORT_FIELDS: frozenset[str] = frozenset({"startTime", "endTime", "createdTime"})
+
+
+class _DescStr:
+    """Wraps a string so an ascending tuple-key sort yields descending order.
+
+    ``list.sort`` only exposes one ``reverse`` flag for the whole key, but
+    our key tuple mixes a direction-agnostic "is this value missing"
+    marker (always ascending, so missing rows land last regardless of
+    ``sort_order``) with a direction-sensitive field value. Numeric fields
+    handle that by negating the number for descending order; strings
+    (timestamps, non-numeric ids) can't be negated, so they get wrapped
+    in this instead -- it inverts ``__lt__`` so plain ascending sort of
+    the wrapper produces descending string order.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __lt__(self, other: "_DescStr") -> bool:
+        return other.value < self.value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _DescStr) and self.value == other.value
+
+
+def _job_sort_key(job: dict[str, Any], sort_by: str, sort_order: str) -> tuple[int, Any, str, str]:
+    """Build a sort key so a single ``list.sort(key=...)`` call yields the
+    globally-correct chronological (or field-appropriate) merge order
+    across all queried projects.
+
+    Returns a 4-tuple ``(missing_flag, primary, project_alias, id)``:
+
+    - ``missing_flag``: ``0`` when the requested field has a usable value,
+      ``1`` when it is absent/None/uncoercible. Always compared ascending
+      (this key tuple is never sorted with ``reverse=True``), so missing
+      rows sort LAST for both "asc" and "desc" -- a job without
+      ``startTime`` (e.g. still ``waiting``) is "not yet comparable", not
+      "the oldest job".
+    - ``primary``: the field's own value, pre-transformed (negated for
+      numeric fields, wrapped in :class:`_DescStr` for string fields) so
+      that a single ascending sort already reflects ``sort_order``.
+    - ``project_alias`` / ``id``: the deterministic tiebreak. It resolves
+      ties on equal field values AND orders the missing-value group
+      itself (whose ``primary`` slot is a fixed placeholder).
+
+    Never raises: Queue API rows are untyped dicts, so every field access
+    is defensively coerced.
+    """
+    desc = sort_order == "desc"
+    alias = str(job.get("project_alias", ""))
+    id_tiebreak = str(job.get("id", ""))
+
+    if sort_by == "durationSeconds":
+        raw = job.get("durationSeconds")
+        try:
+            numeric = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            numeric = None
+        if numeric is None:
+            return (1, 0.0, alias, id_tiebreak)
+        return (0, -numeric if desc else numeric, alias, id_tiebreak)
+
+    if sort_by == "id":
+        raw = job.get("id")
+        if raw is None or raw == "":
+            return (1, (1, ""), alias, id_tiebreak)
+        try:
+            numeric_id = float(raw)
+        except (TypeError, ValueError):
+            # Non-numeric id: string fallback, grouped after the numeric
+            # group via the leading 1 marker (mixed id types never need
+            # to compare against each other directly).
+            return (0, (1, _DescStr(str(raw)) if desc else str(raw)), alias, id_tiebreak)
+        return (0, (0, -numeric_id if desc else numeric_id), alias, id_tiebreak)
+
+    if sort_by in _TIME_SORT_FIELDS:
+        raw = job.get(sort_by)
+        if not raw:
+            return (1, "", alias, id_tiebreak)
+        text = str(raw)
+        return (0, _DescStr(text) if desc else text, alias, id_tiebreak)
+
+    # Defensive fallback for an unexpected sort_by (should not happen --
+    # commands/job.py validates against JOB_SORT_FIELDS before this is
+    # ever called). Treat like a generic missing/string field so we
+    # degrade to the tiebreak order instead of crashing.
+    raw = job.get(sort_by)
+    if raw is None:
+        return (1, "", alias, id_tiebreak)
+    text = str(raw)
+    return (0, _DescStr(text) if desc else text, alias, id_tiebreak)
+
 
 def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     """Fetch the last ``limit`` events for a job; never raises.
@@ -258,6 +355,21 @@ class JobService(BaseService):
         aggregates results into a unified list. Per-project errors are
         collected but do not stop other projects from being queried.
 
+        Each project's page is already sorted server-side by ``sort_by``/
+        ``sort_order``, but merging several already-sorted pages by simple
+        concatenation would leave the aggregate grouped by project instead
+        of globally ordered. The merged ``jobs`` list is therefore
+        re-sorted client-side by the SAME ``sort_by``/``sort_order`` the
+        caller asked for -- e.g. the default ``startTime desc`` gives a
+        single chronological feed interleaved across every project, which
+        is what both the CLI's multi-project ``job list`` and the
+        cross-project "All Jobs" ``serve`` view need. A job missing the
+        requested field (e.g. a ``waiting`` job has no ``startTime`` yet)
+        sorts LAST regardless of ``sort_order`` -- it is "not yet
+        comparable", not "the oldest job". Ties (including the entire
+        missing-value group) break deterministically on
+        ``(project_alias, str(id))``. See ``_job_sort_key``.
+
         Args:
             aliases: Project aliases to query. None means all projects.
             component_id: Optional filter by component ID.
@@ -270,7 +382,8 @@ class JobService(BaseService):
 
         Returns:
             Dict with keys:
-                - "jobs": list of job dicts with project_alias added
+                - "jobs": list of job dicts with project_alias added,
+                  globally sorted by sort_by/sort_order (missing values last)
                 - "errors": list of error dicts with project_alias,
                   error_code, message
 
@@ -299,8 +412,13 @@ class JobService(BaseService):
         for _alias, jobs, _ok in successes:
             all_jobs.extend(jobs)
 
-        # Sort for deterministic output
-        all_jobs.sort(key=lambda j: (j.get("project_alias", ""), str(j.get("id", ""))))
+        # Merge into one globally-ordered feed. Each project's Queue API
+        # call already sorted its own page server-side, but naively
+        # concatenating those pages leaves the aggregate grouped by
+        # project instead of chronological (or whatever sort_by asks
+        # for) -- see _job_sort_key for the missing-value / tiebreak
+        # semantics.
+        all_jobs.sort(key=lambda j: _job_sort_key(j, sort_by, sort_order))
         errors.sort(key=lambda e: e.get("project_alias", ""))
 
         return {"jobs": all_jobs, "errors": errors}
