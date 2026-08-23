@@ -53,6 +53,19 @@ function jobLabel(job: Job): string {
   return job.config ? `${job.component} ・ config ${job.config}` : job.component;
 }
 
+/**
+ * The job's branch as the `JobRun` body wants it: an integer, or `undefined`
+ * for the default branch. The Queue API is inconsistent about whether
+ * `branchId` arrives numeric or as a string, and the router declares
+ * `branch_id: int | None`, so anything non-numeric is dropped rather than
+ * sent as a value FastAPI would reject.
+ */
+function jobBranchId(job: Job): number | undefined {
+  if (job.branchId === null || job.branchId === undefined) return undefined;
+  const n = Number(job.branchId);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export function JobsPage() {
   const { project } = useUIState();
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
@@ -147,10 +160,12 @@ export function JobsPage() {
  * Per-job Re-run / Terminate actions, shared by the table row and the detail
  * drawer header.
  *
- * Re-run posts the job's OWN component + config to `POST /jobs/{p}/run`, i.e.
- * it starts a fresh job from the configuration as it stands NOW -- it does not
- * replay the historical `configData` the old job ran with. That is the same
- * semantics as `kbagent job run`, and the only thing the Queue API offers.
+ * Re-run posts the job's OWN component + config + branch to
+ * `POST /jobs/{p}/run`, i.e. it starts a fresh job from the configuration as
+ * it stands NOW -- it does not replay the historical `configData` the old job
+ * ran with. That is the same semantics as `kbagent job run`, and the only
+ * thing the Queue API offers. The branch IS preserved, though: see
+ * `jobBranchId` and the comment on the mutation body.
  *
  * Terminate goes through `POST /jobs/{p}/terminate` with an explicit
  * `job_ids` list; the filter form of that endpoint (status / component) is
@@ -171,6 +186,12 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
       api.post(`/jobs/${encodeURIComponent(job.project_alias)}/run`, {
         component_id: job.component,
         config_id: job.config,
+        // Branch fidelity: omitting this resolves to the DEFAULT branch
+        // server-side, so a job that originally ran against a dev-branch
+        // config would silently re-run against the production one -- a
+        // different configuration, writing to different tables. The row
+        // already carries the branch, so pass it straight back.
+        branch_id: jobBranchId(job),
       }),
     onError: (e) => setError((e as Error).message),
     onSuccess: () => {
@@ -217,7 +238,11 @@ function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
           className={`${btn} hover:text-keboola`}
           disabled={rerun.isPending}
           onClick={() => rerun.mutate()}
-          title={`Start a new job for ${job.component} / ${job.config}`}
+          // Name the branch in the tooltip: the whole point of threading
+          // branch_id through is that the user can trust where this lands.
+          title={`Start a new job for ${job.component} / ${job.config} on ${
+            jobBranchId(job) === undefined ? "the default branch" : `branch #${jobBranchId(job)}`
+          }`}
         >
           <RotateCw className={`w-3 h-3 ${rerun.isPending ? "animate-spin" : ""}`} />
           {rerun.isPending ? "starting…" : "re-run"}
