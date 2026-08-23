@@ -392,6 +392,16 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   applies retroactively to `auth login --register-projects` (now suffixes on an alias collision
 #   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
 #   section 4.5 for the full design.
+# `auth` over `kbagent serve` (since vNEXT): `register-projects` / `status` / the project-candidate
+#   listing get a `server/routers/auth.py` counterpart -- `POST /auth/register-projects`,
+#   `GET /auth/status`, `GET /auth/projects` (the interactive picker's data source; no CLI leaf
+#   command of its own). `login` / `login-password` / `logout` deliberately have NO endpoint -- a
+#   browser login only completes on the host, a password grant must never sit behind the serve
+#   bearer token, and revoking the session is a host-operator action, not a remote one. `/auth/*`
+#   is also the FIRST router to enforce the `permissions` policy (`--deny-writes` /
+#   `--deny-destructive` included): every route declares `Depends(require_permission(...))`, so a
+#   denial answers HTTP 403 `PERMISSION_DENIED` over REST exactly as on the CLI. The other ~30
+#   routers do not check the engine yet. See docs/web-server.md.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list

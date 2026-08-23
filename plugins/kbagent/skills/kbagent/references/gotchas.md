@@ -4471,3 +4471,27 @@ though single-project `job list` looked correctly time-ordered.
 - Single-project `job list` is unaffected in practice (its one page was
   already server-sorted); the fix only changes behavior once 2+ projects are
   queried together.
+
+## `kbagent serve` permission enforcement is `/auth/*`-only so far (since vNEXT)
+
+`create_app` builds a `PermissionEngine` from the persisted `permissions`
+policy by default, and `kbagent serve` passes its own CLI session engine
+instead -- so `--deny-writes` / `--deny-destructive` on the `serve` invocation
+apply too. But of the ~30 routers, only the three `/auth/*` routes
+(`server/routers/auth.py`) declare `Depends(require_permission(...))` -- see
+`docs/web-server.md` for the endpoint shapes.
+
+- **A deny policy does NOT firewall the whole REST surface.**
+  `permissions set --mode deny --deny cli:write` blocks `POST
+  /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
+  does nothing to `POST /storage/tables/{project}` (create a table) or any
+  other write route on any other router -- those still execute unchecked.
+- `GET /auth/projects` backs a registry key (`auth.projects`) with no CLI leaf
+  command -- `auth register-projects`'s interactive picker is its terminal
+  equivalent. It is exempted from `scripts/check_command_sync.py`'s dead-key
+  check via `SERVE_ONLY_OPERATIONS` in `permissions.py`; see CONTRIBUTING.md's
+  command-sync gate section for the general rule when adding another
+  serve-only operation.
+- Treat this as a gap being closed incrementally, not the design end state:
+  today a deny policy or `--deny-writes` on `serve` gates only `/auth/*`, not
+  the ~30 other routers a session token can otherwise reach.

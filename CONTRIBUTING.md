@@ -824,9 +824,13 @@ live Typer command tree as the single source of truth and fails if any command
 is missing from `permissions.py` `OPERATION_REGISTRY`, `CLAUDE.md`
 `## All CLI Commands`, `commands/context.py` `AGENT_CONTEXT`, or
 `commands-reference.md`. It also flags dead `OPERATION_REGISTRY` keys (renamed /
-removed commands). This is the deterministic half of the "Plugin synchronization
-map" -- the judgement half (is a behaviour change worth a new gotcha? is the
-`(since vX.Y.Z)` tag right?) is left to `/kbagent:review`.
+removed commands). A registry key that intentionally has no CLI leaf command --
+e.g. a `kbagent serve`-only REST operation like `auth.projects` -- must be
+added to `SERVE_ONLY_OPERATIONS` in `permissions.py`, which the script
+subtracts before that dead-key check; otherwise it fails CI as if the command
+had been renamed or removed. This is the deterministic half of the "Plugin
+synchronization map" -- the judgement half (is a behaviour change worth a new
+gotcha? is the `(since vX.Y.Z)` tag right?) is left to `/kbagent:review`.
 
 ### `.github/workflows/e2e.yml` -- nightly + on-demand (NOT per-PR)
 

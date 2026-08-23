@@ -86,7 +86,7 @@ The routers group into the categories declared in
 
 | Category | Routers |
 |---|---|
-| Project Management | `projects` `members` `org` `feature` `billing` `token` |
+| Project Management | `auth` `projects` `members` `org` `feature` `billing` `token` |
 | Configurations | `configs` `components` `transformations` `encrypt` |
 | Data | `storage` `stream` `search` `sharing` |
 | Execution | `jobs` `flows` `schedules` `notifications` `data-apps` `workspaces` |
@@ -98,13 +98,16 @@ The routers group into the categories declared in
 `ai-chat` is the one router with no CLI counterpart — it exists to stream
 the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
 same `agents.json`); what is serve-only there is the cron loop, so a
-scheduled task fires only while the server runs.
+scheduled task fires only while the server runs. `auth` mirrors only the
+read/audit half of `kbagent auth` *(since vNEXT)* — `login` /
+`login-password` / `logout` deliberately have no endpoint — and it is so far
+the only router that enforces the permission policy; see "`/auth/*` — three
+read/audit endpoints, three deliberate gaps" below.
 
-Going the other way, several CLI surfaces are deliberately CLI-only:
-`auth` (see "The `auth` command group has no REST router" below), `sync`
+Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
 (filesystem-local by design), `permissions`, and `init`. The mirrors still
 considered missing are tracked in #657, and the fact that `permissions`
-does not constrain serve at all is #655.
+constrains only `/auth/*` and not the other ~30 routers is #655.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
@@ -462,19 +465,61 @@ a session-backed project from the web UI at all:
 For a project you would rather not expose this way, register it with a static
 Storage token (`kbagent project add --token`) — that path has neither property.
 
-### The `auth` command group has no REST router — including `login-password`
+### `/auth/*` — three read/audit endpoints, three deliberate gaps *(since vNEXT)*
 
-`kbagent auth login` / `login-password` / `status` / `logout` /
-`register-projects` have no `server/routers/auth.py` counterpart; this is a
-whole-group skip (CONTRIBUTING.md's 1:1 CLI/REST convention), not a per-command
-gap. It is a deliberate omission for `login-password` specifically: exposing a
-password grant over `serve` would let whoever holds `KBAGENT_SERVE_TOKEN`
-submit arbitrary account credentials through this process, which is a strictly
-worse blast radius than the existing "serve token borrows a session identity"
-tradeoff above — that one requires a session to already exist; this one would
-let a caller mint one. Sign in via the CLI directly (`kbagent auth
-login-password`, or `auth login` for a human), then register the resulting
-session's projects for `serve` to use.
+`kbagent auth` now has a `server/routers/auth.py` counterpart, but it mirrors
+only the read/audit half of the CLI group:
+
+| Endpoint | CLI equivalent | Permission op |
+|---|---|---|
+| `GET /auth/projects?stack=` | the interactive picker inside `auth register-projects` (no CLI leaf command of its own) | `auth.projects` (read) |
+| `POST /auth/register-projects` | `auth register-projects --all` / `--project-id ID ...` | `auth.register-projects` (write) |
+| `GET /auth/status?stack=` | `auth status` | `auth.status` (read) |
+
+`POST /auth/register-projects` takes a body of `{stack?, all?, project_ids?,
+aliases?}` (`all` is the wire alias for the service's `select_all`; `aliases`
+maps a numeric project id to an alias override, coerced from the JSON body's
+string keys) and returns the same `registered` / `exists` / `skipped`
+per-project statuses the CLI prints — an existing alias is never overwritten.
+None of the three response shapes (`ProjectCandidatesResult`,
+`RegisterProjectsResult`, `AuthStatusResult`) ever carries a token value,
+including the `kbc-session://` sentinel.
+
+`/auth/*` is also the **first router to enforce the permission policy**: every
+route above declares `Depends(require_permission(...))`, so a `--deny-writes`
+session (or a persisted `permissions set --mode deny` policy) blocks `POST
+/auth/register-projects` over REST exactly as it blocks the CLI command. A
+denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` — same code
+the CLI exits on. The other ~30 routers do not check the engine yet; see the
+gotchas entry on this before assuming a deny policy firewalls the whole REST
+surface. A missing or expired session on any of the three (most visibly `GET
+/auth/status`) still answers **HTTP 401** with `SESSION_EXPIRED` /
+`SESSION_NOT_FOUND`, same as every other session-project failure documented
+above.
+
+Registering a project through `POST /auth/register-projects` writes the same
+`kbc-session://<project_id>` sentinel `auth login --register-projects` would —
+so whoever holds `KBAGENT_SERVE_TOKEN` can grow the set of session-backed
+projects this server exposes, still acting as the signed-in user for all of
+them, per "Session-registered projects" above.
+
+`login` / `login-password` / `logout` deliberately have **no** endpoint:
+
+- `auth login` opens a browser (or prints a device-flow code) on the host and
+  only completes there — a REST caller has no way to sit in that loop.
+- `auth login-password` takes a plaintext password (and, for MFA accounts, a
+  TOTP seed) meant to flow from a CI secrets store into one `kbagent` CLI
+  invocation, never as a REST request body sitting behind this server's own
+  bearer token.
+- `auth logout` revokes the live session backing every session-registered
+  project reachable through this very server. Destroying that session is a
+  deliberate host-operator action taken at the CLI, not something a REST
+  client holding the serve bearer token should be able to trigger remotely.
+
+Sign in via the CLI directly (`kbagent auth login-password`, or `auth login`
+for a human), then use `POST /auth/register-projects` — or `auth
+register-projects` on the CLI — to register the resulting session's projects
+for `serve` to use.
 
 ### Manage tokens are per-request
 
