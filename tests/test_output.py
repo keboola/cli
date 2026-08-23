@@ -232,7 +232,7 @@ class TestFormatJobsTable:
                     "id": 1001,
                     "status": "success",
                     "component": "keboola.ex-db-snowflake",
-                    "configId": "101",
+                    "config": "101",
                     "createdTime": "2026-02-26T10:00:00Z",
                     "durationSeconds": 45,
                     "project_alias": "prod",
@@ -241,7 +241,7 @@ class TestFormatJobsTable:
                     "id": 1002,
                     "status": "error",
                     "component": "keboola.wr-db-snowflake",
-                    "configId": "201",
+                    "config": "201",
                     "createdTime": "2026-02-26T11:00:00Z",
                     "durationSeconds": 120,
                     "project_alias": "prod",
@@ -262,6 +262,10 @@ class TestFormatJobsTable:
         assert "error" in output
         assert "45s" in output
         assert "2m 0s" in output
+        # Config column must show the Queue API's `config` field (it used to
+        # read a nonexistent `configId` key and render blank).
+        assert "101" in output
+        assert "201" in output
 
     def test_jobs_table_empty_jobs(self) -> None:
         """format_jobs_table shows helpful message when no jobs found."""
@@ -304,7 +308,7 @@ class TestFormatJobsTable:
                     "id": 1001,
                     "status": "success",
                     "component": "comp-a",
-                    "configId": "1",
+                    "config": "1",
                     "createdTime": "2026-02-26T10:00:00Z",
                     "durationSeconds": 10,
                     "project_alias": "prod",
@@ -313,7 +317,7 @@ class TestFormatJobsTable:
                     "id": 2001,
                     "status": "processing",
                     "component": "comp-b",
-                    "configId": "2",
+                    "config": "2",
                     "createdTime": "2026-02-26T12:00:00Z",
                     "project_alias": "dev",
                 },
@@ -337,7 +341,7 @@ class TestFormatJobsTable:
                     "id": 1,
                     "status": "success",
                     "component": "c",
-                    "configId": "1",
+                    "config": "1",
                     "createdTime": "2026-01-01T00:00:00Z",
                     "durationSeconds": 3661,  # 1h 1m
                     "project_alias": "x",
@@ -360,7 +364,7 @@ class TestFormatJobsTable:
                     "id": 1,
                     "status": "processing",
                     "component": "c",
-                    "configId": "1",
+                    "config": "1",
                     "createdTime": "2026-01-01T00:00:00Z",
                     "project_alias": "x",
                 },
