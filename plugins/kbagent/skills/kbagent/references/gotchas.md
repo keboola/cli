@@ -4412,3 +4412,23 @@ looked like an upstream outage worth retrying.
 - **Over `serve`, a `KeboolaApiError` with code `NOT_FOUND` now answers HTTP
   404, not 502** (all routers, not just components). Branch on
   `error.code`, not on the HTTP status alone.
+
+## `component detail` / `config new` without `--project` really uses the first project (since vNEXT)
+
+`component detail --component-id ID` and `config new --component-id ID`
+(scaffold-only, no `--push`) have always documented `--project` as optional
+("uses first available if not set" / "for AI Service auth; required with
+--push"). On every version before vNEXT that promise was broken: omitting the
+flag failed with `CONFIG_ERROR: Project 'None' not found ...`, because the
+omitted alias was passed into project resolution as a literal `None` element
+and took the strict-lookup path instead of the "first available project"
+fallback (`config examples` already resolved it correctly).
+
+- **vNEXT+**: omitting `--project` resolves to the first configured project;
+  `component detail`'s `project_alias` reports the alias actually used (never
+  `None`). With NO projects configured at all, the failure is an actionable
+  `CONFIG_ERROR: No projects configured. Use 'kbagent project add' ...`.
+- **<= 0.89.x**: pass `--project` explicitly to these two commands -- the help
+  text's "first available" promise does not work there.
+- `component sync-action` is unaffected: its `--project` is genuinely required
+  (exit 2 without it) on every version.
