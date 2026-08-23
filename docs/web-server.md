@@ -492,10 +492,24 @@ session (or a persisted `permissions set --mode deny` policy) blocks `POST
 denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` — same code
 the CLI exits on. The other ~30 routers do not check the engine yet; see the
 gotchas entry on this before assuming a deny policy firewalls the whole REST
-surface. A missing or expired session on any of the three (most visibly `GET
-/auth/status`) still answers **HTTP 401** with `SESSION_EXPIRED` /
-`SESSION_NOT_FOUND`, same as every other session-project failure documented
-above.
+surface.
+
+A missing or expired session reaches `GET /auth/projects` and `POST
+/auth/register-projects` as a **thrown error**, both funnelled through
+`AuthService._introspect_accessible_projects`: no stored session raises
+`SESSION_NOT_FOUND`, a stored session whose refresh fails raises
+`SESSION_EXPIRED` (via `provider.introspect()`) — both answer **HTTP 401**,
+same as every other session-project failure documented above. `GET
+/auth/status` is the deliberate exception: it is the probe you call *to find
+out* whether a session is dead, so it must not itself fail that way.
+`AuthService.status()` catches both cases and always answers **HTTP 200**,
+reporting session health in the response body's `status` field instead —
+`"missing"` (no stored session), `"expired"` (refresh failed),
+`"degraded"` (the auth service was unreachable; locally stored data is shown),
+`"refreshed"` (introspection rotated the access token), or `"live"`. A client
+that wants to detect a dead session by branching on the HTTP status code must
+call `/auth/projects` or `/auth/register-projects`, not `/auth/status` — the
+latter always answers 200 and the caller must read `status` from the body.
 
 Registering a project through `POST /auth/register-projects` writes the same
 `kbc-session://<project_id>` sentinel `auth login --register-projects` would —
