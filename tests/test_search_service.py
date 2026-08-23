@@ -614,6 +614,122 @@ class TestSearchRegexThreading:
         mock_client.global_search.assert_not_called()
 
 
+class TestSearchScopes:
+    """`search --scope` narrows config-based hits to parts of the configuration.
+
+    Scopes are written the way they appear in a configuration body
+    (``parameters``, ``storage.input``) -- the ``configuration.`` /
+    ``rows[N].configuration.`` wrapper that ConfigService reports in
+    ``match_locations`` is normalised away first.
+    """
+
+    @staticmethod
+    def _mock_result(locations: list[str]) -> dict:
+        return {
+            "matches": [
+                {
+                    "project_alias": "prod",
+                    "component_id": "keboola.ex-db-snowflake",
+                    "config_id": "123",
+                    "config_name": "My Extractor",
+                    "description": "",
+                    "match_count": len(locations),
+                    "match_locations": locations,
+                }
+            ],
+            "errors": [],
+            "stats": {"projects_searched": 1, "configs_searched": 5, "matches_found": 1},
+        }
+
+    def _search_with_scopes(self, tmp_path: Path, locations: list[str], scopes: list[str]) -> dict:
+        store = _make_store(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        service = SearchService(config_store=store)
+        with patch("keboola_agent_cli.services.search_service.ConfigService") as MockConfigService:
+            mock_cs = MagicMock()
+            mock_cs.search_configs.return_value = self._mock_result(locations)
+            MockConfigService.return_value = mock_cs
+            return service.search(query="orders", search_type="config-based", scopes=scopes)
+
+    def test_scope_keeps_only_matching_locations(self, tmp_path: Path) -> None:
+        result = self._search_with_scopes(
+            tmp_path,
+            [
+                "configuration.parameters.db.host",
+                "configuration.storage.input.tables[0].source",
+            ],
+            ["storage.input"],
+        )
+
+        assert result["results"][0]["match_locations"] == [
+            "configuration.storage.input.tables[0].source"
+        ]
+        assert result["results"][0]["match_count"] == 1
+
+    def test_scope_matches_inside_config_rows(self, tmp_path: Path) -> None:
+        result = self._search_with_scopes(
+            tmp_path,
+            ["rows[2].configuration.storage.output.tables[0].destination"],
+            ["storage.output"],
+        )
+
+        assert result["results"][0]["match_count"] == 1
+
+    def test_scope_drops_configs_with_no_in_scope_match(self, tmp_path: Path) -> None:
+        result = self._search_with_scopes(
+            tmp_path, ["configuration.parameters.db.host"], ["storage.input"]
+        )
+
+        assert result["results"] == []
+        assert result["stats"]["results_found"] == 0
+
+    def test_scope_does_not_match_a_partial_segment(self, tmp_path: Path) -> None:
+        """`storage.in` must not match `storage.input` -- segment boundaries only."""
+        result = self._search_with_scopes(
+            tmp_path, ["configuration.storage.input.tables[0].source"], ["storage.in"]
+        )
+
+        assert result["results"] == []
+
+    def test_multiple_scopes_are_unioned(self, tmp_path: Path) -> None:
+        result = self._search_with_scopes(
+            tmp_path,
+            [
+                "configuration.parameters.db.host",
+                "configuration.storage.input.tables[0].source",
+                "configuration.storage.output.tables[0].destination",
+            ],
+            ["storage.input", "storage.output"],
+        )
+
+        assert result["results"][0]["match_count"] == 2
+
+    def test_top_level_field_match_is_out_of_scope(self, tmp_path: Path) -> None:
+        """`name`/`description` live outside the configuration body."""
+        result = self._search_with_scopes(tmp_path, ["description"], ["parameters"])
+
+        assert result["results"] == []
+
+    def test_no_scopes_keeps_every_location(self, tmp_path: Path) -> None:
+        result = self._search_with_scopes(
+            tmp_path,
+            ["configuration.parameters.db.host", "description"],
+            [],
+        )
+
+        assert result["results"][0]["match_count"] == 2
+
+    def test_scopes_with_textual_search_raises_config_error(self, tmp_path: Path) -> None:
+        """Validated in the service so the CLI and REST /search both inherit it."""
+        store = _make_store(tmp_path, {"prod": {}})
+        mock_client = _make_mock_client()
+        service = SearchService(config_store=store, client_factory=lambda url, tok: mock_client)
+
+        with pytest.raises(ConfigError, match="config-based"):
+            service.search(query="orders", search_type="textual", scopes=["parameters"])
+
+        mock_client.global_search.assert_not_called()
+
+
 class TestNormaliseMatchedColumns:
     """_normalise_item surfaces matchedColumns as matched_columns."""
 

@@ -30,6 +30,20 @@ from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..data_science_client import DataScienceClient
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+
+# Re-exported so existing `from ...data_app_service import _x` call sites
+# (tests included) keep resolving after the split into _data_app_bodies.py.
+from ._data_app_bodies import (
+    ENCRYPTED_PASSWORD_PREFIXES,
+    RESERVED_RUNTIME_ENV_VARS,
+    _auth_block_for,
+    _build_runtime_block,
+    _coerce_config_dict,
+    _derive_runtime_env_var_name,
+    _redact_git_block,
+    _redact_storage_config,
+    _secret_fingerprint,
+)
 from .base import BaseService, ClientFactory, project_error_entry
 from .encrypt_service import EncryptService
 
@@ -69,27 +83,6 @@ DEFAULT_AUTO_SUSPEND_SECONDS = 900
 
 # Slug must match the URL-safe segment used in the auto-minted hostname.
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
-
-# Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
-# ciphertext -- one variant per cloud, and exactly these three exist:
-# ``KBC::ProjectSecure::`` (AWS KMS), ``KBC::ProjectSecureGKMS::`` (Google KMS)
-# and ``KBC::ProjectSecureKV::`` (Azure Key Vault). All three are project-bound
-# and decrypt only with the originating project's key. The wider
-# ``ComponentSecure*`` / ``ConfigSecure*`` / ``ProjectWideSecure*`` scopes are
-# deliberately NOT accepted here -- they are not bound to this project.
-#
-# Source of truth: the platform's own cipher registry, keboola/keboola-operator
-# ``internal/encryptor/wrapper/registry.go`` (mirrored by the wrappers in
-# keboola/object-encryptor) and
-# https://developers.keboola.com/overview/encryption/. A fourth entry,
-# ``KBC::ProjectSecureKMS::``, was carried here from 0.27.0 but appears nowhere
-# in the platform -- the AWS wrapper is *named* ``PrefixProjectKMS`` while the
-# prefix it emits is plain ``KBC::ProjectSecure::``. Dropped in 0.86.0 (#607).
-ENCRYPTED_PASSWORD_PREFIXES: tuple[str, ...] = (
-    "KBC::ProjectSecure::",
-    "KBC::ProjectSecureGKMS::",
-    "KBC::ProjectSecureKV::",
-)
 
 # Defence-in-depth caps for free-form user input. The platform may accept
 # longer values, but kbagent refuses anything beyond these bounds at the
@@ -146,203 +139,6 @@ SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # operations must accept either, since ``secrets-list`` enumerates both. Only
 # the write path (``secrets-set``) keeps requiring ``#`` -- it encrypts.
 SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
-
-# Env vars the data-app runtime auto-injects. Setting a secret whose
-# derived env-var name collides with one of these is silently shadowed
-# at runtime by the platform value. See storage-access canon at
-# https://help.keboola.com/data-apps/storage-access/.
-#
-# TODO(0.28.x): verify exhaustive list against running data-app env in
-# follow-up. The runtime almost certainly injects more (BRANCH_ID,
-# QUERY_SERVICE_URL, KBC_WORKSPACE_MANIFEST_PATH appear in the
-# storage-access page; others may exist) but the canon-documented floor
-# is KBC_TOKEN + KBC_URL. Expanding this set adds WARNs that are less
-# likely to be false positives once verified live.
-RESERVED_RUNTIME_ENV_VARS: frozenset[str] = frozenset(
-    {
-        "KBC_TOKEN",
-        "KBC_URL",
-    }
-)
-
-
-def _derive_runtime_env_var_name(secret_key: str) -> str:
-    """Translate a ``#``-prefixed secret key into the runtime env-var name.
-
-    Rule from help.keboola.com/data-apps/python-js/: strip the leading
-    ``#``, replace ``-`` with ``_``, uppercase. Examples (verbatim from
-    the help canon):
-
-    - ``#KBC_TOKEN`` -> ``KBC_TOKEN``
-    - ``#my-custom-var`` -> ``MY_CUSTOM_VAR``
-    """
-    stripped = secret_key.lstrip("#")
-    return stripped.replace("-", "_").upper()
-
-
-def _secret_fingerprint(ciphertext: str) -> str:
-    """First 8 chars of the ciphertext payload after the ``KBC::*::`` prefix.
-
-    The full ciphertext is not a secret in the cryptographic sense (it
-    can only be decrypted by the project's KMS), but echoing it in full
-    invites copy-paste leakage into tickets and chat. The fingerprint is
-    enough to compare two ciphertexts without exposing the payload.
-    Returns empty string for non-ciphertext input.
-    """
-    if not isinstance(ciphertext, str):
-        return ""
-    for prefix in ENCRYPTED_PASSWORD_PREFIXES:
-        if ciphertext.startswith(prefix):
-            payload = ciphertext[len(prefix) :]
-            return payload[:8]
-    return ""
-
-
-def _build_simple_auth_block() -> dict[str, Any]:
-    """Authorization block for password-gated apps (writeup §11.2)."""
-    return {
-        "app_proxy": {
-            "auth_providers": [{"id": "simpleAuth", "type": "password"}],
-            "auth_rules": [
-                {
-                    "type": "pathPrefix",
-                    "value": "/",
-                    "auth_required": True,
-                    "auth": ["simpleAuth"],
-                }
-            ],
-        },
-    }
-
-
-def _build_public_auth_block() -> dict[str, Any]:
-    """Authorization block for publicly-accessible apps (no auth gate).
-
-    Mirrors the kbc-ui ``noneProxyAuthorization`` constant exactly.
-    Authoritative source — the public backend validator at
-    ``keboola/job-queue-job-configuration``
-    ``src/JobDefinition/Configuration/Authorization/AppProxyDefinition.php``
-    (when ``auth_required=false``, ``auth`` MUST NOT be set; see
-    https://github.com/keboola/job-queue-job-configuration). The
-    ``keboola/ui`` repo (private; Keboola org members only) corroborates:
-    its ``apps/kbc-ui/src/scripts/modules/data-apps/constants.ts``
-    exports this exact shape as ``noneProxyAuthorization`` for the
-    "None" UI option.
-
-    Without this block, ``--auth public`` shipped in 0.27.0 wrote no
-    ``authorization`` key at all -- the Keboola app-proxy refused to
-    route traffic and the UI's "Authentication Type" selector showed
-    blank. Fixed in 0.28.0.
-    """
-    return {
-        "app_proxy": {
-            "auth_providers": [],
-            "auth_rules": [
-                {
-                    "type": "pathPrefix",
-                    "value": "/",
-                    "auth_required": False,
-                }
-            ],
-        },
-    }
-
-
-def _auth_block_for(auth: str) -> dict[str, Any]:
-    """Dispatch on the validated --auth value.
-
-    The validator at :meth:`DataAppService._validate_create_inputs`
-    rejects anything other than ``password`` / ``public`` at the service
-    boundary, so this code path should only ever see those two values in
-    production. We raise loudly on an unexpected value rather than
-    silently writing no ``authorization`` block (the v0.27.0 bug this
-    helper exists to prevent — see the (since v0.28.0) gotcha entry).
-    """
-    if auth == "password":
-        return _build_simple_auth_block()
-    if auth == "public":
-        return _build_public_auth_block()
-    raise ValueError(
-        f"_auth_block_for missing dispatch for {auth!r}; "
-        "_validate_create_inputs should have rejected this upstream."
-    )
-
-
-def _redact_secret(value: Any) -> Any:
-    """Replace encrypted ``#`` values with a placeholder for human output."""
-    if isinstance(value, str) and value.startswith("KBC::"):
-        return "<encrypted>"
-    return value
-
-
-def _redact_git_block(git: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of the git block with the encrypted password redacted."""
-    redacted = dict(git)
-    if "#password" in redacted:
-        redacted["#password"] = _redact_secret(redacted["#password"])
-    return redacted
-
-
-def _coerce_config_dict(configuration: Any) -> dict[str, Any]:
-    """Return a Storage config's ``configuration`` as a dict.
-
-    ``get_config_detail`` parses the whole response via ``response.json()`` so
-    ``configuration`` is normally already a dict, but some Storage payloads echo
-    it as a JSON string. Mirror the defensive handling in ``get_data_app`` so a
-    string never crashes the chained ``.get()`` lookups downstream.
-    """
-    if isinstance(configuration, str):
-        try:
-            configuration = json.loads(configuration)
-        except (ValueError, TypeError):
-            return {}
-    return configuration if isinstance(configuration, dict) else {}
-
-
-def _redact_secrets_block(secrets: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of ``parameters.dataApp.secrets`` with each ciphertext redacted.
-
-    Used by ``get_data_app`` so the ``raw.storage_config`` echo cannot
-    leak any secret's encrypted value into ``--json`` output. Same
-    defence-in-depth rationale as :func:`_redact_git_block`.
-    """
-    if not isinstance(secrets, dict):
-        return secrets
-    return {key: _redact_secret(value) for key, value in secrets.items()}
-
-
-def _redact_storage_config(storage_config: dict[str, Any]) -> dict[str, Any]:
-    """Deep-copy the Storage config dict and redact any nested encrypted PAT.
-
-    Used by ``get_data_app`` so the ``raw.storage_config`` echo cannot leak
-    the encrypted git PAT verbatim into ``--json`` output. The redaction is
-    cosmetic (the ciphertext is not a secret in the cryptographic sense --
-    it can only be decrypted by Keboola's KMS), but defense-in-depth:
-    keeping ciphertext out of consumed JSON limits its blast radius if a
-    downstream consumer logs it.
-    """
-    if not isinstance(storage_config, dict):
-        return storage_config
-    redacted = dict(storage_config)
-    configuration = redacted.get("configuration")
-    if isinstance(configuration, dict):
-        configuration = dict(configuration)
-        parameters = configuration.get("parameters")
-        if isinstance(parameters, dict):
-            parameters = dict(parameters)
-            data_app = parameters.get("dataApp")
-            if isinstance(data_app, dict):
-                data_app = dict(data_app)
-                git = data_app.get("git")
-                if isinstance(git, dict):
-                    data_app["git"] = _redact_git_block(git)
-                secrets = data_app.get("secrets")
-                if isinstance(secrets, dict):
-                    data_app["secrets"] = _redact_secrets_block(secrets)
-                parameters["dataApp"] = data_app
-            configuration["parameters"] = parameters
-        redacted["configuration"] = configuration
-    return redacted
 
 
 class DataAppService(BaseService):
@@ -540,6 +336,7 @@ class DataAppService(BaseService):
         size: str = DEFAULT_SIZE,
         auto_suspend_after_seconds: int = DEFAULT_AUTO_SUSPEND_SECONDS,
         type_: str = DEFAULT_TYPE,
+        workspace: bool = True,
         branch_id: int | None = None,
         deploy: bool = True,
         wait: bool = False,
@@ -556,7 +353,10 @@ class DataAppService(BaseService):
         3. If the repo is private, encrypt the PAT under THIS project's KMS
            via :class:`EncryptService`.
         4. PUT the full Storage config body, including the auto-injected
-           ``parameters.id`` back-pointer (writeup §5 — required).
+           ``parameters.id`` back-pointer (writeup §5 — required) and, unless
+           ``workspace=False``, ``runtime.workspace.enabled: true`` -- the
+           switch that grants the app Storage access (see
+           :func:`_build_runtime_block`).
         5. If ``deploy``: read the latest Storage version, PATCH the
            deployment record with the §9 trio.
         6. If ``wait``: poll until terminal (running / error / timeout).
@@ -600,6 +400,7 @@ class DataAppService(BaseService):
                 size=size,
                 auto_suspend_after_seconds=auto_suspend_after_seconds,
                 type_=type_,
+                workspace=workspace,
                 branch_id=branch_id,
                 deploy=deploy,
             )
@@ -669,6 +470,7 @@ class DataAppService(BaseService):
                 git_block=git_block,
                 auth=auth,
                 app_id=app_id,
+                workspace=workspace,
             )
             storage_response = storage_client.update_config(
                 component_id=DATA_APP_COMPONENT_ID,
@@ -729,6 +531,7 @@ class DataAppService(BaseService):
                 "size": size,
                 "auto_suspend_after_seconds": auto_suspend_after_seconds,
                 "auth": auth,
+                "workspace": bool(workspace),
                 "git": _redact_git_block(git_block) if git_block else {},
                 "use_managed_git_repo": use_managed_git_repo,
                 "managed_git_repo_id": managed_git_repo_id,
@@ -2016,6 +1819,7 @@ class DataAppService(BaseService):
         git_block: dict[str, Any] | None,
         auth: str,
         app_id: str,
+        workspace: bool = True,
     ) -> dict[str, Any]:
         data_app: dict[str, Any] = {"slug": slug}
         # Managed repos pass git_block=None: the Git Service owns the link via
@@ -2028,7 +1832,7 @@ class DataAppService(BaseService):
                 "dataApp": data_app,
                 "id": str(app_id),  # writeup §5: required back-pointer
             },
-            "runtime": {"backend": {"size": size}},
+            "runtime": _build_runtime_block(size=size, workspace=workspace),
         }
         body["authorization"] = _auth_block_for(auth)
         return body
@@ -2044,6 +1848,7 @@ class DataAppService(BaseService):
         auto_suspend = kwargs["auto_suspend_after_seconds"]
         type_ = kwargs["type_"]
         use_managed_git_repo = bool(kwargs.get("use_managed_git_repo", False))
+        workspace = bool(kwargs.get("workspace", True))
 
         post_body = {
             "branchId": kwargs["branch_id"],
@@ -2091,7 +1896,7 @@ class DataAppService(BaseService):
                 "dataApp": data_app_preview,
                 "id": "<server-assigned numeric id>",
             },
-            "runtime": {"backend": {"size": size}},
+            "runtime": _build_runtime_block(size=size, workspace=workspace),
         }
         put_body["authorization"] = _auth_block_for(auth)
 
@@ -2119,6 +1924,7 @@ class DataAppService(BaseService):
             "dry_run": True,
             "project_alias": kwargs["alias"],
             "use_managed_git_repo": use_managed_git_repo,
+            "workspace": workspace,
             "requests": {
                 "post_apps": post_body,
                 "put_storage_config": put_body,

@@ -5,7 +5,6 @@ Provides direct Storage API access including sharing/linked bucket metadata
 """
 
 from pathlib import Path
-from typing import Any
 
 import typer
 from rich.markup import escape
@@ -20,6 +19,12 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_branch,
 )
+from ._storage_table_detail import (
+    format_range_partitioning,
+    format_time_partitioning,
+    render_table_detail,
+)
+from ._storage_tables_render import render_tables
 
 storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and files")
 
@@ -271,6 +276,16 @@ def storage_tables(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    include_usage: bool = typer.Option(
+        False,
+        "--include-usage",
+        help=(
+            "Also report which configurations read or write each table, from "
+            "their storage input/output mapping. Costs one extra component "
+            "listing per project (not per table), but that listing carries "
+            "every configuration body -- expect it to be slow in a big project."
+        ),
+    ),
 ) -> None:
     """List storage tables from one or more projects.
 
@@ -314,6 +329,7 @@ def storage_tables(
             aliases=project,
             bucket_id=bucket_id,
             branch_id=effective_branch,
+            include_usage=include_usage,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -325,42 +341,11 @@ def storage_tables(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        from rich.table import Table
-
         tables = result["tables"]
         if not tables:
             formatter.console.print("[dim]No tables found.[/dim]")
-            emit_project_warnings(formatter, result)
-            return
-
-        # Group by project so multi-project output stays readable.
-        by_project: dict[str, list[dict]] = {}
-        for t in tables:
-            alias = t["project_alias"]
-            by_project.setdefault(alias, []).append(t)
-
-        for alias, proj_tables in by_project.items():
-            table = Table(title=f"Tables - {alias}")
-            table.add_column("Table ID", style="bold cyan")
-            table.add_column("Rows", justify="right")
-            table.add_column("Size", justify="right", style="dim")
-            table.add_column("Last Import", style="dim")
-
-            for t in proj_tables:
-                size_mb = t["data_size_bytes"] / (1024 * 1024) if t["data_size_bytes"] else 0
-                last_import = t.get("last_import_date", "")
-                if last_import and "T" in last_import:
-                    last_import = last_import.split("T")[0]
-                table.add_row(
-                    t["id"],
-                    str(t["rows_count"]),
-                    f"{size_mb:.1f} MB",
-                    last_import,
-                )
-
-            formatter.console.print(table)
-            formatter.console.print()
-
+        else:
+            render_tables(formatter.console, tables, include_usage)
         emit_project_warnings(formatter, result)
 
 
@@ -383,7 +368,15 @@ def storage_table_detail(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """Show detailed table info including columns and types."""
+    """Show detailed table info including columns, types and physical layout.
+
+    The Storage API's `definition` object is returned as-is. On BigQuery it
+    carries the registered `timePartitioning` / `rangePartitioning` /
+    `clustering` -- the only way to confirm a `create-table --source-table-id`
+    + `swap-tables` repartition landed, since the table ID is the same either
+    way. Human mode prints the layout and a partition count; `--json` carries
+    the full `definition`.
+    """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -408,34 +401,18 @@ def storage_table_detail(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        formatter.console.print(f"[bold]Table:[/bold] {result['table_id']}")
-        formatter.console.print(f"  Name: {escape(result['display_name'] or result['name'])}")
-        formatter.console.print(f"  Bucket: {result['bucket_id']}")
-        formatter.console.print(f"  Rows: {result['rows_count']:,}")
-        size_mb = result["data_size_bytes"] / (1024 * 1024)
-        formatter.console.print(f"  Size: {size_mb:.2f} MB")
-        if result["primary_key"]:
-            formatter.console.print(f"  Primary key: {', '.join(result['primary_key'])}")
-        if result["last_import_date"]:
-            formatter.console.print(f"  Last import: {result['last_import_date']}")
+        render_table_detail(formatter, result)
 
-        if result["column_details"]:
-            formatter.console.print()
-            from rich.table import Table
-
-            table = Table(title="Columns")
-            table.add_column("Name", style="bold cyan")
-            table.add_column("Type", style="dim")
-            table.add_column("Nullable", style="dim")
-
-            for col in result["column_details"]:
-                table.add_row(
-                    col["name"],
-                    col.get("type", ""),
-                    "yes" if col.get("nullable") else "",
-                )
-
-            formatter.console.print(table)
+        # Legacy flat KBC.column.*.description keys are readable here but
+        # invisible everywhere else (#624) -- point at the migration command.
+        # JSON mode needs no warning: the key itself is the signal.
+        legacy_columns = result.get("legacy_column_descriptions") or []
+        if legacy_columns:
+            formatter.console.print(
+                f"\n[yellow]Warning:[/yellow] {len(legacy_columns)} column description(s) "
+                "use the legacy KBC.column.* convention -- invisible to the Keboola UI "
+                "and MCP server. Run 'kbagent storage describe-migrate' to convert."
+            )
 
 
 @storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
@@ -730,20 +707,13 @@ def storage_create_table(
                 formatter.console.print(f"  Columns: {', '.join(result['columns'])}")
             time_partitioning = result.get("time_partitioning")
             if time_partitioning:
-                field = time_partitioning.get("field")
-                suffix = f" on {field}" if field else " (ingestion time)"
-                formatter.console.print(f"  Time partitioning: {time_partitioning['type']}{suffix}")
+                formatter.console.print(
+                    f"  Time partitioning: {format_time_partitioning(time_partitioning)}"
+                )
             range_partitioning = result.get("range_partitioning")
             if range_partitioning:
-                bounds = range_partitioning.get("range") or {}
-                bounds_suffix = ""
-                if bounds:
-                    bounds_suffix = (
-                        f" [{bounds.get('start')}, {bounds.get('end')})"
-                        f" step {bounds.get('interval')}"
-                    )
                 formatter.console.print(
-                    f"  Range partitioning: {range_partitioning['field']}{bounds_suffix}"
+                    f"  Range partitioning: {format_range_partitioning(range_partitioning)}"
                 )
             clustering = result.get("clustering")
             if clustering:
@@ -1686,385 +1656,6 @@ def storage_delete_bucket(
 
 
 # ------------------------------------------------------------------
-# Describe (metadata write) commands
-# ------------------------------------------------------------------
-
-_DESCRIBE = "Descriptions"
-
-
-@storage_app.command("describe-bucket", rich_help_panel=_DESCRIBE)
-def storage_describe_bucket(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    bucket_id: str = typer.Option(
-        ...,
-        "--bucket-id",
-        help="Bucket ID (e.g. 'in.c-my-bucket')",
-    ),
-    text: str | None = typer.Option(
-        None,
-        "--text",
-        help="Description text (inline)",
-    ),
-    file: Path | None = typer.Option(
-        None,
-        "--file",
-        help="Path to a file containing the description",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set the description on a storage bucket.
-
-    Stores the description as KBC.description in bucket metadata (upsert).
-    Provide the text via --text, --file, or --stdin (exactly one required).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    from ._metadata_input import resolve_text_input
-
-    try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-
-    try:
-        result = service.describe_bucket(
-            alias=project,
-            bucket_id=bucket_id,
-            description=description,
-            branch_id=effective_branch,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(f"[bold green]Description set:[/bold green] {bucket_id}")
-        formatter.console.print(f"  {escape(description[:120])}")
-
-
-@storage_app.command("describe-table", rich_help_panel=_DESCRIBE)
-def storage_describe_table(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    table_id: str = typer.Option(
-        ...,
-        "--table-id",
-        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
-    ),
-    text: str | None = typer.Option(
-        None,
-        "--text",
-        help="Description text (inline)",
-    ),
-    file: Path | None = typer.Option(
-        None,
-        "--file",
-        help="Path to a file containing the description",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set the description on a storage table.
-
-    Stores the description as KBC.description in table metadata (upsert).
-    Provide the text via --text, --file, or --stdin (exactly one required).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    from ._metadata_input import resolve_text_input
-
-    try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-
-    try:
-        result = service.describe_table(
-            alias=project,
-            table_id=table_id,
-            description=description,
-            branch_id=effective_branch,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
-        formatter.console.print(f"  {escape(description[:120])}")
-
-
-@storage_app.command("describe-column", rich_help_panel=_DESCRIBE)
-def storage_describe_column(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    table_id: str = typer.Option(
-        ...,
-        "--table-id",
-        help="Table ID (e.g. 'in.c-my-bucket.my-table')",
-    ),
-    column: list[str] = typer.Option(
-        ...,
-        "--column",
-        help="Column description as 'NAME=DESCRIPTION' (can be repeated)",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Set descriptions on one or more columns of a storage table.
-
-    Descriptions are stored as KBC.column.{name}.description keys in table
-    metadata (upsert).  Keboola Storage does not expose a user-writable
-    column-level metadata endpoint; this convention lets you annotate columns
-    and read them back via 'storage table-detail'.
-
-    Example:
-
-        kbagent storage describe-column \\
-            --project myproj \\
-            --table-id in.c-bucket.orders \\
-            --column order_id="Unique order identifier" \\
-            --column total="Order total in USD"
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    parsed: dict[str, str] = {}
-    for entry in column:
-        if "=" not in entry:
-            formatter.error(
-                message=f"--column must be NAME=DESCRIPTION, got: {entry!r}",
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-            raise typer.Exit(code=2) from None
-        name, _, desc = entry.partition("=")
-        name = name.strip()
-        if not name:
-            formatter.error(
-                message=f"Column name cannot be empty in: {entry!r}",
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-            raise typer.Exit(code=2) from None
-        parsed[name] = desc
-
-    try:
-        result = service.describe_columns(
-            alias=project,
-            table_id=table_id,
-            columns=parsed,
-            branch_id=effective_branch,
-        )
-    except ValueError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.console.print(
-            f"[bold green]Column descriptions set:[/bold green] {table_id} "
-            f"({len(parsed)} column(s))"
-        )
-        for name, desc in parsed.items():
-            formatter.console.print(f"  {name}: {escape(desc[:80])}")
-
-
-@storage_app.command("describe-batch", rich_help_panel=_DESCRIBE)
-def storage_describe_batch(
-    ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
-    from_file: Path = typer.Option(
-        ...,
-        "--from-file",
-        help="Path to a YAML file with bucket/table/column descriptions",
-    ),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
-    ),
-) -> None:
-    """Apply descriptions to buckets, tables, and columns from a YAML file.
-
-    YAML schema:
-
-        buckets:
-          in.c-my-bucket: "Bucket description"
-
-        tables:
-          in.c-my-bucket.my-table: "Table description"
-
-        columns:
-          in.c-my-bucket.my-table:
-            col1: "Column 1 description"
-            col2: "Column 2 description"
-
-    All sections are optional.  A failure in one item does not abort the
-    rest -- all results are collected and reported.
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "storage_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
-
-    # In human mode, show a live progress indicator so that large batches
-    # (100+ items) do not look frozen. JSON mode must remain silent on stderr
-    # so structured output is the only thing on stdout.
-    progress_cm: Any = None
-    progress_task: Any = None
-    progress_callback = None
-    if not formatter.json_mode:
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TextColumn,
-            TimeElapsedColumn,
-        )
-
-        progress_cm = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            console=formatter.console,
-            transient=True,
-        )
-
-        def _on_item(obj_type: str, obj_id: str, current: int, total: int) -> None:
-            # Guard against progress_task/progress_cm not being ready yet.
-            if progress_task is None or progress_cm is None:
-                return
-            # total is known up-front (passed the first time), but re-setting
-            # is a no-op after the first call.
-            progress_cm.update(
-                progress_task,
-                total=total,
-                completed=max(current - 1, 0),
-                description=f"Describing {obj_type} {obj_id}",
-            )
-
-        progress_callback = _on_item
-
-    try:
-        if progress_cm is not None:
-            progress_cm.start()
-            progress_task = progress_cm.add_task("Applying descriptions...", total=None)
-        result = service.describe_batch(
-            alias=project,
-            from_file=from_file,
-            branch_id=effective_branch,
-            progress_callback=progress_callback,
-        )
-        if progress_cm is not None and progress_task is not None:
-            # Mark the task complete so the final render shows N / N.
-            progress_cm.update(
-                progress_task,
-                completed=result["applied_count"] + result["error_count"],
-            )
-    except ValueError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-        raise typer.Exit(code=2) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-    finally:
-        if progress_cm is not None:
-            # .stop() is idempotent; safe for both happy and error paths.
-            progress_cm.stop()
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        applied = result["applied_count"]
-        errors = result["error_count"]
-        formatter.console.print(
-            f"[bold green]Batch complete:[/bold green] {applied} applied, {errors} error(s)"
-        )
-        for item in result["applied"]:
-            obj_type = item["type"]
-            obj_id = item["id"]
-            if obj_type == "columns":
-                n = len(item.get("columns", {}))
-                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols)")
-            else:
-                formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
-        for item in result["errors"]:
-            formatter.console.print(f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}")
-        if errors:
-            raise typer.Exit(code=1) from None
-
-
-# ------------------------------------------------------------------
 # File operations
 # ------------------------------------------------------------------
 
@@ -2733,3 +2324,10 @@ def storage_unload_table(
 from ._storage_snapshots import register as _register_snapshot_commands  # noqa: E402
 
 _register_snapshot_commands(storage_app)
+
+
+# Description commands (issue #624 grew them past the file's size ceiling) live
+# in a private module for the same reason, mounted the same way.
+from ._storage_describe import register as _register_describe_commands  # noqa: E402
+
+_register_describe_commands(storage_app)

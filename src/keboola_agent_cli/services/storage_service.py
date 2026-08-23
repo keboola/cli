@@ -14,7 +14,10 @@ from typing import Any
 from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
-from .base import BaseService
+from ._column_descriptions import ColumnDescriptionsMixin
+from ._storage_tables import normalize_table_rows
+from ._table_detail import build_table_detail
+from .table_usage import collect_table_usage, fetch_usage_components
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +397,7 @@ def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
     tmp_path.replace(p)
 
 
-class StorageService(BaseService):
+class StorageService(ColumnDescriptionsMixin):
     """Business logic for storage bucket and table operations.
 
     Supports multi-project parallel queries for listing operations.
@@ -639,7 +642,8 @@ class StorageService(BaseService):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with table metadata, columns, and size info.
+            Dict with table metadata, columns, size info and the raw Storage API
+            ``definition`` (the BigQuery partition/cluster layout lives there).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -650,75 +654,14 @@ class StorageService(BaseService):
         finally:
             client.close()
 
-        columns = table.get("columns", [])
-        column_metadata = table.get("columnMetadata", {})
-        raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
-
-        # Extract description and per-column descriptions from metadata list
-        description = ""
-        col_descriptions: dict[str, str] = {}
-        for m in raw_metadata:
-            key = m.get("key", "")
-            if key == "KBC.description" and m.get("provider") == "user":
-                description = m.get("value", "") or ""
-            elif key.startswith("KBC.column.") and key.endswith(".description"):
-                col_name = key[len("KBC.column.") : -len(".description")]
-                col_descriptions[col_name] = m.get("value", "") or ""
-
-        column_details = []
-        for col in columns:
-            col_info: dict[str, Any] = {"name": col}
-            meta = column_metadata.get(col, [])
-            for m in meta:
-                key = m.get("key", "")
-                value = m.get("value", "")
-                if key == "KBC.datatype.basetype":
-                    col_info["type"] = value
-                elif key == "KBC.datatype.type":
-                    # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
-                    # -- distinct from the Keboola basetype it maps to.
-                    col_info["native_type"] = value
-                elif key == "KBC.datatype.length":
-                    # Length as stored: "40", "18,2", "255", ...
-                    col_info["length"] = value
-                elif key == "KBC.datatype.nullable":
-                    col_info["nullable"] = value == "1"
-                elif key == "KBC.datatype.default":
-                    col_info["default"] = value
-            if col in col_descriptions:
-                col_info["description"] = col_descriptions[col]
-            column_details.append(col_info)
-
-        return {
-            "project_alias": alias,
-            "table_id": table.get("id", table_id),
-            "name": table.get("name", ""),
-            "display_name": table.get("displayName", ""),
-            "bucket_id": table.get("bucket", {}).get("id", ""),
-            # Storage backend of the owning bucket (e.g. "snowflake",
-            # "bigquery"). Consumers: the web UI keys BigQuery-only features
-            # (repartition) off it, and type resolution picks the matching
-            # INFORMATION_SCHEMA dialect for alias / linked tables.
-            "backend": table.get("bucket", {}).get("backend", ""),
-            "description": description,
-            "columns": columns,
-            "column_details": column_details,
-            "primary_key": table.get("primaryKey", []),
-            # API may return null on empty tables; coerce to 0.
-            "rows_count": table.get("rowsCount") or 0,
-            "data_size_bytes": table.get("dataSizeBytes") or 0,
-            "is_alias": table.get("isAlias", False),
-            "last_import_date": table.get("lastImportDate", ""),
-            "last_change_date": table.get("lastChangeDate", ""),
-            "created": table.get("created", ""),
-            "metadata": raw_metadata,
-        }
+        return build_table_detail(alias, table_id, table)
 
     def list_tables(
         self,
         aliases: list[str] | None = None,
         bucket_id: str | None = None,
         branch_id: int | None = None,
+        include_usage: bool = False,
     ) -> dict[str, Any]:
         """List tables from one or more projects (in parallel).
 
@@ -731,45 +674,42 @@ class StorageService(BaseService):
             bucket_id: Optional bucket ID filter applied per project.
             branch_id: If set, target a specific dev branch
                 (only valid with a single project).
+            include_usage: When True, also report which configurations read or
+                write each table (``used_by``). Costs one extra component
+                listing per project -- not per table -- but that listing
+                carries every configuration body, so it is the expensive call
+                in a big project. Off by default.
 
         Returns:
             Dict with 'tables' list (each row tagged with ``project_alias``)
-            and 'errors' list (per-project failures).
+            and 'errors' list (per-project failures). With ``include_usage``
+            every table row also carries a ``used_by`` list (empty when
+            nothing references it, or when the usage scan itself failed).
         """
         projects = self.resolve_projects(aliases)
 
         def _worker(
             alias: str, project: ProjectConfig
-        ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
             return self._fetch_tables(
                 alias,
                 project,
                 bucket_id=bucket_id,
                 branch_id=branch_id,
+                include_usage=include_usage,
+                usage_branch_id=branch_id,
             )
 
         successes, errors = self._run_parallel(projects, _worker)
 
         tables: list[dict[str, Any]] = []
-        for result in successes:
-            alias = result[0]
-            for t in result[1]:
-                tables.append(
-                    {
-                        "project_alias": alias,
-                        "id": t.get("id", ""),
-                        "name": t.get("name", ""),
-                        "display_name": t.get("displayName", t.get("name", "")),
-                        "bucket_id": t.get("bucket", {}).get("id", "")
-                        if isinstance(t.get("bucket"), dict)
-                        else "",
-                        # API may return null on empty tables; coerce to 0.
-                        "rows_count": t.get("rowsCount") or 0,
-                        "data_size_bytes": t.get("dataSizeBytes") or 0,
-                        "is_alias": t.get("isAlias", False),
-                        "last_import_date": t.get("lastImportDate", ""),
-                    }
-                )
+        for alias, raw_tables, components in successes:
+            usage = (
+                collect_table_usage(components, [t.get("id", "") for t in raw_tables])
+                if include_usage
+                else None
+            )
+            tables.extend(normalize_table_rows(alias, raw_tables, usage))
 
         return {"tables": tables, "errors": errors}
 
@@ -2521,56 +2461,6 @@ class StorageService(BaseService):
             "message": f"Description set on table '{table_id}' in project '{alias}'.",
         }
 
-    def describe_columns(
-        self,
-        alias: str,
-        table_id: str,
-        columns: dict[str, str],
-        branch_id: int | None = None,
-    ) -> dict[str, Any]:
-        """Set per-column descriptions on a storage table.
-
-        Column descriptions are stored as namespaced table metadata using the
-        key convention ``KBC.column.{colname}.description``.  Keboola's
-        Storage API does not provide a user-writable column-level metadata
-        endpoint (``columnMetadata`` is populated exclusively by processing
-        components); this convention is the supported alternative for
-        annotating columns from the CLI.
-
-        Args:
-            alias: Project alias.
-            table_id: Full table ID.
-            columns: Mapping of column name -> description text.
-            branch_id: If set, target a specific dev branch.
-
-        Returns:
-            Dict with project_alias, table_id, columns dict, result, message.
-        """
-        if not columns:
-            raise ValueError("At least one column description must be provided.")
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        entries = [(f"KBC.column.{name}.description", desc) for name, desc in columns.items()]
-        client = self._client_factory(project.stack_url, project.token)
-        try:
-            result = client.set_table_metadata(
-                table_id=table_id,
-                entries=entries,
-                branch_id=branch_id,
-            )
-        finally:
-            client.close()
-        return {
-            "project_alias": alias,
-            "table_id": table_id,
-            "columns": columns,
-            "result": result,
-            "message": (
-                f"Descriptions set for {len(columns)} column(s) on table '{table_id}' "
-                f"in project '{alias}'."
-            ),
-        }
-
     def describe_batch(
         self,
         alias: str,
@@ -2591,10 +2481,19 @@ class StorageService(BaseService):
                 col1: "Column 1 description"
                 col2: "Column 2 description"
 
-        All sections are optional; empty or absent sections are silently
-        skipped.  Within each section the operations are applied in order.
-        A failure in one item does not skip remaining items — all results
-        (success and error) are collected and returned.
+        All sections are optional: absent, ``None`` (a bare ``buckets:`` key)
+        and empty (``[]``, ``''``, ``{}``) sections are silently skipped.
+        Within each section the operations are applied in order.
+
+        The document's shape is validated up front (see
+        ``_describe_batch_input``): a section with a wrong NON-EMPTY shape, a
+        null description, or two keys colliding after string coercion raises
+        ``ValueError`` before the first write, so the file is rejected whole
+        rather than half-applied.
+
+        Once application starts, a failure in one item does not skip the
+        remaining items — all per-item *API* results (success and error) are
+        collected and returned.
 
         Args:
             alias: Project alias.
@@ -2610,69 +2509,47 @@ class StorageService(BaseService):
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
         """
-        import yaml
-
         from ..errors import KeboolaApiError
+        from ._describe_batch_input import parse_describe_batch_file
 
-        if not from_file.is_file():
-            raise ValueError(f"Batch file not found: {from_file}")
-        raw = yaml.safe_load(from_file.read_text(encoding="utf-8")) or {}
-        if not isinstance(raw, dict):
-            raise ValueError("Batch file must be a YAML mapping.")
+        parsed = parse_describe_batch_file(from_file)
 
         applied: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
 
-        buckets: dict[str, str] = raw.get("buckets") or {}
-        tables: dict[str, str] = raw.get("tables") or {}
-        columns: dict[str, dict[str, str]] = raw.get("columns") or {}
-
-        total = len(buckets) + len(tables) + len(columns)
+        total = parsed.total
         current = 0
 
-        for bucket_id, desc in buckets.items():
+        for bucket_id, desc in parsed.buckets.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("bucket", bucket_id, current, total)
             try:
-                self.describe_bucket(alias, bucket_id, str(desc), branch_id=branch_id)
+                self.describe_bucket(alias, bucket_id, desc, branch_id=branch_id)
                 applied.append({"type": "bucket", "id": bucket_id, "description": desc})
                 logger.debug("describe_batch bucket %s: ok", bucket_id)
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "bucket", "id": bucket_id, "error": msg})
 
-        for table_id, desc in tables.items():
+        for table_id, desc in parsed.tables.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("table", table_id, current, total)
             try:
-                self.describe_table(alias, table_id, str(desc), branch_id=branch_id)
+                self.describe_table(alias, table_id, desc, branch_id=branch_id)
                 applied.append({"type": "table", "id": table_id, "description": desc})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "table", "id": table_id, "error": msg})
 
-        for table_id, col_map in columns.items():
+        for table_id, col_map in parsed.columns.items():
             current += 1
             if progress_callback is not None:
                 progress_callback("columns", table_id, current, total)
-            if not isinstance(col_map, dict):
-                errors.append(
-                    {"type": "columns", "id": table_id, "error": "columns entry must be a mapping"}
-                )
-                continue
             try:
-                self.describe_columns(
-                    alias, table_id, {k: str(v) for k, v in col_map.items()}, branch_id=branch_id
-                )
-                applied.append(
-                    {
-                        "type": "columns",
-                        "id": table_id,
-                        "columns": {k: str(v) for k, v in col_map.items()},
-                    }
-                )
+                self.describe_columns(alias, table_id, col_map, branch_id=branch_id)
+                applied.append({"type": "columns", "id": table_id, "columns": col_map})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
                 errors.append({"type": "columns", "id": table_id, "error": msg})
@@ -2724,20 +2601,28 @@ class StorageService(BaseService):
         project: ProjectConfig,
         bucket_id: str | None = None,
         branch_id: int | None = None,
-    ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, Any]]:
+        include_usage: bool = False,
+        usage_branch_id: int | None = None,
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | tuple[str, dict[str, Any]]:
         """Fetch tables for a single project (worker for _run_parallel).
 
         Per-project failures (e.g. bucket not found in this project, invalid
         token) are returned as error tuples so other projects still complete.
-        Returns a 3-tuple on success (alias, tables, True) or a 2-tuple
-        (alias, error_dict) on failure, matching the _run_parallel protocol.
+        Returns a 3-tuple on success (alias, tables, components) or a 2-tuple
+        (alias, error_dict) on failure, matching the _run_parallel protocol,
+        which tells the two apart by tuple LENGTH -- so the third slot can
+        carry the component listing rather than a success sentinel. It is
+        empty unless ``include_usage`` asked for a usage scan.
         """
         from ..errors import KeboolaApiError
 
         client = self._client_factory(project.stack_url, project.token)
         try:
             tables = client.list_tables(bucket_id=bucket_id, branch_id=branch_id)
-            return (alias, tables, True)
+            components = (
+                fetch_usage_components(client, alias, usage_branch_id) if include_usage else []
+            )
+            return (alias, tables, components)
         except KeboolaApiError as exc:
             return (
                 alias,

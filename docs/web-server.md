@@ -120,18 +120,40 @@ and `next_run_at` so re-runs after restarts pick up where they left off.
 
 A NERD-themed React SPA that drives the API:
 
+- **Command palette** — `Ctrl+K` / `Cmd+K` anywhere: fuzzy jump to any
+  page, switch the active project, toggle the theme, open Swagger `/docs`.
+  Arrows + enter, esc closes.
 - **Dashboard** — greeting, big Kai chat input, stat tiles (projects /
-  agents / doctor / recent jobs), scheduled-agent activity, suggested
-  next steps, recent jobs panel.
+  agents / doctor / recent jobs / PAYG credits), scheduled-agent
+  activity, suggested next steps, recent jobs panel. The credits tile
+  reads `GET /billing/credits` for the active project and shows a muted
+  `n/a` on a non-PAYG project (`PAYG_NOT_AVAILABLE`).
 - **Projects, Branches, Doctor, Changelog** — manage local config and
   health.
+- **Tokens** — scoped Storage tokens for the selected project
+  (`/token/{p}/list`): create / rotate / revoke, with the secret revealed
+  ONCE in a copy-to-clipboard block, and an opt-in "derive last-used"
+  toggle (`with_last_used=true`) that sorts dormant tokens first and
+  renders `never` / `unknown` / `error` as distinct pills.
 - **Configs, Components (AI search), Storage (with per-column data
   preview), Jobs (cards layout + SSE log stream), Search** — browse a
   selected project.
+  - Configs: detail Drawer with **Run job** (`POST /jobs/{p}/run`) and
+    **Delete** (soft-delete via `DELETE /configs/…`), plus a **Trash**
+    tab (`GET /configs/trash/{p}`) with per-row Restore.
+  - Storage: the table drawer's Info tab renders the raw `definition`
+    (time / range partitioning, clustering, partition filter, partition
+    count) when the stack reports one, and the Schema tab's Description
+    cell is click-to-edit through `POST /storage/columns/{p}/{id}/describe`.
+  - Jobs: per-row **re-run** and **terminate** (`POST /jobs/{p}/run` /
+    `…/terminate`), the latter behind a confirm modal.
 - **SQL Workspaces** — info Drawer with credentials + actions sidebar;
   Open SQL Editor opens a Monaco editor with a clickable Storage
   Explorer tree on the left.
-- **Flows** — visual Mermaid builder of phase DAG + per-phase task list.
+- **Flows** — visual Mermaid builder of phase DAG + per-phase task list,
+  plus a read-only **Notifications** tab (`GET /notifications`) listing
+  who gets paged for the flow, with filter-less project-wide
+  subscriptions shown in their own warning-pilled group.
 - **Schedules** — cross-project cron list + find-by-window query.
 - **Data Apps** — list, start/stop, secrets, validate-repo.
 - **Lineage** — Sharing graph (live, cross-project) + Deep lineage (UI

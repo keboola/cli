@@ -840,6 +840,19 @@ Storage went `1 -> 2` (the empty shell that `POST /apps` minted, with an
 auto-injected `parameters.id` back-pointer to the deployment record) and
 `2 -> 3` (the full body with the git block + runtime block + auth block).
 
+That runtime block carries `workspace: {enabled: true}` by default since
+0.87.0 -- the switch that makes the platform inject `WORKSPACE_ID`,
+`QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`, i.e. the app's only
+route to Storage. Pass `--no-workspace` for an app that never reads Storage.
+Get this wrong and the failure is silent: the app deploys, reports
+`state=running`, passes its health probe, and serves nothing, and the platform
+says nothing about it. Verify by reading the config
+(`config detail` -> `configuration.runtime`) rather than by grepping the log --
+a `Missing env vars: WORKSPACE_ID` line, if you get one, is emitted by the
+app's own startup code, not the platform. An app created by kbagent 0.86.0 or
+earlier does not have the flag -- see "Retrofitting Storage access" below,
+*after* you have finished this walkthrough.
+
 ```bash
 # Deploy: pins the deployment record to configVersion=3 and waits.
 kbagent --json data-app deploy \
@@ -850,6 +863,23 @@ kbagent --json data-app deploy \
 
 Visit the URL. That's the entire round-trip: ~30s for a small Node
 app, longer for the first cold-boot of a heavier Python app.
+
+#### Retrofitting Storage access on an older app
+
+Skip this if you followed the walkthrough above -- the app already has the
+flag. It applies to an app created by kbagent **0.86.0 or earlier**, which
+never wrote `runtime.workspace.enabled` and had no option to.
+
+```bash
+kbagent config update --project prod --component-id keboola.data-apps \
+  --config-id <config_id> --merge --set 'runtime.workspace.enabled=true'
+kbagent data-app deploy --project prod --app-id <app_id> --wait
+```
+
+Both steps are needed: the config update alone never reaches the running
+container, and `data-app deploy` pins the latest config version, so it picks
+up the change. Note this bumps the Storage config version, so the numbers
+will not match the `configVersion=3` in the walkthrough above.
 
 ### 9.2 Private-repo golden path
 

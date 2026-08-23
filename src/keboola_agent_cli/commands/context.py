@@ -351,6 +351,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     MCP run_sync_action parity). --config-data sends explicit configData
     verbatim and skips the config fetch. Response shape is action-specific
     (opaque pass-through).
+    (since 0.89.0) The ROOT configuration's authorization and runtime blocks
+    are forwarded into configData as well -- root only (a --row-id never
+    overrides them) and only when non-empty. authorization.oauth_api.id is the
+    OAuth broker reference the sync-actions service resolves and decrypts, so
+    before 0.89.0 sync actions on OAuth / Service-Account components (e.g.
+    keboola.ex-linkedin-ads) failed with an opaque empty-body 400.
 
 ### Configuration Browsing
 
@@ -405,8 +411,19 @@ Use `kbagent <command> --help` for full flag details and examples.
     exists (.keboola/manifest.json), renames the directory and updates the
     manifest path. Uses git mv when inside a git repo for cleaner history.
 
-  kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID]
-    Delete a configuration. Branch-aware.
+  kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID] [--dry-run]
+    Soft-delete a configuration into the Storage trash (restorable). Branch-aware.
+    Locates the config first: one already in the trash is NOT deleted again
+    (the raw API would purge it permanently on the second DELETE -- the classic
+    retry-after-timeout trap); it reports status "already_in_trash" and exits 0.
+    --dry-run reports the located state without writing.
+
+  kbagent config restore --project NAME --component-id ID --config-id ID [--branch ID]
+    Restore a trashed configuration -- the undo for `config delete`. Only works
+    on a config currently in the trash; brings back versions, rows and metadata.
+
+  kbagent config trash-list --project NAME [--component-id ID] [--branch ID]
+    List configurations in the trash (what `config restore` can bring back).
 
   kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR]
                      [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
@@ -416,7 +433,14 @@ Use `kbagent <command> --help` for full flag details and examples.
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {{}}
     (empty shell, validation auto-skipped). Works for ALL component types including
-    keboola.snowflake-transformation.
+    keboola.snowflake-transformation. With --push AND --output-dir the written scaffold
+    records the created config's identity (_keboola.config_id) and lands in the subtree
+    of the branch the config was created in (--branch or the active branch; the branch
+    is registered in the manifest if missing) -- the next sync push adopts the config
+    instead of creating a duplicate. With an explicit --configuration body the local
+    directory mirrors the pushed (already encrypted) body exactly like sync pull would
+    materialize it (real transform.sql/.py extracted from the body) instead of
+    placeholder scaffolding.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]
@@ -504,7 +528,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Cross-Project Search
 
-  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
     Search for items across one or more projects. Textual mode (default) searches item names
     via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
     --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
@@ -517,10 +541,10 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Job History
 
-  kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N]
+  kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
 
-  kbagent job detail --project NAME --job-id ID
+  kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
     Full job detail including result message and timing.
 
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
@@ -580,7 +604,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Prefer sql_path/sql_dialect in agent code instead of branching on backend yourself.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
-  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID]
+  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID] [--include-usage]
     List storage tables from one or more projects (in parallel). Omit --project
     to query all connected projects. Repeat --project for a specific subset.
     Multi-project by default, matching `storage buckets`, `config list`, `job list`.
@@ -593,6 +617,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage table-detail --project NAME --table-id TABLE_ID [--branch ID]
     Show detailed table info: columns (with types if available), primary key, row count, size, last import date.
     Uses production by default; pass --branch to query a dev branch explicitly.
+    Also surfaces the raw Storage API `definition` (0.88.0+, #621) -- for a BigQuery table
+    that is the ONLY readable record of the registered timePartitioning / rangePartitioning /
+    clustering layout, so it is how you VERIFY a `create-table --source-table-id` +
+    `swap-tables` repartition actually landed (`create-table` only echoes what you REQUESTED).
+    Human mode prints Time partitioning / Range partitioning / Clustering / Partition filter
+    required / Partitions (a COUNT; --json carries the full partitions[] list, one entry per
+    physical partition -- thousands on a long-lived daily table). `definition` is present on
+    EVERY response, untyped tables included, so null means the stack omitted it, NOT "untyped".
+    `storage tables` (the list endpoint) has no layout: the API offers no `definition` include.
+    Human mode also renders a Description column in the Columns table (0.89.0+, #642), shown only
+    when at least one column carries a description; long text wraps instead of truncating. On
+    0.88.0 column descriptions were readable through --json column_details[].description only.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -724,12 +760,29 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
 
   kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
-    Set per-column descriptions stored as KBC.column.{{name}}.description in table metadata (upsert).
-    Readable via table-detail --json .data.column_details[].description.
+    Set per-column descriptions via the native PUT .../tables/{{id}}/definition endpoint (0.88.0+, upsert,
+    async storage job). Writes isDescriptionSystemManaged=false so the next component run's Output Mapping
+    cannot overwrite the text; the backend mirrors the value into columnMetadata KBC.description, so the
+    Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
+    any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
+    (conflict/orphan entries skipped) and the migrated flat keys deleted.
+    Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the
+    human table-detail Columns table, which grows a Description column when any column has one.
 
   kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
-    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional).
-    Failures collected; one error does not abort remaining items.
+    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;
+    absent or empty sections are skipped). Columns go through the same native write as describe-column.
+    File shape is validated BEFORE any write: a section that is not a mapping of ID to description, a null
+    description, a non-mapping columns entry, or two keys colliding after str() coercion (1 vs "1") aborts
+    with INVALID_ARGUMENT and exit 2, naming the offending key -- nothing is half-applied. During application, per-item API failures are collected and reported
+    (one error does not abort the remaining items); the command exits 1 when error_count > 0.
+
+  kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+    Bulk-convert legacy pre-0.88.0 flat KBC.column.*.description metadata to the native endpoint.
+    Scope: explicit --table-id (repeatable), one --bucket-id, or the whole project. Scans and prints a
+    summary, then asks for confirmation (--dry-run reports only; --yes skips the prompt). A column whose
+    visible description already differs is skipped as "conflict"; an entry for a dropped column is skipped
+    as "orphan" unless --prune-orphans. Per-table errors are accumulated, never abort the run.
 
 ### Storage Files
 
@@ -788,21 +841,46 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Scoped Storage Tokens
 
-  kbagent token list --project NAME
-    List the project's Storage API tokens (id, description, created, expires, master flag,
-    creating token). Secrets are never listed -- `token create` is the only reveal. This is where
-    the --token-id for delete/refresh comes from. Acting token needs canManageTokens.
+  kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
+    List the project's Storage API tokens (id, description, created, refreshed, expires, master
+    flag, creating token). Secrets are never listed -- `token create` is the only reveal. This is
+    where the --token-id for delete/refresh comes from. Acting token needs canManageTokens
+    (master NOT required -- unlike `token create`).
+    --with-last-used (0.88.0+) answers "which of these are still in use": it derives each token's
+    most recent activity from its own event feed and sorts dormant-first, so reading order is
+    cleanup order. Opt-in -- it is ONE EXTRA API CALL PER TOKEN (fanned out in parallel).
+    Adds lastUsed / lastUsedEvent / lastUsedStatus per token plus a top-level `errors` list;
+    without the flag the response shape is byte-for-byte what it was before.
+    lastUsedStatus is used | never | unknown | error -- and the distinction MATTERS:
+      never   = provably never used (minted inside the ~6-month event-retention window, no activity)
+      unknown = older than retention, so the API genuinely cannot say -- do NOT read as "never"
+      error   = that token's lookup failed; the row degrades, the audit still completes
+    lastUsedEvent tells human traffic (storage.*) from agent traffic (ext.keboola.mcp-server-tool.*).
+    CAVEAT: activity inside a DEVELOPMENT BRANCH is invisible to this feed (the endpoint always
+    resolves to the default branch), so a branch-only token reads as dormant. Check `branch list`
+    before revoking on a project that uses branches.
+    --columns (repeatable, human output only -- --json is unaffected) selects and orders the table.
+    Names: id, description, created, refreshed, expires, master, created_by, last_used,
+    last_used_event. An unknown name exits 2 and lists the valid ones. last_used /
+    last_used_event REQUIRE --with-last-used (exit 2 otherwise) -- they are derived, so without
+    the derivation there is no honest value to show.
   kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
     Create a scoped Storage API token (Keboola single-bucket-write pattern). --bucket-write /
     --bucket-read (repeatable) grant per-bucket write/read; write wins when a bucket is on both.
     --component-access (repeatable) restricts to named components. The token secret is printed ONCE
-    in a Rich Panel -- store it now, it is never retrievable again. Acting token needs canManageTokens.
+    in a Rich Panel -- store it now, it is never retrievable again. REQUIRES A MASTER (admin)
+    token -- canManageTokens alone gets MISSING_MASTER_TOKEN (pre-flight guard, exit 3; a
+    non-master token with that flag makes the API 500, issue #599).
   kbagent token delete --project NAME --token-id ID [--yes]
     Revoke a token by its numeric id (destructive; confirms unless --yes / --json).
   kbagent token refresh --project NAME --token-id ID [--yes]
     Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
-  Notes: uses the per-project Storage token (no manage token); the acting token must have the
-  canManageTokens privilege. The importable SDK (Client(url,token)) mirrors these as
+    Needs canManageTokens only -- NOT master-guarded (that API defect is create-only). The new
+    secret is NOT written back to config.json: rotating the alias's own token leaves it dead
+    until `project edit --project ALIAS --token <NEW>`.
+  Notes: uses the per-project Storage token (no manage token). `token create` requires a MASTER
+  (admin) token; list/delete/refresh only need the canManageTokens privilege. The importable SDK
+  (Client(url,token)) has NO pre-flight guard and mirrors these as
   create_scoped_token / delete_token / refresh_token (dicts on .raw, typed ScopedTokenResult on the facade).
 
 ### Sharing (Cross-Project)
@@ -817,7 +895,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent sharing unshare --project ALIAS --bucket-id ID
     Disable sharing. Fails if linked buckets exist. Requires master token.
 
-  kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+  kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
     Link a shared bucket into a project (read-only). Uses regular token.
 
   kbagent sharing unlink --project ALIAS --bucket-id ID
@@ -1122,7 +1200,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     [--git-public/--no-git-public] [--git-username USER]
     [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...]
     [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
-    [--type python-js|python|streamlit|r|...] [--branch ID]
+    [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID]
     [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
     Create + configure + deploy in one call. Default `--auth password` mints
     a 20-char hex simpleAuth password (retrievable via `data-app password`).
@@ -1137,6 +1215,19 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --type http_token --permissions readWrite + push code to the managed repo
     URL -> deploy. The platform injects the clone credentials at deploy time,
     so no credential wiring is needed.
+    --workspace (0.87.0+, DEFAULT ON) writes runtime.workspace.enabled=true --
+    the single switch that makes the platform provision the ephemeral workspace
+    and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
+    Any app that reads Storage needs it. Before 0.87.0 kbagent never wrote it,
+    so apps deployed, reported state=running, passed the health probe, and then
+    served no data, with NO platform-side diagnostic: verify by reading
+    `config detail` -> `configuration.runtime`, not by grepping `data-app logs`
+    (a `Missing env vars: WORKSPACE_ID` line comes from the app's own code, so
+    its absence rules nothing out). Pass --no-workspace only for an app that
+    never touches Storage. Retrofit an existing app with:
+      kbagent config update --project P --component-id keboola.data-apps
+        --config-id ID --merge --set 'runtime.workspace.enabled=true'
+    then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID]
@@ -1297,6 +1388,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --branch (since 0.47.0): per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
+    Branch-scoped (since v0.89.0, #649): the local side is read from exactly ONE tree --
+    the target branch's subtree, or main/ when the target has none. `sync pull --branch
+    <dev>` re-targets the WHOLE manifest to that branch, so a later production diff
+    reads a main/ tree the manifest no longer tracks. Entries belonging to another
+    branch's tree are excluded from the changeset and reported under `orphaned`
+    (summary.orphaned + details: component_id, config_id, path, branch_id, branch_path,
+    exists_on_target, reason, hint); human mode previews the first 10. An orphaned FILE
+    whose _keboola.config_id still resolves on the target is ADOPTED (unchanged/modified),
+    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
+    non-zero summary.orphaned with `sync pull`; promote dev-only configs with
+    `branch merge`, never by pushing them to production.
 
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
@@ -1324,12 +1426,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
+    Branch-scoped (since v0.89.0, #649): push consumes the diff's changeset, so configs
+    tracked on another branch's tree are never planned as creates -- they ride along on
+    the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 
   kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
     reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
+    value -> CONFIG_ERROR naming the key + type.
     Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
     but does not push.
 

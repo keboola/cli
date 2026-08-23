@@ -130,9 +130,15 @@ class _TokensMixin(_CoreClient):
         ``can_read_all_file_uploads`` only widens *reading* files uploaded by
         *other* tokens (a device sees its own uploads regardless).
 
-        The acting token must carry ``canManageTokens`` (the API rejects the
-        create otherwise -- surfaced as an ``ACCESS_DENIED`` :class:`KeboolaApiError`
-        with the token masked). The returned dict is the raw API response; its
+        The acting token must be a **master (admin) token** -- ``canManageTokens``
+        alone is not sufficient. ``POST /v2/storage/tokens`` authorizes via
+        ``CreateTokenVoter``, which throws a ``LogicException`` ("Normal token
+        cannot have manage tokens") for a non-admin token carrying that flag,
+        surfaced as a generic 500 "Application error." rather than a 403
+        (issue #599; a token without the flag at all gets a clean 403
+        ``ACCESS_DENIED``). ``TokenService`` pre-flights this via
+        :meth:`get_project_info` ``isMasterToken``; direct SDK callers hit the
+        raw API behavior. The returned dict is the raw API response; its
         ``token`` field is a **one-time** secret reveal -- persist only ``id``
         (for :meth:`delete_token` / :meth:`refresh_token`) and ``expires``.
 
@@ -168,7 +174,8 @@ class _TokensMixin(_CoreClient):
         the token was minted by another token) ``creatorToken``.
 
         The acting token must carry ``canManageTokens``; the API answers 403
-        otherwise (surfaced as ``ACCESS_DENIED``).
+        otherwise (surfaced as ``ACCESS_DENIED``). Unlike the create write it
+        does **not** need to be a master token.
 
         A **secret is never listed here as a rule, but the API is not a
         guarantee**: on a project carrying the ``force-decrypted-token``
@@ -178,6 +185,61 @@ class _TokensMixin(_CoreClient):
         say) degrades to an empty list rather than blowing up in the caller.
         """
         response = self._request("GET", "/v2/storage/tokens")
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+
+    def list_token_events(self, token_id: str, *, limit: int = 1) -> list[dict[str, Any]]:
+        """List the events a token PERFORMED (``GET /v2/storage/tokens/{id}/events``).
+
+        The newest entry is an effective "last used" timestamp -- the Storage
+        API's token payloads carry no ``lastUsed`` field of their own (only the
+        Manage API's PAT response does), so recency has to be derived from this
+        feed.
+
+        **The raw feed is not that answer.** Server-side it ORs two groups
+        (``Storage\\Events\\EventsSearchQueryGenerator::getTokenEventsSearchQuery``)::
+
+            (objectId == {id} AND objectType == 'token')   -- events ABOUT the token
+            OR token.id == {id}                            -- events BY the token
+
+        Only the second group is evidence of use. A freshly minted token's
+        newest raw event is its own ``storage.tokenCreated``, so reading
+        ``events[0]`` reports a never-used token as "used today" -- exactly
+        backwards from what an audit wants. This method therefore narrows to
+        the performed-by group **server-side** via ``q=token.id:{id}`` (the
+        query form Connection's own E2E suite uses), which also avoids the
+        subtler failure of filtering client-side: right after an admin rotates
+        a token, the one event a ``limit=1`` fetch returns is the rotation --
+        an event about the token -- leaving a client-side filter with nothing
+        and reporting an actively-used token as never used.
+
+        Two limits the caller must account for, neither fixable here:
+
+        * **Dev-branch events are invisible.** The route is
+          ``isAvailableInBranch: false`` and always resolves to the default
+          branch, so the query narrows to ``idBranch == <production> OR NOT
+          EXISTS idBranch``. A token used only inside a development branch
+          comes back with an empty feed.
+        * **Retention is ~6 months.** "Never used" and "unused for longer than
+          retention" are the same empty array here; disambiguating them needs
+          the token's ``created`` date (``TokenService`` does this).
+
+        Args:
+            token_id: ID of the token whose activity to read.
+            limit: Number of events to return, newest first (the feed's default
+                sort order is ``desc``). One is enough to derive last-used.
+
+        Returns:
+            The API's event array. Each entry carries ``uuid`` (the numeric
+            ``id`` is stripped server-side), ``created`` and ``event``.
+            Anything past the documented array shape degrades to an empty list
+            rather than raising inside a caller's parallel fan-out.
+        """
+        response = self._request(
+            "GET",
+            f"/v2/storage/tokens/{quote(str(token_id), safe='')}/events",
+            params={"limit": limit, "q": f"token.id:{token_id}"},
+        )
         payload = response.json()
         return payload if isinstance(payload, list) else []
 
@@ -198,6 +260,13 @@ class _TokensMixin(_CoreClient):
         **old** token string becomes immediately invalid (rotation, not
         additive), so every place using it must be updated. The token id is
         stable across a refresh.
+
+        Server-side (``RefreshTokenVoter``) any token may refresh **itself**
+        and refreshing *another* token needs ``canManageTokens``. No master
+        token required -- the ``CreateTokenVoter`` defect behind
+        :meth:`create_scoped_token`'s master-token guard is create-only, so
+        ``TokenService.refresh_token`` deliberately does not guard this
+        (issue #599).
         """
         response = self._request(
             "POST", f"/v2/storage/tokens/{quote(str(token_id), safe='')}/refresh"

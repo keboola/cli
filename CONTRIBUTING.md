@@ -378,11 +378,11 @@ before the PR is mergeable.
 
 - [ ] **`plugins/kbagent/agents/keboola-expert.md`** -- the subagent system prompt. **Highest silent-drift risk in the repo.** Update at minimum:
   - [ ] **§1 Rule 6 VERSION GATE** examples (e.g. `flow update needs 0.22.0+`) when adding a command that introduces or relaxes a minimum-version requirement, or when an example version reference is now stale enough to mislead.
-  - [ ] **§2 Tool Selection Matrix** -- one row **per command GROUP**, not per command. When you add a new write/destructive *group* (e.g. `dev-portal`), give it a single row with `First choice / Fallback / NEVER`. Adding a command to an *existing* group needs no new row. Exhaustive per-command detail belongs in `AGENT_CONTEXT` (`kbagent context`), which is loaded dynamically on demand -- `keboola-expert.md` is a static system prompt loaded into every subagent run and carries a hard 60 KB budget, so it must stay a high-signal decision matrix, not a command catalogue. If a one-row addition would push the file over budget, trim stale content first; do **not** raise the cap. *Severity note:* authors are expected to add the group row, but `/kbagent:review` flags a missing row only **NON-BLOCKING** -- `AGENT_CONTEXT` (a BLOCKING surface above) is the authoritative command catalogue, so a missing matrix row degrades subagent ergonomics without making a command undiscoverable. Don't deprioritize it just because it's non-blocking.
+  - [ ] **§2 Tool Selection Matrix** -- one row **per command GROUP**, not per command. When you add a new write/destructive *group* (e.g. `dev-portal`), give it a single row with `First choice / Fallback / NEVER`. Adding a command to an *existing* group needs no new row. Exhaustive per-command detail belongs in `AGENT_CONTEXT` (`kbagent context`), which is loaded dynamically on demand -- `keboola-expert.md` is a static system prompt loaded into every subagent run and carries a hard 70 000 B budget, so it must stay a high-signal decision matrix, not a command catalogue. If a one-row addition would push the file over budget, trim stale content first; do **not** raise the cap. The ceiling is enforced by `tests/test_agent_prompt.py::TestPilotAgentFile::test_agent_prompt_under_token_budget`, which is the single source of truth -- check with `wc -c plugins/kbagent/agents/keboola-expert.md` before adding, and remember CI builds the merge commit, so a PR that is individually under budget can still fail once `main` has moved. *Severity note:* authors are expected to add the group row, but `/kbagent:review` flags a missing row only **NON-BLOCKING** -- `AGENT_CONTEXT` (a BLOCKING surface above) is the authoritative command catalogue, so a missing matrix row degrades subagent ergonomics without making a command undiscoverable. Don't deprioritize it just because it's non-blocking.
   - [ ] **§3 Inline Gotchas** when behavior changed in a way the agent will get wrong by default (e.g. dev-branch auto-materialization, native column-type whitelisting).
 - [ ] **`plugins/kbagent/skills/kbagent/SKILL.md`** non-table portions -- update the `description:` trigger keywords when introducing a new topic area (so description-matching auto-triggers the skill); add a workflow row to the bottom table if you created a new `references/<topic>-workflow.md`.
 - [ ] **`plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- add the new command bullet under the appropriate section. Hand-maintained, NOT auto-generated. (Yes, this partly duplicates the auto-generated SKILL.md table -- the reference carries denser per-command notes, the table is the at-a-glance picker.)
-- [ ] **`plugins/kbagent/skills/kbagent/references/gotchas.md`** -- if the command's behavior is non-obvious, add an entry tagged with `(since vX.Y.Z)`. The version tag is **non-optional**; gotchas without versions are how AI agents end up recommending behavior that does not exist on older kbagent installs.
+- [ ] **`plugins/kbagent/skills/kbagent/references/gotchas.md`** -- if the command's behavior is non-obvious, add an entry tagged with a version. In a feature PR that version is not known yet (the PR does not bump the version), so tag with the literal placeholder `(since vNEXT)` -- the release PR replaces every `vNEXT` with the version actually being released. Never guess a numeric version: `make version-gate-check` (per-PR CI) rejects any `(since vX.Y.Z)` whose version has no `changelog.py` entry. The version tag is **non-optional**; gotchas without versions are how AI agents end up recommending behavior that does not exist on older kbagent installs.
 - [ ] **`plugins/kbagent/skills/kbagent/references/<topic>-workflow.md`** -- create a new file if the command introduces a new workflow or topic area (existing examples: `workspace-workflow.md`, `branch-workflow.md`, `sync-workflow.md`, `storage-files-workflow.md`, `storage-types-workflow.md`). Single-command additions go into an existing workflow file.
 - [ ] **`plugins/kbagent/.claude-plugin/CLAUDE.md`** -- only update when the high-level delegation strategy changes (e.g. new "when NOT to delegate" cases). Most command additions do not touch this.
 - [ ] **`plugins/kbagent/commands/*.md`** -- only update if a slash-command UX changes (`/keboola`, `/kbagent:setup`, `/kbagent:review`). Most command additions do not touch these. Adding a *new* slash-command file has its own follow-through list -- see the [Plugin synchronization map](#plugin-synchronization-map) row.
@@ -454,19 +454,19 @@ release checklist below.
 
 | File | When to update | CI catches drift? |
 |------|----------------|-------------------|
-| `pyproject.toml` (`version`) | Every release | -- (single source of truth) |
-| `src/keboola_agent_cli/changelog.py` | Every release | YES (`make changelog-check`) |
+| `pyproject.toml` (`version`) | Every release -- in the dedicated release PR ONLY, never a feature PR | -- (single source of truth) |
+| `src/keboola_agent_cli/changelog.py` | Every release -- in the dedicated release PR ONLY, never a feature PR | YES (`make changelog-check`, both directions -- every release has an entry AND every entry has a release) |
 | `src/keboola_agent_cli/commands/context.py` (`AGENT_CONTEXT`) | Adding/removing/renaming commands; significant flag changes | NO |
 | `src/keboola_agent_cli/server/routers/<group>.py` | Adding/removing/renaming commands -- `kbagent serve` mirrors the CLI 1:1 for external consumers (Web UI, scheduled agents, third-party apps). Skip only for terminal-only / kbagent-infrastructure commands; document skip in PR | NO -- callers get HTTP 404 instead of "command works in CLI but not via API" silent gap |
 | `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
 | `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
 | `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
-| `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command **group** (one matrix row per group, not per command -- file has a hard 60 KB prompt budget); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
+| `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command **group** (one matrix row per group, not per command -- file has a hard 70 000 B prompt budget); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
 | `plugins/kbagent/commands/*.md` (`setup.md`, `keboola.md`, `review.md`) | Slash-command UX change (rare). **Adding a new slash-command file** also needs: the surfaces list + "For Claude Code users" block in `plugins/kbagent/.claude-plugin/CLAUDE.md`, `skills/kbagent/SKILL.md` prose if it changes the documented setup/usage path, and the user-facing flow in `README.md`, `docs/TUTORIAL.md`, `commands/context.py` `AGENT_CONTEXT` and `install.sh`'s "Next steps" | NO -- no CI gate or test reads `commands/*.md` at all |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- table | Auto-generated by `make skill-gen` | YES (`make skill-check`; pre-commit auto-stages) |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- description / rules / workflow links | New topic area in `description` triggers; new workflow file added to bottom table | NO |
 | `plugins/kbagent/skills/kbagent/references/commands-reference.md` | Adding/removing/renaming commands; flag changes | NO |
-| `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior -- always tag with `(since vX.Y.Z)` | NO |
+| `plugins/kbagent/skills/kbagent/references/gotchas.md` | New non-obvious behavior -- always tag with a version (`(since vNEXT)` in feature PRs; the release PR rewrites it to `(since vX.Y.Z)`) | PARTLY (`make version-gate-check` proves a numeric tag names a released version; `vNEXT` leftovers are caught by the release checklist grep, not CI) |
 | `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` | New workflow / topic area introduced | NO |
 | `plugins/kbagent/skills/<sibling-skill>/` (e.g. `kbagent-promotion-pipeline`) | Adding a **sibling skill** -- a self-contained skill directory next to `kbagent/`, used when the topic ships executable `scripts/` + tests or needs its own `description` triggers rather than being one more `references/*.md`. Must ALSO be linked from `kbagent/SKILL.md`'s bottom table, otherwise an agent already inside the `kbagent` skill can never discover it | NO -- `make skill-check` only regenerates `kbagent/SKILL.md` and never looks at sibling skills |
 
@@ -479,6 +479,12 @@ to catch this before the change ships.
 
 - **No `Co-Authored-By`** lines in commit messages
 - **No AI attribution footers** in PR descriptions
+- **No version bumps in feature PRs** -- `pyproject.toml`'s `version` and
+  `src/keboola_agent_cli/changelog.py` are touched ONLY by a dedicated release
+  PR (see [Releasing a new version](#releasing-a-new-version)). Parallel PRs
+  each bumping the version collide on merge and silently renumber releases.
+  Tag any new version-gated documentation with the `vNEXT` placeholder
+  (`(since vNEXT)`); the release PR replaces it with the real version.
 - **Conventional commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`
 - **One logical change per commit** -- don't mix unrelated fixes
 - **Pre-commit hook must pass** -- `ruff check` + `ruff format --check`. Install via `make hooks`
@@ -573,10 +579,26 @@ ask you to address it before merge.
 
 ## Releasing a new version
 
-A "release" is whenever you bump `pyproject.toml`'s version. Tag a feature
-branch, walk this checklist end-to-end, then merge to `main`. The point of
-steps 5-8 is that **CI will not catch you** if you skip them; they are the
-manual safety net for the silent-drift risks summarized in the
+A release is a **dedicated release PR** -- the only place `pyproject.toml`'s
+`version` and `changelog.py` are ever touched. Feature PRs merge to `main`
+without any version change; the release PR then batches **everything merged
+since the last release** into one version bump, one changelog entry, and one
+set of release notes.
+
+> **Why not bump in each feature PR?** PRs are developed in parallel (often
+> one AI session per issue). When each bumps the version, every merge is a
+> `pyproject.toml`/`changelog.py` conflict, and resolving the conflicts by
+> merging all of them renumbers releases after the fact. The
+> `KNOWN_UNRELEASED` list in `scripts/generate_changelog.py` -- 18 versions
+> whose content shipped silently, folded into a later release's wheel with no
+> release notes -- is the accumulated damage of exactly that pattern.
+
+Open the release PR from its own branch, walk this checklist end-to-end,
+merge it, then tag the resulting `main` commit (the release pipeline renders
+the GitHub release notes from the changelog entry via
+`scripts/gen_release_notes.py`). The point of steps 7-10 is that **CI will not
+catch you** if you skip them; they are the manual safety net for the
+silent-drift risks summarized in the
 [Plugin synchronization map](#plugin-synchronization-map) above.
 
 > **Want to ship a beta first?** You can. PEP 440 pre-release versions
@@ -586,23 +608,40 @@ manual safety net for the silent-drift risks summarized in the
 > [Releasing a beta (pre-release) version](#releasing-a-beta-pre-release-version)
 > below for the workflow.
 
-1. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it.
-2. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- one entry per release, no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...) and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob.
-3. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
-4. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
-5. **Manually review `plugins/kbagent/agents/keboola-expert.md`**:
+1. **Collect the raw material** -- find the last released tag
+   (`gh release list --limit 1` or `git describe --tags --abbrev=0`), then list
+   every PR merged since it:
+   ```bash
+   git log v<last>..origin/main --oneline --first-parent
+   ```
+   (or `gh pr list --state merged --base main --search "merged:><last-release-date>"`).
+   Those merged PRs are **exactly** the scope of the release: the changelog
+   entry and the release notes must cover each of them, and nothing else.
+2. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it. This is the release PR's defining change -- if you are doing this in a feature PR, stop and read the section intro above.
+3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob.
+4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released, then verify none survive:
+   ```bash
+   grep -rn "vNEXT" CLAUDE.md docs/ plugins/ src/keboola_agent_cli/commands/context.py
+   ```
+   The grep MUST come back empty before merging. This is not CI-enforced (the
+   plugin is served from the repo, so a leftover `(since vNEXT)` ships to
+   agents as an unusable version gate) -- the release PR is the only place it
+   can be fixed.
+5. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
+6. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
+7. **Manually review `plugins/kbagent/agents/keboola-expert.md`**:
    - **§1 Rule 6 VERSION GATE examples** -- if any feature this release shipped (or any feature shipped in a previous release that you missed) was previously missing-and-now-present, document it with the right minimum version. Remove stale "since X.Y.Z" mentions that no longer matter to live users.
-   - **§2 Tool Selection Matrix** -- did you add a new write/destructive command *group* since last release? Is it present with one `First choice / Fallback / NEVER` row (per group, not per command)? Mind the hard 60 KB prompt budget: trim stale content rather than raising the cap. New commands inside an existing group need no new row.
+   - **§2 Tool Selection Matrix** -- did you add a new write/destructive command *group* since last release? Is it present with one `First choice / Fallback / NEVER` row (per group, not per command)? Mind the hard 70 000 B prompt budget: trim stale content rather than raising the cap. New commands inside an existing group need no new row.
    - **§3 Inline Gotchas** -- new behavior the agent would get wrong by default? Add it.
-6. **Manually review `plugins/kbagent/skills/kbagent/references/gotchas.md`** -- every behavior introduced or changed this release that an AI agent would not infer from `--help` should have its own `(since vX.Y.Z)` entry. The version tag is non-optional.
-7. **Manually review `CLAUDE.md` `## All CLI Commands`** -- diff against `kbagent --help` output (and against `kbagent context`). Hand-maintained; CI does not catch drift here.
-8. **Manually review `plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- same drill. Hand-maintained, no CI coverage.
-9. **Run `make check`** -- lint + format + skill freshness + version sync + changelog completeness + error-code enum + full test suite.
-10. **Run `make test-e2e`** if you changed any command -- requires `E2E_API_TOKEN` and `E2E_URL`.
-11. **Open a PR** -- list every plugin file you touched in the description so reviewers can spot what was missed. Plugin files do not auto-show up in CI failures the way Python files do; reviewers are the second line of defence.
-12. **Merge via `gh pr merge`** -- never push directly to `main` (the branch is protected; this would fail anyway).
+8. **Manually review `plugins/kbagent/skills/kbagent/references/gotchas.md`** -- every behavior introduced or changed this release that an AI agent would not infer from `--help` should have its own `(since vX.Y.Z)` entry (freshly rewritten from `vNEXT` in step 4, or added now if a feature PR forgot one). The version tag is non-optional.
+9. **Manually review `CLAUDE.md` `## All CLI Commands`** -- diff against `kbagent --help` output (and against `kbagent context`). Hand-maintained; CI does not catch drift here.
+10. **Manually review `plugins/kbagent/skills/kbagent/references/commands-reference.md`** -- same drill. Hand-maintained, no CI coverage.
+11. **Run `make check`** -- lint + format + skill freshness + version sync + changelog completeness + error-code enum + full test suite.
+12. **Run `make test-e2e`** if any command changed since the last release -- requires `E2E_API_TOKEN` and `E2E_URL`.
+13. **Open the release PR** -- link the merged PRs it covers (step 1) and list every plugin file you touched in the description so reviewers can spot what was missed. Plugin files do not auto-show up in CI failures the way Python files do; reviewers are the second line of defence.
+14. **Merge via `gh pr merge`**, then tag the resulting `main` commit and publish the release -- never push directly to `main` (the branch is protected; this would fail anyway).
 
-If any of steps 5-8 reveal "I should have done this in the PR that introduced
+If any of steps 7-10 reveal "I should have done this in the PR that introduced
 the command, not at release time", **also patch the per-command checklist**
 above so the next contributor catches the gap earlier.
 
@@ -610,7 +649,15 @@ above so the next contributor catches the gap earlier.
 
 Beta and release-candidate versions follow PEP 440: `X.Y.Zb1`, `X.Y.Zb2`,
 `X.Y.Zrc1`, ... -- not the SemVer `-beta.1` form (hatchling and uv require
-PEP 440 syntax in `pyproject.toml`'s `version` field). Two gates keep stable
+PEP 440 syntax in `pyproject.toml`'s `version` field).
+
+A beta is the **one exception** to "version bumps only in the release PR":
+the pre-release tag and GitHub Release are cut from the feature branch itself,
+so the bump deliberately rides that branch -- for the duration of the beta,
+the feature branch *is* the release PR. `main` stays on the stable channel
+until the stable release PR ships the final version.
+
+Two gates keep stable
 users safe from accidentally landing on a beta:
 
 1. **Version string itself.** PEP 440 marks any pre-release suffix as such;
@@ -687,6 +734,7 @@ make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
 make check-sentinel-guards # Verify no kbc-session:// sentinel path is unguarded
+make version-gate-check # Verify every (since vX.Y.Z) / X.Y.Z+ marker names a released version
 make skill-gen          # Regenerate SKILL.md from CLI command metadata
 ```
 
@@ -702,7 +750,8 @@ Two GitHub Actions workflows guard the repo:
 
 - **`check` job** (one run, Python 3.12): the static half of `make check` --
   lint, format, `ty` type-check, SKILL.md freshness, version consistency, the
-  command-sync silent-drift gate, and the error-code enum check. These are
+  command-sync and version-gate silent-drift gates, and the error-code enum
+  check. These are
   deterministic and interpreter-independent, so they do not fan out across the
   matrix. (`changelog-check` stays local-only: it needs `gh` auth and audits
   published releases, a release-time concern -- not a per-PR gate.)

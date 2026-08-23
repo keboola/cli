@@ -6,9 +6,19 @@ token endpoints (``POST /v2/storage/tokens``, ``DELETE .../{id}``,
 :class:`KeboolaClient` factory (testability).
 
 These are **Storage API** operations authenticated with the per-project Storage
-token (``X-StorageApi-Token``) -- no manage token is involved. The acting token
-must itself carry ``canManageTokens``; the API rejects the mint/rotate otherwise
-(surfaced as an ``ACCESS_DENIED`` :class:`KeboolaApiError` with the token masked).
+token (``X-StorageApi-Token``) -- no manage token is involved. **Minting**
+requires a **master (admin) Storage token** -- ``canManageTokens`` alone is not
+sufficient: the Storage API's ``CreateTokenVoter`` treats a non-admin token
+carrying that flag as an impossible state and throws a ``LogicException``
+(surfaced as a generic 500 "Application error."), which is exactly the shape of
+token ``org setup`` / ``project refresh`` mint (issue #599). A pre-flight guard
+turns that into a clean ``MISSING_MASTER_TOKEN`` error before any write.
+
+That defect is create-only. Rotating, listing and deleting need just
+``canManageTokens`` (``RefreshTokenVoter`` additionally lets any token rotate
+itself) and are deliberately **not** guarded -- blocking them would break
+working paths, most sharply the incident one: rotating a leaked device token
+from an ``org setup`` project token.
 
 The scoped-token use case is the Keboola "single-bucket write token" pattern
 (and device enrollment, ADR 0005 in keboola/jasnost): mint a narrow, expiring
@@ -22,11 +32,12 @@ from collections.abc import Callable
 from typing import Any
 
 from ..client import KeboolaClient
-from ..config_store import ConfigStore
+from ..errors import ErrorCode, KeboolaApiError
+from ._token_last_used import dormancy_rank, enrich_tokens
 from .base import (
+    BaseService,
     ResolvedProjectCredentials,
     default_client_factory,
-    make_client_factory,
     resolve_project_credentials,
 )
 
@@ -47,16 +58,14 @@ def default_token_client_factory(stack_url: str, token: str) -> KeboolaClient:
     return default_client_factory(stack_url, token)
 
 
-class TokenService:
-    """Business logic for scoped Storage token create / delete / refresh."""
+class TokenService(BaseService):
+    """Business logic for scoped Storage token create / delete / refresh.
 
-    def __init__(
-        self,
-        config_store: ConfigStore,
-        client_factory: KeboolaClientFactory | None = None,
-    ) -> None:
-        self._config_store = config_store
-        self._client_factory = client_factory or make_client_factory(config_store)
+    Extends :class:`BaseService` for its worker-pool sizing
+    (``_resolve_max_workers``: env var > config.json > 10), which the
+    ``--with-last-used`` fan-out shares with every other parallel operation in
+    the CLI rather than inventing its own limit.
+    """
 
     def create_scoped_token(
         self,
@@ -85,6 +94,7 @@ class TokenService:
             bucket_permissions[bucket_id] = "write"
         client = self._client_factory(creds.stack_url, creds.token)
         try:
+            self._require_master_token(client, alias=alias)
             result = client.create_scoped_token(
                 description=description,
                 bucket_permissions=bucket_permissions or None,
@@ -96,7 +106,7 @@ class TokenService:
         finally:
             client.close()
 
-    def list_tokens(self, *, alias: str) -> dict[str, Any]:
+    def list_tokens(self, *, alias: str, with_last_used: bool = False) -> dict[str, Any]:
         """List every Storage token in ``alias``'s project.
 
         Returns ``{"alias", "count", "tokens"}``. Each entry is the raw API
@@ -106,7 +116,17 @@ class TokenService:
         "the secret is revealed once, at mint" contract for every token at
         once. Everything else is passed through untouched.
 
-        The acting token needs ``canManageTokens``, same as create/refresh.
+        With ``with_last_used`` every entry additionally carries ``lastUsed``,
+        ``lastUsedEvent`` and ``lastUsedStatus``, and the result grows an
+        ``errors`` list; the rows are re-ordered dormant-first so reading order
+        is cleanup order. See :meth:`_enrich_with_last_used`. The flag is
+        opt-in because it costs one extra request per token -- a plain listing
+        that only wants an id to hand to ``token delete`` must not pay for it,
+        and machine consumers keep the exact response shape they parse today.
+
+        The acting token needs ``canManageTokens`` -- unlike ``create`` it does
+        **not** need to be a master token, so this listing is deliberately not
+        behind :meth:`_require_master_token`.
         """
         creds = self._resolve_project(alias)
         client = self._client_factory(creds.stack_url, creds.token)
@@ -115,9 +135,25 @@ class TokenService:
                 {key: value for key, value in token.items() if key != "token"}
                 for token in client.list_tokens()
             ]
-            return {"alias": alias, "count": len(tokens), "tokens": tokens}
+            result: dict[str, Any] = {"alias": alias, "count": len(tokens), "tokens": tokens}
+            if with_last_used:
+                errors = self._enrich_with_last_used(client, tokens)
+                tokens.sort(key=dormancy_rank)
+                result["errors"] = errors
+            return result
         finally:
             client.close()
+
+    def _enrich_with_last_used(
+        self, client: KeboolaClient, tokens: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Fan out the last-used lookup over the shared worker pool.
+
+        Sizing comes from :meth:`BaseService._resolve_max_workers` (env var >
+        config.json > 10) so this obeys the same concurrency ceiling as every
+        other parallel operation in the CLI instead of inventing its own.
+        """
+        return enrich_tokens(client, tokens, max_workers=self._resolve_max_workers())
 
     def delete_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Revoke a token immediately in ``alias``'s project."""
@@ -130,7 +166,15 @@ class TokenService:
             client.close()
 
     def refresh_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
-        """Rotate a token (old value invalidated) in ``alias``'s project."""
+        """Rotate a token (old value invalidated) in ``alias``'s project.
+
+        Deliberately **not** behind :meth:`_require_master_token`. The
+        ``CreateTokenVoter`` defect that guard exists for lives only on the
+        create endpoint; ``RefreshTokenVoter`` lets any token rotate itself and
+        a ``canManageTokens`` token rotate another, both of which work today.
+        Guarding here would block a working incident path -- revoking a leaked
+        device token from an ``org setup`` project token -- to fix nothing.
+        """
         creds = self._resolve_project(alias)
         client = self._client_factory(creds.stack_url, creds.token)
         try:
@@ -138,6 +182,44 @@ class TokenService:
             return {"alias": alias, **result}
         finally:
             client.close()
+
+    def _require_master_token(self, client: KeboolaClient, *, alias: str) -> None:
+        """Fail fast unless the acting token is a master (admin) token.
+
+        Pre-flight for the token mint only (``token refresh`` is deliberately
+        exempt -- see :meth:`refresh_token`), mirroring the
+        ``config oauth-url`` guard: ``POST /v2/storage/tokens`` authorizes via
+        ``CreateTokenVoter``, which throws a ``LogicException`` ("Normal token
+        cannot have manage tokens") for a non-admin token carrying
+        ``canManageTokens`` -- surfaced to the caller as a vague 500
+        "Application error." instead of a 403. Every token minted by
+        ``org setup`` / ``project refresh`` is exactly that shape (issue #599),
+        so without this check the operator gets a misleading server-side error
+        for what is really a local credential problem.
+
+        Raises:
+            KeboolaApiError: ``MISSING_MASTER_TOKEN`` (403) when the acting
+                token is not a master token.
+        """
+        info = client.get_project_info()
+        if not info.get("isMasterToken", False):
+            raise KeboolaApiError(
+                status_code=403,
+                error_code=ErrorCode.MISSING_MASTER_TOKEN,
+                message=(
+                    f"`token create` requires a master Storage API token on "
+                    f"project '{alias}'. The current token "
+                    f"(id={info.get('id', '?')}, "
+                    f"description='{info.get('description', '?')}') is not a "
+                    f"master token -- `canManageTokens` alone is not enough: "
+                    f"the Storage API rejects the request with a generic 500 "
+                    f"'Application error.' (CreateTokenVoter LogicException, "
+                    f"issue #599). Point the alias at a master token "
+                    f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                    f"-- master = the token from your own user account in the "
+                    f"Keboola UI, `isMasterToken: true` in `kbagent token list`."
+                ),
+            )
 
     def _resolve_project(self, alias: str) -> ResolvedProjectCredentials:
         """Resolve ``alias`` to its stack URL + token (or raise ConfigError)."""

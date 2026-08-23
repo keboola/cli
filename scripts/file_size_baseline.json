@@ -3,9 +3,9 @@
   "files": {
     "commands/config.py": 2007,
     "commands/lineage.py": 1271,
-    "commands/storage.py": 2246,
-    "services/data_app_service.py": 1726,
-    "services/storage_service.py": 1733,
+    "commands/storage.py": 2221,
+    "services/data_app_service.py": 1641,
+    "services/storage_service.py": 1684,
     "services/sync_service.py": 1655
   }
 }

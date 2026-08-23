@@ -25,11 +25,28 @@ from ..constants import (
     MANIFEST_VERSION,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..sync.branch_registry import (
+    ScaffoldPlacement,
+    ensure_branch_registered,
+    register_branch_dir,
+    resolve_scaffold_placement,
+)
+from ..sync.branch_scope import (
+    VERDICT_CREATE,
+    VERDICT_ORPHAN,
+    branch_tree_path,
+    classify_untracked,
+    find_untracked_configs,
+    find_untracked_rows,
+    scope_manifest,
+    stale_tree_record,
+)
 from ..sync.code_extraction import extract_code_files, merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
+    dump_config_yaml,
     local_config_to_api,
     local_row_to_api,
 )
@@ -1237,16 +1254,33 @@ class SyncService(BaseService):
                     row_key = f"{component_id}/{config_id}/rows/{row_id}"
                     remote_rows[row_key] = api_row_to_local(row, component_id)
 
-        # Build local configs list from manifest.
+        # Scope the manifest to the ONE tree this diff reads from (issue #649).
+        # ``manifest.configurations`` is flat and may reference several branch
+        # trees at once -- ``sync pull --branch <dev>`` re-targets every entry
+        # to the dev branch and orphans the previously pulled ``main/`` tree on
+        # disk. Entries belonging to another tree must not diff against this
+        # target: push reads every file through ``source_branch_path`` anyway,
+        # so they would be pushed from a different file than the one that
+        # produced their classification -- and a dev-only config compared
+        # against production came out as ``added``, i.e. a duplicate create.
+        # They are excluded and reported under ``orphaned`` instead.
+        source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
+        remote_keys = set(remote_configs)
+        scope = scope_manifest(manifest, project_root, source_branch_path, remote_keys)
+        never_fetched = scope.never_fetched
+        never_fetched_keys = scope.never_fetched_keys
+        tracked_keys = scope.tracked_keys
+        orphaned: list[dict[str, Any]] = list(scope.orphaned)
+
+        # Build local configs list from the in-tree manifest entries.
         # For files unchanged since pull, use the stored pull_config_hash
         # directly (avoids lossy code extraction roundtrip).
         # For locally modified files, merge code back for real comparison.
         local_configs: list[dict[str, Any]] = []
         file_unchanged: dict[str, bool] = {}
         local_override_hashes: dict[str, str] = {}
-        for cfg in manifest.configurations:
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            config_dir = project_root / branch_path / cfg.path
+        for cfg in scope.in_tree:
+            config_dir = project_root / source_branch_path / cfg.path
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
@@ -1293,41 +1327,11 @@ class SyncService(BaseService):
                 }
             )
 
-        # Build set of manifest-tracked keys so that compute_changeset only
-        # flags configs that were previously pulled (not brand-new remote ones).
-        # Never-fetched guard (issue #472): an entry with an EMPTY pull_hash
-        # and no file on disk was registered but never materialized (e.g. by a
-        # pre-0.72 name-collision pull).  Treating it as tracked would classify
-        # it "deleted" and ``push --force`` would delete a remote config nobody
-        # ever deleted.  Exclude it and surface it so callers can warn; the
-        # next ``sync pull`` re-materializes it.
-        tracked_keys: set[str] = set()
-        never_fetched: list[dict[str, str]] = []
-        for cfg in manifest.configurations:
-            key = f"{cfg.component_id}/{cfg.id}"
-            if not cfg.metadata.get("pull_hash"):
-                branch_path = self._find_branch_path(manifest, cfg.branch_id)
-                cfg_file = project_root / branch_path / cfg.path / CONFIG_FILENAME
-                if not cfg_file.exists():
-                    never_fetched.append(
-                        {
-                            "component_id": cfg.component_id,
-                            "config_id": cfg.id,
-                            "path": cfg.path,
-                        }
-                    )
-                    continue
-            tracked_keys.add(key)
-        never_fetched_keys = {
-            f"{item['component_id']}/{item['config_id']}" for item in never_fetched
-        }
-
         # Also add untracked local configs (new files). Scan ONLY the branch
         # subtree push reads from -- scanning another branch's tree (e.g.
         # ``main/`` while targeting a dev branch) turned configs orphaned by a
         # branch switch into phantom "added" entries, and push then created a
         # duplicate on the target branch for each of them (issue #482).
-        source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
         for added_cfg in self._find_untracked_configs(
             project_root, manifest, only_branch_path=source_branch_path
         ):
@@ -1337,19 +1341,31 @@ class SyncService(BaseService):
                 continue
             component_id = added_cfg.get("component_id", "unknown")
             merge_code_files(component_id, local_data, config_dir)
-            # Adopt-by-id guard (issue #482): an untracked file whose
+            # Adopt-by-id guard (issues #482 / #649): an untracked file whose
             # ``_keboola.config_id`` resolves on the target branch and is not
-            # claimed by any manifest entry refers to an EXISTING remote
-            # config -- diff against it (unchanged/modified) instead of
-            # letting push create a duplicate. A claimed id means the user
+            # claimed by a manifest entry IN THIS TREE refers to an EXISTING
+            # remote config -- diff against it (unchanged/modified) instead of
+            # letting push create a duplicate. A same-tree claim means the user
             # copied a tracked config dir to fork it: keep the create.
             untracked_id = added_cfg.get("config_id", "")
-            untracked_key = f"{component_id}/{untracked_id}"
-            if not (
-                untracked_id
-                and untracked_key in remote_configs
-                and untracked_key not in tracked_keys
-            ):
+            verdict = classify_untracked(
+                component_id=component_id,
+                config_id=untracked_id,
+                claims=scope.claims,
+                source_branch_path=source_branch_path,
+                remote_keys=remote_keys,
+            )
+            if verdict == VERDICT_ORPHAN:
+                orphaned.append(
+                    stale_tree_record(
+                        component_id=component_id,
+                        config_id=untracked_id,
+                        path=added_cfg["path"],
+                        claims=scope.claims,
+                    )
+                )
+                continue
+            if verdict == VERDICT_CREATE:
                 untracked_id = ""  # new config, push creates it
             local_configs.append(
                 {
@@ -1366,7 +1382,7 @@ class SyncService(BaseService):
         # Fallback: if file is unchanged since pull, use current config_hash
         # as the base (since local == base when file hasn't been modified).
         base_hashes: dict[str, str] = {}
-        for cfg in manifest.configurations:
+        for cfg in scope.in_tree:
             key = f"{cfg.component_id}/{cfg.id}"
             pch = cfg.metadata.get("pull_config_hash")
             if pch:
@@ -1392,13 +1408,12 @@ class SyncService(BaseService):
         local_rows: list[dict[str, Any]] = []
         tracked_row_keys: set[str] = set()
         row_base_hashes: dict[str, str] = {}
-        for cfg in manifest.configurations:
-            if f"{cfg.component_id}/{cfg.id}" in never_fetched_keys:
-                # Rows of a never-fetched parent were never materialized either;
-                # tracking them would plan remote row deletes (issue #472).
-                continue
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            parent_dir = project_root / branch_path / cfg.path
+        # ``scope.in_tree`` already drops never-fetched parents (whose rows were
+        # never materialized either, so tracking them would plan remote row
+        # deletes -- issue #472) and parents tracked on another branch's tree
+        # (whose rows belong to that branch -- issue #649).
+        for cfg in scope.in_tree:
+            parent_dir = project_root / source_branch_path / cfg.path
             for row in cfg.rows:
                 row_key = f"{cfg.component_id}/{cfg.id}/rows/{row.id}"
                 tracked_row_keys.add(row_key)
@@ -1424,7 +1439,9 @@ class SyncService(BaseService):
         # Also add untracked local rows (new row dirs dropped under a tracked
         # config). They have no row_id yet so compute_row_changeset flags
         # them as "added" and push dispatches them via create_config_row.
-        for untracked in self._find_untracked_rows(project_root, manifest):
+        for untracked in self._find_untracked_rows(
+            project_root, manifest, only_branch_path=source_branch_path
+        ):
             local_rows.append(
                 {
                     "component_id": untracked["component_id"],
@@ -1470,6 +1487,7 @@ class SyncService(BaseService):
             "changes": [c.to_dict() for c in changeset],
             "remote_only": remote_only,
             "never_fetched": never_fetched,
+            "orphaned": orphaned,
             "summary": {
                 "added": len(added),
                 "modified": len(modified),
@@ -1483,6 +1501,7 @@ class SyncService(BaseService):
                 - len(conflicts),
                 "remote_only": len(remote_only),
                 "never_fetched": len(never_fetched),
+                "orphaned": len(orphaned),
             },
         }
 
@@ -1530,6 +1549,9 @@ class SyncService(BaseService):
         diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
         never_fetched = diff_result.get("never_fetched", [])
+        # Configs excluded from the changeset because they belong to another
+        # branch's tree (issue #649) -- reported, never pushed.
+        orphaned = diff_result.get("orphaned", [])
 
         # Only push local-side changes (added, modified, deleted).
         # Skip remote_modified (need pull) and conflict (need resolution).
@@ -1552,6 +1574,8 @@ class SyncService(BaseService):
                 result["skipped_reason"] = "Remote changes detected. Run 'sync pull' first."
             if never_fetched:
                 result["never_fetched"] = never_fetched
+            if orphaned:
+                result["orphaned"] = orphaned
             return result
 
         if dry_run:
@@ -1562,6 +1586,8 @@ class SyncService(BaseService):
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched
+            if orphaned:
+                dry_result["orphaned"] = orphaned
             return dry_result
 
         projects = self.resolve_projects([alias])
@@ -1843,6 +1869,8 @@ class SyncService(BaseService):
             result_data["name_drift_warnings"] = name_drift_warnings
         if never_fetched:
             result_data["never_fetched"] = never_fetched
+        if orphaned:
+            result_data["orphaned"] = orphaned
         return result_data
 
     def clone_project(
@@ -2089,13 +2117,7 @@ class SyncService(BaseService):
         """
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / CONFIG_FILENAME
-        content = yaml.dump(
-            config_data,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-            width=120,
-        )
+        content = dump_config_yaml(config_data)
         config_file.write_text(content, encoding="utf-8", newline="")
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -2174,69 +2196,55 @@ class SyncService(BaseService):
             logger.warning("Failed to parse %s", config_file)
             return None
 
+    def register_branch_dir(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int,
+    ) -> str:
+        """Resolve (and register if needed) the on-disk directory for *branch_id*.
+
+        Thin wrapper over :func:`..sync.branch_registry.register_branch_dir`
+        (issue #644); see that module for the semantics.
+        """
+        projects = self.resolve_projects([alias])
+        return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
+
+    def resolve_scaffold_placement(
+        self,
+        alias: str,
+        project_root: Path,
+        branch_id: int | None,
+    ) -> ScaffoldPlacement:
+        """Resolve where a ``config new --push`` scaffold belongs on disk.
+
+        Thin wrapper over :func:`..sync.branch_registry.resolve_scaffold_placement`
+        (issue #644).
+        """
+        # Resolved for BOTH paths: the production path needs the project id
+        # for the foreign-workspace mismatch check (PR #653 review sweep).
+        project = self.resolve_projects([alias])[alias]
+        return resolve_scaffold_placement(project, project_root, branch_id, self._client_factory)
+
     def _ensure_branch_registered(
         self,
         manifest: Manifest,
         branch_id: int | None,
         client: Any,
     ) -> str | None:
-        """Ensure *branch_id* has an entry in ``manifest.branches``.
-
-        If *branch_id* is ``None`` (production) or already present, this is
-        a no-op.  Otherwise the branch name is fetched from the API and a
-        new :class:`ManifestBranch` is appended.
-
-        Returns:
-            The new branch path if one was added, ``None`` otherwise.
-        """
-        if branch_id is None:
-            return None
-
-        # Already registered?
-        for branch in manifest.branches:
-            if branch.id == branch_id:
-                return None
-
-        # Fetch branch info from API to get a human-readable name
-        all_branches = client.list_dev_branches()
-        branch_name = ""
-        for b in all_branches:
-            if b.get("id") == branch_id:
-                branch_name = b.get("name", "")
-                break
-
-        # Generate filesystem-safe path
-        path = sanitize_name(branch_name) if branch_name else ""
-        if not path:
-            path = f"branch-{branch_id}"
-
-        # Handle path uniqueness -- avoid collisions with existing entries
-        existing_paths = {br.path for br in manifest.branches}
-        if path in existing_paths:
-            path = f"{path}-{branch_id}"
-
-        manifest.branches.append(ManifestBranch(id=branch_id, path=path))
-        logger.info("Registered dev branch %d as '%s' in manifest", branch_id, path)
-        return path
+        """Delegate to :func:`..sync.branch_registry.ensure_branch_registered`."""
+        return ensure_branch_registered(manifest, branch_id, client)
 
     def _find_branch_path(self, manifest: Manifest, branch_id: int | None) -> str:
         """Find the branch directory name for a given branch ID.
 
-        When ``branch_id`` is ``None`` (production / default branch),
-        return the first branch path from the manifest.
+        Thin wrapper over :func:`sync.branch_scope.branch_tree_path`, which is
+        also the normalizer the branch-scoping logic (issue #649) compares
+        with: production is spelled ``None``, ``0`` and "the default branch's
+        numeric id" depending on how the manifest entry was written, and all
+        three must map to the same tree.
         """
-        if branch_id is None:
-            # Production -- use default branch path
-            return manifest.branches[0].path if manifest.branches else "main"
-        for branch in manifest.branches:
-            if branch.id == branch_id:
-                return branch.path
-        # Fallback to default branch -- should not happen after _ensure_branch_registered
-        logger.warning(
-            "Branch ID %s not found in manifest, falling back to default path",
-            branch_id,
-        )
-        return manifest.branches[0].path if manifest.branches else "main"
+        return branch_tree_path(manifest, branch_id)
 
     def _branch_path_has_configs(self, branch_dir: Path) -> bool:
         """Return True if *branch_dir* exists and holds at least one config.
@@ -2294,106 +2302,22 @@ class SyncService(BaseService):
     ) -> list[dict[str, str]]:
         """Scan for _config.yml files that are not tracked in the manifest.
 
-        When ``only_branch_path`` is given, scan exactly that branch subtree.
-        ``diff`` / ``push`` pass the resolved *source* branch path (the tree
-        push reads configs from) so that files belonging to a different
-        branch's tree can never be classified as "added" for the target
-        branch: after a branch switch, ``sync pull`` re-targets
-        ``manifest.configurations`` to the new branch, orphaning the previous
-        branch's tree on disk -- and every orphaned file used to surface as
-        "added", making ``sync push`` create a duplicate config on the target
-        branch for each of them (issue #482).
-
-        Without ``only_branch_path`` (``sync status``), scan branch
-        directories the user is actively working with: branches that already
-        have tracked configs and the default branch (production). The default
-        branch is always in scope so the documented "scaffold locally then
-        push" workflow works on workspaces with empty
-        ``manifest.configurations`` (issue #267, Bug B). Branches outside
-        this scope are skipped to avoid phantom "added" configs from
-        orphaned dev-branch directories left over from previous work.
+        Delegates to :func:`sync.branch_scope.find_untracked_configs`; see
+        there for the branch-scoping rules (issues #267, #482, #649).
         """
-        tracked_paths: set[str] = set()
-        in_scope_branch_ids: set[int] = set()
-        for cfg in manifest.configurations:
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            tracked_paths.add(str(project_root / branch_path / cfg.path))
-            in_scope_branch_ids.add(cfg.branch_id)
+        return find_untracked_configs(
+            project_root, manifest, self._read_config_file, only_branch_path
+        )
 
-        # Default branch is always in scope -- pushing a brand-new config
-        # against production with empty configurations[] is a legitimate flow.
-        if manifest.branches:
-            in_scope_branch_ids.add(manifest.branches[0].id)
-
-        added: list[dict[str, str]] = []
-        for branch in manifest.branches:
-            if only_branch_path is not None:
-                if branch.path != only_branch_path:
-                    continue
-            elif branch.id not in in_scope_branch_ids:
-                continue
-            branch_dir = project_root / branch.path
-            if not branch_dir.exists():
-                continue
-            for config_file in branch_dir.rglob(CONFIG_FILENAME):
-                config_dir = config_file.parent
-                # Skip row-level configs (they're under rows/ subdirectory)
-                if "rows" in config_dir.parts:
-                    continue
-                # Skip branch-level _config.yml
-                if config_dir == branch_dir:
-                    continue
-                if str(config_dir) not in tracked_paths:
-                    local_data = self._read_config_file(config_dir)
-                    keboola_meta = local_data.get("_keboola", {}) if local_data else {}
-                    added.append(
-                        {
-                            "component_id": keboola_meta.get("component_id", "unknown"),
-                            "config_id": keboola_meta.get("config_id", ""),
-                            "path": config_dir.relative_to(project_root / branch.path).as_posix(),
-                        }
-                    )
-
-        return added
-
-    def _find_untracked_rows(self, project_root: Path, manifest: Manifest) -> list[dict[str, Any]]:
+    def _find_untracked_rows(
+        self,
+        project_root: Path,
+        manifest: Manifest,
+        only_branch_path: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Scan tracked config dirs for ``rows/*/_config.yml`` not in manifest.
 
-        Paralleling :meth:`_find_untracked_configs` at the row level. A user
-        can drop a hand-crafted row directory under a tracked config's
-        ``rows/`` folder; this surfaces it so :meth:`diff` can flag it as
-        ``"added"`` and :meth:`push` can POST it via ``create_config_row``.
-
-        Each entry contains ``component_id``, ``parent_config_id``,
-        ``row_name`` (from the loaded YAML), ``path`` (relative to the parent
-        config dir, e.g. ``rows/new-row``), and ``data`` (the loaded dict).
+        Delegates to :func:`sync.branch_scope.find_untracked_rows`; see there
+        for the branch-scoping rules (issue #649).
         """
-        added: list[dict[str, Any]] = []
-        for cfg in manifest.configurations:
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            parent_dir = project_root / branch_path / cfg.path
-            rows_dir = parent_dir / "rows"
-            if not rows_dir.is_dir():
-                continue
-            tracked_row_paths = {row.path for row in cfg.rows}
-            for row_subdir in rows_dir.iterdir():
-                if not row_subdir.is_dir():
-                    continue
-                row_rel_path = f"rows/{row_subdir.name}"
-                if row_rel_path in tracked_row_paths:
-                    continue
-                if not (row_subdir / CONFIG_FILENAME).exists():
-                    continue
-                local_data = self._read_config_file(row_subdir)
-                if local_data is None:
-                    continue
-                added.append(
-                    {
-                        "component_id": cfg.component_id,
-                        "parent_config_id": cfg.id,
-                        "row_name": local_data.get("name", ""),
-                        "path": row_rel_path,
-                        "data": local_data,
-                    }
-                )
-        return added
+        return find_untracked_rows(project_root, manifest, self._read_config_file, only_branch_path)

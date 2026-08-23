@@ -274,6 +274,18 @@ def data_app_create(
         "--type",
         help="Runtime type. Default 'python-js' covers Python AND Node apps.",
     ),
+    workspace: bool = typer.Option(
+        True,
+        "--workspace/--no-workspace",
+        help=(
+            "Grant the app Storage access by writing "
+            "runtime.workspace.enabled=true (default). This is what makes the "
+            "platform inject WORKSPACE_ID / QUERY_SERVICE_URL / "
+            "KBC_WORKSPACE_MANIFEST_PATH -- without it an app that reads "
+            "Storage deploys and reports running while serving no data. Pass "
+            "--no-workspace only for an app that never touches Storage."
+        ),
+    ),
     branch: int | None = typer.Option(
         None,
         "--branch",
@@ -381,6 +393,7 @@ def data_app_create(
             size=size,
             auto_suspend_after_seconds=auto_suspend,
             type_=type_,
+            workspace=workspace,
             branch_id=branch,
             deploy=not no_deploy,
             wait=wait,
@@ -415,6 +428,21 @@ def data_app_create(
             if result.get("use_managed_git_repo"):
                 repo_id = result.get("managed_git_repo_id") or "(provisioning)"
                 formatter.console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
+            if result.get("workspace"):
+                # Report what we WROTE, not what the platform will do with it.
+                # kbagent sets the key; whether the runtime honours it is the
+                # platform's call, so "requested" is the honest verb here.
+                formatter.console.print(
+                    "  [bold]Storage access:[/bold] requested (runtime.workspace.enabled=true)"
+                )
+            else:
+                # --no-workspace is the footgun shape: say it out loud
+                # so a dead data path is never a silent surprise at runtime.
+                formatter.console.print(
+                    "  [bold yellow]Storage access:[/bold yellow] DISABLED "
+                    "(--no-workspace) -- WORKSPACE_ID / QUERY_SERVICE_URL will "
+                    "not be injected; an app that reads Storage will serve no data"
+                )
             if result.get("url"):
                 formatter.console.print(f"  [bold]URL:[/bold] {result['url']}")
             formatter.console.print(

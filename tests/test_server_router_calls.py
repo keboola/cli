@@ -290,6 +290,53 @@ def test_storage_describe_columns_passes_columns_kwarg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# storage.py  POST /columns/{p}/describe-migrate
+# Service: storage.describe_migrate(...)  -- the 1:1 mirror of the CLI command
+# ---------------------------------------------------------------------------
+
+
+def test_storage_describe_migrate_forwards_scope_and_flags(tmp_path: Path) -> None:
+    """Router must forward every scope/flag kwarg to StorageService.describe_migrate."""
+    storage_svc = MagicMock()
+    storage_svc.describe_migrate.return_value = {"tables_migrated": 1}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/columns/{PROJECT}/describe-migrate",
+            headers=AUTH,
+            json={"table_ids": [TABLE_ID], "prune_orphans": True, "dry_run": True},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = storage_svc.describe_migrate.call_args.kwargs
+    assert kwargs["alias"] == PROJECT
+    assert kwargs["table_ids"] == [TABLE_ID]
+    assert kwargs["bucket_id"] is None
+    assert kwargs["prune_orphans"] is True
+    assert kwargs["dry_run"] is True
+
+
+def test_storage_describe_migrate_defaults_to_whole_project_write(tmp_path: Path) -> None:
+    """An empty body means whole-project scope and a real (non-dry-run) write."""
+    storage_svc = MagicMock()
+    storage_svc.describe_migrate.return_value = {"tables_migrated": 0}
+    registry = _mock_registry(storage=storage_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(f"/storage/columns/{PROJECT}/describe-migrate", headers=AUTH, json={})
+
+    assert res.status_code == 200, res.text
+    kwargs = storage_svc.describe_migrate.call_args.kwargs
+    assert kwargs["table_ids"] is None
+    assert kwargs["bucket_id"] is None
+    assert kwargs["dry_run"] is False
+    assert kwargs["prune_orphans"] is False
+
+
+# ---------------------------------------------------------------------------
 # storage.py  POST /{p}  (create table)
 # Service: storage.create_table(source_table_id=..., time_partitioning_*=...,
 #          clustering_fields=...) -- the source-copy + BigQuery layout params
@@ -997,6 +1044,47 @@ def test_data_app_create_passes_use_managed_git_repo(tmp_path: Path) -> None:
     kwargs = data_app_svc.create_data_app.call_args.kwargs
     assert kwargs.get("use_managed_git_repo") is True
     assert kwargs.get("git_repo") == ""
+
+
+def test_data_app_create_workspace_defaults_on_over_rest(tmp_path: Path) -> None:
+    """The REST surface must default Storage access ON, like the CLI."""
+    data_app_svc = MagicMock()
+    data_app_svc.create_data_app.return_value = {"app_id": "9", "workspace": True}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}",
+            headers=AUTH,
+            json={"name": "App", "slug": "app", "git_repo": "https://github.com/o/r"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert data_app_svc.create_data_app.call_args.kwargs.get("workspace") is True
+
+
+def test_data_app_create_workspace_can_be_disabled_over_rest(tmp_path: Path) -> None:
+    """``"workspace": false`` in the body must reach the service."""
+    data_app_svc = MagicMock()
+    data_app_svc.create_data_app.return_value = {"app_id": "9", "workspace": False}
+    registry = _mock_registry(data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/data-apps/{PROJECT}",
+            headers=AUTH,
+            json={
+                "name": "App",
+                "slug": "app",
+                "git_repo": "https://github.com/o/r",
+                "workspace": False,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert data_app_svc.create_data_app.call_args.kwargs.get("workspace") is False
 
 
 def test_data_app_runs_endpoint_calls_service(tmp_path: Path) -> None:
@@ -2019,3 +2107,203 @@ def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -
     notification_svc.get_subscription_detail.assert_called_once_with(
         alias=PROJECT, subscription_id="1234"
     )
+
+
+# ---------------------------------------------------------------------------
+# token.py  GET /{p}/list?with_last_used=
+# Service: token.list_tokens(alias=..., with_last_used=...)
+# The enrichment is one extra Storage call PER TOKEN, so a router that dropped
+# the query param would silently make every REST listing pay for it -- or,
+# worse, silently never deliver it.
+# ---------------------------------------------------------------------------
+
+
+def test_token_list_forwards_with_last_used_kwarg(tmp_path: Path) -> None:
+    """`?with_last_used=true` must reach TokenService.list_tokens."""
+    token_svc = MagicMock()
+    token_svc.list_tokens.return_value = {"alias": PROJECT, "count": 0, "tokens": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/token/{PROJECT}/list", params={"with_last_used": "true"}, headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    kwargs = token_svc.list_tokens.call_args.kwargs
+    assert kwargs.get("with_last_used") is True, f"got kwargs={kwargs}"
+
+
+def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
+    """Omitting the param must NOT opt the caller into the N+1 enrichment."""
+    token_svc = MagicMock()
+    token_svc.list_tokens.return_value = {"alias": PROJECT, "count": 0, "tokens": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/token/{PROJECT}/list", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False
+
+
+# 0.88.0 MCP-parity flags: every one must be reachable over `kbagent serve`,
+# not just from the CLI. Each router docstring claims it "Mirrors" its command,
+# so a flag the router cannot express makes that claim false (PR #632 review).
+# ---------------------------------------------------------------------------
+
+
+def test_jobs_list_forwards_offset_and_sort(tmp_path: Path) -> None:
+    """GET /jobs must expose the Queue API paging controls."""
+    job_svc = MagicMock()
+    job_svc.list_jobs.return_value = {"jobs": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/jobs?offset=100&sort_by=endTime&sort_order=asc",
+            headers=AUTH,
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = job_svc.list_jobs.call_args.kwargs
+    assert kwargs["offset"] == 100
+    assert kwargs["sort_by"] == "endTime"
+    assert kwargs["sort_order"] == "asc"
+
+
+def test_jobs_detail_forwards_log_tail_lines(tmp_path: Path) -> None:
+    """GET /jobs/{p}/{id} must be able to ask for the log tail."""
+    job_svc = MagicMock()
+    job_svc.get_job_detail.return_value = {"id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/jobs/{PROJECT}/123?log_tail_lines=25", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert job_svc.get_job_detail.call_args.kwargs["log_tail_lines"] == 25
+
+
+def test_jobs_detail_defaults_to_no_log_tail(tmp_path: Path) -> None:
+    """The extra events call stays opt-in over REST too."""
+    job_svc = MagicMock()
+    job_svc.get_job_detail.return_value = {"id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/jobs/{PROJECT}/123", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert job_svc.get_job_detail.call_args.kwargs["log_tail_lines"] == 0
+
+
+def test_search_forwards_scopes(tmp_path: Path) -> None:
+    """GET /search must forward repeated ?scope= as scopes=."""
+    search_svc = MagicMock()
+    search_svc.search.return_value = {"results": [], "errors": [], "stats": {}}
+    app = _make_app_with_registry(tmp_path, _mock_registry(search=search_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/search?query=orders&search_type=config-based"
+            "&scope=storage.input&scope=storage.output",
+            headers=AUTH,
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = search_svc.search.call_args.kwargs
+    assert kwargs["scopes"] == ["storage.input", "storage.output"]
+
+
+def test_sharing_link_forwards_stage(tmp_path: Path) -> None:
+    """POST /sharing/{p}/link must be able to target the out stage."""
+    sharing_svc = MagicMock()
+    sharing_svc.link.return_value = {"linked_bucket_id": "out.c-x", "message": "ok"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(sharing=sharing_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/sharing/{PROJECT}/link",
+            headers=AUTH,
+            json={"source_project_id": 9, "bucket_id": "out.c-data", "stage": "out"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert sharing_svc.link.call_args.kwargs["stage"] == "out"
+
+
+def test_sharing_link_stage_defaults_to_in(tmp_path: Path) -> None:
+    """Omitting stage keeps the CLI's `in` default, not the source bucket's."""
+    sharing_svc = MagicMock()
+    sharing_svc.link.return_value = {"linked_bucket_id": "in.c-x", "message": "ok"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(sharing=sharing_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/sharing/{PROJECT}/link",
+            headers=AUTH,
+            json={"source_project_id": 9, "bucket_id": "out.c-data"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert sharing_svc.link.call_args.kwargs["stage"] == "in"
+
+
+def test_storage_tables_forwards_include_usage(tmp_path: Path) -> None:
+    """GET /storage/tables must expose the usage scan."""
+    storage_svc = MagicMock()
+    storage_svc.list_tables.return_value = {"tables": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/storage/tables?include_usage=true", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert storage_svc.list_tables.call_args.kwargs["include_usage"] is True
+
+
+# ---------------------------------------------------------------------------
+# configs.py  trash safety: DELETE dry_run + restore + trash listing (0.89.0)
+# ---------------------------------------------------------------------------
+
+
+def test_config_delete_forwards_dry_run(tmp_path: Path) -> None:
+    """DELETE /configs/... must be able to preview without deleting."""
+    cfg_svc = MagicMock()
+    cfg_svc.delete_config.return_value = {"status": "would_delete"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(
+            f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}?dry_run=true", headers=AUTH
+        )
+
+    assert res.status_code == 200, res.text
+    assert cfg_svc.delete_config.call_args.kwargs["dry_run"] is True
+
+
+def test_config_restore_route(tmp_path: Path) -> None:
+    """POST .../restore mirrors `kbagent config restore`."""
+    cfg_svc = MagicMock()
+    cfg_svc.restore_config.return_value = {"status": "restored"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/restore", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    kwargs = cfg_svc.restore_config.call_args.kwargs
+    assert kwargs["component_id"] == COMPONENT
+    assert kwargs["config_id"] == CONFIG_ID
+
+
+def test_config_trash_list_route(tmp_path: Path) -> None:
+    """GET /configs/trash/{project} mirrors `kbagent config trash-list`."""
+    cfg_svc = MagicMock()
+    cfg_svc.list_config_trash.return_value = {"trash": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(config=cfg_svc))
+
+    with TestClient(app) as client:
+        res = client.get(f"/configs/trash/{PROJECT}?component_id={COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT

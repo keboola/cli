@@ -16,6 +16,7 @@ from keboola_agent_cli.services.component_service import (
     _generate_from_schema,
     _mask_secrets,
 )
+from keboola_agent_cli.sync.config_format import local_config_to_api
 
 # ---------------------------------------------------------------------------
 # Sample API responses
@@ -478,12 +479,84 @@ class TestGenerateScaffold:
         assert "tasks:" in content, "Flow config must contain tasks section"
         assert "goto:" in content, "Flow config must use goto transitions"
         assert "dependsOn" not in content, "Conditional flows do not use dependsOn"
+        assert "version: 2" in content, "Flow config must declare version: 2"
 
-        # Verify it's valid YAML with string ids
+        # Verify it's valid YAML with string ids. phases/tasks live under
+        # _configuration_extra (not top-level) so local_config_to_api merges
+        # them back into the API configuration body on push -- see
+        # test_scaffold_flow_round_trips_through_local_config_to_api below.
         parsed = yaml.safe_load(content)
-        assert parsed["phases"][0]["id"] == "phase-1"
-        assert parsed["tasks"][0]["phase"] == "phase-1"
-        assert parsed["tasks"][0]["task"]["type"] == "job"
+        extra = parsed["_configuration_extra"]
+        assert extra["phases"][0]["id"] == "phase-1"
+        assert extra["tasks"][0]["phase"] == "phase-1"
+        assert extra["tasks"][0]["task"]["type"] == "job"
+
+    def test_scaffold_flow_round_trips_through_local_config_to_api(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The flow scaffold must survive `sync push`'s local -> API conversion.
+
+        `local_config_to_api` (sync/config_format.py) only promotes
+        `parameters`/`input`/`output`/`processors` to the API configuration
+        body; every other top-level key is dropped unless it was preserved
+        under `_configuration_extra`. Before this fix, `phases`/`tasks` sat
+        at the top level of the flow scaffold and were silently lost on push,
+        producing a flow with an empty configuration (issue #650 follow-up).
+        """
+        mock_ai = _make_ai_client(detail_response=FLOW_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias="prod", component_id="keboola.flow")
+        config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
+        parsed = yaml.safe_load(config_file["content"])
+
+        _name, _description, configuration = local_config_to_api(parsed)
+
+        assert "phases" in configuration, (
+            "local_config_to_api must preserve phases from the flow scaffold"
+        )
+        assert "tasks" in configuration, (
+            "local_config_to_api must preserve tasks from the flow scaffold"
+        )
+        assert configuration["phases"][0]["id"] == "phase-1"
+        assert configuration["tasks"][0]["task"]["componentId"] == "keboola.ex-http"
+
+    @pytest.mark.parametrize(
+        ("detail_response", "component_id"),
+        [
+            (EXTRACTOR_RESPONSE, "keboola.ex-http"),
+            (SQL_TRANSFORM_RESPONSE, "keboola.snowflake-transformation"),
+            (PYTHON_TRANSFORM_RESPONSE, "keboola.python-transformation-v2"),
+            (CUSTOM_PYTHON_APP_RESPONSE, "kds-team.app-custom-python"),
+            (FLOW_RESPONSE, "keboola.flow"),
+        ],
+        ids=["extractor", "sql_transformation", "python_transformation", "custom_python", "flow"],
+    )
+    def test_scaffold_every_category_has_keboola_block(
+        self, tmp_config_dir: Path, detail_response: dict[str, Any], component_id: str
+    ) -> None:
+        """Every scaffold category's _config.yml must carry a `_keboola` block.
+
+        `sync push` resolves the component of an untracked local config from
+        `_keboola.component_id` (`_find_untracked_configs` in sync_service.py);
+        a scaffold category missing this block falls back to "unknown" and can
+        never be pushed from disk (issue #650). The flow category used to be
+        the sole exception -- regression-guard every category here so a future
+        scaffold builder cannot reintroduce the gap.
+        """
+        mock_ai = _make_ai_client(detail_response=detail_response)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias="prod", component_id=component_id)
+
+        config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
+        content = config_file["content"]
+
+        assert "_keboola:" in content, (
+            f"_config.yml for {component_id} must contain a _keboola block"
+        )
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == component_id
 
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""
@@ -764,3 +837,218 @@ class TestGenerateFromSchema:
         schema = {"properties": {"threshold": {"type": "number", "default": 0.5}}}
         result = _generate_from_schema(schema)
         assert result["threshold"] == 0.5
+
+
+# ===========================================================================
+# stamp_scaffold_config_id + build_pushed_config_files (issue #644)
+# ===========================================================================
+
+
+_SCAFFOLD_YML = (
+    "# Component: HTTP (keboola.ex-http)\n"
+    "# Type: extractor\n"
+    "#\n"
+    "# NOTE: config_id will be assigned by Keboola on first push\n"
+    "version: 2\n"
+    'name: "test-config"\n'
+    "description: |\n"
+    "  TODO: describe this configuration\n"
+    "\n"
+    "parameters: {}\n"
+    "\n"
+    "_keboola:\n"
+    "  component_id: keboola.ex-http\n"
+    "\n"
+)
+
+
+class TestStampScaffoldConfigId:
+    """The --push path must record the created config's ID in the scaffold.
+
+    Without the ID the next ``sync push`` treats the directory as a brand-new
+    configuration and creates a duplicate (issue #644).
+    """
+
+    def _scaffold(self) -> dict[str, Any]:
+        return {
+            "component_id": "keboola.ex-http",
+            "component_name": "HTTP",
+            "component_type": "extractor",
+            "directory": "extractor/keboola.ex-http/test-config",
+            "files": [
+                {"path": "_config.yml", "content": _SCAFFOLD_YML},
+                {"path": "transform.sql", "content": "SELECT 1;\n"},
+            ],
+        }
+
+    def test_stamps_id_into_existing_keboola_block(self) -> None:
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        result = stamp_scaffold_config_id(self._scaffold(), "01m0njbrqwpyqbx0yqfqq9pyen")
+        content = result["files"][0]["content"]
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "01m0njbrqwpyqbx0yqfqq9pyen"
+        # The misleading "first push" note must be gone on this path.
+        assert "assigned by Keboola on first push" not in content
+
+    def test_numeric_id_stays_a_string(self) -> None:
+        """Legacy numeric config IDs must round-trip as YAML strings.
+
+        An unquoted ``config_id: 12345`` parses as int and then never matches
+        the string-keyed remote lookup in the sync diff adopt-by-id guard.
+        """
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        result = stamp_scaffold_config_id(self._scaffold(), "12345")
+        parsed = yaml.safe_load(result["files"][0]["content"])
+        assert parsed["_keboola"]["config_id"] == "12345"
+        assert isinstance(parsed["_keboola"]["config_id"], str)
+
+    def test_appends_block_when_keboola_missing(self) -> None:
+        """Flow scaffolds have no _keboola block (issue #650); stamping must
+        create one so the pushed flow is adoptable too."""
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        scaffold = self._scaffold()
+        scaffold["files"][0]["content"] = 'name: "my flow"\nphases: []\n'
+        result = stamp_scaffold_config_id(scaffold, "999")
+        parsed = yaml.safe_load(result["files"][0]["content"])
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "999"
+
+    def test_stamps_real_generator_output_with_single_keboola_block(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Guard against builder-format drift: feed REAL _build_config_yml
+        output through the stamper (PR #653 review) -- a renamed or
+        reordered _keboola block would silently fall into the append path
+        and produce a duplicate block."""
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+        scaffold = service.generate_scaffold(alias="prod", component_id="keboola.ex-http")
+
+        stamped = stamp_scaffold_config_id(scaffold, "01m0njbrqwpyqbx0yqfqq9pyen")
+
+        content = stamped["files"][0]["content"]
+        assert content.count("_keboola:") == 1, "stamping must not append a second block"
+        parsed = yaml.safe_load(content)
+        assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+        assert parsed["_keboola"]["config_id"] == "01m0njbrqwpyqbx0yqfqq9pyen"
+        assert "assigned by Keboola on first push" not in content
+
+    def test_companion_files_untouched_and_input_not_mutated(self) -> None:
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        scaffold = self._scaffold()
+        original_yml = scaffold["files"][0]["content"]
+        result = stamp_scaffold_config_id(scaffold, "12345")
+        assert result["files"][1]["content"] == "SELECT 1;\n"
+        # Pure function: the input scaffold must not be mutated.
+        assert scaffold["files"][0]["content"] == original_yml
+
+
+class TestMaterializePushedConfig:
+    """When --configuration was pushed, the local dir must mirror the pushed
+    body exactly the way ``sync pull`` would materialize it -- placeholder
+    scaffolding would make the next ``sync push`` overwrite the real remote
+    config with TODO templates, and inline-only YAML would drop the code
+    files pull-based trees carry."""
+
+    def test_mirrors_pushed_body(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        written = materialize_pushed_config(
+            component_id="keboola.ex-http",
+            config_id="12345",
+            name="test-config",
+            description="desc",
+            configuration={
+                "parameters": {
+                    "baseUrl": "https://example.com",
+                    "#token": "KBC::ProjectSecure::abc",
+                },
+                "storage": {"input": {"tables": [{"source": "in.c-b.t"}]}},
+            },
+            config_dir=tmp_path,
+        )
+        # _description.md is pull-parity: sync pull extracts a non-empty
+        # description into a companion file the same way.
+        assert written == ["_config.yml", "_description.md"]
+        parsed = yaml.safe_load((tmp_path / "_config.yml").read_text(encoding="utf-8"))
+        assert parsed["name"] == "test-config"
+        assert parsed["parameters"]["baseUrl"] == "https://example.com"
+        # Encrypted value travels verbatim -- never decrypted, never a TODO.
+        assert parsed["parameters"]["#token"] == "KBC::ProjectSecure::abc"
+        assert parsed["input"] == {"tables": [{"source": "in.c-b.t"}]}
+        assert parsed["_keboola"] == {
+            "component_id": "keboola.ex-http",
+            "config_id": "12345",
+        }
+
+    def test_transformation_body_extracts_real_code(self, tmp_path: Path) -> None:
+        """A pushed SQL body must yield a real transform.sql (like sync pull),
+        NOT a placeholder -- and not disappear entirely (PR #653 review)."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        written = materialize_pushed_config(
+            component_id="keboola.snowflake-transformation",
+            config_id="67890",
+            name="tf",
+            description="",
+            configuration={
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "Blocks",
+                            "codes": [{"name": "Code", "script": ["SELECT 1;"]}],
+                        }
+                    ]
+                }
+            },
+            config_dir=tmp_path,
+        )
+        assert "transform.sql" in written and "_config.yml" in written
+        sql = (tmp_path / "transform.sql").read_text(encoding="utf-8")
+        assert "SELECT 1;" in sql
+        assert "TODO" not in sql
+
+    def test_null_parameters_body_does_not_crash(self, tmp_path: Path) -> None:
+        """'{"parameters": null}' is accepted by the Storage API; the local
+        materialization must not crash after the remote create succeeded
+        (PR #653 review sweep)."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        written = materialize_pushed_config(
+            component_id="keboola.snowflake-transformation",
+            config_id="123",
+            name="tf",
+            description="",
+            configuration={"parameters": None},
+            config_dir=tmp_path,
+        )
+        assert "_config.yml" in written
+
+    def test_stale_files_not_reported_and_stale_description_removed(self, tmp_path: Path) -> None:
+        """The slugified dir can pre-exist: stray files must not be reported
+        as written, and a stale _description.md must not misattribute to the
+        new config when the pushed description is empty."""
+        from keboola_agent_cli.services.component_service import materialize_pushed_config
+
+        (tmp_path / "_description.md").write_text("old description", encoding="utf-8")
+        (tmp_path / "leftover_notes.txt").write_text("stray", encoding="utf-8")
+
+        written = materialize_pushed_config(
+            component_id="keboola.ex-http",
+            config_id="123",
+            name="cfg",
+            description="",
+            configuration={"parameters": {"a": 1}},
+            config_dir=tmp_path,
+        )
+        assert written == ["_config.yml"]
+        assert not (tmp_path / "_description.md").exists()
+        # Stray unrelated files are left alone -- just not claimed as ours.
+        assert (tmp_path / "leftover_notes.txt").exists()

@@ -207,6 +207,19 @@ When several people (or several Claude sessions) edit the same project:
   [sync workflow](sync-workflow.md) (per-branch local checkout with
   explicit `pull` / `diff` / `push`) over ad-hoc `config update`.
 
+## Deleting a configuration is reversible -- deleting it twice was not
+
+`kbagent config delete` soft-deletes into the Storage trash and has
+`--dry-run` *(since v0.89.0)*. Undo with `kbagent config restore`; list what is
+restorable with `kbagent config trash-list`.
+
+Never blind-retry a delete on an older kbagent: the raw Storage API PURGES
+permanently when a DELETE lands on a configuration already in the trash, so on
+0.88.0 and earlier a retry-after-timeout destroyed the configuration with its
+versions, rows and metadata. Since 0.89.0 kbagent locates the configuration
+first and answers `already_in_trash` (exit 0) instead of sending that second
+DELETE. See [gotchas.md](gotchas.md).
+
 ## When dry-run is not available
 
 A few destructive operations don't (yet) have `--dry-run`:

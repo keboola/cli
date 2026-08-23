@@ -520,6 +520,9 @@ class TestFullE2E:
         _step("19c", "config new --push validation", "real schema vs real body (#587)")
         self._test_config_new_push_schema_validation()
 
+        _step("19c2", "config new --push --output-dir", "scaffold carries created config_id (#644)")
+        self._test_config_new_push_output_dir()
+
         _step("19d", "config clone", "whole-config duplicate incl. rows (#587)")
         self._test_config_clone()
 
@@ -950,6 +953,28 @@ class TestFullE2E:
             "--yes",
         )
 
+        # Verify the swap through `definition` (issue #621). The table ID is
+        # identical whether or not the swap happened -- the registered layout is
+        # the only thing that tells the two apart, and before 0.88.0 kbagent
+        # could not read it at all. `create-table`'s own output is no substitute:
+        # it echoes the layout that was REQUESTED.
+        swapped = self._run_ok(
+            "storage",
+            "table-detail",
+            "--project",
+            self.alias,
+            "--table-id",
+            source_table_id,
+            "--branch",
+            str(branch_id),
+        )["data"]
+        definition = swapped["definition"]
+        assert isinstance(definition, dict), f"Expected a definition object, got {definition!r}"
+        assert definition.get("clustering", {}).get("fields") == ["id"], (
+            "The clustering layout applied by create-table is not readable on the "
+            f"production name after the swap: {definition.get('clustering')!r}"
+        )
+
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""
         csv_path = _create_test_csv(self.data_dir, rows=5)
@@ -1299,6 +1324,14 @@ class TestFullE2E:
         assert "id" in col_names
         assert "name" in col_names
         assert "value" in col_names
+        # The raw Storage API `definition` is passed through (issue #621). It is
+        # present on every table-detail response regardless of backend or typing,
+        # so the KEY is the contract here; the BigQuery layout inside it is
+        # asserted in _test_create_table_from_source where a layout is actually set.
+        assert "definition" in detail, (
+            "table-detail dropped `definition` -- the BigQuery partition/cluster "
+            "layout is unreadable without it (issue #621)"
+        )
 
     def _test_download_table(self, table_id: str) -> None:
         """Download table data and verify round-trip integrity."""
@@ -2157,6 +2190,62 @@ class TestFullE2E:
             # remote config promptly; the global teardown loop is a safety
             # net for the case where this delete itself fails.
             # ``config delete`` has no ``--yes`` flag (CLAUDE.md inventory).
+            self._run_ok(
+                "config",
+                "delete",
+                "--project",
+                self.alias,
+                "--component-id",
+                "keboola.ex-http",
+                "--config-id",
+                new_config_id,
+            )
+
+    def _test_config_new_push_output_dir(self) -> None:
+        """Test ``config new --push --output-dir`` writes an adoptable scaffold (issue #644).
+
+        The written ``_config.yml`` must carry ``_keboola.config_id`` of the
+        just-created configuration -- before the #644 fix it did not, and the
+        next ``sync push`` created a duplicate (34-config incident). A plain
+        (non-sync) output dir is used, so the layout is flat and no manifest
+        is involved; the stamped ID is the contract under test.
+        """
+        import yaml as _yaml
+
+        push_name = f"{RUN_ID} push-scaffold-644"
+        out_dir = self.work_dir / "scaffold-644"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        created = self._run_ok(
+            "config",
+            "new",
+            "--component-id",
+            "keboola.ex-http",
+            "--project",
+            self.alias,
+            "--name",
+            push_name,
+            "--push",
+            "--output-dir",
+            str(out_dir),
+        )["data"]
+        new_config_id = str(created["id"])
+        self._created_config_ids.append(("keboola.ex-http", new_config_id))
+
+        try:
+            scaffold_info = created["local_scaffold"]
+            assert scaffold_info["config_id"] == new_config_id, scaffold_info
+            config_yml = Path(scaffold_info["directory"]) / "_config.yml"
+            assert config_yml.is_file(), f"scaffold not written: {scaffold_info}"
+            raw = config_yml.read_text(encoding="utf-8")
+            parsed = _yaml.safe_load(raw)
+            assert parsed["_keboola"]["component_id"] == "keboola.ex-http"
+            # The stamped ID is the duplicate-prevention contract (#644):
+            # sync diff's adopt-by-id guard pairs the dir with the remote.
+            assert parsed["_keboola"]["config_id"] == new_config_id, raw
+            assert isinstance(parsed["_keboola"]["config_id"], str)
+            assert "assigned by Keboola on first push" not in raw
+        finally:
             self._run_ok(
                 "config",
                 "delete",
@@ -3596,10 +3685,15 @@ class TestFullE2E:
             assert detail_data["data"]["id"]
 
     def _test_config_delete(self, config_id: str) -> None:
-        """Delete the test config via CLI."""
-        data = self._run_ok(
-            "config",
-            "delete",
+        """Delete the test config via CLI, exercising the 0.89.0 trash round trip.
+
+        delete -> repeated delete answers ``already_in_trash`` (the retry that
+        used to PURGE permanently) -> trash-list finds it -> restore brings it
+        back -> final delete. Every leg runs against the real Storage API, so
+        the double-delete guard is proven against the endpoint that actually
+        overloads DELETE, not against a mock.
+        """
+        common = (
             "--project",
             self.alias,
             "--component-id",
@@ -3607,7 +3701,43 @@ class TestFullE2E:
             "--config-id",
             config_id,
         )
+        data = self._run_ok("config", "delete", *common)
         assert data["data"]["config_id"] == config_id
+        assert data["data"]["status"] == "deleted"
+
+        # The retry: MUST be a no-op success, never a permanent purge.
+        data = self._run_ok("config", "delete", *common)
+        assert data["data"]["status"] == "already_in_trash"
+
+        data = self._run_ok(
+            "config",
+            "trash-list",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+        )
+        trashed_ids = [e["config_id"] for e in data["data"]["trash"]]
+        assert config_id in trashed_ids, f"{config_id} not in trash listing: {trashed_ids}"
+
+        data = self._run_ok("config", "restore", *common)
+        assert data["data"]["status"] == "restored"
+
+        # Restored config is live again -- detail must answer.
+        data = self._run_ok(
+            "config",
+            "detail",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+        )
+
+        # Final cleanup: back into the trash.
+        data = self._run_ok("config", "delete", *common)
+        assert data["data"]["status"] == "deleted"
         # Remove from cleanup since we deleted via CLI
         self._created_config_ids.remove((TEST_COMPONENT_ID, config_id))
 
@@ -3977,6 +4107,114 @@ class TestFullE2E:
         assert data["data"]["description"] == "Batch table desc"
         col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
         assert col_descs.get("id") == "Batch column id desc"
+        # The `columns` payload of PUT .../definition is a POSITIVE-ONLY patch:
+        # the batch above sent `id` alone, so `name` -- described two steps
+        # earlier -- must survive untouched. The whole write path assumes this;
+        # a full-replace endpoint would silently wipe every column left out of
+        # the payload, and the assertion on `id` alone would never notice.
+        assert col_descs.get("name") == "Human-readable name"
+        # The native write leaves no legacy flat keys behind (#624).
+        assert data["data"]["legacy_column_descriptions"] == []
+
+        self._test_storage_describe_migrate(table_id)
+
+    def _test_storage_describe_migrate(self, table_id: str) -> None:
+        """Seed a pre-0.88.0 flat metadata key and migrate it (#624).
+
+        The flat ``KBC.column.{name}.description`` convention is what kbagent
+        wrote before the native definition endpoint; nothing but kbagent ever
+        read it. Seeding goes through the raw client on purpose -- no CLI
+        command writes that shape any more.
+
+        Seeded on ``value``, the one column the describe steps above leave
+        undescribed: that is the real pre-0.88.0 shape (a legacy key and
+        nothing else). ``id`` / ``name`` already carry native descriptions,
+        so a legacy key there is a *conflict*, which the second half of this
+        test covers separately.
+        """
+        self.api.set_table_metadata(
+            table_id=table_id,
+            entries=[("KBC.column.value.description", "Legacy column description")],
+        )
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["legacy_column_descriptions"] == ["value"]
+
+        # Dry run reports the table and writes nothing.
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert data["data"]["tables_migrated"] == 0
+        migrated = {item["table_id"]: item["columns"] for item in data["data"]["migrated"]}
+        assert migrated[table_id]["value"] == "Legacy column description"
+
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["tables_migrated"] == 1
+        assert data["data"]["errors"] == []
+
+        # The description survives where everyone reads it, the legacy key is gone.
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        assert data["data"]["legacy_column_descriptions"] == []
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("value") == "Legacy column description"
+
+        # Re-running is a no-op: nothing left to migrate.
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["migrated"] == []
+
+        # A legacy key on a column that ALREADY has a native description is a
+        # conflict: the newer (visible) value wins, the stale key is reported
+        # and left alone rather than overwriting what the UI shows.
+        self.api.set_table_metadata(
+            table_id=table_id,
+            entries=[("KBC.column.id.description", "Stale legacy id description")],
+        )
+        data = self._run_ok(
+            "storage",
+            "describe-migrate",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--yes",
+        )
+        assert data["data"]["migrated"] == []
+        conflicts = [s for s in data["data"]["skipped"] if s["reason"] == "conflict"]
+        assert [s["column"] for s in conflicts] == ["id"]
+
+        data = self._run_ok(
+            "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+        )
+        col_descs = {c["name"]: c.get("description", "") for c in data["data"]["column_details"]}
+        assert col_descs.get("id") == "Batch column id desc"
+        assert data["data"]["legacy_column_descriptions"] == ["id"]
 
     def _test_semantic_layer_roundtrip(self) -> None:
         """Live roundtrip of the semantic-layer command group against ``self.alias``.
@@ -5552,11 +5790,21 @@ class TestE2ENotificationSubscriptions:
     def _run(self, *args: str) -> Any:
         return _invoke(self.config_dir, ["--json", *args])
 
+    def _payload(self, *args: str) -> dict[str, Any]:
+        """Run the CLI and return the ``data`` payload, not the whole envelope.
+
+        ``_json_ok`` hands back ``{"status": ..., "data": {...}}``, while every
+        assertion below is about what sits inside ``data``. Unwrapping once
+        here keeps that off each call site: reading the envelope as if it were
+        the payload is exactly how this class shipped raising ``KeyError`` on
+        every run, and a per-call-site ``["data"]`` invites the same slip again.
+        """
+        return _json_ok(self._run(*args))["data"]
+
     def test_notification_list_returns_well_formed_envelope(self) -> None:
         """A plain Storage token must reach the notification host and list."""
         _step(1, "notification list -- envelope + live auth path")
-        result = self._run("notification", "list", "--project", self.alias)
-        data = _json_ok(result)
+        data = self._payload("notification", "list", "--project", self.alias)
 
         assert isinstance(data["subscriptions"], list)
         assert isinstance(data["errors"], list)
@@ -5584,8 +5832,9 @@ class TestE2ENotificationSubscriptions:
         filter away on the strength of the swagger.
         """
         _step(2, "notification list --event job-failed")
-        result = self._run("notification", "list", "--project", self.alias, "--event", "job-failed")
-        data = _json_ok(result)
+        data = self._payload(
+            "notification", "list", "--project", self.alias, "--event", "job-failed"
+        )
 
         assert all(row["event"] == "job-failed" for row in data["subscriptions"])
 
@@ -5598,7 +5847,7 @@ class TestE2ENotificationSubscriptions:
         loudly otherwise.
         """
         _step(3, "notification list --event <one of several>")
-        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        everything = self._payload("notification", "list", "--project", self.alias)
         rows = everything["subscriptions"]
         events = {row["event"] for row in rows}
         if len(events) < 2:
@@ -5609,9 +5858,7 @@ class TestE2ENotificationSubscriptions:
 
         target = sorted(events)[0]
         expected = sum(1 for row in rows if row["event"] == target)
-        filtered = _json_ok(
-            self._run("notification", "list", "--project", self.alias, "--event", target)
-        )
+        filtered = self._payload("notification", "list", "--project", self.alias, "--event", target)
 
         assert len(filtered["subscriptions"]) == expected
         assert len(filtered["subscriptions"]) < len(rows)
@@ -5633,7 +5880,7 @@ class TestE2ENotificationSubscriptions:
         the two behaviors apart.
         """
         _step(4, "raw ?event= behavior canary")
-        everything = _json_ok(self._run("notification", "list", "--project", self.alias))
+        everything = self._payload("notification", "list", "--project", self.alias)
         events = {row["event"] for row in everything["subscriptions"]}
         if len(events) < 2:
             pytest.skip("need >= 2 distinct events to observe the API-side filter")
@@ -5662,7 +5909,7 @@ class TestE2ENotificationSubscriptions:
         and read as "these all fire on that event".
         """
         _step(5, "notification list --event <nonexistent>")
-        result = self._run(
+        data = self._payload(
             "notification",
             "list",
             "--project",
@@ -5670,14 +5917,13 @@ class TestE2ENotificationSubscriptions:
             "--event",
             "definitely-not-an-event",
         )
-        data = _json_ok(result)
 
         assert data["subscriptions"] == []
 
     def test_config_filter_counts_excluded_catchalls(self) -> None:
         """Project-wide subscriptions dropped by a scope filter must be counted."""
         _step(6, "notification list --component-id keboola.flow")
-        unfiltered = _json_ok(self._run("notification", "list", "--project", self.alias))
+        unfiltered = self._payload("notification", "list", "--project", self.alias)
         # Only the rows the filter DROPS are counted -- a project-wide
         # subscription that filters on keboola.flow survives and is shown.
         expected_excluded = sum(
@@ -5686,15 +5932,13 @@ class TestE2ENotificationSubscriptions:
             if row["scope"] == "project-wide" and row["component_id"] != "keboola.flow"
         )
 
-        filtered = _json_ok(
-            self._run(
-                "notification",
-                "list",
-                "--project",
-                self.alias,
-                "--component-id",
-                "keboola.flow",
-            )
+        filtered = self._payload(
+            "notification",
+            "list",
+            "--project",
+            self.alias,
+            "--component-id",
+            "keboola.flow",
         )
 
         assert filtered["project_wide_excluded"] == expected_excluded
@@ -5703,20 +5947,18 @@ class TestE2ENotificationSubscriptions:
     def test_detail_round_trips_a_listed_subscription(self) -> None:
         """`detail` must resolve the same row `list` reported."""
         _step(7, "notification detail -- round-trip from list")
-        listed = _json_ok(self._run("notification", "list", "--project", self.alias))
+        listed = self._payload("notification", "list", "--project", self.alias)
         if not listed["subscriptions"]:
             pytest.skip("project has no notification subscriptions to inspect")
 
         expected = listed["subscriptions"][0]
-        detail = _json_ok(
-            self._run(
-                "notification",
-                "detail",
-                "--project",
-                self.alias,
-                "--subscription-id",
-                expected["subscription_id"],
-            )
+        detail = self._payload(
+            "notification",
+            "detail",
+            "--project",
+            self.alias,
+            "--subscription-id",
+            expected["subscription_id"],
         )
 
         assert detail["subscription_id"] == expected["subscription_id"]
@@ -8866,7 +9108,9 @@ class TestE2EDataAppLifecycle:
     def cleanup(self) -> Any:
         yield
         print("\n--- DATA-APP CLEANUP ---")
-        for app_id in self._created_app_ids:
+        # ``setup`` may have skipped before assigning this (fixture teardown
+        # still runs); a test gated only on credentials must not error here.
+        for app_id in getattr(self, "_created_app_ids", []):
             try:
                 _invoke(
                     self.config_dir,
@@ -8958,6 +9202,102 @@ class TestE2EDataAppLifecycle:
         assert detail["config_version_storage"], (
             "Storage config version should be populated after PUT"
         )
+
+        _step(4, "Storage access is granted by default")
+        assert body["data"]["workspace"] is True, (
+            "create must report Storage access enabled by default"
+        )
+        cfg = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    body["data"]["config_id"],
+                ],
+            )
+        )["data"]
+        record = cfg[0] if isinstance(cfg, list) else cfg
+        runtime = record["configuration"]["runtime"]
+        # This is the switch that makes the platform inject WORKSPACE_ID /
+        # QUERY_SERVICE_URL. Without it the app deploys and reports running
+        # while being unable to read a single row.
+        assert runtime.get("workspace") == {"enabled": True}, (
+            f"expected runtime.workspace.enabled=true in the live config, got {runtime!r}"
+        )
+        # ...and it must not have displaced the backend sizing.
+        assert runtime.get("backend", {}).get("size"), (
+            f"workspace block must be a sibling of backend, got {runtime!r}"
+        )
+
+    def test_data_app_no_workspace_omits_the_block(self) -> None:
+        """``--no-workspace`` renders the pre-0.87.0 runtime body.
+
+        Dry run: proves the opt-out reaches the request body without
+        provisioning an app on the stack.
+        """
+        _step(1, "Dry-run create with --no-workspace")
+        body = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E NoWorkspace {RUN_ID}",
+                    "--slug",
+                    f"e2e-nows-{RUN_ID}"[:60],
+                    "--git-repo",
+                    "https://github.com/keboola/does-not-matter-for-dry-run",
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-workspace",
+                    "--dry-run",
+                ],
+            )
+        )["data"]
+        assert body["dry_run"] is True
+        assert body["workspace"] is False
+        runtime = body["requests"]["put_storage_config"]["runtime"]
+        assert "workspace" not in runtime, (
+            f"--no-workspace must omit the block entirely, got {runtime!r}"
+        )
+
+        _step(2, "Same dry run WITHOUT the flag carries the block")
+        body = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Workspace {RUN_ID}",
+                    "--slug",
+                    f"e2e-ws-{RUN_ID}"[:60],
+                    "--git-repo",
+                    "https://github.com/keboola/does-not-matter-for-dry-run",
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--dry-run",
+                ],
+            )
+        )["data"]
+        assert body["workspace"] is True
+        assert body["requests"]["put_storage_config"]["runtime"]["workspace"] == {"enabled": True}
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:
@@ -9150,73 +9490,72 @@ class TestE2EDataAppLifecycle:
         self._created_app_ids.append(app_id)
 
         _step(2, "secrets-set: encrypt and write")
-        set_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-set",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                    "--secret",
-                    f"{secret_key}={secret_plaintext}",
-                    "--no-hint-next",
-                ],
-            )
+        # Keep the raw CLI result: the leak assertions below are about the
+        # command's stdout, which the parsed envelope no longer carries.
+        set_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-set",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--secret",
+                f"{secret_key}={secret_plaintext}",
+                "--no-hint-next",
+            ],
         )
-        assert secret_plaintext not in set_result["raw_output"], (
+        _json_ok(set_raw)
+        assert secret_plaintext not in set_raw.output, (
             "Plaintext value MUST NEVER appear in secrets-set output"
         )
 
         _step(3, "secrets-list: enumerate keys (never decrypts)")
-        list_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-list",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                ],
-            )
+        list_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-list",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+            ],
         )
+        list_result = _json_ok(list_raw)
         keys_in_list = [s["key"] for s in list_result["data"]["secrets"]]
         assert secret_key in keys_in_list, (
             f"secrets-list must surface the just-written key; got {keys_in_list}"
         )
-        assert secret_plaintext not in list_result["raw_output"], (
+        assert secret_plaintext not in list_raw.output, (
             "Plaintext value MUST NEVER appear in secrets-list output"
         )
 
         _step(4, "secrets-get: metadata only (never plaintext)")
-        get_result = _json_ok(
-            _invoke(
-                self.config_dir,
-                [
-                    "--json",
-                    "data-app",
-                    "secrets-get",
-                    "--project",
-                    self.alias,
-                    "--app-id",
-                    app_id,
-                    "--key",
-                    secret_key,
-                ],
-            )
+        get_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-get",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--key",
+                secret_key,
+            ],
         )
+        get_result = _json_ok(get_raw)
         assert get_result["data"]["key"] == secret_key
         assert get_result["data"]["encrypted"] is True, (
             "an encrypted secret must report encrypted=true"
         )
         assert get_result["data"]["value"] is None, "an encrypted secret must NOT expose a value"
-        assert secret_plaintext not in get_result["raw_output"], (
+        assert secret_plaintext not in get_raw.output, (
             "secrets-get MUST NEVER echo the decrypted plaintext (Encryption API is one-way)"
         )
 
@@ -10461,6 +10800,108 @@ class TestE2EMcpParityCommands:
             "config-based",
             "--project",
             self.alias,
+        )
+        assert result.exit_code == 2
+
+    # ------------------------------------------------------------------
+    # 0.88.0 MCP-parity flags
+    # ------------------------------------------------------------------
+
+    def test_search_scope_narrows_config_based_results(self) -> None:
+        """`--scope` must be accepted and can only shrink the result set."""
+        wide = self._run_ok(
+            "search", "in.c", "--search-type", "config-based", "--project", self.alias
+        )["data"]
+        scoped = self._run_ok(
+            "search",
+            "in.c",
+            "--search-type",
+            "config-based",
+            "--scope",
+            "storage.input",
+            "--project",
+            self.alias,
+        )["data"]
+
+        assert len(scoped["results"]) <= len(wide["results"])
+        for row in scoped["results"]:
+            assert row["match_count"] >= 1
+
+    def test_search_scope_with_textual_is_usage_error(self) -> None:
+        """`--scope` + textual search fails fast (exit 2), like `--regex` inverted."""
+        result = self._run("search", "data", "--scope", "parameters", "--project", self.alias)
+        assert result.exit_code == 2
+
+    def test_job_list_offset_and_sort_are_accepted(self) -> None:
+        """The Queue API must accept sortBy/sortOrder/offset as kbagent sends them."""
+        first = self._run_ok("job", "list", "--project", self.alias, "--limit", "2")["data"]
+        oldest = self._run_ok(
+            "job",
+            "list",
+            "--project",
+            self.alias,
+            "--limit",
+            "2",
+            "--sort-by",
+            "startTime",
+            "--sort-order",
+            "asc",
+        )["data"]
+        paged = self._run_ok(
+            "job", "list", "--project", self.alias, "--limit", "2", "--offset", "1"
+        )["data"]
+
+        for data in (first, oldest, paged):
+            assert "jobs" in data and "errors" in data
+
+    def test_job_list_rejects_unknown_sort_field(self) -> None:
+        result = self._run("job", "list", "--project", self.alias, "--sort-by", "whenever")
+        assert result.exit_code == 2
+
+    def test_job_detail_log_tail_lines(self) -> None:
+        """`--log-tail-lines` must attach `logTail` for a real, finished job."""
+        listing = self._run_ok("job", "list", "--project", self.alias, "--limit", "1")["data"]
+        if not listing["jobs"]:
+            pytest.skip("project has no job history")
+        job_id = str(listing["jobs"][0]["id"])
+
+        plain = self._run_ok("job", "detail", "--project", self.alias, "--job-id", job_id)["data"]
+        assert "logTail" not in plain
+
+        tailed = self._run_ok(
+            "job", "detail", "--project", self.alias, "--job-id", job_id, "--log-tail-lines", "5"
+        )["data"]
+        assert isinstance(tailed["logTail"], list)
+        assert len(tailed["logTail"]) <= 5
+
+    def test_storage_tables_include_usage(self) -> None:
+        """`--include-usage` must attach `used_by` to every row against a live project."""
+        data = self._run_ok("storage", "tables", "--project", self.alias, "--include-usage")["data"]
+
+        for row in data["tables"]:
+            assert isinstance(row["used_by"], list)
+            for ref in row["used_by"]:
+                assert ref["scope"] in ("storage.input", "storage.output")
+                assert ref["component_id"]
+
+    def test_storage_tables_without_usage_omits_used_by(self) -> None:
+        data = self._run_ok("storage", "tables", "--project", self.alias)["data"]
+        for row in data["tables"]:
+            assert "used_by" not in row
+
+    def test_sharing_link_rejects_unknown_stage(self) -> None:
+        """Stage validation happens before any API call (exit 2)."""
+        result = self._run(
+            "sharing",
+            "link",
+            "--project",
+            self.alias,
+            "--source-project-id",
+            "1",
+            "--bucket-id",
+            "out.c-nonexistent",
+            "--stage",
+            "staging",
         )
         assert result.exit_code == 2
 
@@ -13013,14 +13454,44 @@ class TestE2EDeviceEnrollmentPrimitives:
         assert all("token" not in row for row in rows.values()), (
             "token list must never carry a secret value"
         )
+        # The default shape must stay exactly what machine consumers parse today.
+        assert all("lastUsed" not in row for row in rows.values()), (
+            "the last-used fields must be absent without --with-last-used"
+        )
 
-        _step(3, "token refresh", "rotate the secret; id is stable, old value dies")
+        _step(
+            3,
+            "token list --with-last-used",
+            "a token minted seconds ago must read as never used, not 'used today'",
+        )
+        audited = self._run_ok("token", "list", "--project", self.alias, "--with-last-used")["data"]
+        audited_rows = {str(row.get("id")): row for row in audited.get("tokens") or []}
+        assert token_id in audited_rows, "the minted token must survive the enrichment"
+        minted = audited_rows[token_id]
+        # This is the regression this feature exists for. The token's own event
+        # feed is NOT empty -- it holds the `storage.tokenCreated` the ACTING
+        # token performed on it -- so a naive `events[0]` read reports it as
+        # active. Narrowing to events the token itself performed is what makes
+        # the answer "never", and the answer is provable here because the token
+        # was minted well inside the event-retention window.
+        assert minted.get("lastUsedStatus") == "never", (
+            f"a just-minted token must read as never used, got {minted.get('lastUsedStatus')!r} "
+            f"(lastUsed={minted.get('lastUsed')!r}, event={minted.get('lastUsedEvent')!r})"
+        )
+        assert minted.get("lastUsed") is None
+        assert all(
+            row.get("lastUsedStatus") in {"used", "never", "unknown", "error"}
+            for row in audited_rows.values()
+        ), "every row must carry a known last-used status"
+        assert isinstance(audited.get("errors"), list)
+
+        _step(4, "token refresh", "rotate the secret; id is stable, old value dies")
         refreshed = self._run_ok(
             "token", "refresh", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]
         assert bool(refreshed.get("token")), "rotated token must reveal a new non-empty secret"
 
-        _step(4, "token delete", "revoke immediately -- no live credential left behind")
+        _step(5, "token delete", "revoke immediately -- no live credential left behind")
         deleted = self._run_ok(
             "token", "delete", "--project", self.alias, "--token-id", token_id, "--yes"
         )["data"]

@@ -177,10 +177,11 @@ Seven methods for the "provision an OTLP ingest endpoint, then mint a narrowly-s
 
 **Scoped Storage tokens** — mint, list, revoke, rotate:
 
-- **`create_scoped_token(*, description, bucket_permissions=None, component_access=None, can_read_all_file_uploads=False, expires_in=None) -> ScopedTokenResult`** — `POST /v2/storage/tokens`. `bucket_permissions` is `{bucket_id: "read"|"write"}`; `expires_in` is seconds. The acting token must carry **`canManageTokens`** or the create 403s.
+- **`create_scoped_token(*, description, bucket_permissions=None, component_access=None, can_read_all_file_uploads=False, expires_in=None) -> ScopedTokenResult`** — `POST /v2/storage/tokens`. `bucket_permissions` is `{bucket_id: "read"|"write"}`; `expires_in` is seconds. The acting token must be a **master (admin) token**: a non-master token carrying `canManageTokens` gets a generic 500 (`CreateTokenVoter` `LogicException`, issue #599), one without the flag gets a 403. The SDK facade has no pre-flight guard (only the CLI/service layer does), so you hit the raw API behavior.
 - **`list_tokens() -> list[TokenListEntryResult]`** — `GET /v2/storage/tokens` (`0.86.0+`). Where the `token_id` for `delete_token` / `refresh_token` comes from. **Secrets are stripped before validation**: a project carrying the `force-decrypted-token` feature has the API embed live values in the listing, and `create_scoped_token` is meant to be the only reveal. The acting token needs `canManageTokens`.
+- **`list_tokens(*, with_last_used=False)`** — `with_last_used` (`0.88.0+`) additionally derives each token's most recent activity from `GET /v2/storage/tokens/{id}/events`, populating `last_used` / `last_used_event` / `last_used_status` and returning the entries dormant-first. **Opt-in: one extra request per token**, run in parallel. Read `last_used_status` rather than a bare `last_used`: `used` (timestamp is real), `never` (**proven** unused — minted inside the ~6-month event-retention window with no activity), `unknown` (older than retention, so the API cannot say — do *not* treat as never), `error` (that token's lookup failed; the entry degrades, the call still returns). Activity inside a **development branch is invisible** to this feed, so a branch-only token reads as dormant.
 - **`delete_token(token_id) -> None`** — `DELETE /v2/storage/tokens/{id}` (204, no body). Revokes.
-- **`refresh_token(token_id) -> ScopedTokenResult`** — `POST .../tokens/{id}/refresh`. Rotates the secret in place; the returned `.token` is the new secret.
+- **`refresh_token(token_id) -> ScopedTokenResult`** — `POST .../tokens/{id}/refresh`. Rotates the secret in place; the returned `.token` is the new secret. Any token may refresh itself; refreshing another token needs `canManageTokens`. No master token required — the `CreateTokenVoter` defect is create-only, so neither this facade nor the CLI guards it.
 
 ```python
 tok = kbc.create_scoped_token(
@@ -201,7 +202,7 @@ device_secret = tok.token   # ONE-TIME reveal — see the gotcha below
 **The two-call enrollment example** — provision the endpoint, then mint the device's token scoped to exactly the sink bucket:
 
 ```python
-with Client(url=URL, token=TOKEN) as kbc:   # TOKEN must have canManageTokens
+with Client(url=URL, token=TOKEN) as kbc:   # TOKEN must be a master token for create
     src = kbc.create_stream_source("my-source")     # StreamSourceResult
     # hand the device its ingest endpoint:
     print(src.otlp_url)          # carries the ingest secret in the path — UNMASKED
@@ -258,7 +259,7 @@ The two device-enrollment models (`0.66.0+`) commit these named fields:
 - **`ScopedTokenResult`** — `id`, `token` (the one-time secret, see the gotcha in §4), `description`, `expires` (`str | None`), `can_read_all_file_uploads` (alias `canReadAllFileUploads`).
 - **`StreamSourceResult`** — `id`, `source_id`, `name`, `type`, `description`, `branch_id` (default `"default"`), `otlp_url` (ingest URL, secret in the path — unmasked), `otlp_secret`, `base_endpoint`, `sink_bucket_id` (`str | None`; the `in.c-otlp-<id>` bucket to grant a device token write on).
 
-`TokenListEntryResult` (`0.86.0+`) commits `id`, `description`, `created` (`str | None`), `expires` (`str | None`), `is_expired` (alias `isExpired`), `is_master_token` (alias `isMasterToken`). It has **no secret field by design** — see `list_tokens` above.
+`TokenListEntryResult` (`0.86.0+`) commits `id`, `description`, `created` (`str | None`), `expires` (`str | None`), `is_expired` (alias `isExpired`), `is_master_token` (alias `isMasterToken`), and (`0.88.0+`) `last_used` (alias `lastUsed`), `last_used_event` (alias `lastUsedEvent`) and `last_used_status` (alias `lastUsedStatus`) — all three `str | None`, `None` unless `list_tokens(with_last_used=True)` was used. It has **no secret field by design** — see `list_tokens` above.
 
 > **The committed surface is `__all__`.** Anything exported from `keboola_agent_cli` (`Client`, `Files`, `FileEntry`, the result models, `JobIdempotencyStore`, `__version__`) is public API under semver. Renaming or removing a named field, or tightening a type, is a breaking change.
 

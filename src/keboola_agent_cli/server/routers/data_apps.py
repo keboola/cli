@@ -52,6 +52,8 @@ class DataAppCreate(BaseModel):
     size: str = "tiny"
     auto_suspend_after_seconds: int = 900
     type: str = "python-js"
+    # Storage access switch -- defaults ON, mirroring `--workspace` on the CLI.
+    workspace: bool = True
     branch_id: int | None = None
     deploy: bool = True
     wait: bool = False
@@ -132,6 +134,7 @@ def create(
         size=body.size,
         auto_suspend_after_seconds=body.auto_suspend_after_seconds,
         type_=body.type,
+        workspace=body.workspace,
         branch_id=body.branch_id,
         deploy=body.deploy,
         wait=body.wait,

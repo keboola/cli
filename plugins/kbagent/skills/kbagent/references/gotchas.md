@@ -274,6 +274,19 @@ Versioning convention:
   `parameters`/`storage` top-level keys replace the root's wholesale -- a row
   that sets `parameters.db` replaces the ENTIRE root `db` object, it does not
   deep-merge into it.
+- **`component sync-action` forwards the root `authorization` and `runtime`
+  blocks** *(since v0.89.0)*. `authorization.oauth_api.id` is the OAuth broker
+  reference the sync-actions service resolves and decrypts before invoking the
+  component. Below 0.89.0 kbagent sent only `parameters` + `storage`, so EVERY
+  sync action on an OAuth / Service-Account component (`keboola.ex-linkedin-ads`
+  and friends) died with an opaque **empty-body 400** -- the component crashed
+  before its own error handling could name the missing credential, so the
+  failure looked like a broken action rather than a missing block. If you see
+  that empty 400 on an OAuth component, check the kbagent version first. Both
+  blocks are taken from the ROOT configuration only -- a `--row-id` never
+  overrides them (docker-runner contract) -- and are forwarded only when
+  non-empty, so a component without them sends exactly the same body as before.
+  Matches keboola-mcp-server's `run_sync_action`.
 - **`transformation edit` ids are positional and renumber** after every
   structural op -- always `transformation show` immediately before `edit`
   (fresh-fetch rule). `--storage` REPLACES `configuration.storage` wholesale.
@@ -294,10 +307,26 @@ Versioning convention:
   --token-id ID` revokes. All three back the SDK facade
   (`Client.create_scoped_token` / `refresh_token` / `delete_token`) and the same
   service layer.
-- **The acting token must carry `canManageTokens`.** Without it the create/refresh
-  `POST /v2/storage/tokens[...]` returns 403. A normal project-admin storage token
-  has it; a narrowly-scoped device token does NOT — you cannot bootstrap tokens
-  from a token you just minted unless you granted it `canManageTokens`.
+- **`create` requires a MASTER (admin) token — `canManageTokens` alone is NOT
+  enough.** A non-master token carrying the flag is the Storage API's
+  "impossible state" (`CreateTokenVoter` `LogicException` → generic 500, issue
+  #599) — exactly the shape `org setup` / `project refresh` mint. Since v0.89.0
+  `token create` pre-flights `isMasterToken` and fails fast with
+  `MISSING_MASTER_TOKEN` (exit 3) naming the fix (`kbagent project edit
+  --project ALIAS --token <MASTER>`).
+- **That defect is CREATE-ONLY — `refresh` / `list` / `delete` are NOT
+  master-guarded.** `RefreshTokenVoter` lets any token rotate **itself** and a
+  `canManageTokens` token rotate another, so rotating a leaked device token
+  from an `org setup` project token works and kbagent deliberately does not
+  block it (the incident path is the last place to add a credential upgrade
+  step). Do not "fix" a failing `refresh` by hunting for a master token — read
+  the actual error. A narrowly-scoped device token has neither privilege, so
+  you still cannot bootstrap tokens from a token you just minted.
+- **`token refresh` does not write the new secret back to `config.json`.** The
+  value is printed once, exactly like `create`. Rotating the very token an
+  alias uses therefore leaves that alias holding a dead value — follow it with
+  `kbagent project edit --project ALIAS --token <NEW>` or the next command
+  fails on auth.
 - **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
   once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
   retrievable again — persist only the `id` (to revoke/refresh later) and `expires`.
@@ -1136,6 +1165,35 @@ events and emits a final `done` SSE frame mirroring the same record.
   /openapi.json` returns the full schema, which lets the AI pick the
   right route + body shape without hard-coded knowledge.
 
+## `config new --push --output-dir` scaffolds carry the created config's ID and land in the right branch subtree (since v0.89.0)
+
+- **Before 0.89.0 this combo was a duplicate factory** (issue #644): the
+  scaffold was written WITHOUT `_keboola.config_id` (the "assigned on first
+  push" comment was wrong on this path -- the config already existed), and it
+  always landed in the DEFAULT branch's tree even when the config was created
+  in a dev branch (`--branch`, or the active branch set by `branch create` /
+  `branch use`). The next `sync push` then classified the directory as a new
+  config and POSTed a duplicate -- a real incident created 34 duplicates.
+- **Since 0.89.0** the written `_config.yml` records `_keboola.config_id`
+  (double-quoted, so legacy numeric IDs stay YAML strings) and the files are
+  written into the subtree of the branch the config was ACTUALLY created in;
+  an unregistered branch is added to `manifest.branches` exactly like
+  `sync pull --branch` would. If that registration fails, files fall back to
+  `branch-{id}/` -- never to the default tree -- with a warning in
+  `warnings[]`.
+- The follow-up `sync diff` reports the new config as `modified` (placeholder
+  scaffold vs the pushed empty body) -- that is the expected "now edit and
+  push" state, NOT drift. With an explicit `--configuration` body the local
+  directory mirrors the pushed (already encrypted) body instead, materialized
+  exactly like `sync pull` would (a transformation body's `parameters.blocks`
+  become a REAL `transform.sql`/`transform.py`, a non-empty description
+  becomes `_description.md`) -- so the diff is clean and a later push cannot
+  regress the remote to TODO placeholders.
+- `--json` gains an additive `local_scaffold: {directory, files, config_id}`
+  key on this path.
+- Agents on kbagent < 0.89.0: do NOT recommend `--output-dir` + `--push`
+  together; use scaffold-only then `sync push`, or `--push --no-files`.
+
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
 - **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote
@@ -1326,6 +1384,38 @@ events and emits a final `done` SSE frame mirroring the same record.
 - **A cross-project clone is not transactional.** If a row fails mid-copy the
   error names the created configuration id and how many rows landed, so you
   can delete it and re-run.
+
+## `config delete` twice = permanent purge -- kbagent now refuses the second one (since v0.89.0)
+
+The Storage API overloads `DELETE .../configs/{id}`: on a live configuration
+it soft-deletes into the trash (restorable), but on a configuration ALREADY in
+the trash the same call **purges it permanently** -- versions, rows and
+metadata gone, no restore. The classic way to hit this is an agent retry: the
+first DELETE times out client-side after the server already trashed the
+config, the retry fires, and the retry destroys it for good.
+
+- Since 0.89.0 `config delete` locates the configuration first and never
+  sends a DELETE at anything that is not live. A config already in the trash
+  answers `status: "already_in_trash"` with **exit 0** (the retry stays
+  idempotent for scripts) and a pointer to `config restore`. A config in
+  neither place is NOT_FOUND.
+- `config restore --project P --component-id C --config-id ID` is the undo;
+  `config trash-list` shows what is restorable. Restore brings back versions,
+  rows and metadata.
+- **On kbagent <= 0.88.x the guard does not exist** -- a repeated
+  `config delete` there purges permanently. When driving an older kbagent,
+  never blind-retry a delete; check `config list` first.
+- Direct API callers: the purge-safe alternative is the dedicated
+  `POST .../configs/{id}/purge` endpoint (fails with 400 when the config is
+  not in the trash), never a second DELETE.
+- **The likeliest second DELETE is not a human retry -- it is the HTTP
+  client's own.** `DELETE` is conventionally idempotent, so most transports
+  (kbagent's included, before 0.89.0) repeat it after a read timeout or a
+  5xx. On this endpoint that automatic repeat IS the purge, and it happens
+  before any caller sees a result. If you are writing a script or another
+  client against the Storage API, disable transport-level retry for a config
+  DELETE specifically; idempotency here is a property of the endpoint, not
+  of the method.
 
 ## `data-app` JSON output: key for the app's own id is `app_id` (since v0.33.0)
 
@@ -1637,6 +1727,20 @@ events and emits a final `done` SSE frame mirroring the same record.
   per-type canon citations. Tracked as a follow-up.
 - **GitHub-only.** GitLab / Bitbucket support is a follow-up. Calling
   with a non-GitHub URL exits 2 / `INVALID_ARGUMENT`.
+- **The `setup.sh` rules read CODE, not comments** *(since v0.88.0)*. Both
+  `golden-rule.setup-sh-no-pip` and `golden-rule.setup-sh-uv-sync` strip shell
+  comments before matching. Before 0.88.0 they grepped the raw file, which broke
+  in both directions: a script whose comment read
+  `# always uv sync here, never pip install` was rejected as **BLOCKING** --
+  penalising exactly the author who documented the rule -- while a script whose
+  only mention of `uv sync` was in a comment **satisfied** the uv-sync rule
+  despite installing nothing. If you are advising on a repo validated by an
+  older kbagent, a BLOCKING `setup-sh-no-pip` may be about a comment; check the
+  file before telling anyone to change what the script runs.
+- The stripper is deliberately not a shell parser: it tracks single/double
+  quotes, so a `#` inside a string survives, but heredocs and `${...#...}`
+  expansions are out of scope. A `pip install` hidden inside a heredoc is not
+  detected -- the rule is a pre-flight heuristic, not a guarantee.
 - Exit 0 on all checks <= WARN; exit 1 on any BLOCKING. `--strict`
   treats WARNs as failures (exit 1) for CI gating.
 - **Reading the build / runtime log** is now available via
@@ -2049,6 +2153,32 @@ unknown -- do not try to parse a fallback message.
 
 See [storage-types-workflow.md](storage-types-workflow.md) for the full
 type inventory and examples.
+
+## `storage table-detail` is the only way to READ a BigQuery partition layout (since v0.88.0, #621)
+
+- **`create-table` output does not prove anything.** Its `--json` echoes the
+  `time_partitioning` / `range_partitioning` / `clustering` you *requested*, not
+  what the server registered, and its `--if-not-exists` skip path sets all three
+  to `null` on purpose (the existing table's layout is never re-derived). To
+  confirm a repartition landed, read it back:
+  `kbagent --json storage table-detail --project P --table-id T` ->
+  `.definition.timePartitioning` / `.definition.clustering`.
+- **Before 0.88.0 the field was dropped entirely.** The service assembled its
+  response from a field allowlist that omitted `definition`, so on 0.87.0 and
+  earlier the layout is unreachable from kbagent -- verifying meant raw Storage
+  API calls or BigQuery metadata access. Version-gate accordingly.
+- **`definition` is present on EVERY table-detail response**, untyped and
+  Snowflake tables included (connection builds one either way). `null` therefore
+  means the stack omitted the key -- it never means "this table is untyped".
+  Test for the layout keys, not for `definition`.
+- **`.definition.partitions` is unbounded.** It is one entry per physical
+  partition, straight from `INFORMATION_SCHEMA.PARTITIONS` -- a DAY-partitioned
+  table with a few years of history returns thousands. `--json` carries the whole
+  list; human mode prints only the count. Do not pipe the raw JSON of a large
+  partitioned table into a context window unfiltered.
+- **`storage tables` (the LIST endpoint) still has no layout.** The Storage API's
+  `include=` on the list route accepts no `definition` value, so reading the
+  layout costs one `table-detail` request per table.
 
 ## `storage create-table --source-table-id` + partition/clustering are BigQuery-only (since 0.66.0)
 
@@ -2622,21 +2752,52 @@ so setting a branch's description will **not** update the dashboard.
 `kbagent storage describe-bucket / describe-table / describe-column / describe-batch`
 write descriptive metadata onto storage objects. Three behaviors are easy to miss:
 
-- **Column descriptions use a metadata-key convention, not a column endpoint.**
-  The Keboola Storage API has no user-writable column-level metadata endpoint,
-  so `describe-column` stores each description as a `KBC.column.{name}.description`
-  entry on the **table's** metadata (upsert). `storage table-detail` reads them
-  back via the same key and surfaces them under `column_details[].description`.
-  Renaming or deleting a column does NOT automatically clean these entries up
-  (they remain on the table's metadata under the old name). Same convention for
-  table and bucket descriptions: stored as `KBC.description` (provider=user) on
-  the object's metadata.
+- **Column descriptions go through the native definition endpoint** *(since
+  v0.88.0)*. `describe-column` / `describe-batch` write via
+  `PUT /v2/storage/branch/{branch}/tables/{id}/definition` -- the endpoint the
+  web UI uses (async `tableDefinitionUpdate` storage job) -- with
+  `isDescriptionSystemManaged: false`, which is what stops the next component
+  run's Output Mapping from overwriting a hand-authored description. The backend
+  mirrors the written value into `columnMetadata` `KBC.description` for typed AND
+  untyped tables, so one write is visible to the Keboola UI, to the MCP server
+  (`get_tables`), and in the Snowflake `COMMENT` / BigQuery column description.
+  *Pre-0.88.0 behaviour:* kbagent stored each description as a flat
+  `KBC.column.{name}.description` entry on the **table's** metadata. Nothing but
+  kbagent itself ever read that key -- columns documented that way look blank in
+  the UI, are invisible to the MCP server, and never reach the warehouse. That
+  mirroring is one-way: a `POST .../metadata` write never reaches the native
+  field. Convert leftovers with `kbagent storage describe-migrate` (bulk,
+  scan-then-confirm, `--dry-run` first); `describe-column` / `describe-batch`
+  also migrate remaining legacy entries on whatever table they touch. A column
+  whose visible description already differs is skipped as `conflict` (newer value
+  wins), an entry for a dropped column is skipped as `orphan` unless
+  `--prune-orphans`. **Migrated flat entries are DELETED** -- that is deliberate:
+  leaving them would let the read fallback resurrect an old description after
+  someone clears the column's text. `table-detail` reads with the precedence
+  native definition -> `columnMetadata` `KBC.description` -> legacy flat key,
+  always returns `legacy_column_descriptions`, and warns in human mode when
+  legacy keys remain (it never writes -- safe under a read-only token or
+  `--deny-writes`). Its human-mode Columns table shows a `Description`
+  column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
+  readable only through `--json` `column_details[].description`, so a
+  blank-looking terminal table on that version does not mean the write failed.
+  Unknown column names now fail fast BEFORE any write; the old
+  flat write accepted typos silently. Table and bucket descriptions are
+  unaffected: still `KBC.description` (provider=user) on the object's metadata.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
   inspect `errors[]` (or at least `error_count`) rather than relying solely on
   the exit code — and when consuming `--json` output, never trust a zero-exit
-  as "everything applied."
+  as "everything applied." That tolerance covers **API** failures only: a
+  `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
+  section that is a list instead of a mapping of ID to description, a column
+  entry that is not a mapping, a document that is not a mapping at all) is a
+  usage error *(since v0.89.0)* — the whole file is rejected before the first
+  write with `INVALID_ARGUMENT` and exit 2, naming the offending key and its
+  actual type. Nothing is half-applied. On 0.88.0 and earlier the same input
+  raised an `AttributeError` traceback partway through, after some items had
+  already been applied.
 - **Description-field precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
   metadata entry are present, `storage bucket-detail` / `storage table-detail`
@@ -2870,7 +3031,8 @@ project list should do the same — never render the bare null.
 
 The OAuth wizard URL embeds a short-lived **child** Storage API token scoped
 to the target component. Minting this child token via `POST /v2/storage/tokens`
-requires `canManageTokens` privilege, which only **master tokens** carry.
+requires a **master (admin) token** — `canManageTokens` alone is not enough
+(issue #599: a non-master token carrying it makes the API 500 instead of 403).
 
 - Pre-flight: `kbagent` calls `verify_token` first and refuses with
   `MISSING_MASTER_TOKEN` (exit 3) before any HTTP write happens. Without this
@@ -2881,10 +3043,12 @@ requires `canManageTokens` privilege, which only **master tokens** carry.
   the OAuth flow via the Keboola UI instead.
 - AI agents creating the project token via `kbagent project add` /
   `kbagent project refresh` get a non-master token by default — they must
-  switch to a master token before calling `config oauth-url`. See
-  https://github.com/keboola/cli/issues/<TBD> for the upstream
-  request to make `project add` / `project refresh` mint a token with
-  `canManageTokens` so OAuth flows work out of the box.
+  switch to a master token before calling `config oauth-url`. Granting the
+  minted token `canManageTokens` would NOT help: issue #599 established the
+  Storage API rejects a non-admin token carrying that flag with a 500
+  (`CreateTokenVoter` "impossible state"), so a master token is the only
+  working credential here. `token create` carries the same guard since
+  v0.89.0 (`token refresh` does not — that endpoint has no such defect).
 
 ## `data-app logs` is the only unconstrained log surface (since v0.43.8)
 
@@ -3412,6 +3576,12 @@ things to internalise:
   new/empty target. Re-running clone with the same `--target-dir` is idempotent
   (`no_changes`), because after the first push the local manifest carries the new
   ULIDs that match the target remote.
+- Override files (`--bucket-map` / `--variable-values` / `--instance-rename`)
+  must be **flat `{id: scalar}` mappings** (since v0.89.0). A nested value —
+  one fat-fingered colon away from valid YAML, e.g. `in.c-old:` followed by an
+  indented `new: in.c-new` — is rejected with `CONFIG_ERROR` (exit 5) naming
+  the offending key and its actual type. Older versions silently stringified
+  it (`str(dict)` → `"{'new': 'in.c-new'}"`) and pushed that as a "bucket ID".
 
 ### `search --regex` matches entity names only; `matched_columns` is textual-only (since v0.67.0)
 
@@ -3530,6 +3700,18 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   `archive` and `system` there is no single correct command, so it is `""` and
   the sentence lives in `upgrade_hint`. **Never shell out to `upgrade_hint`**,
   and check `upgrade_command` is non-empty before running it.
+- **`upgrade_command` is empty whenever `up_to_date` is not `false`** *(since
+  v0.88.0)*. That covers `true` (nothing to upgrade to) and `null` (the release
+  feed was unreachable, so kbagent cannot name a target). Before 0.88.0 it was
+  built unconditionally, which made both states hand out a wrong command: a
+  caller on a **pre-release** compares ahead of the stable release a
+  non-`--beta` fetch returns (`0.44.0b1` >= `0.43.3`), so it read
+  `up_to_date: true` next to a `--force --reinstall` command pinned to the
+  OLDER stable wheel -- a silent downgrade off the beta. With `up_to_date:
+  null` it fell through to an **unpinned `git+` source install**, resolving
+  whatever the default branch happens to be, on the one path reached precisely
+  because kbagent could not establish what the current release is. Gate on
+  `up_to_date is False`, not on the string being present.
   Do not infer it from the version string; a frozen binary reports a perfectly
   normal version (PyInstaller bundles the dist metadata, so there is no
   `0.0.0-dev` tell).
@@ -3943,9 +4125,262 @@ the web UI.
   `token refresh` are the only reveals, and a listing that dumped live values
   would break that contract for every token in the project at once. Do not
   reach for `kbagent http get` to work around this.
-- **It needs `canManageTokens`, same as `create`.** A plain Storage token gets
-  a 403 -> `ACCESS_DENIED`.
+- **It needs `canManageTokens` — but unlike `create` it does NOT need a master
+  token** (since v0.89.0 the mint is master-guarded, issue #599). A plain
+  Storage token gets a 403 -> `ACCESS_DENIED`.
 - The master token appears in the listing with `isMasterToken: true` and cannot
   be deleted -- the API refuses.
 - SDK parity: `Client.list_tokens() -> list[TokenListEntryResult]`, secrets
   stripped there too.
+
+## A data app without `runtime.workspace.enabled` deploys green and reads nothing (since v0.87.0)
+
+- **`data-app create` now grants Storage access by default.** The new
+  `--workspace / --no-workspace` flag writes
+  `runtime.workspace.enabled: true` into the `keboola.data-apps` config, and
+  `--workspace` is the default. That flag is the **single** switch that makes
+  the platform provision the app's ephemeral workspace and inject
+  `WORKSPACE_ID`, `QUERY_SERVICE_URL` and `KBC_WORKSPACE_MANIFEST_PATH`. No
+  flag, no env vars, no Storage access -- for reads *and* writes.
+- **Before v0.87.0 kbagent never wrote it and offered no option to.** Every
+  app created with `data-app create` on 0.86.0 or earlier that reads Storage
+  has a dead data path unless someone hand-patched the config afterwards.
+  If you are debugging an app created by an older kbagent, **check this
+  first**:
+
+  ```bash
+  kbagent --json config detail --project P --component-id keboola.data-apps \
+    --config-id <cfg> | jq '.data.configuration.runtime'
+  # missing "workspace": {"enabled": true}  ->  this is your bug
+  ```
+
+- **The failure is silent and every platform-level signal is green.** The
+  deploy succeeds, `setup_sh` completes, `state=running`,
+  `desiredState=running`, the health probe passes. **The platform emits no
+  diagnostic at all** -- so do not read "the app is running" as "the app can
+  read data".
+- **The authoritative check is the config, not the log.** The platform gives
+  you nothing to grep for, so read the flag directly:
+
+  ```bash
+  kbagent --json config detail --project P --component-id keboola.data-apps \
+    --config-id <cfg> | jq '.data.configuration.runtime'
+  # no "workspace": {"enabled": true}  ->  this is your bug
+  ```
+
+- **Any log line about the missing env var comes from the APP, not the
+  platform.** An app that checks its own environment may say something like:
+
+  ```
+  [startup] initial cache load failed: Missing env vars: WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)
+  ```
+
+  That exact wording is the ai-kit DuckDB-cache template's. An app built from
+  anything else may log a different message, a generic query error, or
+  **nothing at all** -- so a `data-app logs` grep that comes back empty
+  proves nothing, and must NOT be read as ruling the workspace flag out.
+  Check the config (above) before believing a quiet log.
+- **Which of the two bad outcomes you get depends on the app's own code.** An
+  app that catches the failure serves an empty dashboard -- all zeros, no
+  error banner. An app that does not crash-loops behind the health probe,
+  which is *more* visible and therefore the better of the two. Defensive
+  coding is currently punished.
+- **Still worth reading `data-app logs` when a data app returns empty
+  results**, not just when it fails to start -- but as a *possible* clue, with
+  the config check as the decider. Nothing about this surfaces through
+  `data-app detail`, `data-app runs`, or the job status.
+- **`--no-workspace` omits the key rather than writing `enabled: false`.**
+  The request body is byte-identical to 0.86.0, so an app deliberately
+  created without Storage access carries no new config noise. Use it only for
+  an app that never touches Storage.
+- **The block is a SIBLING of `runtime.backend`, not a replacement.** The
+  correct shape (matching what the UI and MCP's `modify_python_js_data_app`
+  both write) is:
+
+  ```json
+  "runtime": {
+    "backend":   {"size": "small", "type": "e2bSandbox"},
+    "workspace": {"enabled": true}
+  }
+  ```
+
+- **Retrofitting requires a redeploy, not just a config update.** A config
+  change alone never reaches the running container:
+
+  ```bash
+  kbagent config update --project P --component-id keboola.data-apps \
+    --config-id <cfg> --merge --set 'runtime.workspace.enabled=true'
+  kbagent data-app deploy --project P --app-id <ID> --wait
+  ```
+
+  `data-app deploy` pins the LATEST config version, so the plain form is
+  correct here -- do not pass `--config-version`.
+- **Not gated on any project feature.** The `data-apps-storage-workspace`
+  project flag is being enabled everywhere and then removed, so the config
+  option is the sole control. kbagent deliberately does **not** implement
+  MCP's legacy fallback of injecting `WORKSPACE_ID` through
+  `parameters.dataApp.secrets` (`keboola-mcp-server` still does that when the
+  feature is off) -- do not add it, and do not expect to see it.
+- **`--json` reports it:** the create envelope gains a `workspace` boolean,
+  and the human output prints the Storage-access state on every create --
+  loudly when it is off. The REST surface mirrors the flag as
+  `"workspace": true` in the `POST /data-apps/{project}` body.
+
+## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.88.0)
+
+`--with-last-used` derives each token's most recent activity so you can tell
+dormant tokens from live ones before revoking anything. Storage token payloads
+carry no `lastUsed` field (only the Manage API's PAT response does), so the
+value comes from each token's own event feed -- **one extra API call per
+token**, which is why the flag is opt-in. Never add it to a `token list` whose
+only purpose is finding a `--token-id`.
+
+- **Read `lastUsedStatus`, never bare `lastUsed`.** Four values:
+  - `used` -- `lastUsed` is a real timestamp.
+  - `never` -- **proven** never used: minted inside the ~6-month event-retention
+    window with no activity of its own. This is the finding worth surfacing; it
+    usually means a mis-provisioning or an onboarding step that failed silently.
+  - `unknown` -- older than retention, so the API genuinely cannot say. Do NOT
+    report this as "never used"; it is exactly the population someone is about
+    to revoke.
+  - `error` -- that token's lookup failed. The row degrades and the error lands
+    in the top-level `errors`; the rest of the audit still completes.
+- **Dev-branch activity is invisible.** `GET /v2/storage/tokens/{id}/events` is
+  not branch-addressable and always resolves to the default branch, narrowing to
+  `idBranch == <production> OR NOT EXISTS idBranch`. A token used only inside a
+  development branch therefore reads as dormant. On a project that uses branches,
+  check `branch list` before recommending a revocation.
+- **Do not hand-roll this against the raw endpoint.** The feed mixes events the
+  token *performed* with events performed *on* it, so a fresh token's newest raw
+  event is its own `storage.tokenCreated` and `events[0]` reports a never-used
+  token as "used today" -- backwards. kbagent narrows server-side with
+  `q=token.id:{id}`. Filtering client-side is not equivalent: right after a
+  rotation the single event a `limit=1` fetch returns is that rotation, leaving
+  the filter with nothing and calling an active token unused.
+- `lastUsedEvent` distinguishes human traffic (`storage.tablesListed`,
+  `storage.tableDetail`) from agent traffic
+  (`ext.keboola.mcp-server-tool.*`) -- useful when deciding whether a token
+  belongs to a person who left or to an automation still running.
+- The default `token list` shape is unchanged: without the flag none of these
+  keys appear and no `errors` list is added.
+- SDK parity: `Client.list_tokens(with_last_used=True)`; the fields land on
+  `TokenListEntryResult` as `last_used`, `last_used_event`, `last_used_status`.
+
+## `token list --columns` is human-output only (since v0.88.0)
+
+`--columns` (repeatable, e.g. `--columns description --columns last_used`)
+selects *and orders* the Rich table. `Refreshed` is now part of the default
+column set -- `--json` always returned it, the fixed table just had no way to
+show it.
+
+- **`--json` is deliberately unaffected.** The machine contract stays whole no
+  matter what the human view is narrowed to, so never use `--columns` to shape
+  data you are about to parse.
+- Valid names: `id`, `description`, `created`, `refreshed`, `expires`, `master`,
+  `created_by`, `last_used`, `last_used_event`. An unknown name exits 2 and
+  prints the valid list.
+- An explicit `--columns` is taken literally -- combining it with
+  `--with-last-used` does *not* silently append the derived columns. Name
+  `last_used` yourself if you want it.
+- **`last_used` / `last_used_event` REQUIRE `--with-last-used`** and exit 2
+  without it. They are derived per token, so with no derivation there is
+  nothing honest to render -- and the alternative (a blank or a default
+  label) would state something about data nobody fetched.
+## `--include-usage` counts mappings, not SQL text (since v0.88.0)
+
+`storage tables --include-usage` reports a table as used only when a
+configuration names it in `storage.input.tables[].source` or
+`storage.output.tables[].destination`. A transformation whose SQL says
+`SELECT * FROM in.c-main.orders` but whose input mapping does not list the
+table is **not** reported.
+
+That is deliberate -- the question the column answers is "what breaks if this
+table changes?", and matching free text would answer it with false positives.
+It also means the column is not a complete "is this string anywhere?" audit:
+for that, use `search --search-type config-based` (which scans whole bodies),
+optionally narrowed with `--scope`.
+
+Matching is case-insensitive but whole-id: `in.c-main.order` does not match
+`in.c-main.orders`.
+
+## `sharing link` does not inherit the source bucket's stage (since v0.88.0)
+
+`--stage` defaults to `in`, the stage kbagent has always used. MCP's
+`link_shared_bucket` instead derives the stage from the source bucket, so the
+same link lands in different places depending on which tool you drive. If you
+are porting an MCP call that relied on the derived stage, pass `--stage out`
+explicitly for an `out.*` source.
+
+## `job detail` needs `--log-tail-lines` to show logs (since v0.88.0)
+
+The log tail is off by default so a plain `job detail` stays one API call.
+`job run --wait` still attaches a tail on its own for terminal failures --
+that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
+maximum as `job detail`'s.
+
+## A scaffolded `keboola.flow` config can now be pushed from disk (since v0.89.0)
+
+`config new --component-id keboola.flow` (no `--push`) used to write a
+`_config.yml` with no `_keboola` block at all -- every other scaffold
+category (extractor/writer, SQL/Python transformation, custom Python app)
+always got `_keboola: {component_id: ...}` appended, but the flow builder
+(`_build_flow_config_yml` in `services/component_service.py`) never emitted
+one. `sync push` resolves the component of an untracked local config from
+`_keboola.component_id` (the untracked-config walker in `sync/branch_scope.py`);
+without it the config resolved to `"unknown"`, so a scaffolded flow could
+never be pushed via the documented scaffold -> edit -> `sync push` workflow
+(issue #650). Fixed by appending the same footer the other categories get.
+If you were hand-patching scaffolded flow files with a `_keboola` block as a
+workaround, that step is no longer necessary.
+
+Mind the shape of the scaffolded file when you edit it: the flow definition
+sits under `_configuration_extra:` in `_config.yml`, not at the top level.
+`sync push` converts a local file back to an API body with
+`local_config_to_api`, which promotes only `parameters` / `input` / `output` /
+`processors` from the top level (everything else rides along from
+`_configuration_extra`). A `phases:` / `tasks:` block added by hand at the top
+level is therefore **silently dropped** on push -- no error, no diff entry, a
+flow that pushes empty. This is the opposite of the `flow new --file` body
+shape, where `phases` / `tasks` ARE top-level; the two formats are not
+interchangeable.
+
+## A `sync diff` is scoped to ONE branch tree -- the rest is reported as `orphaned` (since v0.89.0)
+
+`sync pull --branch <dev>` re-targets EVERY `manifest.configurations` entry to
+that dev branch. The `main/` tree stays on disk and stops being tracked, so a
+later **production** `sync diff` / `sync push` reads a tree the manifest no
+longer knows about. Before this fix that combination classified the whole
+orphaned `main/` tree as `added` with an EMPTY `config_id`, and dev-only configs
+as `added` WITH an id -- one `sync push` away from duplicating an entire
+production project. No scaffolding or hand-edited manifest was needed; the
+documented multi-branch pull was enough (issue #649).
+
+- **diff/push act on exactly one tree**, the source branch path (the target
+  branch's own subtree, or `main/` when the target has none -- the KFR-07
+  promote path). Manifest entries whose branch resolves to a DIFFERENT tree are
+  excluded from the changeset and reported under a new `orphaned` bucket
+  (`summary.orphaned` + a details list; human mode previews the first 10).
+  This is not cosmetic: `push` already reads every file through the source
+  path, so an entry diffed from another tree would be pushed from a different
+  file than the one that produced the classification.
+- **An orphaned file that still resolves on the target is ADOPTED**, not
+  duplicated: the id-claim check now has a branch dimension. A claim by an entry
+  in the SAME tree is still the #482/#497 fork-by-copy case (copy a tracked
+  config dir -> the copy CREATEs). A claim only from another tree means the
+  manifest was re-targeted, so the file is diffed against the remote config
+  carrying its id -- `unchanged`/`modified`, never `added`.
+- **An orphaned file whose id no longer exists on the target** is reported with
+  `reason: "stale_branch_tree"` and acted on in no way at all.
+- **A config that exists only on the dev branch** is reported with
+  `reason: "tracked_on_other_branch"` and `exists_on_target: false`; its hint
+  points at `kbagent branch merge`. Pushing it to production would have created
+  a second, unrelated config there.
+- **Production is spelled three ways** in manifests in the wild -- `None` (CLI
+  `--branch` absent), `0` (`branchId: branch_id or 0` from a git-branching
+  pull) and the default branch's numeric id (plain pull). All three normalize to
+  the default tree before anything is compared, so a legacy `branchId: 0` entry
+  is NOT an orphan.
+- **The fix is one command**: `kbagent sync pull --project ALIAS` re-targets the
+  manifest to the branch you are actually on. `--json` callers should treat a
+  non-zero `summary.orphaned` as "the manifest is pointing at another branch",
+  not as a per-config problem.

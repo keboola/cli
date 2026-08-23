@@ -505,3 +505,55 @@ class TestSearchMatchedColumns:
 
         assert result.exit_code == 0
         assert "Matched columns" not in result.stdout
+
+
+class TestSearchScopeFlag:
+    """`kbagent search --scope` reaches SearchService and rejects bad combos."""
+
+    def _invoke(self, tmp_path: Path, args: list[str]):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_svc = MagicMock()
+        mock_svc.search.return_value = _make_service_result()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSearchService.return_value = mock_svc
+            result = runner.invoke(app, ["--json", "search", *args])
+        return result, mock_svc
+
+    def test_repeated_scope_is_forwarded(self, tmp_path: Path) -> None:
+        result, mock_svc = self._invoke(
+            tmp_path,
+            [
+                "orders",
+                "--search-type",
+                "config-based",
+                "--scope",
+                "storage.input",
+                "--scope",
+                "storage.output",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert mock_svc.search.call_args.kwargs["scopes"] == ["storage.input", "storage.output"]
+
+    def test_no_scope_passes_empty_list(self, tmp_path: Path) -> None:
+        result, mock_svc = self._invoke(tmp_path, ["orders"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_svc.search.call_args.kwargs["scopes"] == []
+
+    def test_scope_with_textual_search_exits_2(self, tmp_path: Path) -> None:
+        result, mock_svc = self._invoke(tmp_path, ["orders", "--scope", "parameters"])
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+        mock_svc.search.assert_not_called()

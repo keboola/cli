@@ -1,7 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
-import { Activity, Clock, Cpu, FileCode, Play, Server, Square, Timer, User } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Activity,
+  Clock,
+  Cpu,
+  FileCode,
+  Play,
+  RotateCw,
+  Server,
+  Square,
+  Timer,
+  User,
+  XOctagon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, sseSubscribe } from "../api/client";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -22,6 +35,36 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "nerd-pill",
   terminated: "nerd-pill",
 };
+
+/**
+ * Statuses the Queue API will actually accept a terminate for. A terminal job
+ * (success / error / ...) has nothing left to stop, so we hide the button
+ * rather than let the user discover that by getting a 4xx back.
+ */
+const TERMINABLE_STATUSES = new Set(["created", "waiting", "processing"]);
+
+/**
+ * Human label for a job's target: `component ・ config <id>`, dropping the
+ * config half entirely when the job carries none. A job run from an inline
+ * `configData` payload has no stored configuration, and rendering the raw
+ * value there produced a literal "config undefined" in the drawer header.
+ */
+function jobLabel(job: Job): string {
+  return job.config ? `${job.component} ・ config ${job.config}` : job.component;
+}
+
+/**
+ * The job's branch as the `JobRun` body wants it: an integer, or `undefined`
+ * for the default branch. The Queue API is inconsistent about whether
+ * `branchId` arrives numeric or as a string, and the router declares
+ * `branch_id: int | None`, so anything non-numeric is dropped rather than
+ * sent as a value FastAPI would reject.
+ */
+function jobBranchId(job: Job): number | undefined {
+  if (job.branchId === null || job.branchId === undefined) return undefined;
+  const n = Number(job.branchId);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 export function JobsPage() {
   const { project } = useUIState();
@@ -82,7 +125,10 @@ export function JobsPage() {
               ),
             },
             { header: "Component", cell: (j) => <span className="text-accent">{j.component}</span> },
-            { header: "Config", cell: (j) => <span className="text-zinc-500">{j.configId}</span> },
+            {
+              header: "Config",
+              cell: (j) => <span className="text-zinc-500">{j.config ?? "—"}</span>,
+            },
             {
               header: "Created",
               cell: (j) => <span className="text-zinc-500 text-xs">{j.createdTime}</span>,
@@ -96,12 +142,141 @@ export function JobsPage() {
                 </span>
               ),
             },
+            {
+              header: "Actions",
+              align: "right",
+              cell: (j) => <JobActions job={j} />,
+            },
           ]}
         />
       )}
 
       {selected ? <JobDetailDrawer job={selected} onClose={() => setSelected(null)} /> : null}
     </div>
+  );
+}
+
+/**
+ * Per-job Re-run / Terminate actions, shared by the table row and the detail
+ * drawer header.
+ *
+ * Re-run posts the job's OWN component + config + branch to
+ * `POST /jobs/{p}/run`, i.e. it starts a fresh job from the configuration as
+ * it stands NOW -- it does not replay the historical `configData` the old job
+ * ran with. That is the same semantics as `kbagent job run`, and the only
+ * thing the Queue API offers. The branch IS preserved, though: see
+ * `jobBranchId` and the comment on the mutation body.
+ *
+ * Terminate goes through `POST /jobs/{p}/terminate` with an explicit
+ * `job_ids` list; the filter form of that endpoint (status / component) is
+ * deliberately not exposed here -- one row, one job.
+ */
+function JobActions({ job, compact = true }: { job: Job; compact?: boolean }) {
+  const qc = useQueryClient();
+  const [confirm, setConfirm] = useState<"terminate" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["dashboard-jobs"] });
+  };
+
+  const rerun = useMutation({
+    mutationFn: () =>
+      api.post(`/jobs/${encodeURIComponent(job.project_alias)}/run`, {
+        component_id: job.component,
+        config_id: job.config,
+        // Branch fidelity: omitting this resolves to the DEFAULT branch
+        // server-side, so a job that originally ran against a dev-branch
+        // config would silently re-run against the production one -- a
+        // different configuration, writing to different tables. The row
+        // already carries the branch, so pass it straight back.
+        branch_id: jobBranchId(job),
+      }),
+    onError: (e) => setError((e as Error).message),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+  });
+
+  const terminate = useMutation({
+    mutationFn: () =>
+      api.post(`/jobs/${encodeURIComponent(job.project_alias)}/terminate`, {
+        job_ids: [String(job.id)],
+        dry_run: false,
+      }),
+    onError: (e) => setError((e as Error).message),
+    onSuccess: () => {
+      setError(null);
+      setConfirm(null);
+      invalidate();
+    },
+  });
+
+  // A job started from an inline `configData` payload has no stored
+  // configuration to re-run, so `config` is null and the button is hidden.
+  const canRerun = !!job.component && !!job.config;
+  const canTerminate = TERMINABLE_STATUSES.has(job.status);
+  const btn = `nerd-btn ${compact ? "text-[10px] py-0.5 px-1.5" : "text-xs"} flex items-center gap-1 disabled:opacity-50`;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1.5"
+      // Row clicks open the detail drawer; an action click must not.
+      onClick={(e) => e.stopPropagation()}
+      role="presentation"
+    >
+      {error ? (
+        <span className="text-[10px] text-red-600 dark:text-red-400 max-w-[16rem] truncate" title={error}>
+          {error}
+        </span>
+      ) : null}
+      {canRerun ? (
+        <button
+          type="button"
+          className={`${btn} hover:text-keboola`}
+          disabled={rerun.isPending}
+          onClick={() => rerun.mutate()}
+          // Name the branch in the tooltip: the whole point of threading
+          // branch_id through is that the user can trust where this lands.
+          title={`Start a new job for ${job.component} / ${job.config} on ${
+            jobBranchId(job) === undefined ? "the default branch" : `branch #${jobBranchId(job)}`
+          }`}
+        >
+          <RotateCw className={`w-3 h-3 ${rerun.isPending ? "animate-spin" : ""}`} />
+          {rerun.isPending ? "starting…" : "re-run"}
+        </button>
+      ) : null}
+      {canTerminate ? (
+        <button
+          type="button"
+          className={`${btn} hover:text-red-600 dark:hover:text-red-400`}
+          disabled={terminate.isPending}
+          onClick={() => setConfirm("terminate")}
+          title="Terminate this job"
+        >
+          <XOctagon className="w-3 h-3" /> terminate
+        </button>
+      ) : null}
+      {confirm === "terminate" ? (
+        <ConfirmModal
+          danger
+          busy={terminate.isPending}
+          title="Terminate job?"
+          body={
+            <>
+              Job <span className="font-mono text-accent">{String(job.id)}</span> (
+              {jobLabel(job)}) is <span className="font-mono">{job.status}</span>.
+              Terminating stops it where it is — partially written output stays written.
+            </>
+          }
+          confirmLabel="Terminate"
+          onConfirm={() => terminate.mutate()}
+          onCancel={() => setConfirm(null)}
+        />
+      ) : null}
+    </span>
   );
 }
 
@@ -168,24 +343,33 @@ function JobDetailDrawer({ job, onClose }: { job: Job; onClose: () => void }) {
       open={true}
       onClose={onClose}
       title={`Job ${job.id}`}
-      subtitle={`${job.component} ・ config ${job.configId}`}
+      subtitle={jobLabel(job)}
       width="max-w-5xl"
       actions={
-        <button
-          type="button"
-          className="nerd-btn flex items-center gap-1 hover:text-keboola"
-          onClick={() => (streaming ? esRef.current?.close() : startStream())}
-        >
-          {streaming ? (
-            <>
-              <Square className="w-3 h-3" /> stop stream
-            </>
-          ) : (
-            <>
-              <Play className="w-3 h-3" /> stream logs
-            </>
-          )}
-        </button>
+        <>
+          {/* Status comes from the freshly fetched detail when available, so a
+              job that finished while the drawer was open loses its Terminate
+              button on the next poll instead of offering a doomed call. */}
+          <JobActions
+            job={{ ...job, status: String(detailQ.data?.status ?? job.status) }}
+            compact={false}
+          />
+          <button
+            type="button"
+            className="nerd-btn flex items-center gap-1 hover:text-keboola"
+            onClick={() => (streaming ? esRef.current?.close() : startStream())}
+          >
+            {streaming ? (
+              <>
+                <Square className="w-3 h-3" /> stop stream
+              </>
+            ) : (
+              <>
+                <Play className="w-3 h-3" /> stream logs
+              </>
+            )}
+          </button>
+        </>
       }
     >
       {detailQ.isLoading ? <Loading /> : null}
@@ -229,7 +413,9 @@ function JobCards({
     (detail.token as { description?: string } | undefined)?.description ??
     "";
   const url = (detail.url as string | undefined) ?? "";
-  const config = (detail.config as string | undefined) ?? job.configId;
+  // Empty string, not null: KV drops a falsy value, so a configData-only job
+  // renders no "Config ID" row at all instead of a literal "null".
+  const config = (detail.config as string | undefined) ?? job.config ?? "";
   const branchId = (detail.branchId as number | undefined) ?? null;
   const params = (detail.params as Record<string, unknown> | undefined) ?? {};
   const backendSize = String(

@@ -19,7 +19,9 @@ from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
+from ..services.component_service import materialize_pushed_config, stamp_scaffold_config_id
 from ..services.config_service import validate_set_paths
+from ..sync.branch_registry import default_branch_prefix
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -33,31 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 def _detect_branch_prefix(output_dir: Path) -> str | None:
-    """Detect kbc project branch path from .keboola/manifest.json.
+    """Detect the default-branch path prefix for a sync workspace.
 
-    When output_dir is inside a kbc project (has .keboola/manifest.json),
-    returns the default branch path (e.g. "main") so scaffold files
-    land in the correct location (main/extractor/... instead of extractor/...).
-
-    Returns None if not a kbc project or manifest is unreadable.
+    Delegates to :func:`..sync.branch_registry.default_branch_prefix` --
+    single source of the "scaffold under main/ when inside a kbc project"
+    convention. Returns None if not a kbc project or manifest is unreadable.
     """
-    manifest_path = output_dir / KEBOOLA_DIR_NAME / MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        return None
-
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        branches = manifest.get("branches", [])
-        if branches:
-            # Use the first (default) branch path
-            branch_path = branches[0].get("path", "")
-            if branch_path:
-                logger.debug("Detected kbc branch prefix: %s", branch_path)
-                return branch_path
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.debug("Could not read manifest: %s", exc)
-
-    return None
+    return default_branch_prefix(output_dir)
 
 
 config_app = typer.Typer(help="Browse and inspect configurations")
@@ -1115,12 +1099,21 @@ def config_delete(
         "--branch",
         help="Delete from a specific dev branch ID (defaults to active branch)",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what would happen (live / already in trash) without deleting",
+    ),
 ) -> None:
-    """Delete a configuration from a project.
+    """Soft-delete a configuration into the trash (restorable).
 
     If a dev branch is active (via 'branch use'), the deletion targets
     that branch. Use --branch to override. Deleting in a branch marks
     the config as removed without affecting Main.
+
+    A configuration already in the trash is NOT deleted again -- the API
+    would purge it permanently -- the command reports 'already_in_trash'
+    and exits 0. Undo with 'config restore'; browse with 'config trash-list'.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
@@ -1131,6 +1124,7 @@ def config_delete(
             component_id=component_id,
             config_id=config_id,
             branch_id=branch,
+            dry_run=dry_run,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_config_service_error(formatter, exc)
@@ -1141,10 +1135,21 @@ def config_delete(
         branch_info = ""
         if result.get("branch_id"):
             branch_info = f" (branch {result['branch_id']})"
-        formatter.success(
-            f"Deleted config {result['component_id']}/{result['config_id']} "
-            f"from project '{result['project_alias']}'{branch_info}"
-        )
+        status = result.get("status")
+        if status == "already_in_trash":
+            formatter.console.print(f"[yellow]{result['message']}[/yellow]")
+        elif status == "would_delete":
+            formatter.console.print(
+                f"[bold yellow]DRY RUN[/bold yellow] -- would move config "
+                f"{result['component_id']}/{result['config_id']} to the trash"
+                f"{branch_info} (restorable via 'config restore')"
+            )
+        else:
+            formatter.success(
+                f"Moved config {result['component_id']}/{result['config_id']} "
+                f"to the trash in project '{result['project_alias']}'{branch_info} "
+                f"(undo: kbagent config restore)"
+            )
 
 
 # --- File extension to Rich Syntax lexer mapping ---
@@ -1398,6 +1403,13 @@ def config_new(
         # POST (the "scaffold + push" combo). Dry-run must NOT touch the
         # filesystem -- the user expects a preview, not a side effect.
         #
+        # Issue #644: the config exists remotely at this point, so the file
+        # must carry its identity (``_keboola.config_id``) and must land in
+        # the subtree of the branch the config was actually created in --
+        # otherwise the next ``sync push`` creates a duplicate (dev-branch
+        # creates used to scaffold into ``main/``, invisible to the dev push
+        # and a phantom "added" for the production push).
+        #
         # ``silent=True``: the push-result envelope below is the authoritative
         # output for this path. In JSON mode emitting the scaffold envelope
         # too would produce two concatenated JSON documents on stdout (breaks
@@ -1406,7 +1418,50 @@ def config_new(
         # passed as a sentinel ``False`` because ``silent=True`` short-circuits
         # before it is read.
         if output_dir and scaffold is not None and not dry_run:
-            _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=False, silent=True)
+            created_id = str(push_result.get("id") or "")
+            placement = get_service(ctx, "sync_service").resolve_scaffold_placement(
+                alias=project or "",
+                project_root=Path(output_dir),
+                branch_id=push_result.get("branch_id"),
+            )
+            pushed_body = push_result.get("configuration")
+            if created_id and config_body is not None and isinstance(pushed_body, dict):
+                # An explicit body was pushed: mirror it exactly the way
+                # ``sync pull`` would materialize it (real code extracted to
+                # transform.sql/.py, not placeholder templates) -- writing the
+                # placeholder scaffold here would make the next ``sync push``
+                # overwrite the real remote config with TODOs.
+                target_dir = _scaffold_target_dir(
+                    output_dir, placement.branch_prefix, scaffold["directory"]
+                )
+                files_written = materialize_pushed_config(
+                    component_id=component_id,
+                    config_id=created_id,
+                    name=str(push_result.get("name") or name),
+                    description=str(push_result.get("description") or ""),
+                    configuration=pushed_body,
+                    config_dir=target_dir,
+                )
+                written_dir = target_dir
+            else:
+                if created_id:
+                    scaffold = stamp_scaffold_config_id(scaffold, created_id)
+                written_dir = _write_scaffold_to_disk(
+                    formatter,
+                    scaffold,
+                    output_dir,
+                    json_mode=False,
+                    silent=True,
+                    branch_prefix=placement.branch_prefix,
+                )
+                files_written = [f["path"] for f in scaffold["files"]]
+            push_result["local_scaffold"] = {
+                "directory": str(written_dir),
+                "files": files_written,
+                "config_id": created_id or None,
+            }
+            if placement.warning:
+                push_result.setdefault("warnings", []).append(placement.warning)
 
         if formatter.json_mode:
             formatter.output(push_result)
@@ -1417,7 +1472,13 @@ def config_new(
     # ── Scaffold-only path: today's behavior, byte-for-byte unchanged ────────
     assert scaffold is not None  # narrowing for type-checker; skip_scaffold is False here.
     if output_dir:
-        _write_scaffold_to_disk(formatter, scaffold, output_dir, json_mode=formatter.json_mode)
+        _write_scaffold_to_disk(
+            formatter,
+            scaffold,
+            output_dir,
+            json_mode=formatter.json_mode,
+            branch_prefix=_detect_branch_prefix(Path(output_dir)),
+        )
     else:
         # Print scaffold content
         if formatter.json_mode:
@@ -1445,17 +1506,29 @@ def config_new(
                 formatter.console.print()
 
 
+def _scaffold_target_dir(output_dir: str, branch_prefix: str | None, scaffold_dir: str) -> Path:
+    """Join the output dir, optional branch subtree, and scaffold directory."""
+    if branch_prefix:
+        return Path(output_dir) / branch_prefix / scaffold_dir
+    return Path(output_dir) / scaffold_dir
+
+
 def _write_scaffold_to_disk(
     formatter: Any,
     scaffold: dict[str, Any],
     output_dir: str,
     json_mode: bool,
     silent: bool = False,
-) -> None:
+    branch_prefix: str | None = None,
+) -> Path:
     """Shared helper: write the generated scaffold files under ``output_dir``.
 
-    Detects an enclosing ``main/`` branch prefix the same way the pre-push
-    path does, so the layout matches what ``kbagent sync push`` would expect.
+    ``branch_prefix`` selects the branch subtree (``None`` = flat layout).
+    The scaffold-only path passes :func:`_detect_branch_prefix`'s result
+    (historical behaviour -- default branch path or flat); the ``--push``
+    path passes ``ScaffoldPlacement.branch_prefix``, because a dev-branch
+    create must land in the dev branch's subtree (issue #644). Returns the
+    directory the files were written into.
 
     Output rules:
     - ``silent=True``: write files only; emit no banner and no JSON envelope.
@@ -1467,22 +1540,19 @@ def _write_scaffold_to_disk(
       ``{directory, files_written}`` when ``json_mode`` is set, otherwise a
       dim-formatted "Scaffold written to ..." banner.
     """
-    branch_prefix = _detect_branch_prefix(Path(output_dir))
-    if branch_prefix:
-        scaffold_dir = branch_prefix + "/" + scaffold["directory"]
-    else:
-        scaffold_dir = scaffold["directory"]
-
-    base_path = Path(output_dir) / scaffold_dir
+    base_path = _scaffold_target_dir(output_dir, branch_prefix, scaffold["directory"])
     base_path.mkdir(parents=True, exist_ok=True)
 
     for file_entry in scaffold["files"]:
         file_path = base_path / file_entry["path"]
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(file_entry["content"], encoding="utf-8")
+        # newline="" so Windows does not CRLF-translate scaffold files that
+        # sit next to LF-only files written by sync pull (same convention as
+        # SyncService._write_config_file).
+        file_path.write_text(file_entry["content"], encoding="utf-8", newline="")
 
     if silent:
-        return
+        return base_path
 
     if json_mode:
         formatter.output(
@@ -1495,6 +1565,7 @@ def _write_scaffold_to_disk(
         formatter.console.print(
             f"[dim]Scaffold written to {base_path} ({len(scaffold['files'])} file(s))[/dim]"
         )
+    return base_path
 
 
 def _render_push_result_human(
@@ -1531,6 +1602,15 @@ def _render_push_result_human(
     formatter.success(
         f"Created config '{escape(name)}' [{config_id}] in {escape(component_id)}{branch_info}"
     )
+    local_scaffold = result.get("local_scaffold")
+    if local_scaffold:
+        id_note = ", config_id recorded" if local_scaffold.get("config_id") else ""
+        formatter.console.print(
+            f"[dim]Files written to {escape(local_scaffold['directory'])} "
+            f"({len(local_scaffold['files'])} file(s){id_note})[/dim]"
+        )
+    for warning in result.get("warnings", []) or []:
+        formatter.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
     if validation_status == "skipped":
         formatter.console.print(
             "[dim]Note: schema validation was skipped "
@@ -2470,6 +2550,8 @@ from . import config_state as _config_state  # noqa: E402,F401
 # the `config.*` permission namespace and appears in `kbagent config --help`.
 from ._config_clone_cmd import register as _register_clone_command  # noqa: E402
 from ._config_oauth import register as _register_oauth_command  # noqa: E402
+from ._config_trash_cmd import register as _register_trash_commands  # noqa: E402
 
 _register_clone_command(config_app)
 _register_oauth_command(config_app)
+_register_trash_commands(config_app)

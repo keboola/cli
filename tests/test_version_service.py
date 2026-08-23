@@ -66,6 +66,44 @@ class TestVersionService:
 
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    def test_no_upgrade_command_when_local_is_ahead(
+        self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
+    ) -> None:
+        """A local build ahead of the latest release advertises no command.
+
+        ``upgrade_command`` is documented as a string a consumer may shell out
+        to verbatim. It used to be built unconditionally, so a caller sitting on
+        a pre-release (``0.44.0b1`` compares >= the ``0.43.3`` stable that a
+        non-``--beta`` fetch returns) was told ``up_to_date: true`` and handed a
+        ``--force --reinstall`` command pinned to the OLDER stable wheel --
+        running it silently downgrades off the beta.
+        """
+        mock_kbagent_latest.return_value = "0.0.1"
+
+        result = VersionService().get_versions()
+
+        assert result["kbagent"]["up_to_date"] is True
+        assert result["kbagent"]["upgrade_command"] == ""
+
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    def test_upgrade_command_absent_when_latest_unknown(
+        self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
+    ) -> None:
+        """An unreachable release feed must not advertise a command either.
+
+        ``up_to_date`` is ``None`` there -- kbagent does not know whether an
+        upgrade exists, so it cannot name a target to upgrade to.
+        """
+        mock_kbagent_latest.return_value = None
+
+        result = VersionService().get_versions()
+
+        assert result["kbagent"]["up_to_date"] is None
+        assert result["kbagent"]["upgrade_command"] == ""
+
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
     def test_payload_carries_no_dependencies(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:

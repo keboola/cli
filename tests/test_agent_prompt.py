@@ -12,6 +12,7 @@ for this suite.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -23,12 +24,46 @@ COMMAND_FILE = PLUGIN_DIR / "commands" / "keboola.md"
 PLUGIN_CLAUDE_MD = PLUGIN_DIR / ".claude-plugin" / "CLAUDE.md"
 PLUGIN_JSON = PLUGIN_DIR / ".claude-plugin" / "plugin.json"
 
-# ~20k tokens ≈ 80 kB in typical English markdown (~4 chars/token).
-# We target well under that to leave headroom. Bumped 60 kB -> 62 kB in
-# v0.48.0 to fit the `feature` command-group matrix row; if this keeps
-# creeping up, split keboola-expert into per-domain specialists rather
-# than raising the ceiling again.
-PROMPT_BYTE_BUDGET = 62_000
+# ~20k tokens ~= 80 kB in typical English markdown (~4 chars/token). The budget
+# stays under that so the static prompt never crowds out the task.
+#
+# History: 60 kB -> 62 000 B in v0.48.0 (the `feature` matrix row); 62 000 B ->
+# 70 000 B in v0.88.0. That earlier bump left the file with under 100 bytes of
+# headroom, which stopped being a budget and became a tripwire: the next PR to
+# touch the prompt paid for an unrelated trim before it could add its own line.
+# 70 000 B is a deliberate owner decision to buy that room back, and it still
+# sits ~12% under the 80 kB reference point.
+#
+# It is NOT a licence to grow the file. The standing instruction is unchanged:
+# exhaustive per-command detail belongs in `AGENT_CONTEXT` (loaded on demand),
+# and the real answer to sustained growth is splitting keboola-expert into
+# per-domain specialists, not another bump. Trim before you add.
+#
+# This is the SINGLE SOURCE OF TRUTH for the budget. Prose elsewhere that
+# hardcodes its own figure instead of quoting this one drifts silently:
+# CONTRIBUTING.md and kbagent-pr-reviewer.md both said "60 KB" long after
+# v0.48.0 moved the ceiling to 62 000 B, and both still said "62 000 B"
+# after v0.88.0 moved it again to 70 000 B, until each was caught by hand.
+# test_documented_budget_matches_enforced_budget below is the gate that
+# keeps them honest going forward.
+PROMPT_BYTE_BUDGET = 70_000
+
+# Docs that state the prompt budget in prose. Each must quote it as
+# "<PROMPT_BYTE_BUDGET> B" (space-grouped, e.g. "70 000 B") next to the
+# word "budget" -- see _BUDGET_MENTION_RE below.
+BUDGET_DOC_SITES = [
+    "CONTRIBUTING.md",
+    "plugins/kbagent/agents/kbagent-pr-reviewer.md",
+]
+
+# Matches a budget figure immediately followed by "budget" (optionally
+# "prompt budget"), in either the enforced byte form ("70 000 B" / "70000 B")
+# or the deprecated kilobyte form ("60 KB"). Grouping punctuation (spaces or
+# commas) inside the number is tolerated so "70 000", "70,000" and "70000"
+# all match -- only the digits are compared against PROMPT_BYTE_BUDGET.
+_BUDGET_MENTION_RE = re.compile(
+    r"(?P<number>\d[\d ,]*\d|\d)\s*(?P<unit>KB|B)\s+(?:prompt\s+)?budget"
+)
 
 
 @pytest.fixture(scope="module")
@@ -71,6 +106,42 @@ class TestPilotAgentFile:
             f"Agent prompt is {size} bytes (~{size // 4} tokens); "
             f"budget is {PROMPT_BYTE_BUDGET} bytes. Trim or split into specialists."
         )
+
+    def test_documented_budget_matches_enforced_budget(self) -> None:
+        """Every doc site's budget figure must match PROMPT_BYTE_BUDGET.
+
+        A doc site that hardcodes its own figure instead of quoting this
+        module's constant is a silent-drift surface: CONTRIBUTING.md and
+        kbagent-pr-reviewer.md both sat on a stale figure for a full release
+        span after the constant moved, until someone caught it by hand. The
+        expected string is derived from PROMPT_BYTE_BUDGET rather than a
+        second hardcoded literal, so a legitimate future budget change (the
+        constant and the docs moving together) never fails this test --
+        only a doc site left behind does.
+
+        _BUDGET_MENTION_RE also matches the deprecated "KB" form, so a site
+        that regresses to kilobytes is caught even though its digits happen
+        to equal PROMPT_BYTE_BUDGET's byte figure (which would never
+        legitimately occur, but the point is to catch the wrong *unit* too).
+        """
+        expected_bytes = str(PROMPT_BYTE_BUDGET)
+        for relative_path in BUDGET_DOC_SITES:
+            text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+            mentions = _BUDGET_MENTION_RE.findall(text)
+            assert mentions, (
+                f"{relative_path} does not mention the prompt budget in the "
+                f"expected '<number> B budget' form. It must quote the "
+                f"enforced value (PROMPT_BYTE_BUDGET in {Path(__file__).name}), "
+                f"not its own figure."
+            )
+            for number, unit in mentions:
+                digits = re.sub(r"[ ,]", "", number)
+                assert unit == "B" and digits == expected_bytes, (
+                    f"{relative_path} states the prompt budget as "
+                    f"'{number} {unit}', but PROMPT_BYTE_BUDGET is "
+                    f"{expected_bytes} B ({Path(__file__).name} is the single "
+                    f"source of truth). Update the doc to match."
+                )
 
 
 # ---------------------------------------------------------------------

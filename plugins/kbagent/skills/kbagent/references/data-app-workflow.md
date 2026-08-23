@@ -9,8 +9,107 @@ that auto-suspends after idle. Two API surfaces own them:
 | **Data Science API** (`/apps`) | deployment record: state, desiredState, url, configVersion |
 
 `kbagent data-app` orchestrates both, plus the project's Encryption API for
-git PATs. The CLI encapsulates four documented footguns so callers cannot
+git PATs. The CLI encapsulates the documented footguns so callers cannot
 hit them; see "Gotchas encoded" below.
+
+## What goes IN the repo: the `dataapp-developer` skill (read before authoring)
+
+This file covers the **lifecycle** -- create, deploy, secrets, credentials,
+rollback -- i.e. what `kbagent data-app` does to an app. It does NOT specify
+what the git repo must contain. That is the base image's contract, and it is
+owned by Keboola's official skill:
+
+    keboola/ai-kit -> plugins/dataapp-developer/skills/dataapp-development/
+      SKILL.md
+      references/python-js-apps.md     <- the /app contract, nginx, supervisord
+      references/storage-access.md
+      references/troubleshooting.md
+      templates/{python-app,nodejs-app,python-node-app}/
+
+Read `references/python-js-apps.md` before authoring or reviewing a repo. The
+rules that bite hardest are not discoverable from a failed deploy, because a
+container that never becomes ready produces **no logs at all** -- the deploy
+just dies as `StartupDeadlineExceeded` after ten minutes:
+
+- **nginx must `listen 8888`.** Hardcoded by the platform; the proxy routes
+  external traffic there and nowhere else. Only ports >= 1024 work at all
+  (the container does not run as root).
+- **Never declare `[program:nginx]`** in `keboola-config/supervisord/`. The
+  base image manages nginx; declaring it too makes one of the two fail to
+  start.
+- **The health check polls `GET /`**, not `/health`. Blocking work on that
+  path stalls it and the container never reports ready.
+- Required paths are fixed: `keboola-config/nginx/sites/*.conf` and
+  `keboola-config/supervisord/services/*.conf`. The repo is cloned to `/app`.
+
+`kbagent data-app validate-repo` checks a SUBSET of that contract (see
+"Pre-flight repo validation" below) -- notably it does not inspect the nginx
+`listen` port, so **0 BLOCKING is not a promise that the app will start**.
+Treat the skill as the specification and validate-repo as a cheap first pass.
+
+The templates under `templates/` are the fastest correct starting point: copy
+one rather than assembling `keboola-config/` by hand.
+
+## Storage access: `runtime.workspace.enabled` (read this first)
+
+Any data app that reads Storage needs `runtime.workspace.enabled: true` in
+its `keboola.data-apps` configuration. That flag -- and nothing else -- is
+what makes the platform provision the app's ephemeral workspace and inject:
+
+| Env var | Purpose |
+|---|---|
+| `WORKSPACE_ID` | the provisioned workspace the app queries through |
+| `QUERY_SERVICE_URL` | Query Service endpoint for reads/writes |
+| `KBC_WORKSPACE_MANIFEST_PATH` | path to the workspace manifest in the container |
+
+**Since 0.87.0 `data-app create` sets it by default.** Pass
+`--no-workspace` only for an app that never touches Storage.
+
+```jsonc
+// what --workspace (default) writes -- a SIBLING of backend
+"runtime": {
+  "backend":   { "size": "small" },
+  "workspace": { "enabled": true }
+}
+```
+
+**Why this has its own section:** before 0.87.0 kbagent never wrote the flag
+and offered no option to. An app missing it **deploys successfully** --
+`state=running`, `desiredState=running`, health probe green, `setup_sh`
+completed -- and cannot read a row. **The platform emits no diagnostic**, so
+the only reliable check is the config itself:
+
+```bash
+kbagent --json config detail --project P --component-id keboola.data-apps \
+  --config-id <cfg> | jq '.data.configuration.runtime'
+```
+
+An app that checks its own env may log something like `Missing env vars:
+WORKSPACE_ID (or KBC_WORKSPACE_MANIFEST_PATH)` -- that phrasing is the ai-kit
+DuckDB-cache template's, and an app built from anything else may log something
+different or nothing at all. An empty `data-app logs` grep therefore does not
+rule this out.
+
+An app that does *not* catch the failure crash-loops behind the health probe
+instead, which is at least visible. Silently serving zeros is the dangerous
+outcome, and it is the one you get from the DuckDB-cached read-only dashboard
+pattern -- the `dataapp-developer` skill's default.
+
+**Retrofitting an app created before 0.87.0** (or by any other path):
+
+```bash
+kbagent config update --project P --component-id keboola.data-apps \
+  --config-id <cfg> --merge --set 'runtime.workspace.enabled=true'
+kbagent data-app deploy --project P --app-id <ID> --wait   # pins the LATEST version
+```
+
+The redeploy is required -- a config change alone does not reach the running
+container.
+
+> Not gated on any project feature. The `data-apps-storage-workspace` flag is
+> being enabled everywhere and then removed, so the config option is the sole
+> control. kbagent deliberately does **not** implement MCP's legacy
+> `parameters.dataApp.secrets.WORKSPACE_ID` fallback.
 
 ## Quick recipes
 
@@ -129,7 +228,10 @@ kbagent data-app validate-repo \
 Walks the repo via the GitHub Contents + Trees API and emits
 BLOCKING / WARN / OK per check (Golden-Rule structure, no `pip install`
 in `setup.sh`, `requires-python` consistency, nginx/app port match,
-etc.). Each check carries a citation back to the help-doc anchor
+etc.). The two `setup.sh` rules match **comment-stripped code** *(since
+v0.88.0)*, so documenting the rule in a comment (`# never pip install`)
+no longer trips it -- and, in the other direction, a commented-out
+`uv sync` no longer satisfies the dependency-install rule. Each check carries a citation back to the help-doc anchor
 (<https://help.keboola.com/data-apps/python-js/>). Run before
 `data-app create` so you don't burn a deploy cycle on a misconfigured
 repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
@@ -293,13 +395,20 @@ yours at runtime.
    service preserves it on every subsequent update. Stripping it breaks
    the URL minting and produces inconsistent state.
 
+6. **Storage access on by default** (since 0.87.0) — `data-app create`
+   writes `runtime.workspace.enabled: true` unless you pass
+   `--no-workspace`. Omitting it produces an app that deploys, reports
+   `running`, passes its health probe and reads nothing. See "Storage
+   access" at the top of this file.
+
 ## When to use what
 
 | Goal | Command |
 |---|---|
 | Inventory: "what data apps does this project have?" | `data-app list` |
 | Inspect one: "is this app running? what's its URL?" | `data-app detail --app-id N` |
-| Bring a new app online from a git repo | `data-app create` (encrypts + PUTs + deploys) |
+| Bring a new app online from a git repo | `data-app create` (encrypts + PUTs + deploys; Storage access ON by default since 0.87.0) |
+| Grant Storage access to an app that lacks it | `config update --merge --set 'runtime.workspace.enabled=true'` → `data-app deploy` |
 | Roll out new code already pushed to git | `data-app deploy --app-id N` |
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |

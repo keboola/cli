@@ -325,6 +325,35 @@ class TokenListEntryResult(_ApiResultModel):
         validation_alias=AliasChoices("isMasterToken", "is_master_token"),
         description="True for the project's master token (cannot be deleted).",
     )
+    last_used: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("lastUsed", "last_used"),
+        description=(
+            "ISO timestamp of the token's most recent activity, or None. "
+            "Only populated when list_tokens(with_last_used=True); read it "
+            "together with last_used_status, which says what None means."
+        ),
+    )
+    last_used_event: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("lastUsedEvent", "last_used_event"),
+        description=(
+            "Storage event name behind last_used (e.g. 'storage.tablesListed', "
+            "'ext.keboola.mcp-server-tool.*'), which distinguishes human "
+            "traffic from agent traffic. None unless with_last_used was set."
+        ),
+    )
+    last_used_status: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("lastUsedStatus", "last_used_status"),
+        description=(
+            "How to read last_used: 'used' (timestamp is real), 'never' "
+            "(proven never used -- minted inside the event-retention window "
+            "with no activity), 'unknown' (older than retention, so the API "
+            "cannot say), or 'error' (the per-token lookup failed). None "
+            "unless with_last_used was set."
+        ),
+    )
 
 
 class StreamSourceResult(_ApiResultModel):

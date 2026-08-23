@@ -13,6 +13,11 @@ with `--type cli_command --argv ...` using the same command.
 
 ## Tool -> command map
 
+Verified against `keboola/mcp-server` v1.76.2 (2026-08-21): 41 registered tools,
+all covered below. This table is hand-maintained and has no CI freshness check --
+when the MCP server adds a tool, add a row here (`TOOLS.md` in that repo is the
+generated, authoritative list).
+
 | MCP tool | Native command | Notes |
 |---|---|---|
 | `add_config_row` | `kbagent config row-create` | |
@@ -54,6 +59,8 @@ with `--type cli_command --argv ...` using the same command.
 | `get_buckets` | `kbagent storage buckets` | or `storage bucket-detail` |
 | `get_tables` | `kbagent storage tables` | or `storage table-detail` |
 | `update_descriptions` | `kbagent storage describe-batch` | or `describe-table` / `describe-bucket` / `describe-column` |
+| `get_shared_buckets` | `kbagent sharing list` | Data Catalog "Shared with me": buckets other projects share with this one, whether or not they are linked yet. `storage buckets` lists only buckets already in the project. |
+| `link_shared_bucket` | `kbagent sharing link` | `--source-project-id` + `--bucket-id` + `--name`. kbagent always links into the `in` stage; the MCP tool defaults to the source bucket's own stage and accepts a `target_stage` override. |
 
 ## Still using keboola-mcp-server elsewhere (Claude Desktop, Cursor)?
 

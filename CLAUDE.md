@@ -153,7 +153,38 @@ is simply a separate distribution kbagent no longer manages.
 - `plugins/kbagent/.claude-plugin/plugin.json` must match. Run `make version-sync` (or `python scripts/sync_version.py`) to update it.
 - The pre-commit hook and CI automatically check version consistency.
 
-**When bumping the version**: edit `pyproject.toml`, add a changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. CI enforces changelog completeness via `make changelog-check`.
+### Version bumps happen ONLY in a dedicated release PR
+
+**Feature/fix PRs MUST NOT bump the version and MUST NOT add a `changelog.py`
+entry.** PRs are routinely developed in parallel (separate AI sessions, one per
+issue); when each of them bumps `pyproject.toml`, every merge is a version
+conflict and the merge order silently renumbers releases. The historical
+`KNOWN_UNRELEASED` list in `scripts/generate_changelog.py` -- 18 versions whose
+content shipped with no release notes -- is exactly what that pattern produces.
+
+The flow is instead:
+
+1. **Feature PR**: merges to `main` with NO change to `pyproject.toml`
+   `version` and NO `changelog.py` entry. When the PR documents version-gated
+   behavior (gotchas.md, commands-reference.md, this file), it tags it with
+   the literal placeholder **`vNEXT`** -- `(since vNEXT)` / `vNEXT+`.
+   `make version-gate-check` ignores the placeholder (it only matches numeric
+   versions) but rejects a guessed numeric version with no changelog entry,
+   so a numeric future tag cannot even pass CI.
+2. **Release PR** (its only job): bump `pyproject.toml`, review everything
+   merged since the last release (`git log v<last>..origin/main`), write ONE
+   changelog entry covering all of it (one bullet per logical change, with
+   `(#PR)` references), replace every `vNEXT` placeholder with the real
+   version, run `make version-sync`. Merge, then tag -- the release pipeline
+   renders the GitHub release notes from the changelog entry
+   (`scripts/gen_release_notes.py`). Full checklist: `CONTRIBUTING.md` >
+   "Releasing a new version".
+
+**Inside the release PR**: edit `pyproject.toml`, add the changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. `make changelog-check` (release-time, needs `gh`) enforces changelog completeness in both directions.
+
+The one exception is a **beta/pre-release** (below): there the bump deliberately
+rides the feature branch, because the pre-release tag and GitHub Release are cut
+from that branch -- the branch temporarily *is* the release PR.
 
 ### Beta / pre-release versions (since 0.43.3)
 
@@ -237,7 +268,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
-    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with `(since vX.Y.Z)`)
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR)
     - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
@@ -380,6 +411,17 @@ kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [
 kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket --project NAME --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
 kbagent config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
+kbagent config delete --project NAME --component-id ID --config-id ID [--branch ID] [--dry-run]
+kbagent config restore --project NAME --component-id ID --config-id ID [--branch ID]
+kbagent config trash-list --project NAME [--component-id ID] [--branch ID]
+# config delete (0.89.0+ safety): SOFT delete into the Storage trash, with a locate-first guard.
+#   The raw API purges PERMANENTLY when DELETE hits a config already in the trash -- the classic
+#   agent retry after a timeout. kbagent now looks the config up first: live -> trash it;
+#   already trashed -> status "already_in_trash", exit 0, NO second DELETE ever sent; absent
+#   from both -> NOT_FOUND. Undo with `config restore`; browse candidates with `config
+#   trash-list`. Before 0.89.0 the second delete destroyed the config permanently. CLAUDE.md
+#   did not list `config delete` at all until 0.89.0 (silent drift) -- the command itself has
+#   existed for a long time.
 kbagent config variables-set --project NAME --component-id ID --config-id ID --var KEY=VALUE [--var ...] [--replace] [--variables-id ID] [--values-id ID] [--branch ID] [--dry-run]
 kbagent config variables-get --project NAME --component-id ID --config-id ID [--branch ID]
 kbagent config variables-clear --project NAME --component-id ID --config-id ID [--branch ID] [--yes]
@@ -417,7 +459,7 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
 #   (`sync clone` is the command that remaps).
 
-kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--limit N]
+kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
 #   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
 #   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
@@ -427,15 +469,31 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   "is this referenced anywhere" miss a table spelled DCFAmount in one config and DCFAMOUNT in
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
-kbagent job list [--project NAME] [--component-id ID] [--status STATUS] [--limit N]
-kbagent job detail --project NAME --job-id ID
+kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
+kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 
 kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
-kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID]
+kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID] [--include-usage]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
+# table-detail (0.88.0+, #621): also returns the raw Storage API `definition`. On BigQuery
+#   that object (timePartitioning / rangePartitioning / clustering / requirePartitionFilter /
+#   partitions[]) is the ONLY readable record of the registered layout, so it is how a
+#   `create-table --source-table-id ...` + `swap-tables` repartition is VERIFIED -- the table
+#   ID is unchanged either way, and `create-table` only echoes the layout you REQUESTED (its
+#   --if-not-exists skip path nulls the layout keys outright). Human mode adds Time
+#   partitioning / Range partitioning / Clustering / Partition filter required / Partitions
+#   (a COUNT) and prints nothing new when there is no layout. The human
+#   Columns table also carries a Description column (0.89.0+, #642; NOT on 0.88.0), populated from
+#   `column_details[].description` and shown only when some column has one -- the one
+#   surface #624 left blank, so `describe-column` then `table-detail` now verifies
+#   itself (long text wraps, never truncates). --json passes `definition`
+#   through verbatim, including the unbounded `partitions[]` (one entry per physical
+#   partition from INFORMATION_SCHEMA.PARTITIONS). `definition` is present on EVERY response
+#   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".
+#   `storage tables` (the LIST endpoint) is unaffected: the API has no `definition` include.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
@@ -460,6 +518,32 @@ kbagent storage describe-bucket --project NAME --bucket-id ID [--text STR | --fi
 kbagent storage describe-table --project NAME --table-id ID [--text STR | --file PATH | --stdin] [--branch ID]
 kbagent storage describe-column --project NAME --table-id ID --column NAME=DESC [--column ...] [--branch ID]
 kbagent storage describe-batch --project NAME --from-file YAML [--branch ID]
+kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+# Column descriptions (0.88.0+, #624): describe-column/describe-batch write through the native
+#   `PUT .../tables/{id}/definition` endpoint (async job) with `isDescriptionSystemManaged: false`
+#   (stops the next Output Mapping run from overwriting the text). The backend mirrors the value into
+#   `columnMetadata` `KBC.description`, so the UI, the MCP server and the Snowflake COMMENT /
+#   BigQuery description all see it. Before 0.88.0 kbagent wrote a flat `KBC.column.{name}.description`
+#   key on the TABLE's metadata -- read by nothing but kbagent, so documented columns looked blank
+#   everywhere else. Unknown column names now FAIL FAST before any write (behavior change; the flat
+#   write accepted typos silently). `table-detail` reads with precedence native definition ->
+#   columnMetadata KBC.description -> legacy flat key, always returns `legacy_column_descriptions`
+#   and warns in human mode when legacy keys remain; it never writes. `describe-migrate` converts
+#   legacy keys in bulk (scope: --table-id / --bucket-id / whole project; scan-then-confirm,
+#   --dry-run reports only; per-table errors accumulate). describe-column/describe-batch also migrate
+#   leftovers on the table they touch. Rules: a column whose visible description already differs is
+#   skipped as `conflict` (newer value wins), an entry for a dropped column is skipped as `orphan`
+#   unless --prune-orphans. Migrated flat entries are DELETED so a later clear cannot be resurrected
+#   by the read fallback.
+# describe-batch --from-file shape check (0.89.0+, #645, issue #640): the WHOLE file is validated
+#   before the first write. A tables:/buckets:/columns: section given as a list instead of a mapping
+#   of ID to description, a column entry that is not a mapping, a null description, a non-mapping
+#   document, or two keys colliding after str() coercion (1 vs "1") -> structured INVALID_ARGUMENT,
+#   exit 2, naming the key and its actual type; nothing is half-applied. Behavior change: before
+#   0.89.0 the same input raised an AttributeError traceback PARTWAY THROUGH the batch. Empty
+#   sections (absent, null, [], '', {}) stay silent no-ops; per-item API failures during
+#   application are still accumulated into errors[] (exit 1) -- shape is a usage error, an API
+#   refusal is not.
 kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
 kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
 kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
@@ -487,7 +571,7 @@ kbagent lineage server --load PATH [--port N] [--host HOST]
 kbagent sharing list [--project NAME]
 kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
 kbagent sharing unshare --project ALIAS --bucket-id ID
-kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME]
+kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
 kbagent sharing unlink --project ALIAS --bucket-id ID
 kbagent sharing edges [--project NAME]
 
@@ -513,8 +597,13 @@ kbagent feature user-show --project ALIAS --email EMAIL
 kbagent feature user-add --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 kbagent feature user-remove --project ALIAS --email EMAIL --feature NAME [--dry-run] [--yes]
 
-# token: scoped Storage tokens (Keboola single-bucket-write pattern; acting token needs canManageTokens; secret shown once).
-kbagent token list --project NAME
+# token: scoped Storage tokens (Keboola single-bucket-write pattern; secret shown once).
+# create REQUIRES a MASTER (admin) token -- pre-flight MISSING_MASTER_TOKEN guard (exit 3)
+#   since #599: a non-master token with canManageTokens is CreateTokenVoter's "impossible state"
+#   and the API answers a generic 500. That defect is CREATE-ONLY: list/delete/refresh need only
+#   canManageTokens and are deliberately NOT guarded (RefreshTokenVoter also lets any token
+#   rotate itself), so rotating a leaked device token from an org-setup token keeps working.
+kbagent token list --project NAME [--with-last-used] [--columns NAME ...]
 kbagent token create --project NAME --description DESC [--bucket-write BUCKET ...] [--bucket-read BUCKET ...] [--component-access ID ...] [--can-read-all-file-uploads] [--expires-in N]
 kbagent token delete --project NAME --token-id ID [--yes]
 kbagent token refresh --project NAME --token-id ID [--yes]
@@ -522,6 +611,25 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   get the id `delete`/`refresh` need, without the web UI. Secrets are STRIPPED from every row: a
 #   project with the `force-decrypted-token` feature has the API embed live values in the listing, and
 #   echoing those would break the group's "revealed once, at mint" contract for every token at once.
+# `--with-last-used` (0.88.0+, issue #622): answers which tokens are still IN USE -- the Storage API
+#   carries no `lastUsed` (only the Manage API's PAT response does), so it is DERIVED per token from
+#   GET /v2/storage/tokens/{id}/events, fanned out over max_parallel_workers. Opt-in: ONE EXTRA CALL
+#   PER TOKEN. Adds lastUsed / lastUsedEvent / lastUsedStatus + a top-level `errors`; the default
+#   shape is unchanged. Sorts dormant-first (reading order = cleanup order).
+#   The feed is narrowed SERVER-SIDE to `q=token.id:{id}` -- events the token PERFORMED. The raw feed
+#   also carries events performed ON the token, so a fresh token's newest raw event is its own
+#   storage.tokenCreated: `events[0]` reports never-used as "used today", exactly backwards. Filtering
+#   client-side instead breaks differently -- right after a rotation the one event a limit=1 fetch
+#   returns is that rotation, so the filter is left with nothing and calls an active token unused.
+#   lastUsedStatus separates `never` (minted INSIDE the ~6-month retention window, no activity =>
+#   proven) from `unknown` (older than retention => the API cannot say) from `error` (per-token lookup
+#   failed; row degrades, audit completes). Do not collapse never/unknown -- they lead to opposite
+#   decisions. DEV-BRANCH ACTIVITY IS INVISIBLE (the endpoint always resolves to the default branch:
+#   `idBranch == <production> OR NOT EXISTS idBranch`), so a branch-only token reads as dormant.
+# `--columns` (0.88.0+, repeatable): selects/orders the human table; `Refreshed` is now a default
+#   column (--json always returned it). --json is deliberately NOT affected by --columns.
+#   `last_used` / `last_used_event` REQUIRE --with-last-used (exit 2 otherwise): nothing was
+#   derived, so any rendered value would assert something never checked.
 # SDK (importable Client(url,token)) now exposes create_scoped_token / list_tokens / delete_token /
 # refresh_token / create_stream_source / get_stream_source / list_stream_sources /
 # delete_stream_source: dicts on .raw, typed ScopedTokenResult / TokenListEntryResult /
@@ -571,7 +679,19 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
-kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+# --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
+#   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
+#   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
+#   0.87.0 kbagent never wrote it and offered no way to: such an app deploys, reports state=running and
+#   passes its health probe while being unable to read a row, and the PLATFORM reports nothing -- verify
+#   via `config detail` -> `configuration.runtime`, not by grepping `data-app logs` (a `Missing env vars:
+#   WORKSPACE_ID` line is the app's own output, so its absence rules nothing out; an app that does not
+#   check crash-loops behind the probe instead). It defaults ON because the opposite mistake -- an
+#   unused workspace on an app that never reads Storage -- is the cheap one; pass --no-workspace there.
+#   Omitting the flag writes NO `enabled: false` key: the body is byte-identical to pre-0.87.0.
+#   Not gated on any project feature -- the config option is the sole control. Retrofit an existing app:
+#   `config update --merge --set 'runtime.workspace.enabled=true'` then `data-app deploy` (pins latest).
 # Exactly one git source is required: --git-repo URL (external) OR --use-managed-git-repo (0.65.0+).
 # --use-managed-git-repo provisions an EMPTY Keboola-hosted repo (POST useManagedGitRepo:true), writes
 #   NO parameters.dataApp.git block, and forces --no-deploy (nothing to run yet). Mutually exclusive with
@@ -606,8 +726,21 @@ kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--c
 #   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
 #   parameters/storage keys replace root wholesale, MCP parity -- NOT deep merge); --config-data
 #   sends explicit configData verbatim (skips fetch); branchId omitted from body for production.
+# sync-action (0.89.0+, #620): the ROOT configuration's `authorization` and `runtime` blocks are
+#   forwarded into configData too (root only -- a --row-id never overrides them; only when
+#   non-empty, so a component without them sends the pre-0.89.0 body). authorization.oauth_api.id
+#   is the broker reference the sync-actions service resolves + decrypts, so before 0.89.0 every
+#   sync action on an OAuth/Service-Account component (e.g. keboola.ex-linkedin-ads) failed with
+#   an opaque empty-body 400. MCP run_sync_action parity.
 kbagent config examples --component-id ID [--project NAME] [--row]
 kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-dir DIR] [--push --no-files --description D --configuration JSON|@file|- --configuration-file PATH --no-validate --branch ID --dry-run --allow-plaintext-on-encrypt-failure]
+# config new --push --output-dir (0.89.0+, #644): the written scaffold now records the created
+#   config's ID (_keboola.config_id, quoted so numeric IDs stay strings) and is placed in the
+#   subtree of the branch the config was ACTUALLY created in (--branch or active branch;
+#   unregistered branches are added to the manifest like `sync pull --branch` would). Before,
+#   the scaffold had no ID and always landed in the default branch tree, so the next
+#   `sync push` created a DUPLICATE (34-config incident). With --configuration, the local file
+#   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
 kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
@@ -617,8 +750,9 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
-# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target).
+# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
 kbagent sync branch-unlink [--directory DIR]
 kbagent sync branch-status [--directory DIR]
@@ -812,7 +946,11 @@ kbagent update [--beta]
 # the kbagent self-update stage and reports that channel's own command instead -- a uv/pip
 # reinstall would install a SECOND, unrelated kbagent that shadows it on PATH. `version
 # --json` gains additive `install_channel` + `upgrade_hint`; `upgrade_command` is empty for
-# a hand-unpacked archive. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
+# a hand-unpacked archive. Since 0.88.0 `upgrade_command` is ALSO empty whenever `up_to_date`
+# is not `false` (i.e. `true` or `null`) -- it used to be built unconditionally, so a caller on
+# a pre-release got `up_to_date: true` beside a pinned `--force --reinstall` command for the
+# older STABLE wheel (a silent downgrade), and an unreachable feed got an unpinned `git+`
+# default-branch install. Gate on `up_to_date is False`, never on the string being present. Since 0.85.0 `update` handles kbagent ONLY -- keboola-mcp-server
 # is no longer installed or refreshed by kbagent (see docs/mcp-migration.md for the manual
 # `uv tool install --upgrade --prerelease=allow keboola-mcp-server` command). Self-update
 # completes discovery first, then does the terminal exact-version reinstall and immediately

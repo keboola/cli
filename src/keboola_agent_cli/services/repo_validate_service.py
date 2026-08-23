@@ -76,6 +76,38 @@ _NGINX_PROXY_PASS_PORT_RE = re.compile(r"proxy_pass\s+http://[^:]+:(\d+)")
 _APP_CONF_PORT_RE = re.compile(r"--port[=\s]+(\d+)|:(\d+)\b")
 
 
+def _strip_shell_comments(text: str) -> str:
+    """Return ``text`` with ``#`` comments removed, quoted ``#`` preserved.
+
+    The setup.sh rules below grep for what the script *runs*, so they have to
+    see code and not prose. Without this, a comment warning against the wrong
+    installer -- exactly what a careful author writes above the right one --
+    is read as the violation it warns about and blocks the repo. The inverse
+    also matters: a comment merely mentioning ``uv sync`` must not satisfy the
+    check that the script actually invokes it.
+
+    Deliberately not a shell parser. It tracks single/double quotes so a
+    ``#`` inside a string survives, and treats a ``#`` at line start or after
+    whitespace as starting a comment -- which covers real setup.sh files
+    without pretending to handle heredocs or ``${...#...}`` expansions.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        quote: str | None = None
+        cut = len(line)
+        for i, char in enumerate(line):
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == "#" and (i == 0 or line[i - 1].isspace()):
+                cut = i
+                break
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
 # Severities. Order matters for verdict aggregation (worst wins).
 SEVERITY_OK = "OK"
 SEVERITY_WARN = "WARN"
@@ -355,7 +387,9 @@ def validate_keboola_repo(
         )
 
     if setup_sh_present and snapshot.setup_sh is not None:
-        if _PIP_INSTALL_RE.search(snapshot.setup_sh):
+        # Both rules below ask what the script RUNS, so they read code only.
+        setup_sh_code = _strip_shell_comments(snapshot.setup_sh)
+        if _PIP_INSTALL_RE.search(setup_sh_code):
             results.append(
                 CheckResult(
                     name="golden-rule.setup-sh-no-pip",
@@ -377,7 +411,7 @@ def validate_keboola_repo(
             )
 
         if pyproject_has_deps:
-            if _UV_SYNC_RE.search(snapshot.setup_sh):
+            if _UV_SYNC_RE.search(setup_sh_code):
                 results.append(
                     CheckResult(
                         name="golden-rule.setup-sh-uv-sync",

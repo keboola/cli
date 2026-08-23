@@ -145,6 +145,42 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
+## Switching back to production after a `--branch` pull (since v0.89.0)
+
+`sync pull --branch <dev>` does two things: it materializes the
+`<branch_name>/` subtree **and** it re-targets every `manifest.configurations`
+entry to that dev branch. The `main/` tree stays on disk but is no longer
+tracked — it is an orphan of the branch the manifest left behind.
+
+So after `branch reset` (or any production `sync diff` / `sync push`), the
+manifest and the tree you are diffing disagree. kbagent detects that and reports
+it instead of acting on it:
+
+```bash
+kbagent sync pull --project prod --branch 51406   # manifest now tracks 51406
+kbagent branch reset --project prod
+kbagent sync diff --project prod                  # target: production
+# Warning: 17 config(s) belong to a different branch than the one being synced.
+#   They are excluded from the diff and from push planning -- run
+#   'kbagent sync pull' to re-target the manifest to this branch, or remove
+#   the stale directory
+```
+
+- Configs whose id **does** exist on the target branch are still diffed, from
+  the file in the target's own tree (`main/`) — so an ordinary production diff
+  after a dev pull reports `unchanged`, not a create.
+- Configs that exist **only** on the dev branch are excluded entirely. Promote
+  them with `kbagent branch merge`, never by pushing them to production.
+- `--json` carries the full list under `orphaned` (`component_id`, `config_id`,
+  `path`, `branch_id`, `branch_path`, `exists_on_target`, `reason`, `hint`) plus
+  a `summary.orphaned` counter; human mode previews the first 10.
+- The fix: `kbagent sync pull --project prod` re-targets the manifest back to
+  production. Then diff/push behave normally and the warning disappears.
+
+Before this landed, that production diff classified the whole orphaned `main/`
+tree as `added` with an empty `config_id`, and `sync push` would have created a
+duplicate of every production config (issue #649).
+
 ## Fresh-CREATE writeback (since v0.47.0)
 
 If you (or a tool like FIIA) seed `.keboola/manifest.json` with placeholder
@@ -295,6 +331,9 @@ kbagent sync pull --project prod --force      # refresh main/
 - The manifest tracks which branch each config belongs to
 - Switching branches (`branch use` / `branch reset`) changes where pull writes and push reads
 - `sync diff` and `sync push` also respect the active branch
+- Each pull re-targets `manifest.configurations` to the branch it pulled, so
+  after switching back you must `sync pull` again before diff/push is meaningful
+  — see "Switching back to production after a `--branch` pull" above
 
 ### Directory structure
 
@@ -424,6 +463,11 @@ Override files are JSON or YAML objects:
 - `--bucket-map` → `{ "in.c-ref": "in.c-prod", "out.c-ref": "out.c-prod" }` — rewrites the bucket prefix of every storage input `source` / output `destination`.
 - `--variable-values` → `{ "db_host": "prod-db", "api_base": "https://..." }` — overrides matching `keboola.variables` row values.
 - `--instance-rename` → `{ "extractor/keboola.ex-db/Acme": "extractor/keboola.ex-db/Globex" }` — renames config dirs + manifest paths.
+
+All three files must be **flat `{id: scalar}` mappings** (since v0.89.0) — a
+nested mapping, list, or empty (`null`) value is rejected with `CONFIG_ERROR`
+(exit 5) naming the offending key and its actual type, instead of being
+silently stringified into a bogus ID.
 
 **Why it just works on a fresh target:** the reference's config ids do not exist
 in the target project, so the push diff classifies every config as `added` and

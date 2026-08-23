@@ -81,6 +81,17 @@ def search_command(
             "Textual search only."
         ),
     ),
+    scope: list[str] | None = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Narrow a config-based hit to part of the configuration body. "
+            "Dot notation written as it appears in the configuration, e.g. "
+            "'parameters' or 'storage.input'. Repeatable (scopes are OR-ed). "
+            "A configuration with no in-scope match drops out of the results. "
+            "Config-based search only."
+        ),
+    ),
 ) -> None:
     """Search for items across one or more Keboola projects.
 
@@ -135,6 +146,14 @@ def search_command(
         )
         raise typer.Exit(code=2)
 
+    # Scopes point into a configuration body, which textual search never reads.
+    if scope and search_type != "config-based":
+        formatter.error(
+            message="--scope is only supported with --search-type config-based.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+
     try:
         result = service.search(
             query=query,
@@ -143,6 +162,7 @@ def search_command(
             search_type=search_type,
             limit=limit,
             regex=regex,
+            scopes=scope or [],
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

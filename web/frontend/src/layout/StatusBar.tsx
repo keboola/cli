@@ -20,6 +20,9 @@ export function StatusBar() {
           ⬆ {v.latest_version} available
         </span>
       ) : null}
+      <span className="text-zinc-600 dark:text-zinc-500">
+        <kbd className="font-mono">ctrl+k</kbd> — command palette
+      </span>
       <span className="ml-auto">localhost only ・ bearer auth ・ kernel: python ・ ui: typescript</span>
     </footer>
   );
