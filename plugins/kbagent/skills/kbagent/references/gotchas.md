@@ -1197,7 +1197,9 @@ events and emits a final `done` SSE frame mirroring the same record.
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
 - **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote
-  boilerplate files to `--output-dir` (or stdout) and made **zero API calls**.
+  boilerplate files to `--output-dir` (or stdout) and made **no Storage
+  write calls** (scaffold mode has always made one AI Service read to fetch
+  the component schema -- that is what `--project` authenticates).
   The intended flow was scaffold → edit → `kbagent sync push`. The agent docs
   in `keboola-expert.md` and SKILL.md conflated this with "create config"
   intent, which was wrong if the goal was an API mutation.

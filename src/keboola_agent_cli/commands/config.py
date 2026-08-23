@@ -1246,7 +1246,8 @@ def config_new(
     Two modes:
       * Default (no --push): scaffold only -- generates ready-to-edit files
         (config YAML, code blocks, description). Writes to --output-dir or
-        prints to stdout. **Zero API calls.**
+        prints to stdout. No Storage write calls -- one AI Service read
+        fetches the component schema (hence --project for auth).
       * With --push: scaffold step + POST to Storage API. Requires --project
         and a non-empty --name. Use --no-files for FIIA-style one-shot create
         with no filesystem step.
