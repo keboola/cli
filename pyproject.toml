@@ -47,9 +47,26 @@ packages = ["src/keboola_agent_cli"]
 # ``uv tool install git+...`` or ``pip install`` from PyPI without the
 # user needing the ``web/`` source tree.
 #
-# ``force-include`` overrides the default ``.gitignore`` exclusion so the
-# generated dist actually lands in the wheel. Key on the LHS is the path
-# on disk; value on the RHS is the path inside the wheel.
+# ``force-include`` (below) is meant to be the ONLY way ``_ui_dist/`` enters
+# the wheel. Without this ``exclude``, the ``packages`` collection above picks
+# the dir up as well and the build aborts with "A second file is being added to
+# the wheel archive at the same path".
+#
+# Do NOT count on hatchling's .gitignore-based exclusion to prevent that; it is
+# version-dependent and it does not save this repo. Bisected on a clean
+# checkout WITH both ``.git`` and ``.gitignore`` present and a prebuilt SPA on
+# disk: hatchling <= 1.29.0 builds, >= 1.30.0 fails (1.30 / 1.31 / 1.32 all
+# reproduce), and ``requires = ["hatchling"]`` above is unpinned, so every
+# build takes the latest. Whether that exclusion fires at all also depends on
+# where the ``.gitignore`` sits relative to the project root and the ``.git``
+# boundary hatchling stops its upward search at -- an ancestor ``.gitignore``
+# suppressed the duplicate in a minimal fixture, this repo's own root
+# ``.gitignore`` does not.
+#
+# ``exclude`` is a plain glob, evaluated unconditionally, so it holds across
+# both VCS state and hatchling version: verified shipping exactly one
+# ``_ui_dist/index.html`` on hatchling 1.27, 1.29, 1.30 and 1.32.
+exclude = ["src/keboola_agent_cli/_ui_dist"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/keboola_agent_cli/_ui_dist" = "keboola_agent_cli/_ui_dist"
@@ -83,6 +100,14 @@ exclude = [
     "web/frontend/dist",
     "web/frontend/tsconfig.tsbuildinfo",
     "web/backend",
+    # Generated SPA output must never ship as *source*. ``include`` above has
+    # ``src/``, so with a ``_ui_dist/`` already on disk (an earlier editable
+    # install) and hatchling's .gitignore exclusion not applying -- as
+    # unreliable here as it is for the wheel target above -- the sdist carries
+    # a prebuilt SPA. Harmless downstream, since ``_bundle_ui`` rmtree's the
+    # dir before every build and a stale copy can never reach a wheel, but it
+    # ships bytes that are not source.
+    "src/keboola_agent_cli/_ui_dist",
 ]
 
 [tool.pytest.ini_options]
