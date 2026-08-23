@@ -62,6 +62,27 @@ describe("splitHeadline", () => {
     const { headline } = splitHeadline("exit code 5! And more.");
     expect(headline).toBe("exit code 5!");
   });
+
+  // The abbreviation set is an exact port of _HEADLINE_ABBREVIATIONS in
+  // changelog.py; every member must suppress the split here too, or a note
+  // reads differently on the page than under `kbagent changelog`.
+  it.each(["e.g", "i.e", "vs", "etc", "cf", "no", "al", "inc"])(
+    "does not break after the %s. abbreviation",
+    (abbr) => {
+      const { headline } = splitHeadline(`before ${abbr}. after. Second sentence.`);
+      expect(headline).toBe(`before ${abbr}. after.`);
+    },
+  );
+
+  it("breaks after an abbreviation-like word outside the ported set", () => {
+    const { headline } = splitHeadline("shipped incl. extras. More.");
+    expect(headline).toBe("shipped incl.");
+  });
+
+  it("resolves the trailing token to its final word, digits and underscores aside", () => {
+    const { headline } = splitHeadline("the flag kbagent_no. after. More.");
+    expect(headline).toBe("the flag kbagent_no. after.");
+  });
 });
 
 describe("toRuns", () => {

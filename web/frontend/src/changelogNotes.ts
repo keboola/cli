@@ -80,9 +80,16 @@ const LABELS: Record<string, string> = {
   why: "Why",
 };
 
-// Abbreviations whose trailing period is not a sentence end; subset of
-// _HEADLINE_ABBREVIATIONS in changelog.py that actually occurs in notes.
-const ABBREVIATIONS = new Set(["e.g", "i.e", "etc", "vs", "cf", "incl", "resp"]);
+// Abbreviations whose trailing period is not a sentence end. Exact port of
+// _HEADLINE_ABBREVIATIONS in changelog.py -- a note must split the same way
+// here and in `kbagent changelog`, so this set carries no additions of its own.
+const ABBREVIATIONS = new Set(["e.g", "i.e", "vs", "etc", "cf", "no", "al", "inc"]);
+
+// Final alphabetic token (internal dots included) before a period, tested
+// against ABBREVIATIONS. Port of _TRAILING_TOKEN: letters only, so a token
+// carrying digits or underscores resolves to its trailing word exactly as it
+// does in Python ("kbagent_no." -> "no").
+const TRAILING_TOKEN = /[A-Za-z][A-Za-z.]*$/;
 
 /**
  * First-sentence split, porting `headline()`'s rules: a `.`/`!`/`?` followed
@@ -96,7 +103,7 @@ export function splitHeadline(text: string): { headline: string; rest: string } 
     const dot = m.index;
     const before = dot > 0 ? text[dot - 1] : "";
     const isDigitPeriod = text[dot] === "." && before >= "0" && before <= "9";
-    const tokenMatch = /[\w.]+$/.exec(text.slice(0, dot));
+    const tokenMatch = TRAILING_TOKEN.exec(text.slice(0, dot));
     const token = tokenMatch ? tokenMatch[0].replace(/\.+$/, "").toLowerCase() : "";
     if (!isDigitPeriod && !ABBREVIATIONS.has(token)) {
       return {
