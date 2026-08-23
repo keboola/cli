@@ -35,6 +35,7 @@ from .dependencies import ServiceRegistry, install_registry
 from .routers import (
     agents,
     ai_chat,
+    auth,
     billing,
     branches,
     components,
@@ -80,6 +81,16 @@ logger = logging.getLogger(__name__)
 # a section to the end of the sidebar with no description.
 OPENAPI_TAGS: list[dict[str, str]] = [
     # ---- Project Management ----
+    {
+        "name": "auth",
+        "description": (
+            "**Project Management.** "
+            "Read/audit the current browser-login session and register its "
+            "accessible projects as local aliases. `login` / `login-password` "
+            "/ `logout` have no endpoint here -- see `server/routers/auth.py`. "
+            "Mirrors `kbagent auth status|register-projects` (partially)."
+        ),
+    },
     {
         "name": "projects",
         "description": (
@@ -727,6 +738,7 @@ def create_app(
         return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(members.router)
     app.include_router(feature.router)
