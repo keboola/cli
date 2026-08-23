@@ -104,7 +104,13 @@ jobs:
             echo "::error::docs/web-server-endpoints.md is untracked -- the endpoint reference must be committed."
             exit 1
           fi
-          uv run python scripts/gen_endpoint_reference.py > /dev/null 2>&1
+          # `--extra server` even though the install step already synced it:
+          # `uv run` re-resolves per invocation, so naming the extra here is
+          # what actually guarantees fastapi is importable, and it keeps this
+          # identical to `make endpoints-check`. stdout is dropped but stderr
+          # is NOT -- the step already fails on a crash (`bash -e`), and
+          # swallowing the traceback would leave no way to see why.
+          uv run --extra server python scripts/gen_endpoint_reference.py > /dev/null
           if ! git diff --quiet docs/web-server-endpoints.md; then
             echo "::error::docs/web-server-endpoints.md is out-of-date. Run 'make endpoints-gen' and commit."
             git diff docs/web-server-endpoints.md

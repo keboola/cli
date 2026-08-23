@@ -126,7 +126,9 @@ endpoints-gen: ## Regenerate docs/web-server-endpoints.md from the live FastAPI 
 	uv run --extra server python scripts/gen_endpoint_reference.py
 
 endpoints-check: ## Check the serve endpoint reference is up-to-date (fails if stale)
-	@uv run --extra server python scripts/gen_endpoint_reference.py > /dev/null 2>&1
+# stdout is dropped, stderr is not: a generator crash must show its traceback
+# rather than degrading into a confusing "doc is out-of-date".
+	@uv run --extra server python scripts/gen_endpoint_reference.py > /dev/null
 # Two conditions, because either one alone has a blind spot. `git diff --quiet`
 # reports NOTHING for an untracked path, so a doc that fell out of the index
 # would pass while documenting nothing; `git status --porcelain` closes that but
