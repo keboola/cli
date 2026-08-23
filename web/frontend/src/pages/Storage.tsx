@@ -11,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
@@ -206,22 +206,38 @@ export function StoragePage() {
     enabled: !!project && tab === "tables",
   });
 
-  // Restore a deep-linked table ONCE, after the first tables load. The list is
-  // unfiltered, so every table in the project is a candidate; a link to a table
-  // that no longer exists simply leaves the list open.
-  const restoredRef = useRef(false);
+  // Adopt a `sel` that arrived from OUTSIDE this page. On a cold deep link
+  // that is the initial state, but the command palette can also retarget the
+  // page while it is already mounted -- so this cannot be a mount-only read.
+  // The page's own clicks write `sel` and the matching local state together,
+  // so they arrive here as no-ops.
   useEffect(() => {
-    if (restoredRef.current) return;
+    const { tab: wantTab, tableId, bucketId } = parseStorageSel(sel);
+    if (wantTab === "tables") setTabState("tables");
+    if (bucketId) setBucketFilter(bucketId);
+    // A table target resolves against the project-wide list, so a filter that
+    // cannot contain it would hide the very row we are opening. Drop that one;
+    // keep a filter the table does belong to -- it is the context the reader
+    // is already in, and the chip should not blink out from under them.
+    if (tableId) setBucketFilter((f) => (f && tableId.startsWith(`${f}.`) ? f : null));
+  }, [sel]);
+
+  // Open the table named by `?sel=` once a list containing it has loaded.
+  //
+  // Deliberately NOT guarded by a "we already tried this id" flag. Dropping an
+  // incompatible bucket filter (above) swaps the tables query onto a new key,
+  // and this effect runs once more against the OLD, still-filtered rows before
+  // the wider list arrives -- a give-up flag set on that pass would strand the
+  // drawer shut. A miss simply changes nothing and waits for the next data.
+  //
+  // It cannot re-open a drawer the user closed either: closing rewrites `sel`
+  // without a table part, so `wanted` is null from then on.
+  useEffect(() => {
     const wanted = parseStorageSel(sel).tableId;
-    if (!wanted) {
-      restoredRef.current = true;
-      return;
-    }
-    if (!tablesQ.data) return;
-    restoredRef.current = true;
+    if (!wanted || wanted === selectedTable?.id || !tablesQ.data) return;
     const hit = tablesQ.data.tables.find((t) => t.id === wanted);
     if (hit) setSelectedTable(hit);
-  }, [sel, tablesQ.data]);
+  }, [sel, selectedTable, tablesQ.data]);
 
   return (
     <div className="space-y-4">
