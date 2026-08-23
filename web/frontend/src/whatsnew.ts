@@ -12,9 +12,12 @@
  * features. Add a new `WhatsNewRelease` entry keyed by the exact
  * `pyproject.toml` version, newest first.
  *
- * A version with NO entry here shows no popup at all. That is the intended
- * default, not a bug: a patch release that only touches CLI internals has
- * nothing to interrupt anyone about, and an empty modal is worse than silence.
+ * A release with no entry of its own is NOT silent: `whatsNewFor` falls back
+ * to the newest entry at or below the running version, so users still get the
+ * most recent curated reel (capped at one showing each by the seen-marker).
+ * Silence happens only when NO entry is <= the running version -- i.e. before
+ * the first curated release. See `whatsNewFor` for why exact matching would
+ * make the feature ship dark.
  */
 
 export interface WhatsNewItem {
@@ -86,16 +89,41 @@ export const WHATS_NEW: WhatsNewRelease[] = [
   },
 ];
 
+/** Compare two plain `X.Y.Z` versions. Negative when `a` sorts before `b`. */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 /**
- * Look up the curated entry for a running kbagent version.
+ * Pick the curated reel to show on a given running kbagent version: the
+ * NEWEST entry at or below it.
  *
- * Matching is exact on the release version, with one tolerance: a PEP 440
- * pre-release suffix on the RUNNING version is stripped before comparing, so
- * someone on `0.89.0b1` / `0.89.0rc2` / `0.89.0a1` sees the `0.89.0` reel.
- * Entries themselves are always keyed by the plain release version.
+ * Not an exact match, deliberately. An exact match makes the feature ship
+ * dark: this popup first runs in the release AFTER the one whose highlights
+ * seeded the list, so on day one the running version would have no entry and
+ * nobody would ever see a reel. "Newest entry <= running version" also
+ * degrades correctly in every other direction -- a user who skipped a release
+ * still gets the most recent curated reel rather than nothing, and once a
+ * release PR adds an entry for the version actually shipping, that entry wins
+ * immediately. The seen-marker still caps it at one showing per reel.
+ *
+ * A PEP 440 pre-release suffix on the RUNNING version is stripped before
+ * comparing, so `0.90.0b1` is treated as `0.90.0`. Entries themselves are
+ * always keyed by the plain release version.
  */
 export function whatsNewFor(version: string | undefined): WhatsNewRelease | undefined {
   if (!version) return undefined;
   const base = version.trim().replace(/(a|b|rc)\d+$/i, "");
-  return WHATS_NEW.find((r) => r.version === base);
+  let best: WhatsNewRelease | undefined;
+  for (const release of WHATS_NEW) {
+    if (compareVersions(release.version, base) > 0) continue;
+    if (!best || compareVersions(release.version, best.version) > 0) best = release;
+  }
+  return best;
 }

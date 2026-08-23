@@ -301,8 +301,12 @@ one is a single array element:
 { version: "0.90.0", items: [{ title: "…", body: "…", hint: "ctrl+k" }] }
 ```
 
-A version with **no** entry shows **no** popup. That is the intended
-default, not a bug — a release with nothing worth a modal gets no modal.
+A release with no entry of its own is **not** silent: the UI falls back to
+the newest entry at or below the running version, so users still see the
+most recent curated reel (each shown at most once). Exact matching would
+make the feature ship dark — the popup first runs in the release *after*
+the one whose highlights seeded the list. Silence happens only when no
+entry is `<=` the running version.
 
 **Mechanics.**
 
