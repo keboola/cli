@@ -89,6 +89,39 @@ class TestUiBootstrap:
         assert "console.log" in resp.text
 
 
+class TestUiShellCaching:
+    """The SPA shell must never be trusted to a browser cache without revalidation.
+
+    Live-observed during the PR #665 UI audit: after a ``kbagent serve --ui``
+    restart (new bearer token), a browser reload served the *cached*
+    ``index.html`` without contacting the server. No request means no fresh
+    ``Set-Cookie``, so the stale session cookie 401'd every ``/api/*`` call
+    and the SPA silently rendered empty lists. ``Cache-Control: no-cache``
+    forces the browser to revalidate the shell on every load -- and because
+    the bootstrap route always answers a full 200 (it implements no
+    conditional-request handling), every revalidation re-sets the cookie.
+    """
+
+    def test_shell_responses_always_revalidate(self, tmp_path: Path, ui_dist: Path) -> None:
+        client = _make_client(tmp_path, ui_dist=ui_dist)
+        for path in ("/", "/index.html"):
+            resp = client.get(path)
+            assert resp.status_code == 200, path
+            assert resp.headers.get("cache-control") == "no-cache", (
+                f"GET {path} must answer 'Cache-Control: no-cache' so a browser "
+                "revalidates the shell (and picks up a fresh session cookie) "
+                "after a server restart"
+            )
+
+    def test_assets_keep_default_caching(self, tmp_path: Path, ui_dist: Path) -> None:
+        # Build assets are content-hashed by Vite (a new build means new
+        # URLs), so the no-cache stamp is scoped to the shell only.
+        client = _make_client(tmp_path, ui_dist=ui_dist)
+        resp = client.get("/assets/main.js")
+        assert resp.status_code == 200
+        assert resp.headers.get("cache-control") != "no-cache"
+
+
 class TestApiAlias:
     def test_api_prefix_routes_to_bare_endpoint(self, tmp_path: Path, ui_dist: Path) -> None:
         client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
