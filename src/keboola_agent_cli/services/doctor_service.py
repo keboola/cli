@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from packaging.version import InvalidVersion, Version
+
 from .. import __version__
 from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
@@ -543,6 +545,13 @@ class DoctorService:
         plugin is missing; 'pass' with the installed version otherwise --
         plus a reinstall-from-ai-kit note when the copy came from the shim.
 
+        With BOTH marketplaces installed, every cached version dir under both
+        is considered and the NEWEST one wins by PEP 440 ordering, whichever
+        marketplace it sits under. The reported version, path, marketplace
+        name, drift hint and migration note therefore all describe the same
+        copy -- a newest-copy-under-the-shim install gets the migration note,
+        and the drift hint names the marketplace it should be updated from.
+
         Intentionally does NOT auto-fix: Claude Code's plugin install flow
         goes through the user's in-session ``/plugin`` commands, which a
         background CLI cannot invoke. The most we can do is surface the
@@ -562,28 +571,35 @@ class DoctorService:
 
         # Claude Code caches each plugin version under its own subdir
         # (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/), so the
-        # marketplace the user installed FROM is visible in the path. Probe the
-        # current marketplace (`keboola-claude-kit`, published from
-        # keboola/ai-kit) first, then the legacy one (`keboola-agent-cli`, this
-        # repo's own deprecated shim) -- an install from the shim still works and
-        # still passes, it just earns a migration note.
+        # marketplace the user installed FROM is visible in the path. Two
+        # marketplaces can ship this plugin: the current one
+        # (`keboola-claude-kit`, published from keboola/ai-kit) and the legacy
+        # one (`keboola-agent-cli`, this repo's own deprecated shim). An install
+        # from the shim still works and still passes, it just earns a migration
+        # note.
+        #
+        # Collect version dirs from EVERY marketplace dir that exists rather than
+        # stopping at the first one that holds any: a user who installed from both
+        # keeps two independent copies, and the one worth reporting is the NEWEST,
+        # whichever marketplace it came from. Short-circuiting on the first hit
+        # meant that while ai-kit trails a cli release -- with a newer copy under
+        # the legacy dir -- doctor reported the OLDER `keboola-claude-kit` copy,
+        # suppressed the migration note, and aimed the drift hint at a path the
+        # user was not actually running.
         cache_root = claude_home / "plugins" / "cache"
-        candidates: tuple[tuple[Path, bool], ...] = (
-            (cache_root / "keboola-claude-kit" / "kbagent", False),
-            (cache_root / "keboola-agent-cli" / "kbagent", True),
+        marketplaces: tuple[tuple[str, bool], ...] = (
+            ("keboola-claude-kit", False),
+            ("keboola-agent-cli", True),
         )
-        version_dirs: list[Path] = []
-        from_legacy_marketplace = False
-        for plugin_root, is_legacy in candidates:
+        # (version dir, came-from-the-legacy-marketplace)
+        candidates: list[tuple[Path, bool]] = []
+        for marketplace, is_legacy in marketplaces:
+            plugin_root = cache_root / marketplace / "kbagent"
             if not plugin_root.is_dir():
                 continue
-            found = [p for p in plugin_root.iterdir() if p.is_dir()]
-            if found:
-                version_dirs = found
-                from_legacy_marketplace = is_legacy
-                break
+            candidates.extend((p, is_legacy) for p in plugin_root.iterdir() if p.is_dir())
 
-        if not version_dirs:
+        if not candidates:
             return {
                 "check": "claude_plugin",
                 "name": "Claude Code plugin",
@@ -597,9 +613,20 @@ class DoctorService:
                 ),
             }
 
-        # Take the newest version dir name as the installed version.
-        # Fallback to manifest lookup if the dir name is not parseable.
-        latest = max(version_dirs, key=lambda p: p.name)
+        # Newest cached version across every marketplace dir, so the reported
+        # version, the path, the drift hint and the migration note all describe
+        # the SAME copy. Ordered by PEP 440 (`packaging.version`, as
+        # version_service does) rather than by dir name: a plain string compare
+        # sorts "0.100.0" below "0.90.0", which would report a stale copy as the
+        # newest exactly once the minor version rolls past 99. Unparseable names
+        # sort below every real version but stay eligible, so a hand-made dir
+        # never hides a real install. Ties -- the same version cached under both
+        # marketplaces -- resolve to the current marketplace: same code, no
+        # reason to nag about the shim.
+        latest, from_legacy_marketplace = max(
+            candidates,
+            key=lambda c: (DoctorService._plugin_version_sort_key(c[0].name), not c[1]),
+        )
         plugin_version = latest.name
         manifest = latest / ".claude-plugin" / "plugin.json"
         if manifest.is_file():
@@ -609,11 +636,23 @@ class DoctorService:
             except (OSError, json.JSONDecodeError):
                 pass
 
+        # cache/<marketplace>/kbagent/<version> -- name the marketplace the
+        # REPORTED copy came from, so a user with both installs can tell which of
+        # the two the rest of this message is talking about.
+        marketplace_name = latest.parent.parent.name
+
         cli_version = __version__
+        # Qualify the update command with the marketplace of the reported copy:
+        # with both marketplaces installed a bare `/plugin update kbagent` is
+        # ambiguous, and the whole point of the hint is to name the copy that is
+        # actually behind.
         drift = (
             ""
             if plugin_version == cli_version
-            else f" (CLI is v{cli_version} -- run `/plugin update kbagent` in Claude Code to sync)"
+            else (
+                f" (CLI is v{cli_version} -- run "
+                f"`/plugin update kbagent@{marketplace_name}` in Claude Code to sync)"
+            )
         )
         # Installed from this repo's deprecated marketplace shim: still a pass (it
         # keeps working and keeps updating), but the shim's entry goes away in a few
@@ -631,7 +670,31 @@ class DoctorService:
             "check": "claude_plugin",
             "name": "Claude Code plugin",
             "status": "pass",
-            "message": f"kbagent plugin v{plugin_version} installed at {latest}{drift}{migration}",
+            "message": (
+                f"kbagent plugin v{plugin_version} installed at {latest} "
+                f"(from the {marketplace_name} marketplace){drift}{migration}"
+            ),
             "plugin_path": str(latest),
             "plugin_version": plugin_version,
+            "plugin_marketplace": marketplace_name,
         }
+
+    @staticmethod
+    def _plugin_version_sort_key(name: str) -> tuple[int, Version | None, str]:
+        """PEP 440 sort key for a Claude Code plugin cache dir name.
+
+        Claude Code names each cached version dir after the version it holds, so
+        picking the newest install means ordering those names. Plain string
+        ordering gets it wrong across a digit-count change ("0.100.0" < "0.90.0"),
+        which matters as soon as two marketplaces are compared against each other.
+
+        Returns:
+            ``(1, Version, "")`` for a PEP 440-parseable name, ordering by
+            version; ``(0, None, name)`` for anything else, which sorts below
+            every real version but is still eligible to be picked (a lone
+            unparseable dir is better reported than treated as no install).
+        """
+        try:
+            return (1, Version(name.lstrip("v")), "")
+        except InvalidVersion:
+            return (0, None, name)

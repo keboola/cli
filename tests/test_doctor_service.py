@@ -566,6 +566,172 @@ class TestDoctorServiceCheckClaudePlugin:
         assert "keboola-claude-kit" in result["plugin_path"]
         assert "deprecated" not in result["message"]
 
+    def test_pass_reports_legacy_copy_when_it_is_the_newer_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """With both cache dirs present, the NEWER copy wins even when it is the legacy one.
+
+        This is the state the ai-kit publication flip creates: ai-kit trails a cli
+        release, so a user with both installs can hold a newer copy under the legacy
+        `keboola-agent-cli` dir. Probing the current marketplace first and stopping
+        there reported the older claude-kit copy, dropped the migration note, and
+        aimed the drift hint at a path the user was not running.
+        """
+        fake_home = tmp_path / "legacy-is-newer"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent" / "0.20.0").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.24.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        # The newer copy is the reported one -- version, path and marketplace agree.
+        assert result["plugin_version"] == "0.24.0"
+        assert "keboola-agent-cli" in result["plugin_path"]
+        assert result["plugin_marketplace"] == "keboola-agent-cli"
+        assert "v0.24.0" in result["message"]
+        assert "v0.20.0" not in result["message"]
+        # A newest-copy-under-the-shim install must still get the migration note.
+        assert "deprecated keboola-agent-cli marketplace" in result["message"]
+        assert "/plugin install kbagent@keboola-claude-kit" in result["message"]
+        # ...and the drift hint must name the marketplace of the copy being reported,
+        # not the other one sitting alongside it.
+        assert "/plugin update kbagent@keboola-agent-cli" in result["message"]
+        assert "kbagent@keboola-claude-kit` in Claude Code to sync" not in result["message"]
+
+    def test_pass_prefers_current_marketplace_on_a_version_tie(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Same version cached under both dirs: report the current marketplace, no note.
+
+        It is the same code either way, so there is nothing to migrate off and no
+        reason to nag -- the tie must not be resolved by iteration order alone.
+        """
+        fake_home = tmp_path / "version-tie"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent" / "0.24.0").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.24.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert result["plugin_marketplace"] == "keboola-claude-kit"
+        assert "deprecated" not in result["message"]
+
+    def test_pass_reports_legacy_copy_when_current_root_is_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A present-but-empty current root must not mask a real legacy install."""
+        fake_home = tmp_path / "empty-current-root"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.24.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert result["plugin_marketplace"] == "keboola-agent-cli"
+        assert "deprecated keboola-agent-cli marketplace" in result["message"]
+
+    def test_pass_picks_newest_across_marketplaces_by_pep440_not_string_order(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Cross-marketplace comparison orders by PEP 440, not by dir-name string.
+
+        A string compare puts "0.100.0" below "0.90.0", so once the minor version
+        rolls past 99 a plain sort would report a stale copy as the newest -- and
+        the repo is already at 0.90.x.
+        """
+        fake_home = tmp_path / "digit-count-rollover"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent" / "0.90.0").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.100.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.100.0"
+        assert result["plugin_marketplace"] == "keboola-agent-cli"
+        assert "deprecated keboola-agent-cli marketplace" in result["message"]
+
+    def test_pass_picks_newest_when_both_dirs_hold_several_versions(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Multiple cached versions on both sides: the single global newest is reported."""
+        fake_home = tmp_path / "many-versions"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        for v in ("0.18.0", "0.24.0"):
+            (cache / "keboola-claude-kit" / "kbagent" / v).mkdir(parents=True)
+        for v in ("0.20.0", "0.23.0"):
+            (cache / "keboola-agent-cli" / "kbagent" / v).mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert result["plugin_marketplace"] == "keboola-claude-kit"
+        assert "deprecated" not in result["message"]
+
+    def test_pass_unparseable_dir_name_loses_to_a_real_version(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A junk dir name sorts below every real version but never hides an install."""
+        fake_home = tmp_path / "junk-dirname"
+        cache = fake_home / ".claude" / "plugins" / "cache"
+        (cache / "keboola-claude-kit" / "kbagent" / "not-a-version").mkdir(parents=True)
+        (cache / "keboola-agent-cli" / "kbagent" / "0.24.0").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "0.24.0"
+        assert result["plugin_marketplace"] == "keboola-agent-cli"
+
+    def test_pass_lone_unparseable_dir_name_still_reported(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """With nothing else cached, an unparseable dir name is still a pass, not a warn."""
+        fake_home = tmp_path / "only-junk-dirname"
+        (
+            fake_home / ".claude" / "plugins" / "cache" / "keboola-claude-kit" / "kbagent" / "main"
+        ).mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert result["plugin_version"] == "main"
+
+    def test_pass_names_the_marketplace_of_the_reported_copy(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The message names the marketplace the reported copy came from."""
+        fake_home = tmp_path / "names-marketplace"
+        (
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "keboola-claude-kit"
+            / "kbagent"
+            / "0.24.0"
+        ).mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        result = DoctorService._check_claude_plugin()
+
+        assert result["status"] == "pass"
+        assert "from the keboola-claude-kit marketplace" in result["message"]
+        assert result["plugin_marketplace"] == "keboola-claude-kit"
+
     def test_warn_when_only_legacy_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:
         """An empty legacy plugin root is still not-installed (no false pass)."""
         fake_home = tmp_path / "empty-legacy-root"
