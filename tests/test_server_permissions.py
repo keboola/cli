@@ -287,6 +287,123 @@ class TestServeCommandCarriesTheFlags:
         assert captured["deny_destructive"] is False
 
 
+class TestServeCommandCarriesTheRootConfigDir:
+    """The root `kbagent --config-dir` must reach `create_app` (issue #679).
+
+    `serve` is the only subcommand with a `--config-dir` of its own. It used to
+    forward ONLY that one, so `kbagent --config-dir A serve` silently served a
+    completely different directory -- the wrong projects, and (since the
+    `/auth/*` routes started enforcing it) the wrong `permissions` policy.
+    Precedence is now most-specific-wins, as in `kbagent repl`.
+    """
+
+    def _captured_config_dir(
+        self, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+    ) -> tuple[Any, Any]:
+        result, captured = TestServeCommandCarriesTheFlags()._invoke_serve(monkeypatch, argv)
+        return result, captured.get("config_dir")
+
+    def test_root_flag_is_used_when_serve_has_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root_dir = tmp_path / "root"
+        result, config_dir = self._captured_config_dir(
+            monkeypatch, ["--config-dir", str(root_dir), "serve"]
+        )
+        assert result.exit_code == 0, result.output
+        assert config_dir == str(root_dir)
+
+    def test_serve_flag_alone_still_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        serve_dir = tmp_path / "serve"
+        result, config_dir = self._captured_config_dir(
+            monkeypatch, ["serve", "--config-dir", str(serve_dir)]
+        )
+        assert result.exit_code == 0, result.output
+        assert config_dir == str(serve_dir)
+
+    def test_serve_flag_beats_the_root_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root_dir = tmp_path / "root"
+        serve_dir = tmp_path / "serve"
+        result, config_dir = self._captured_config_dir(
+            monkeypatch,
+            ["--config-dir", str(root_dir), "serve", "--config-dir", str(serve_dir)],
+        )
+        assert result.exit_code == 0, result.output
+        assert config_dir == str(serve_dir)
+
+    def test_neither_flag_leaves_resolution_to_create_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, config_dir = self._captured_config_dir(monkeypatch, ["serve"])
+        assert result.exit_code == 0, result.output
+        assert config_dir is None
+
+    def test_env_var_source_is_not_propagated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The root callback resolved this dir from KBAGENT_CONFIG_DIR, not from
+        # an explicit flag. `create_app` reads the same env var and lands on the
+        # same directory, so forwarding it would only pin a resolution made at a
+        # different moment. Only the `cli-flag` source travels.
+        monkeypatch.setenv("KBAGENT_CONFIG_DIR", str(tmp_path / "from-env"))
+        result, config_dir = self._captured_config_dir(monkeypatch, ["serve"])
+        assert result.exit_code == 0, result.output
+        assert config_dir is None
+
+
+class TestRootConfigDirPolicyReachesTheRestSurface:
+    """End-to-end: the security half of issue #679.
+
+    A deny policy persisted next to the projects the caller named must be the
+    one the served app enforces -- previously `kbagent --config-dir A serve`
+    built its engine from an entirely different directory.
+    """
+
+    def _serve_app(self, monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> Any:
+        """Run the real CLI (real `create_app`) and capture the app uvicorn got."""
+        import uvicorn
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app as cli_app
+
+        monkeypatch.setenv("KBAGENT_AUTO_UPDATE", "false")
+        monkeypatch.setenv("KBAGENT_SERVE_TOKEN", TOKEN)
+        captured: dict[str, Any] = {}
+
+        def _fake_run(app: Any, **_kwargs: Any) -> None:
+            captured["app"] = app
+
+        monkeypatch.setattr(uvicorn, "run", _fake_run)
+        result = CliRunner().invoke(cli_app, argv)
+        assert result.exit_code == 0, result.output
+        return captured["app"]
+
+    def test_persisted_deny_in_the_root_dir_blocks_the_route(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        served = tmp_path / "served"
+        _persist_policy(served, PermissionPolicy(mode="allow", deny=["auth.register-projects"]))
+
+        app = self._serve_app(monkeypatch, ["--config-dir", str(served), "serve"])
+        client = TestClient(app)
+
+        denied = client.post("/auth/register-projects", json={"all": True}, headers=AUTH)
+        assert denied.status_code == 403, denied.text
+        assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
+        # `/auth/status` is gated by a DIFFERENT registry key (`auth.status`),
+        # which the policy above does not name -- so a non-403 here proves the
+        # deny is narrow rather than a blanket failure of the whole surface.
+        # It still errors PAST the guard: with no default project and no
+        # `?stack=`, `AuthService.status()` -> `_resolve_stack_url()` raises
+        # ConfigError -> HTTP 400 CONFIG_ERROR. Hence "not denied", not 200.
+        allowed = client.get("/auth/status", headers=AUTH)
+        assert allowed.status_code != 403, allowed.text
+
+
 class TestDenyWritesBlocksTheServeCommandItself:
     """`kbagent --deny-writes serve` never starts the server.
 

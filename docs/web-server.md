@@ -516,10 +516,11 @@ carried. Two consequences worth knowing before you reach for a flag:
   policy works too, but its allow list must then include `serve` (and the reads
   you want to keep), or the server will not start for the same reason as above.
 
-  Pass `--config-dir` **to `serve`**: the server resolves its own config dir
-  (`--config-dir` on the `serve` command, then `KBAGENT_CONFIG_DIR`, then the
-  local/global chain), so a root-level `kbagent --config-dir ... serve` sets the
-  directory for the CLI invocation, not for the served process.
+  Either spelling of `--config-dir` selects the served directory *(since
+  vNEXT)* — see [Which config directory `serve`
+  uses](#which-config-directory-serve-uses) below. On **0.90.1 and older**,
+  only `serve --config-dir` did: a root-level `kbagent --config-dir ... serve`
+  was ignored, so the policy above was silently not the one enforced.
 
 A missing or expired session reaches `GET /auth/projects` and `POST
 /auth/register-projects` as a **thrown error**, both funnelled through
@@ -599,6 +600,27 @@ This is what lets a midnight agent task do meaningful work: it has
 the same view of Keboola the operator does, it can call any endpoint in
 the reference, and its full response (including any tools it called)
 is captured into the run history.
+
+### Which config directory `serve` uses
+
+`serve` is the only subcommand with a `--config-dir` of its own, so there are
+two places the flag can appear. Most specific wins *(since vNEXT)*:
+
+1. `kbagent serve --config-dir X` → serves `X`.
+2. `kbagent --config-dir Y serve` → serves `Y`.
+3. Neither → `KBAGENT_CONFIG_DIR`, then the `.kbagent` walk-up from the CWD,
+   then the global directory (`config_store.resolve_config_dir`).
+
+Giving both is not an error — the `serve`-level flag simply wins, as in rule 1.
+Only an explicit root flag is forwarded; an env-var/walk-up/global resolution is
+left to the server, which reaches the identical directory on its own.
+
+> **On 0.90.1 and older, rule 2 did not exist** (issue #679): the root-level
+> `--config-dir` was ignored by `serve` entirely, with no warning. The server
+> then exposed a different set of projects than the caller named, and — once
+> `/auth/*` began enforcing `permissions` in 0.90.1 — enforced a different
+> directory's policy. On those versions always pass `--config-dir` to `serve`
+> itself.
 
 ### State on disk
 

@@ -26,7 +26,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
-    # Serve-only (since vNEXT): `GET /auth/projects` lists the session's
+    # Serve-only (since 0.90.1): `GET /auth/projects` lists the session's
     # registerable project candidates. It has no CLI leaf command -- the
     # terminal equivalent is the interactive picker inside
     # `auth register-projects` -- so it is exempted from the dead-key check
@@ -322,8 +322,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
-    # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. The serve's own routes enforce their own permissions on top.
+    # Categorised by the underlying HTTP method under the taxonomy at the top
+    # of this registry: GET = read, POST/PATCH = write (they create/modify),
+    # DELETE = destructive (it deletes). DELETE is deliberately a rung above
+    # the other mutating verbs -- lumping it in as `write` would let a
+    # `--deny-destructive` session delete through the REST boundary.
+    # These keys are the ONLY firewall an `http.*` call meets for
+    # most routes: on the serve side only `/auth/*` re-checks the policy
+    # (since 0.90.1) -- every other router is still unguarded, so a deny
+    # policy does not survive the REST boundary there (issue #655).
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",

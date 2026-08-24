@@ -1866,6 +1866,15 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
 
+    Config directory served -- most specific wins: `serve --config-dir X`,
+    then an explicit root-level `kbagent --config-dir Y serve`, then the
+    normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
+    is not an error; the serve-level flag wins. That directory decides which
+    projects the REST surface exposes AND which persisted `permissions`
+    policy the /auth/* routes enforce. NOTE for older installs: up to 0.90.1
+    `serve` ignored the root-level flag entirely, silently serving a
+    different directory -- there, always pass --config-dir to `serve` itself.
+
     --no-banner (since 0.90.0) suppresses the web UI's "What's new" popup --
     a curated per-version highlights modal the UI shows once per version
     (dismissal persisted in localStorage `kbagent.whatsnew.seen`). The SPA
@@ -1993,6 +2002,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
+     `serve` is the only subcommand with a --config-dir of its own: its flag wins over the
+     root-level one, which wins over the rest of the chain above (see `kbagent serve`).
 
 9. Historical MCP tool names: the `tool` group was removed in v0.85.0. If a
    user or an old script names a tool (get_configs, query_data, ...), map it to
