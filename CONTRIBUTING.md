@@ -462,6 +462,8 @@ release checklist below.
 | `docs/web-server.md` | Architecture, auth, concepts, router categories. Never enumerate routes here -- that is the generated file's job (this doc drifted to "150+ endpoints" over a 226-operation server, issue #656) | NO (prose); the route list it used to carry is now gated |
 | `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
 | `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
+| `.claude-plugin/marketplace.json` (this repo -- **deprecated shim**) | Never by hand except the entry `description`. The `version` is auto-synced; the file and its `kbagent` entry MUST stay so installs made from the old `keboola-agent-cli` marketplace keep resolving updates. Planned removal: ~3 releases after vNEXT (the release that first ships the deprecation notice) | YES (`make version-check`; pre-commit auto-stages) |
+| **`keboola/ai-kit` -> `.claude-plugin/marketplace.json`** (ANOTHER REPO) | Every stable release -- this is where the plugin is actually published (`keboola-claude-kit`, an external `git-subdir` entry pinned to the release tag). Automated: the `ai-kit-marketplace` job in `.github/workflows/release-kbagent.yml` rewrites `version` + `source.ref` and opens a PR against keboola/ai-kit. **Merging that PR is what ships the release to plugin users** -- a green release here does not move them | NO -- nothing in this repo can see ai-kit's catalogue. Check the opened PR after every release; if `secrets.AI_KIT_TOKEN` is missing or expired the job fails and no PR appears |
 | `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
 | `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command **group** (one matrix row per group, not per command -- file has a hard 70 000 B prompt budget); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
 | `plugins/kbagent/commands/keboola.md` | `/keboola` slash-command UX change (rare) | NO |
@@ -678,6 +680,12 @@ silent-drift risks summarized in the
     gh run watch $(gh run list --workflow release-kbagent.yml --limit 1 --json databaseId --jq '.[0].databaseId')
     ```
     then confirm `gh release view v<X.Y.Z>` shows a non-empty body rendered from the changelog and both wheels (`keboola_cli-*` + legacy `keboola_agent_cli-*`) among the assets. A `skipped` winget job is normal; any red job is a real signal.
+17. **After the tag: merge the ai-kit publish PR.** The `ai-kit-marketplace` job opens
+    `chore(kbagent): publish vX.Y.Z` against `keboola/ai-kit`, bumping the `kbagent`
+    entry in the `keboola-claude-kit` marketplace to this tag. Until that PR merges,
+    `/plugin install kbagent@keboola-claude-kit` still serves the PREVIOUS version --
+    the release is not user-visible for plugin users. If no PR appeared, the job
+    failed: check `secrets.AI_KIT_TOKEN` in the `release` environment.
 
 If any of steps 8-11 reveal "I should have done this in the PR that introduced
 the command, not at release time", **also patch the per-command checklist**

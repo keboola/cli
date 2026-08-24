@@ -293,15 +293,27 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `auth register-projects` disclose and every doc surface defers to. Run
     `python scripts/check_sentinel_guards.py --list` to see the inventory.
 
-## Claude Code Plugin (Marketplace)
+## Claude Code Plugin
 
-This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
+The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
+
+**Source here, publication there.** The source stays in this repo because four CI gates validate it against the live command tree (`make skill-gen` / `make skill-check`, `scripts/sync_version.py`, `scripts/check_command_sync.py`, `make version-check`) -- none of which exist in ai-kit. What ai-kit owns is the *catalogue*: its `keboola-claude-kit` marketplace carries an external `git-subdir` entry pointing at `plugins/kbagent` in this repo, pinned to a release tag. Keboola has ONE Claude Code marketplace, and it is not this one.
+
+**Install path users are told to use:**
+```
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
+```
+
+**The sync mechanism** is the `ai-kit-marketplace` job in `.github/workflows/release-kbagent.yml`: on every stable tag it rewrites the kbagent entry's `version` + `source.ref` in ai-kit and opens a PR there (a PR, not a push -- ai-kit's evals must see it). It needs `secrets.AI_KIT_TOKEN` in the `release` environment. No-op safe: an entry already at this version opens nothing.
+
+**`.claude-plugin/marketplace.json` in this repo is a DEPRECATED SHIM.** Do not delete it and do not remove its `kbagent` entry: existing installs from `keboola-agent-cli` resolve updates through it, and `scripts/sync_version.py` + `make version-check` still keep its `version` in lock-step with `pyproject.toml`. Its entry `description` carries the migration notice users see in `/plugin` listings. Plan: keep for ~3 releases, then drop the entry and leave a `renames` tombstone. `renames` cannot redirect across marketplaces, so the migration is necessarily a manual two-line user action -- which is why the notice lives in the description.
 
 **Update rules** -- see `CONTRIBUTING.md` > "Documentation changes (mandatory!)", "Plugin synchronization map", and "Releasing a new version" for the binding checklists. Coding convention #17 above is the short version. Do **not** maintain a parallel update list here -- it always drifts.
 
 **Structure:**
 ```
-.claude-plugin/marketplace.json                        # Repo-level marketplace definition
+.claude-plugin/marketplace.json                        # DEPRECATED shim marketplace (kept so old installs keep updating)
 plugins/kbagent/
   .claude-plugin/
     plugin.json                                        # Plugin manifest (auto-synced from pyproject.toml)

@@ -2050,8 +2050,8 @@ When you receive a non-zero exit code, use --json to get structured error detail
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:
 
-  /plugin marketplace add keboola/cli
-  /plugin install kbagent@keboola-agent-cli
+  /plugin marketplace add keboola/ai-kit
+  /plugin install kbagent@keboola-claude-kit
 
 The plugin provides a skill with detailed workflow references including:
 - SQL transformation migration (input mapping removal, Snowflake paths)

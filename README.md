@@ -98,8 +98,8 @@ This CLI is built AI-first. Every command outputs structured JSON (`--json`), er
 **Claude Code plugin** (agent learns all 100+ commands + gets a specialist subagent for writes):
 
 ```
-/plugin marketplace add keboola/cli
-/plugin install kbagent@keboola-agent-cli
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
 ```
 
 Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over raw REST, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
