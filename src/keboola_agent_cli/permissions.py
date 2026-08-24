@@ -322,8 +322,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
-    # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. These keys are the ONLY firewall an `http.*` call meets for
+    # Categorised by the underlying HTTP method under the taxonomy at the top
+    # of this registry: GET = read, POST/PATCH = write (they create/modify),
+    # DELETE = destructive (it deletes). DELETE is deliberately a rung above
+    # the other mutating verbs -- lumping it in as `write` would let a
+    # `--deny-destructive` session delete through the REST boundary.
+    # These keys are the ONLY firewall an `http.*` call meets for
     # most routes: on the serve side only `/auth/*` re-checks the policy
     # (since 0.90.1) -- every other router is still unguarded, so a deny
     # policy does not survive the REST boundary there (issue #655).
