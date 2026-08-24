@@ -106,8 +106,10 @@ read/audit endpoints, three deliberate gaps" below.
 
 Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
 (filesystem-local by design), `permissions`, and `init`. The mirrors still
-considered missing are tracked in #657, and the fact that `permissions`
-constrains only `/auth/*` and not the other ~30 routers is #655.
+considered missing are tracked in #657 — `describe-batch` (inline payload),
+`unload-table` and `job run`'s idempotency fields came off that list in vNEXT;
+the fact that `permissions` constrains only `/auth/*` and not the other ~30
+routers is #655.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
@@ -571,6 +573,25 @@ Sign in via the CLI directly (`kbagent auth login-password`, or `auth login`
 for a human), then use `POST /auth/register-projects` — or `auth
 register-projects` on the CLI — to register the resulting session's projects
 for `serve` to use.
+
+### CLI options that a REST mirror deliberately drops
+
+*(since vNEXT — issue #657)*
+
+Three mirrors landed with a shape that is not a field-for-field copy of the CLI
+command, because the CLI's version of the option refers to the *caller's*
+filesystem — which, over `serve`, is the server's:
+
+| CLI | REST | Difference |
+|---|---|---|
+| `storage describe-batch --from-file PATH` | `POST /storage/describe-batch/{project}` | Sections travel **inline in the body** (`buckets` / `tables` / `columns` / `branch_id`). Same validator (`services/_describe_batch_input.py`), so both surfaces accept and reject exactly the same documents, whole, before the first write. |
+| `storage unload-table [--download] [--output]` | `POST /storage/tables/{project}/{table_id}/unload` | No `download` / `output`. The response carries the Storage `file_id`; fetch the bytes with `GET /storage/files/{project}/{file_id}/download`. That is also the only shape that works for `file_type: "parquet"`, whose export is sliced. |
+| `job run --idempotency-key KEY [--force-rerun]` | `POST /jobs/{project}/run` | Same two fields, now on the body. Retrying a POST is the canonical case #427's store was built for, so the mirror omitting them left the caller who needs them most without them. Dedup is scoped to the **served** config dir, i.e. per machine. |
+
+One error-shape note: a malformed `describe-batch` body answers **422**
+(`HTTP_ERROR`) where the CLI exits **2** (`INVALID_ARGUMENT`). The message is
+the same one #645 writes — the offending key, its actual type, and an example —
+but the code differs, so branch on the status for this one, not the code.
 
 ### Manage tokens are per-request
 

@@ -15,6 +15,47 @@ from ..dependencies import ServiceRegistry, get_registry
 router = APIRouter(prefix="/storage", tags=["storage"])
 
 
+class DescribeBatch(BaseModel):
+    """Inline payload for the bulk-documentation mirror (issue #657).
+
+    The CLI takes a YAML *path*; a REST caller has a JSON *body*, and asking
+    it to first write a file onto the server's filesystem would be both
+    awkward and a way to smuggle a path in. So the three sections travel in
+    the body instead, and everything else -- the rules, the messages, the
+    reject-whole-before-first-write guarantee -- is literally the shared
+    validator (`services/_describe_batch_input.py`).
+
+    The sections are typed ``Any`` on purpose. Declaring them
+    ``dict[str, str]`` would have pydantic reject a wrong shape first, with
+    its generic 422, discarding the whole point of #645's messages: the key
+    that is wrong, its actual type, and a copy-pasteable example.
+    """
+
+    buckets: Any = None
+    tables: Any = None
+    columns: Any = None
+    branch_id: int | None = None
+
+
+class UnloadTable(BaseModel):
+    """Body for the `storage unload-table` mirror (issue #657).
+
+    The CLI's `--download` / `--output` are deliberately absent: they write to
+    the *caller's* filesystem, which for a REST caller is the server's.
+    The route returns the Storage file id instead, and
+    `GET /storage/files/{project}/{file_id}/download` fetches the bytes --
+    which is also the only shape that works for `parquet`, whose export is
+    sliced and has no single-file download even on the CLI.
+    """
+
+    columns: list[str] | None = None
+    limit: int | None = None
+    tags: list[str] | None = None
+    file_type: str = "csv"
+    keep_slices: bool = False
+    branch_id: int | None = None
+
+
 class CreateBucket(BaseModel):
     stage: str
     name: str
@@ -580,6 +621,36 @@ def describe_columns(
     )
 
 
+@router.post("/describe-batch/{project}", summary="Apply descriptions in bulk")
+def describe_batch(
+    project: str,
+    body: DescribeBatch,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Apply bucket/table/column descriptions in one call.
+
+    Mirrors `kbagent storage describe-batch --from-file`, with the document
+    inline instead of on disk. Same validation, so the whole payload is
+    rejected before the first write if any section has the wrong shape; a
+    per-item API failure afterwards is accumulated into `errors` and does not
+    stop the remaining items.
+
+    A shape error answers **422** (`HTTP_ERROR`) rather than the CLI's exit-2
+    `INVALID_ARGUMENT` -- it is a malformed request body, the same class of
+    problem FastAPI already answers 422 for on this surface. The message is
+    the CLI's, naming the offending key and its actual type.
+    """
+    document = {"buckets": body.buckets, "tables": body.tables, "columns": body.columns}
+    try:
+        return registry.storage.describe_batch_document(
+            alias=project,
+            document=document,
+            branch_id=body.branch_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
 @router.post("/columns/{project}/describe-migrate", summary="Migrate legacy column descriptions")
 def describe_migrate(
     project: str,
@@ -594,6 +665,39 @@ def describe_migrate(
         prune_orphans=body.prune_orphans,
         dry_run=body.dry_run,
         branch_id=body.branch_id,
+    )
+
+
+@router.post("/tables/{project}/{table_id:path}/unload", summary="Export a table to a file")
+def unload_table(
+    project: str,
+    table_id: str,
+    body: UnloadTable | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Export a table into a Storage File and return its metadata.
+
+    Mirrors `kbagent storage unload-table`. The sync `GET
+    /storage/table-preview/...` covers small reads; this covers the big ones,
+    where the async export + a presigned Storage file is the whole point.
+
+    Nothing is written to the server's filesystem: the response carries the
+    `file_id`, and `GET /storage/files/{project}/{file_id}/download` fetches
+    the bytes. `file_type: "parquet"` produces a SLICED file with no
+    single-file download -- use `GET /storage/files/{project}/{file_id}` and
+    work with the slices.
+    """
+    params = body or UnloadTable()
+    return registry.storage.unload_table_to_file(
+        alias=project,
+        table_id=table_id,
+        columns=params.columns,
+        limit=params.limit,
+        tags=params.tags,
+        download=False,
+        branch_id=params.branch_id,
+        file_type=params.file_type,
+        keep_slices=params.keep_slices,
     )
 
 

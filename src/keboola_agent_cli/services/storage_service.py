@@ -9,7 +9,7 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -18,6 +18,9 @@ from ._column_descriptions import ColumnDescriptionsMixin
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
 from .table_usage import collect_table_usage, fetch_usage_components
+
+if TYPE_CHECKING:
+    from ._describe_batch_input import DescribeBatchInput
 
 logger = logging.getLogger(__name__)
 
@@ -2509,10 +2512,72 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
         """
-        from ..errors import KeboolaApiError
         from ._describe_batch_input import parse_describe_batch_file
 
-        parsed = parse_describe_batch_file(from_file)
+        return self._apply_describe_batch(
+            alias,
+            parse_describe_batch_file(from_file),
+            branch_id=branch_id,
+            progress_callback=progress_callback,
+        )
+
+    def describe_batch_document(
+        self,
+        alias: str,
+        document: Any,
+        branch_id: int | None = None,
+        progress_callback: Callable[[str, str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Apply descriptions from an already-loaded document (no file on disk).
+
+        The inline-payload sibling of :meth:`describe_batch`, added for the
+        REST mirror in issue #657 -- a serve caller has a JSON body, not a
+        path, and asking it to write a temp file on the server's filesystem
+        would be both awkward and a way to smuggle a path in.
+
+        Validation and application are literally the same code as the file
+        path (:func:`~keboola_agent_cli.services._describe_batch_input.parse_describe_batch_document`
+        plus :meth:`_apply_describe_batch`), so the two surfaces cannot drift
+        into accepting different documents.
+
+        Args:
+            alias: Project alias.
+            document: The parsed document -- same three optional ``buckets`` /
+                ``tables`` / ``columns`` sections the YAML file carries.
+            branch_id: If set, target a specific dev branch.
+            progress_callback: See :meth:`describe_batch`.
+
+        Returns:
+            Dict with project_alias, applied, errors, applied_count, error_count.
+
+        Raises:
+            ValueError: The document has a wrong shape. Rejected whole, before
+                the first write, exactly as for a file.
+        """
+        from ._describe_batch_input import parse_describe_batch_document
+
+        return self._apply_describe_batch(
+            alias,
+            parse_describe_batch_document(document, "request body"),
+            branch_id=branch_id,
+            progress_callback=progress_callback,
+        )
+
+    def _apply_describe_batch(
+        self,
+        alias: str,
+        parsed: "DescribeBatchInput",
+        branch_id: int | None = None,
+        progress_callback: Callable[[str, str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Write one validated describe-batch document, accumulating per-item errors.
+
+        Shared by :meth:`describe_batch` (file) and
+        :meth:`describe_batch_document` (inline). A failure on one item does
+        not skip the rest -- all per-item API results, success and error, are
+        collected and returned.
+        """
+        from ..errors import KeboolaApiError
 
         applied: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
