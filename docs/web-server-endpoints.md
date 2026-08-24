@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**231 operations** across **202 paths** and **30 routers**.
+**232 operations** across **203 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -457,6 +457,14 @@ Developer Portal app discovery -- list a vendor's apps, get one app's full entry
 | `GET` | `/dev-portal/apps/{app}` | Get one Developer Portal app |
 
 ## System
+
+### `permissions` (1 operation)
+
+Read the session firewall policy this server enforces on every route (issue #655). Read-only: `permissions set|reset` stay terminal actions on the host, so a bearer token can never widen the policy that constrains it. Mirrors `kbagent permissions show`.
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/permissions/show` | Show the active permission policy |
 
 ### `health` (6 operations)
 

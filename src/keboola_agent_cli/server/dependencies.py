@@ -227,6 +227,14 @@ def get_permission_engine(request: Request) -> PermissionEngine:
     return engine  # type: ignore[no-any-return]
 
 
+# Attribute stamped on the callable :func:`require_permission` returns, so the
+# app-level dependency in ``route_permissions`` can recognise a route that
+# already guards itself and skip its own (table-driven) lookup. A plain
+# ``hasattr`` check on some ad-hoc name would be guesswork; a named constant
+# makes the handshake between the two modules greppable.
+PERMISSION_DEPENDENCY_MARKER = "kbagent_permission_operation"
+
+
 def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
     """Build a FastAPI dependency enforcing the permission policy for ``operation``.
 
@@ -245,6 +253,13 @@ def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
     The engine comes from :func:`get_permission_engine` (app state), never from
     the registry, so overriding ``get_registry`` in a test cannot disable the
     check.
+
+    Since 0.90.2 (issue #655) this is the per-route OVERRIDE form, not the
+    default one: every route is classified centrally in
+    ``server/route_permissions.py`` and checked by one app-level dependency.
+    Use this when a route needs an operation the table cannot express -- and
+    when you do, the app-level dependency stands down for that route
+    (:data:`PERMISSION_DEPENDENCY_MARKER` is how it recognises one).
     """
 
     def _check_permission(
@@ -252,6 +267,7 @@ def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
     ) -> None:
         engine.check_or_raise(operation)
 
+    setattr(_check_permission, PERMISSION_DEPENDENCY_MARKER, operation)
     return _check_permission
 
 
