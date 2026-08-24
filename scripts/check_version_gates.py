@@ -139,7 +139,15 @@ def find_vnext_residue(paths: list[Path]) -> list[VnextResidue]:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()
-        for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), start=1):
+        # UTF-8 is pinned, never left to the platform default: on Windows that
+        # default is cp1252, and 73 of the files this now scans carry non-ASCII
+        # (em dashes, box-drawing rules in section comments). Decoded as cp1252
+        # their bytes turn to mojibake, which can move or destroy the backticks
+        # INLINE_CODE_RE keys on -- so a real placeholder could read as quoted
+        # prose on one OS and as residue on another.
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
             if VNEXT_TOKEN not in line:
                 continue
             if VNEXT_TOKEN in INLINE_CODE_RE.sub("", line):
@@ -161,7 +169,9 @@ def collect_gates(paths: list[Path]) -> dict[str, list[tuple[str, int]]]:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()
-        for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), start=1):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
             for match in GATE_RE.finditer(line):
                 version = match.group(1) or match.group(2)
                 gates[version].append((rel, lineno))

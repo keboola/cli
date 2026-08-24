@@ -25,9 +25,14 @@ residue = check_version_gates.find_vnext_residue
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
-    """Write a fixture inside pytest's tmp_path -- never into the repo tree."""
+    """Write a fixture inside pytest's tmp_path -- never into the repo tree.
+
+    UTF-8 is explicit because fixtures mirror real repo lines, and those carry
+    em dashes and box-drawing rules. Left to the platform default this raises
+    UnicodeEncodeError on Windows (cp1252) while passing everywhere else.
+    """
     target = tmp_path / name
-    target.write_text(body)
+    target.write_text(body, encoding="utf-8")
     return target
 
 
@@ -185,7 +190,9 @@ class TestLiveRepositoryVnext:
             # branch stores an absolute path instead; `REPO_ROOT / <absolute>`
             # yields that path unchanged, so both cases are covered.
             lines = (
-                (check_version_gates.REPO_ROOT / gate.path).read_text(errors="replace").splitlines()
+                (check_version_gates.REPO_ROOT / gate.path)
+                .read_text(encoding="utf-8", errors="replace")
+                .splitlines()
             )
             assert 1 <= gate.line <= len(lines), f"{gate.path}:{gate.line} is out of range"
             assert check_version_gates.VNEXT_TOKEN in lines[gate.line - 1], (
@@ -198,7 +205,7 @@ class TestLiveRepositoryVnext:
         mentions = sum(
             line.count(check_version_gates.VNEXT_TOKEN)
             for path in paths
-            for line in path.read_text(errors="replace").splitlines()
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
         )
         assert mentions > 0, "no vNEXT mentions at all -- the scan globs are probably broken"
 
@@ -262,7 +269,10 @@ class TestVnextFencedBlocks:
 
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "commands.md"
-            f.write_text("```\n# component detail (since vNEXT): falls back to ...\n```\n")
+            f.write_text(
+                "```\n# component detail (since vNEXT): falls back to ...\n```\n",
+                encoding="utf-8",
+            )
             found = residue([f])
         assert len(found) == 1, "a fenced gate must not be exempt -- see the class docstring"
 
