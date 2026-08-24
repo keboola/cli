@@ -394,10 +394,12 @@ class TestRootConfigDirPolicyReachesTheRestSurface:
         denied = client.post("/auth/register-projects", json={"all": True}, headers=AUTH)
         assert denied.status_code == 403, denied.text
         assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
-        # A sibling operation the policy does not name is NOT denied, so the
-        # 403 above is the policy talking and not a blanket failure. (`/auth/
-        # status` still errors past the guard -- there is no session in this
-        # fixture dir -- so assert on the absence of the denial, not on 200.)
+        # `/auth/status` is gated by a DIFFERENT registry key (`auth.status`),
+        # which the policy above does not name -- so a non-403 here proves the
+        # deny is narrow rather than a blanket failure of the whole surface.
+        # It still errors PAST the guard: with no default project and no
+        # `?stack=`, `AuthService.status()` -> `_resolve_stack_url()` raises
+        # ConfigError -> HTTP 400 CONFIG_ERROR. Hence "not denied", not 200.
         allowed = client.get("/auth/status", headers=AUTH)
         assert allowed.status_code != 403, allowed.text
 
