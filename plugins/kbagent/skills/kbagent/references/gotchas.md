@@ -4506,17 +4506,37 @@ shapes.
   keep) must be in its allow list, or the server will not start either.
   Pass `--config-dir` to `serve` itself: the root-level `kbagent --config-dir
   ... serve` sets the dir for the CLI invocation, not for the server process.
-- **A deny policy does NOT firewall the whole REST surface.**
-  `permissions set --mode deny --deny cli:write` blocks `POST
-  /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
-  does nothing to `POST /storage/tables/{project}` (create a table) or any
-  other write route on any other router -- those still execute unchecked.
-- `GET /auth/projects` backs a registry key (`auth.projects`) with no CLI leaf
-  command -- `auth register-projects`'s interactive picker is its terminal
-  equivalent. It is exempted from `scripts/check_command_sync.py`'s dead-key
-  check via `SERVE_ONLY_OPERATIONS` in `permissions.py`; see CONTRIBUTING.md's
-  command-sync gate section for the general rule when adding another
-  serve-only operation.
-- Treat this as a gap being closed incrementally, not the design end state:
-  today a deny policy gates only `/auth/*`, not the ~30 other routers a
-  session token can otherwise reach.
+- **A deny policy firewalls the WHOLE REST surface (since vNEXT, #655).**
+  Every route is classified in `server/route_permissions.py` and checked by
+  one app-level dependency against the served config dir's policy, so
+  `permissions set --mode deny --deny cli:write` now blocks `POST
+  /storage/tables/{project}` exactly like it blocks `POST
+  /auth/register-projects` -- HTTP 403, `error_code: PERMISSION_DENIED`, same
+  code the CLI exits on. **On 0.90.1 and older only `/auth/*` was checked**;
+  on those versions every other write/destructive route executed unchecked, so
+  do not rely on a deny policy to contain a `serve` you did not upgrade.
+  Bootstrap paths (`/health/ping`, `/health/auth-info`, `/ui-config`, `/docs`,
+  `/redoc`, `/openapi.json`, SPA shell) are never checked, by design.
+- **`GET /permissions/show` (since vNEXT)** reports the EFFECTIVE policy --
+  the persisted block already merged with the `--deny-*` flags the daemon was
+  launched with. Read-only: there is no REST way to change the policy, so an
+  agent cannot widen the firewall that constrains it. Reachable under any
+  policy (`permissions.*` is always allowed), but still needs the bearer token.
+- **REST classification is coarser than the CLI for `semantic-layer` sub-apps.**
+  `POST /semantic-layer/items/{kind}` maps to the collapsed parent key
+  `semantic-layer.add`, not `semantic-layer.add.metric` (`kind` is a path
+  param). A policy naming only the leaf key is enforced on the CLI but not
+  over REST -- name the parent or a `cli:*` category to cover both.
+- Three registry keys back a serve-only surface with no CLI leaf command:
+  `auth.projects` (the terminal equivalent is `auth register-projects`'s
+  interactive picker) plus `ai.chat` and `workspace.sql-improve` (since vNEXT --
+  the dashboard's Local AI tile and the SQL editor's "improve this query"
+  helper; both are `write`, because both spawn a local CLI process on the host
+  exactly like `agent prompt-improve`). All three are exempted from
+  `scripts/check_command_sync.py`'s dead-key check via `SERVE_ONLY_OPERATIONS`
+  in `permissions.py`; see CONTRIBUTING.md's command-sync gate section before
+  adding another.
+- A route with no entry in `ROUTE_OPERATIONS` is **refused** (403), not
+  exempted. A released build cannot reach that path -- a test asserts the
+  table matches the live app in both directions -- so seeing it means a route
+  was added without classifying it.

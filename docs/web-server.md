@@ -100,14 +100,13 @@ the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
 same `agents.json`); what is serve-only there is the cron loop, so a
 scheduled task fires only while the server runs. `auth` mirrors only the
 read/audit half of `kbagent auth` *(since v0.90.1)* — `login` /
-`login-password` / `logout` deliberately have no endpoint — and it is so far
-the only router that enforces the permission policy; see "`/auth/*` — three
-read/audit endpoints, three deliberate gaps" below.
+`login-password` / `logout` deliberately have no endpoint.
 
 Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
-(filesystem-local by design), `permissions`, and `init`. The mirrors still
-considered missing are tracked in #657, and the fact that `permissions`
-constrains only `/auth/*` and not the other ~30 routers is #655.
+(filesystem-local by design), `init`, and the *write* half of `permissions`
+(`set` / `reset`). The mirrors still considered missing are tracked in #657.
+`GET /permissions/show` *(since vNEXT)* is the read half — see "The session
+firewall applies to every route" below.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
@@ -485,12 +484,11 @@ None of the three response shapes (`ProjectCandidatesResult`,
 `RegisterProjectsResult`, `AuthStatusResult`) ever carries a token value,
 including the `kbc-session://` sentinel.
 
-`/auth/*` is also the **first router to enforce the permission policy**: every
-route above declares `Depends(require_permission(...))`, so a denied operation
-answers **HTTP 403** with `error_code: PERMISSION_DENIED` — the same code the
-CLI exits on. The other ~30 routers do not check the engine yet; see the
-gotchas entry on this before assuming a deny policy firewalls the whole REST
-surface.
+`/auth/*` was the **first router to enforce the permission policy** (0.90.1):
+every route above declares `Depends(require_permission(...))` at its own call
+site. Since vNEXT that is no longer special — *every* route on the server is
+enforced (see "The session firewall applies to every route" below) — and the
+three inline declarations survive only as the per-route override form.
 
 The policy in force is the **persisted `permissions` block of the config dir
 `serve` resolves**, plus whichever session flags the `kbagent` invocation
@@ -571,6 +569,62 @@ Sign in via the CLI directly (`kbagent auth login-password`, or `auth login`
 for a human), then use `POST /auth/register-projects` — or `auth
 register-projects` on the CLI — to register the resulting session's projects
 for `serve` to use.
+
+### The session firewall applies to every route
+
+*(since vNEXT — issue #655)*
+
+`PermissionEngine` used to be built only in the Typer callback, so a persisted
+`permissions set --mode deny` policy — and both `--deny-writes` and
+`--deny-destructive` — protected the CLI process and nothing else. `kbagent
+serve` exposed every route, `DELETE /storage/buckets` included, behind a single
+all-or-nothing bearer token. 0.90.1 closed that for `/auth/*` only; vNEXT closes
+it for the whole surface.
+
+**How it works.** One app-level dependency (`server/route_permissions.py`) runs
+on every request, looks the matched route up by `(method, path template)` in
+`ROUTE_OPERATIONS`, and calls the same `PermissionEngine.check_or_raise` the CLI
+uses. A denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` and the
+same message the CLI prints, so a client can branch on one value across both
+surfaces.
+
+Three properties worth knowing:
+
+- **A route with no classification is refused, not exempted.** Failing open
+  would make the newest, least-reviewed part of the surface the one outside the
+  firewall. A test (`tests/test_server_route_permissions.py`) asserts the table
+  matches the live app in both directions, so the refusal path should never be
+  reached in a released build — if you hit it, a route was added without a table
+  entry.
+- **No policy configured changes nothing.** With a clean `config.json` and no
+  session flags, `is_allowed` returns True for everything and the surface
+  behaves exactly as it did before.
+- **Bootstrap paths are never checked** (`UNGUARDED_PATHS`: `/health/ping`,
+  `/health/auth-info`, `/ui-config`, `/docs`, `/redoc`, `/openapi.json`, and the
+  SPA shell). A locked-down server must still be able to say who it is;
+  otherwise a client cannot tell a policy refusal from a dead process.
+
+**Granularity caveat.** A few routes are coarser than the CLI operation they
+mirror. `POST /semantic-layer/items/{kind}` covers `metric`/`dataset`/… in one
+route, so it maps to the collapsed parent key `semantic-layer.add`, not
+`semantic-layer.add.metric`. A policy naming only a leaf key is enforced on the
+CLI but not over REST — name the parent, or a `cli:*` category, to cover both.
+
+**Discovering the policy.** `GET /permissions/show` returns the *effective*
+policy the server enforces — the persisted block already merged with the
+`--deny-*` flags the daemon was launched with, which a REST caller can neither
+see nor change:
+
+```json
+{"active": true, "policy": {"mode": "allow", "allow": [], "deny": ["cli:destructive"]}}
+```
+
+It stays reachable under any policy (`permissions.*` operations are always
+allowed, by the same anti-lockout rule the CLI has) but still requires the
+bearer token. There is deliberately **no write counterpart**: letting a bearer
+token widen the policy that constrains it would make the firewall
+self-defeating, so `permissions set` / `reset` stay terminal actions on the
+host.
 
 ### Manage tokens are per-request
 

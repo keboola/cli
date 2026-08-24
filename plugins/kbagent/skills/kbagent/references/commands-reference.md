@@ -92,6 +92,7 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 
 ## Permissions (session firewall commands)
 The `permissions` subcommands persist a write/destructive policy to config.json (the `--deny-*` flags above are the one-shot form). The engine guards against agent mistakes; it is not a sandbox.
+Since vNEXT (#655) the persisted policy also firewalls the whole `kbagent serve` REST surface -- every route is checked against the SERVED config dir's policy and a denial answers HTTP 403 `PERMISSION_DENIED`. On 0.90.1 and older only `/auth/*` was checked. `GET /permissions/show` (serve-only, since vNEXT) reports the EFFECTIVE policy; there is deliberately no REST route that CHANGES it.
 - `permissions list [--category read|write|destructive|admin]` -- list all operations with their risk category and current allowed/denied status
 - `permissions show` -- show the current active permission policy
 - `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:read`, `cli:write`, `cli:destructive`. `tool:*` patterns are INERT since v0.85.0 (the MCP passthrough is gone) -- they load but match nothing, so a `--mode deny` policy whose only allowance was `tool:read` now denies everything

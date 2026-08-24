@@ -1917,7 +1917,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     List all operations with risk categories and current allowed/denied status.
 
   kbagent permissions show
-    Show current active permission policy.
+    Show current active permission policy. The persisted policy also applies
+    to every route of `kbagent serve` (denial = HTTP 403 PERMISSION_DENIED),
+    against the config dir the SERVER resolved; `GET /permissions/show` over
+    serve reports that effective policy. No REST route can change it.
 
   kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
     Set firewall-style permission policy. Patterns: exact (branch.delete),

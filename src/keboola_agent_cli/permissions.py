@@ -321,9 +321,19 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # Serve-only AI helpers (since vNEXT). Neither touches Keboola, but both
+    # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
+    # like `agent prompt-improve` -- classified `write` for the same reason, so
+    # one --deny-writes keeps an agent from spawning subprocesses through any
+    # of the three. Exempted from the dead-key check via SERVE_ONLY_OPERATIONS.
+    "ai.chat": "write",
+    "workspace.sql-improve": "write",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. The serve's own routes enforce their own permissions on top.
+    # = write. Since vNEXT (issue #655) the serve's own routes DO enforce the
+    # served config dir's policy on top, so a denied operation is refused at
+    # both ends; before that, this second layer did not exist and the claim
+    # this comment used to make was false.
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
@@ -393,7 +403,16 @@ FLAG_ESCALATIONS: dict[str, str] = {
 # they have no CLI leaf command, so the command-sync gate would otherwise report
 # them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
 # its "key matching no live command" check.
-SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects"})
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "auth.projects",
+        # Both back a web-UI affordance with no terminal equivalent: the
+        # dashboard's Local AI chat tile and the workspace SQL editor's
+        # "improve this query" helper.
+        "ai.chat",
+        "workspace.sql-improve",
+    }
+)
 
 
 # The operation namespace that disappeared with the MCP passthrough, and the
@@ -527,6 +546,20 @@ class PermissionEngine:
     def active(self) -> bool:
         """Whether a permission policy is configured."""
         return self._policy is not None
+
+    @property
+    def policy(self) -> PermissionPolicy | None:
+        """The EFFECTIVE policy this engine evaluates, or None when unrestricted.
+
+        On the serve side the engine is built by ``create_app`` from the served
+        directory's persisted policy already merged with ``--deny-writes`` /
+        ``--deny-destructive`` (:func:`apply_firewall_flags`), so this is what
+        ``GET /permissions/show`` must report: a caller needs the rules that
+        actually apply, not the persisted half of them.
+
+        Read-only by design -- a policy is chosen once, at engine construction.
+        """
+        return self._policy
 
     def is_allowed(self, operation: str) -> bool:
         """Check if an operation is allowed by the active policy.

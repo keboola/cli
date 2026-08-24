@@ -19,7 +19,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -32,6 +32,7 @@ from ..permissions import PermissionEngine, apply_firewall_flags
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_permission_engine, install_registry
+from .route_permissions import enforce_route_permission
 from .routers import (
     agents,
     ai_chat,
@@ -63,6 +64,9 @@ from .routers import (
     token,
     transformation,
     workspaces,
+)
+from .routers import (
+    permissions as permissions_router,
 )
 
 logger = logging.getLogger(__name__)
@@ -357,6 +361,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     # ---- System ----
+    {
+        "name": "permissions",
+        "description": (
+            "**System.** "
+            "Read the session firewall policy this server enforces on every "
+            "route (issue #655). Read-only: `permissions set|reset` stay "
+            "terminal actions on the host, so a bearer token can never widen "
+            "the policy that constrains it. "
+            "Mirrors `kbagent permissions show`."
+        ),
+    },
     {
         "name": "health",
         "description": (
@@ -674,6 +689,12 @@ def create_app(
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # The session firewall, applied to EVERY route the app declares
+        # (issue #655). App-level rather than per-router so a new router
+        # cannot be added outside it; the route -> operation classification
+        # lives in `route_permissions.ROUTE_OPERATIONS`, and an unclassified
+        # route is refused rather than silently exempted.
+        dependencies=[Depends(enforce_route_permission)],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,
@@ -780,6 +801,7 @@ def create_app(
         return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
+    app.include_router(permissions_router.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(members.router)

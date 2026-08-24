@@ -672,6 +672,18 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # like cli:read, cli:write, cli:destructive). `tool:*` patterns are INERT since 0.85.0 (the MCP
 # passthrough is gone): they load but match nothing, so a mode=deny policy whose only allowance was
 # tool:read now denies everything. The agent guards rails against mistakes; not a sandbox.
+# (since vNEXT, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
+#   route is classified in server/route_permissions.py and checked by one app-level dependency
+#   against the SERVED config dir's policy -> HTTP 403 error_code PERMISSION_DENIED, the same
+#   code the CLI exits on. On 0.90.1 and older only /auth/* was checked and every other route
+#   executed unchecked. An unclassified route is REFUSED, not exempted (a test keeps the table
+#   and the live app in sync both ways); bootstrap paths (/health/ping, /health/auth-info,
+#   /ui-config, /docs, /redoc, /openapi.json, SPA shell) are never checked. Coarser than the
+#   CLI where a path param collapses leaves: POST /semantic-layer/items/{kind} maps to the
+#   parent key `semantic-layer.add`, so a leaf-only policy pattern is CLI-only.
+#   `GET /permissions/show` (serve, since vNEXT) reports the EFFECTIVE policy (persisted block
+#   merged with the daemon's --deny-* flags); read-only by design -- no REST route can widen
+#   the policy that constrains it, so `permissions set|reset` stay terminal actions on the host.
 kbagent permissions list [--category read|write|destructive|admin]
 kbagent permissions show
 kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
