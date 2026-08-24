@@ -401,10 +401,13 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   is also the FIRST router to enforce the `permissions` policy: every route declares
 #   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
 #   exactly as on the CLI. The other ~30 routers do not check the engine yet.
-#   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then
-#   KBAGENT_CONFIG_DIR, then the local/global chain) -- not from the root callback's `--config-dir`
-#   -- plus the session flags of the invocation. Reachable ways to enforce: a persisted narrow
-#   policy (`kbagent permissions set --mode allow --deny auth.register-projects`, needs a real
+#   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then -- since
+#   vNEXT, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
+#   local/global chain) plus the session flags of the invocation. On 0.90.1 the root-level
+#   `--config-dir` was IGNORED here, so a policy stored beside the projects the caller named was
+#   silently not the one enforced; on that version pass --config-dir to `serve` itself.
+#   Reachable ways to enforce: a persisted narrow policy
+#   (`kbagent permissions set --mode allow --deny auth.register-projects`, needs a real
 #   terminal for the confirmation code), or `--mode deny` with `serve` (and the reads you want) in
 #   the allow list. `kbagent --deny-writes serve` does NOT work: `serve` is admin-class and
 #   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so the CLI callback
@@ -1000,6 +1003,14 @@ kbagent update [--beta]
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# `--config-dir` on serve (since vNEXT, #679): `serve` is the only subcommand with a --config-dir of
+#   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
+#   which in turn beats KBAGENT_CONFIG_DIR / the .kbagent walk-up / global. Passing both is NOT an
+#   error. Up to 0.90.1 the ROOT flag was ignored by serve entirely, silently: `kbagent --config-dir A
+#   serve` exposed a different project set than the caller named, and (since 0.90.1's /auth/*
+#   enforcement) applied a different directory's `permissions` policy. On <=0.90.1 always pass
+#   --config-dir to `serve` itself. Only an explicit root flag propagates -- an env-var/walk-up/global
+#   resolution is left to the server, which reaches the identical directory on its own.
 # `--no-banner` (since 0.90.0): suppress the web UI's "What's new" popup. The UI shows a curated
 #   per-version highlights modal once per version (localStorage `kbagent.whatsnew.seen`); this flag
 #   turns the UNSOLICITED popup off fleet-wide. Surfaced to the SPA via `GET /ui-config`

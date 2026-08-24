@@ -4475,7 +4475,8 @@ though single-project `job list` looked correctly time-ordered.
 ## `kbagent serve` permission enforcement is `/auth/*`-only so far (since v0.90.1)
 
 `create_app` builds a `PermissionEngine` from the persisted `permissions`
-policy of **the config dir `serve` resolves** (its own `--config-dir`, then
+policy of **the config dir `serve` resolves** (its own `--config-dir`, then --
+since vNEXT -- an explicit root-level `kbagent --config-dir`, then
 `KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
 forwards only the session FLAGS of the invocation on top. But of the ~30
 routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
@@ -4504,8 +4505,6 @@ shapes.
 
   A `--mode deny` policy works too, but then `serve` (and the reads you want to
   keep) must be in its allow list, or the server will not start either.
-  Pass `--config-dir` to `serve` itself: the root-level `kbagent --config-dir
-  ... serve` sets the dir for the CLI invocation, not for the server process.
 - **A deny policy does NOT firewall the whole REST surface.**
   `permissions set --mode deny --deny cli:write` blocks `POST
   /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
@@ -4520,3 +4519,28 @@ shapes.
 - Treat this as a gap being closed incrementally, not the design end state:
   today a deny policy gates only `/auth/*`, not the ~30 other routers a
   session token can otherwise reach.
+
+## `serve` honors the root-level `--config-dir` (since vNEXT)
+
+`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+flag has two possible positions. The precedence is **most specific wins**,
+matching what `kbagent repl` does with the root flags:
+
+1. `kbagent serve --config-dir X` -> serves `X`.
+2. `kbagent --config-dir Y serve` -> serves `Y`.
+3. neither -> `KBAGENT_CONFIG_DIR`, then the `.kbagent` walk-up, then global.
+
+Passing both is not an error and produces no warning -- rule 1 simply wins.
+Only an *explicit* root flag is forwarded; an env-var / walk-up / global
+resolution is left to the server, which lands on the same directory anyway.
+
+- **On 0.90.1 and older, rule 2 did not exist** (issue #679) and nothing was
+  printed about it: `kbagent --config-dir A serve` served whatever rule 3
+  resolved instead, so `GET /projects` listed a
+  different set of aliases than the caller named, and the `permissions` policy
+  enforced on `/auth/*` came from that other directory too. If you are on
+  <= 0.90.1, always pass `--config-dir` to `serve` itself.
+- Quick check on any version: start the server and
+  `curl -s -H "Authorization: Bearer $KBAGENT_SERVE_TOKEN" localhost:PORT/projects`
+  -- if the aliases are not the ones in the directory you named, the flag was
+  in the position your version ignores.
