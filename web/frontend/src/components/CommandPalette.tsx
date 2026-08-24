@@ -2,26 +2,51 @@
  * Ctrl+K / Cmd+K command palette.
  *
  * One keystroke to reach anything the shell can already do: jump to a page,
- * switch the active project, or fire a small action (theme, Swagger docs).
- * Deliberately NOT a search over Keboola data -- that is the Search page's
- * job, and mixing "navigate the app" with "query the project" makes both
- * slower. Everything here resolves locally, so the list never waits on a
- * network round-trip.
+ * switch the active project, fire a small action (theme, Swagger docs) -- and
+ * land on a specific storage bucket or table.
+ *
+ * The storage objects are folded in WITHOUT giving up the palette's core
+ * contract: nothing waits on the network while you type. The data is fetched
+ * once when the palette opens and matched locally. The active project's
+ * buckets/tables reuse the exact react-query keys the Storage page already
+ * populates, so opening the palette after visiting Storage normally costs no
+ * request at all; the cross-project bucket list is its own key held at a 60s
+ * staleTime. Cross-project TABLES are deliberately not loaded -- that haystack
+ * grows with every registered project, and a foreign table is one keystroke
+ * away via its bucket anyway.
+ *
+ * Anything the local haystack cannot answer escapes to the Search page via the
+ * always-last "Search … across projects" row, which is where a real server-side
+ * query belongs.
+ *
+ * Picking a storage object navigates by writing the Storage page's `?sel=`
+ * selection (built with that page's own grammar helper, never spelled out
+ * here), so a palette jump produces the same shareable URL as clicking the
+ * row -- and lands nowhere the UI could not already be linked to.
  *
  * The page list comes from the sidebar's exported SECTIONS, so a page can
  * never be reachable from one surface and invisible in the other.
  */
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Boxes, CornerDownLeft, Search, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  Boxes,
+  CornerDownLeft,
+  Database,
+  Search,
+  Sparkles,
+  Table2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api/client";
-import { SECTIONS } from "../layout/Sidebar";
+import { PALETTE_ONLY_PAGES, SECTIONS } from "../layout/Sidebar";
+import { buildStorageSel } from "../pages/Storage";
 import { type PageId, useUIState } from "../state";
 import { useTheme } from "../theme";
-import type { Project } from "../types";
+import type { Bucket, Project, Table } from "../types";
 
-type CommandKind = "page" | "project" | "action";
+type CommandKind = "page" | "project" | "action" | "bucket" | "table" | "search";
 
 interface Command {
   id: string;
@@ -32,6 +57,8 @@ interface Command {
   hint?: string;
   /** Extra text folded into the match haystack but not rendered. */
   keywords?: string;
+  /** Added to the match score (higher = ranked lower). See DATA_SCORE_BIAS. */
+  bias?: number;
   icon: React.ComponentType<{ className?: string }>;
   run: () => void;
 }
@@ -90,7 +117,21 @@ const KIND_LABEL: Record<CommandKind, string> = {
   page: "page",
   project: "project",
   action: "action",
+  bucket: "bucket",
+  table: "table",
+  search: "search",
 };
+
+/**
+ * Ranking bias (higher = worse; results sort ascending). Storage objects
+ * outnumber pages and actions by orders of magnitude, so without a bias a
+ * two-letter query would bury "Storage" under fifty buckets that happen to
+ * contain those letters. A specific query like "oltp" still wins on raw match
+ * quality, which is exactly the trade we want.
+ */
+const DATA_SCORE_BIAS = 25;
+/** Foreign buckets rank below the active project's own on an equal match. */
+const FOREIGN_PROJECT_SCORE_BIAS = 10;
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -99,7 +140,16 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { project, setProject, setBranchId, setPage } = useUIState();
+  const {
+    project,
+    branchId,
+    setProject,
+    setBranchId,
+    setPage,
+    setSel,
+    setWhatsNewForced,
+    setPendingSearchQuery,
+  } = useUIState();
   const { theme, toggle } = useTheme();
 
   // Projects are already cached by the top bar under this exact key, so
@@ -108,6 +158,39 @@ export function CommandPalette() {
     queryKey: ["projects"],
     queryFn: () => api.get("/projects"),
     enabled: open,
+  });
+
+  // Same key shape as the Storage page's buckets query -- a shared cache
+  // entry, not a second fetch, whenever Storage has already been visited.
+  const bucketsQ = useQuery<{ buckets: Bucket[]; errors: unknown[] }>({
+    queryKey: ["buckets", project, branchId],
+    queryFn: () =>
+      api.get("/storage/buckets", {
+        query: { project: project ?? undefined, branch_id: branchId ?? undefined },
+      }),
+    enabled: open && !!project,
+  });
+
+  // Mirrors the Storage page's UNFILTERED tables query (bucket filter = null).
+  const tablesQ = useQuery<{ tables: Table[]; errors: unknown[] }>({
+    queryKey: ["tables", project, null, branchId],
+    queryFn: () =>
+      api.get("/storage/tables", {
+        query: { project: project ?? undefined, branch_id: branchId ?? undefined },
+      }),
+    enabled: open && !!project,
+  });
+
+  // Every registered project at once. No branch_id: branch ids are numbered
+  // per project, so one value cannot mean anything across a fan-out. The
+  // server degrades per project via `errors`, which the palette ignores --
+  // a project that failed simply contributes no rows, and saying so here
+  // would be noise in a list you are typing through.
+  const allBucketsQ = useQuery<{ buckets: Bucket[]; errors: unknown[] }>({
+    queryKey: ["buckets-all"],
+    queryFn: () => api.get("/storage/buckets"),
+    enabled: open,
+    staleTime: 60_000,
   });
 
   const close = useCallback(() => {
@@ -151,6 +234,17 @@ export function CommandPalette() {
         });
       }
     }
+    for (const item of PALETTE_ONLY_PAGES) {
+      out.push({
+        id: `page:${item.id}`,
+        kind: "page",
+        label: item.label,
+        hint: "All projects",
+        keywords: item.id,
+        icon: item.icon,
+        run: () => setPage(item.id as PageId),
+      });
+    }
     for (const p of projectsQ.data?.projects ?? []) {
       out.push({
         id: `project:${p.alias}`,
@@ -183,27 +277,126 @@ export function CommandPalette() {
       icon: ArrowRight,
       run: () => window.open("/docs", "_blank", "noopener,noreferrer"),
     });
+    out.push({
+      id: "action:whatsnew",
+      kind: "action",
+      label: "What's new",
+      hint: "release highlights",
+      keywords: "changelog release highlights whatsnew version news",
+      icon: Sparkles,
+      run: () => setWhatsNewForced(true),
+    });
+
+    /**
+     * Navigate to a storage object. The `sel` string is built by the Storage
+     * page's own grammar helper rather than spelled out here -- the page owns
+     * the meaning of its selection, the palette only picks a target.
+     *
+     * ORDER MATTERS: setProject / setBranchId / setPage each clear `sel` (a
+     * selection from another context is meaningless), so the selection has to
+     * be written LAST or it would be wiped by the navigation that precedes it.
+     */
+    const openStorage = (alias: string, sel: string | null) => {
+      if (alias !== project) {
+        setProject(alias);
+        // A branch id is only meaningful inside its own project.
+        setBranchId(null);
+      }
+      setPage("storage");
+      setSel(sel);
+    };
+    const bucketCommand = (b: Bucket, foreign: boolean): Command => ({
+      id: `bucket:${b.project_alias}/${b.id}`,
+      kind: "bucket",
+      label: b.display_name || b.id,
+      hint: `${b.project_alias} · ${b.id}`,
+      keywords: `${b.id} ${b.stage}`,
+      bias: DATA_SCORE_BIAS + (foreign ? FOREIGN_PROJECT_SCORE_BIAS : 0),
+      icon: Database,
+      run: () => openStorage(b.project_alias, buildStorageSel("tables", null, b.id)),
+    });
+
+    for (const b of bucketsQ.data?.buckets ?? []) out.push(bucketCommand(b, false));
+    // The active project's own rows come from the branch-aware query above and
+    // are authoritative for it; the fan-out contributes only foreign projects,
+    // which also dedupes the two lists against each other.
+    for (const b of allBucketsQ.data?.buckets ?? []) {
+      if (b.project_alias === project) continue;
+      out.push(bucketCommand(b, true));
+    }
+
+    // Active project only -- see the file header on why foreign tables are not
+    // loaded (bounded haystack; reachable through their bucket).
+    for (const t of tablesQ.data?.tables ?? []) {
+      out.push({
+        id: `table:${t.project_alias}/${t.id}`,
+        kind: "table",
+        label: t.display_name || t.name,
+        hint: `${t.project_alias} · ${t.bucket_id}`,
+        keywords: t.id,
+        bias: DATA_SCORE_BIAS,
+        icon: Table2,
+        run: () => openStorage(t.project_alias, buildStorageSel("tables", t.id)),
+      });
+    }
     return out;
-  }, [projectsQ.data, setPage, setProject, setBranchId, theme, toggle]);
+  }, [
+    projectsQ.data,
+    bucketsQ.data,
+    tablesQ.data,
+    allBucketsQ.data,
+    project,
+    setPage,
+    setProject,
+    setBranchId,
+    setSel,
+    setWhatsNewForced,
+    theme,
+    toggle,
+  ]);
 
   const results = useMemo(() => {
     const q = query.trim();
     const scored: Array<{ cmd: Command; indices: number[]; score: number }> = [];
     for (const cmd of commands) {
+      // With no query there is nothing to rank by, so storage objects would
+      // simply flood the idle list and push the pages out of it. The resting
+      // palette stays what it always was: pages, projects, actions.
+      if (!q && (cmd.kind === "bucket" || cmd.kind === "table")) continue;
+      const bias = cmd.bias ?? 0;
       const onLabel = fuzzyMatch(q, cmd.label);
       if (onLabel) {
-        scored.push({ cmd, indices: onLabel.indices, score: onLabel.score });
+        scored.push({ cmd, indices: onLabel.indices, score: onLabel.score + bias });
         continue;
       }
       // Fall back to the invisible haystack (project name, page id, synonyms)
       // so "colour" finds the theme toggle -- but rank those below label hits.
       const haystack = `${cmd.label} ${cmd.hint ?? ""} ${cmd.keywords ?? ""}`;
       const onHaystack = fuzzyMatch(q, haystack);
-      if (onHaystack) scored.push({ cmd, indices: [], score: onHaystack.score + 50 });
+      if (onHaystack) scored.push({ cmd, indices: [], score: onHaystack.score + 50 + bias });
     }
     if (!q) return scored.slice(0, 50);
-    return scored.sort((a, b) => a.score - b.score).slice(0, 50);
-  }, [commands, query]);
+    const top = scored.sort((a, b) => a.score - b.score).slice(0, 50);
+    // Appended AFTER sorting and slicing: the escape hatch is not a match, it
+    // is the answer to "the local haystack does not have it". Being part of
+    // `results` is what makes it reachable with ↓ and Enter like any other row.
+    top.push({
+      cmd: {
+        id: "search:global",
+        kind: "search",
+        label: `Search "${q}" across projects`,
+        hint: "Search page",
+        icon: Search,
+        run: () => {
+          setPendingSearchQuery(q);
+          setPage("search");
+        },
+      },
+      indices: [],
+      score: Number.MAX_SAFE_INTEGER,
+    });
+    return top;
+  }, [commands, query, setPage, setPendingSearchQuery]);
 
   // Keep the cursor inside the (shrinking) result list as the user types.
   useEffect(() => {
@@ -259,7 +452,7 @@ export function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="jump to a page, switch project, run an action…"
+            placeholder="jump to a page, find a bucket or table, run an action…"
             className="flex-1 bg-transparent text-sm focus:outline-none placeholder-zinc-400 dark:placeholder-zinc-600"
             aria-label="Command palette"
           />

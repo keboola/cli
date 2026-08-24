@@ -307,13 +307,13 @@ cannot use the plugin without the CLI.
 In Claude Code, run:
 
 ```
-/plugin marketplace add keboola/cli
-/plugin install kbagent@keboola-agent-cli
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
 /kbagent:setup
 ```
 
 Claude Code clones the marketplace and drops the plugin into
-`~/.claude/plugins/cache/keboola-agent-cli/kbagent/<version>/`.
+`~/.claude/plugins/cache/keboola-claude-kit/kbagent/<version>/`.
 
 `/kbagent:setup` then does everything else in one command: installs the
 `kbagent` CLI if it is missing (handling the installer's PATH caveat),

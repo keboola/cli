@@ -26,6 +26,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
+    # Serve-only (since 0.90.1): `GET /auth/projects` lists the session's
+    # registerable project candidates. It has no CLI leaf command -- the
+    # terminal equivalent is the interactive picker inside
+    # `auth register-projects` -- so it is exempted from the dead-key check
+    # in scripts/check_command_sync.py via SERVE_ONLY_OPERATIONS below.
+    "auth.projects": "read",
     # Project management
     "project.add": "admin",
     "project.list": "read",
@@ -316,8 +322,15 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
-    # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. The serve's own routes enforce their own permissions on top.
+    # Categorised by the underlying HTTP method under the taxonomy at the top
+    # of this registry: GET = read, POST/PATCH = write (they create/modify),
+    # DELETE = destructive (it deletes). DELETE is deliberately a rung above
+    # the other mutating verbs -- lumping it in as `write` would let a
+    # `--deny-destructive` session delete through the REST boundary.
+    # These keys are the ONLY firewall an `http.*` call meets for
+    # most routes: on the serve side only `/auth/*` re-checks the policy
+    # (since 0.90.1) -- every other router is still unguarded, so a deny
+    # policy does not survive the REST boundary there (issue #655).
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
@@ -382,6 +395,13 @@ FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
 }
 
+# Operations that exist ONLY on the `kbagent serve` REST surface. They are real
+# OPERATION_REGISTRY entries (a policy must be able to name and deny them), but
+# they have no CLI leaf command, so the command-sync gate would otherwise report
+# them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
+# its "key matching no live command" check.
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects"})
+
 
 # The operation namespace that disappeared with the MCP passthrough, and the
 # version that removed it. A pattern aimed at it can no longer match anything.
@@ -391,6 +411,62 @@ INERT_SINCE_VERSION = "0.85.0"
 # Single wording for the "your policy carries dead rules" hint, so `permissions
 # show` and `kbagent doctor` cannot drift apart.
 INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
+
+
+def apply_firewall_flags(
+    persisted: PermissionPolicy | None,
+    *,
+    deny_writes: bool,
+    deny_destructive: bool,
+) -> PermissionPolicy | None:
+    """Merge --deny-writes / --deny-destructive into the active policy for this invocation.
+
+    Session-only: does NOT touch config.json. If neither flag is set, the
+    persisted policy is returned unchanged (possibly None).
+
+    Merge semantics:
+    - A fresh session policy synthesized from the flags uses mode='allow'
+      so everything is allowed unless matched by the deny list.
+    - When a persisted policy already exists, the flag-implied deny patterns
+      are appended to its deny list (dedup); the mode is preserved. This is
+      strictly additive -- adding a flag never relaxes the persisted policy.
+
+    Lives here rather than in ``cli.py`` because it has two callers that must
+    not drift: the CLI callback (``cli.py``, which re-exports this name) and
+    ``server.app.create_app``, which composes the same policy for the REST
+    surface out of the config dir it actually serves.
+    """
+    if not deny_writes and not deny_destructive:
+        return persisted
+
+    extra_deny: list[str] = []
+    if deny_writes:
+        # The cli:write pattern intentionally spans write+destructive+admin
+        # (see _matches_pattern below). Wide net: --deny-writes blocks
+        # anything that mutates state.
+        extra_deny.append("cli:write")
+    if deny_destructive:
+        # cli:destructive narrowly matches only ops categorized 'destructive'
+        # (data destruction). Admin and pure-write are left allowed by design:
+        # the two flags exist precisely so callers can opt into the narrower
+        # block without forfeiting writes (e.g. allow create-bucket, block
+        # delete-bucket).
+        extra_deny.append("cli:destructive")
+
+    if persisted is None:
+        return PermissionPolicy(mode="allow", allow=[], deny=extra_deny)
+
+    # Preserve persisted mode, allow list; extend deny list without duplicates.
+    merged_deny = list(persisted.deny)
+    for pattern in extra_deny:
+        if pattern not in merged_deny:
+            merged_deny.append(pattern)
+
+    return PermissionPolicy(
+        mode=persisted.mode,
+        allow=list(persisted.allow),
+        deny=merged_deny,
+    )
 
 
 def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:

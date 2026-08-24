@@ -89,12 +89,17 @@ re-running this after a partial setup only fills the gaps.
    - config file + permissions and per-project connectivity -- any `fail`
      here means step 2/3 did not really land; fix that before declaring
      success.
-   - the **`claude_plugin` check** -- `pass` means the plugin is cached
-     (a version-drift note asks for `/plugin update kbagent`); `warn`
-     means Claude Code is present but the plugin is not cached, so print
-     the two `/plugin` lines doctor gives you; `skip` means Claude Code
-     was not detected on this host. `doctor` deliberately does not
-     install the plugin -- `/plugin` is an in-session user command.
+   - the **`claude_plugin` check** -- `pass` means the plugin is cached;
+     relay whatever note doctor attaches to it verbatim (a version-drift
+     hint naming the exact copy to update, or a migration hint if the
+     copy was installed from the deprecated marketplace). `warn` means
+     Claude Code is present but the plugin is not cached, so print the
+     `/plugin` lines doctor gives you. `skip` means Claude Code was not
+     detected on this host. Always quote doctor's own `/plugin` lines
+     rather than any names hardcoded here -- doctor is the single source
+     of truth for the marketplace and plugin names. `doctor` deliberately
+     does not install the plugin -- `/plugin` is an in-session user
+     command.
 
 5. **Close it out.** One short line: what is connected, and two or three
    things to try next -- e.g. `/keboola list all configs in <alias>`,

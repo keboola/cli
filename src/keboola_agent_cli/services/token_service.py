@@ -33,11 +33,13 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..errors import ErrorCode, KeboolaApiError
+from ..models import ProjectConfig
 from ._token_last_used import dormancy_rank, enrich_tokens
 from .base import (
     BaseService,
     ResolvedProjectCredentials,
     default_client_factory,
+    project_error_entry,
     resolve_project_credentials,
 )
 
@@ -154,6 +156,105 @@ class TokenService(BaseService):
         other parallel operation in the CLI instead of inventing its own.
         """
         return enrich_tokens(client, tokens, max_workers=self._resolve_max_workers())
+
+    def list_tokens_all(
+        self, *, aliases: list[str] | None = None, with_last_used: bool = False
+    ) -> dict[str, Any]:
+        """List Storage tokens across one, many, or all registered projects.
+
+        Fans out over the shared multi-project pool (see ``JobService.list_jobs``
+        / ``BillingService.get_credits`` for the same idiom) and, per project,
+        delegates wholesale to :meth:`list_tokens` rather than re-implementing
+        secret stripping or ``with_last_used`` enrichment -- both stay
+        byte-identical to the single-project path. Per-project failures degrade
+        into ``errors`` without aborting the other projects.
+
+        Args:
+            aliases: Project aliases to query. ``None`` / empty means every
+                registered project.
+            with_last_used: Forwarded to :meth:`list_tokens` per project. Costs
+                one extra Storage API call per token, per project -- see the
+                thread-multiplication note on :meth:`_fetch_project_tokens`.
+
+        Returns:
+            ``{"tokens": [...], "count": len(tokens), "errors": [...],
+            "token_errors": [...]}``. The two error lists are semantically
+            different and deliberately kept apart: ``errors`` holds
+            project-level failures (that project could not be listed at all),
+            while ``token_errors`` holds per-token ``with_last_used`` lookup
+            failures (the project listed fine; one token's event feed did
+            not, and its row degraded). Merging them would make a healthy
+            project with one degraded token read as unlistable. Every token
+            row and every error entry carries ``project_alias``; entries in
+            ``token_errors`` also carry ``token_id``.
+            Ordering: without ``with_last_used``, tokens are grouped by
+            ``project_alias`` (stable sort -- the per-project order
+            :meth:`list_tokens` produced is preserved within each group). With
+            ``with_last_used``, the dormant-first order is applied globally
+            across every project's tokens via the same :func:`dormancy_rank`
+            helper :meth:`list_tokens` uses, not per-project groups first.
+        """
+        projects = self.resolve_projects(aliases)
+
+        def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+            return self._fetch_project_tokens(alias, with_last_used)
+
+        successes, errors = self._run_parallel(projects, worker)
+
+        all_tokens: list[dict[str, Any]] = []
+        token_errors: list[dict[str, Any]] = []
+        for _alias, tokens, inner_errors, _ok in successes:
+            all_tokens.extend(tokens)
+            token_errors.extend(inner_errors)
+
+        if with_last_used:
+            all_tokens.sort(key=dormancy_rank)
+        else:
+            all_tokens.sort(key=lambda t: t.get("project_alias", ""))
+        errors.sort(key=lambda e: e.get("project_alias", ""))
+        token_errors.sort(key=lambda e: (e.get("project_alias", ""), str(e.get("token_id", ""))))
+
+        return {
+            "tokens": all_tokens,
+            "count": len(all_tokens),
+            "errors": errors,
+            "token_errors": token_errors,
+        }
+
+    def _fetch_project_tokens(self, alias: str, with_last_used: bool) -> tuple[Any, ...]:
+        """Fetch + stamp one project's token listing for the cross-project fan-out.
+
+        Calls :meth:`list_tokens` (which owns client creation/close for this
+        project) instead of duplicating its logic, so secret-stripping and
+        ``with_last_used`` semantics can never drift between the single- and
+        multi-project paths.
+
+        NOTE on thread count: when ``with_last_used`` is set, ``list_tokens``
+        itself fans out one thread per token (:meth:`_enrich_with_last_used`).
+        Nested inside this method's own caller -- the per-project
+        ``ThreadPoolExecutor`` in ``BaseService._run_parallel`` -- that means
+        up to ``max_workers`` projects each spinning up their own
+        ``max_workers`` per-token pool concurrently. This is deliberate and
+        acceptable: every request is I/O-bound (a Storage API call) and both
+        pools are bounded by the same ``_resolve_max_workers()`` ceiling, so
+        the worst case is a burst of short-lived threads, not unbounded growth.
+
+        Returns a 4-tuple ``(alias, tokens, inner_errors, True)`` on success
+        (the ``BaseService._run_parallel`` contract only requires "not
+        length-2"), or ``(alias, error_dict)`` on failure.
+        """
+        try:
+            result = self.list_tokens(alias=alias, with_last_used=with_last_used)
+        except KeboolaApiError as exc:
+            return (alias, project_error_entry(alias, exc))
+        except Exception as exc:
+            return (alias, project_error_entry(alias, exc))
+
+        tokens = result["tokens"]
+        for token in tokens:
+            token["project_alias"] = alias
+        inner_errors = [{**error, "project_alias": alias} for error in result.get("errors", [])]
+        return (alias, tokens, inner_errors, True)
 
     def delete_token(self, *, alias: str, token_id: str) -> dict[str, Any]:
         """Revoke a token immediately in ``alias``'s project."""

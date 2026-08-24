@@ -89,6 +89,39 @@ class TestUiBootstrap:
         assert "console.log" in resp.text
 
 
+class TestUiShellCaching:
+    """The SPA shell must never be trusted to a browser cache without revalidation.
+
+    Live-observed during the PR #665 UI audit: after a ``kbagent serve --ui``
+    restart (new bearer token), a browser reload served the *cached*
+    ``index.html`` without contacting the server. No request means no fresh
+    ``Set-Cookie``, so the stale session cookie 401'd every ``/api/*`` call
+    and the SPA silently rendered empty lists. ``Cache-Control: no-cache``
+    forces the browser to revalidate the shell on every load -- and because
+    the bootstrap route always answers a full 200 (it implements no
+    conditional-request handling), every revalidation re-sets the cookie.
+    """
+
+    def test_shell_responses_always_revalidate(self, tmp_path: Path, ui_dist: Path) -> None:
+        client = _make_client(tmp_path, ui_dist=ui_dist)
+        for path in ("/", "/index.html"):
+            resp = client.get(path)
+            assert resp.status_code == 200, path
+            assert resp.headers.get("cache-control") == "no-cache", (
+                f"GET {path} must answer 'Cache-Control: no-cache' so a browser "
+                "revalidates the shell (and picks up a fresh session cookie) "
+                "after a server restart"
+            )
+
+    def test_assets_keep_default_caching(self, tmp_path: Path, ui_dist: Path) -> None:
+        # Build assets are content-hashed by Vite (a new build means new
+        # URLs), so the no-cache stamp is scoped to the shell only.
+        client = _make_client(tmp_path, ui_dist=ui_dist)
+        resp = client.get("/assets/main.js")
+        assert resp.status_code == 200
+        assert resp.headers.get("cache-control") != "no-cache"
+
+
 class TestApiAlias:
     def test_api_prefix_routes_to_bare_endpoint(self, tmp_path: Path, ui_dist: Path) -> None:
         client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
@@ -262,6 +295,64 @@ class TestCookieAuth:
             headers={"authorization": "Bearer t"},
         )
         assert resp.status_code == 200
+
+
+class TestUiConfigBanner:
+    """``GET /ui-config`` -- the SPA's non-secret bootstrap switches.
+
+    Delivered as an endpoint, NOT injected into ``index.html``: the injection
+    point this would have extended (``window.__KBAGENT_TOKEN``) was removed in
+    favour of the session cookie, and an injected copy would miss the
+    StaticFiles ``html=True`` fallback that serves the shell for deep links --
+    letting a suppressed popup reappear. ``test_banner_flag_not_injected_into_html``
+    pins the "still nothing in the HTML" half of that decision.
+    """
+
+    def test_banner_defaults_to_enabled(self, tmp_path: Path) -> None:
+        client = _make_client(tmp_path, token="t")
+        resp = client.get("/ui-config", headers={"authorization": "Bearer t"})
+        assert resp.status_code == 200
+        assert resp.json() == {"banner": True}
+
+    def test_banner_disabled_when_flag_set(self, tmp_path: Path) -> None:
+        app = create_app(
+            config_dir=str(tmp_path / "cfg"),
+            auth_token="t",
+            ui_banner=False,
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/ui-config", headers={"authorization": "Bearer t"})
+        assert resp.status_code == 200
+        assert resp.json() == {"banner": False}
+
+    def test_banner_flag_available_without_ui_mount(self, tmp_path: Path) -> None:
+        # The SPA also runs against a bare `kbagent serve` via the Vite dev
+        # server / Node BFF, where no dist is mounted -- the switch must still
+        # be readable there.
+        app = create_app(config_dir=str(tmp_path / "cfg"), auth_token="t", ui_banner=False)
+        client = TestClient(app, raise_server_exceptions=False)
+        assert client.get("/ui-config", headers={"authorization": "Bearer t"}).json() == {
+            "banner": False
+        }
+
+    def test_banner_flag_not_injected_into_html(self, tmp_path: Path, ui_dist: Path) -> None:
+        # The shell stays a static artifact: no config script, no secrets.
+        app = create_app(
+            config_dir=str(tmp_path / "cfg"),
+            auth_token="t",
+            ui_dist=str(ui_dist),
+            ui_banner=False,
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        body = client.get("/").text
+        assert "__KBAGENT_UI__" not in body
+        assert "banner" not in body
+
+    def test_ui_config_requires_auth(self, tmp_path: Path, ui_dist: Path) -> None:
+        # Not part of the public bootstrap surface -- the SPA reads it with the
+        # session cookie, exactly like /version.
+        client = _make_client(tmp_path, ui_dist=ui_dist, token="t")
+        assert client.get("/api/ui-config").status_code == 401
 
 
 class TestUiOptional:

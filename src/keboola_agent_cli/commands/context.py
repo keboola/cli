@@ -341,6 +341,15 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent component detail --component-id ID [--project NAME]
     Show component docs, config schema, and examples count.
+    (since 0.90.0) The AI Service indexes the PUBLIC catalog only, so a private
+    or deprecated component the project can run (keboola.mcp-server-tool,
+    keboola.data-apps) used to 404 here while `component list` showed it. A
+    NOT_FOUND now falls back to the project's Storage component catalog.
+    documentation_source ("ai_service" vs "storage_catalog") is present on BOTH
+    paths and tells them apart; the fallback carries NO configuration examples
+    (examples_count / row_examples_count always 0), so check
+    documentation_source before reading 0 as "this component ships none".
+    NOT_FOUND is still raised when both sources miss.
 
   kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
     (since 0.73.0) Run a synchronous component action (testConnection, getTables,
@@ -543,6 +552,10 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
+    Without --project the fan-out over every registered project is merged GLOBALLY by
+    --sort-by/--sort-order (default startTime desc), missing values last, deterministic
+    (project_alias, id) tiebreak -- since 0.90.1 it is one chronological feed, NOT rows
+    grouped per project. Group them yourself if you need per-project blocks.
 
   kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
     Full job detail including result message and timing.
@@ -1837,6 +1850,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload]
                 [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+                [--no-banner]
     Launch the FastAPI HTTP server backing the web UI. Two modes:
 
     - `--ui` (single-process, recommended): bundles the built React SPA from
@@ -1851,6 +1865,22 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Prints the bearer token to stdout on startup (use it for `kbagent http`
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
+
+    Config directory served -- most specific wins: `serve --config-dir X`,
+    then an explicit root-level `kbagent --config-dir Y serve`, then the
+    normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
+    is not an error; the serve-level flag wins. That directory decides which
+    projects the REST surface exposes AND which persisted `permissions`
+    policy the /auth/* routes enforce. NOTE for older installs: up to 0.90.1
+    `serve` ignored the root-level flag entirely, silently serving a
+    different directory -- there, always pass --config-dir to `serve` itself.
+
+    --no-banner (since 0.90.0) suppresses the web UI's "What's new" popup --
+    a curated per-version highlights modal the UI shows once per version
+    (dismissal persisted in localStorage `kbagent.whatsnew.seen`). The SPA
+    reads the switch from `GET /ui-config` -> {{"banner": bool}}; nothing is
+    injected into index.html. It governs only the UNSOLICITED popup: the
+    command palette's "What's new" action still opens it on request.
 
   kbagent doctor
     Health checks (no --fix since 0.85.0 -- it only installed the MCP server).
@@ -1972,6 +2002,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
+     `serve` is the only subcommand with a --config-dir of its own: its flag wins over the
+     root-level one, which wins over the rest of the chain above (see `kbagent serve`).
 
 9. Historical MCP tool names: the `tool` group was removed in v0.85.0. If a
    user or an old script names a tool (get_configs, query_data, ...), map it to
@@ -2018,8 +2050,8 @@ When you receive a non-zero exit code, use --json to get structured error detail
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:
 
-  /plugin marketplace add keboola/cli
-  /plugin install kbagent@keboola-agent-cli
+  /plugin marketplace add keboola/ai-kit
+  /plugin install kbagent@keboola-claude-kit
   /kbagent:setup
 
 `/kbagent:setup` is the one-command first-run path: it installs this CLI if

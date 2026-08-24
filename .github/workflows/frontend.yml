@@ -1,0 +1,82 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Frontend gate for the React SPA in web/frontend (PR #658 finding NB-1).
+#
+# ci.yml covers only the Python side, so a frontend PR's type errors used to
+# ship to main undetected -- PR #658 landed a types.ts field-name mismatch
+# (`configId` vs the Queue API's actual `config`) that rendered a whole table
+# column empty, and only a manual `tsc` run caught it.
+#
+# This lives in its OWN workflow (not a job in ci.yml) because `paths:`
+# filtering is trigger-level, not job-level: keeping it separate means a
+# Python-only PR never even schedules a runner for it. That is safe here
+# because the main ruleset has no required_status_checks rule (the merge gate
+# is the human review) -- a skipped run cannot leave a required check pending
+# forever. If frontend checks ever become REQUIRED, this filter must be
+# rethought (change-detection inside an always-running job, or a paths-ignore
+# mirror that reports success).
+#
+# The `vitest` step arrived with the first test file (`src/router.test.ts`,
+# the hash-router parse/build contract). It was deliberately absent before
+# that: `vitest run` on an empty suite exits 1 ("No test files found"), which
+# would have failed every frontend PR. That same fail-on-empty default now
+# works FOR us -- it guards against the suite silently vanishing.
+# ──────────────────────────────────────────────────────────────────────────
+name: Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/frontend.yml"
+
+# Same rationale, and the same pending-run caveat, as ci.yml: supersede an
+# in-flight PR run when the branch is pushed again, but never drop a main push.
+# Pushes are keyed on the SHA rather than the ref because `cancel-in-progress:
+# false` only protects a RUNNING run -- a PENDING one is cancelled when a newer
+# run queues into the same group. See the longer note in ci.yml.
+concurrency:
+  group: frontend-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frontend:
+    name: Type check + test + build (web/frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          # Node 20 matches web/backend's `engines` floor and the version
+          # ci.yml's build-windows job uses for the wheel's SPA build hook.
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        # `npm run build` (tsc -b && vite build) type-checks too, but a
+        # dedicated step pins a type error to a "Type check" failure
+        # annotation instead of burying it inside the build step.
+        run: npx tsc --noEmit
+
+      - name: Test
+        # `vitest run` -- exits 1 on an empty suite, so this also fails if the
+        # test files are ever removed.
+        run: npm test
+
+      - name: Build
+        # The same command hatch_build.py runs when bundling the SPA into the
+        # wheel -- if this fails, `uv tool install` from git fails too.
+        run: npm run build

@@ -458,3 +458,17 @@ KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org
 # Or onboard specific projects (any project member, uses Personal Access Token)
 KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
 ```
+
+### Installing this plugin
+
+This plugin ships through Keboola's `keboola-claude-kit` marketplace, published
+from `keboola/ai-kit`. To (re)install it in Claude Code:
+
+```
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
+```
+
+Copies installed from the older `keboola-agent-cli` marketplace (this CLI's own
+repo) still work and still update, but that entry is deprecated -- the two lines
+above are how a user moves to the maintained one.

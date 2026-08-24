@@ -27,13 +27,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__
 from ..config_store import ConfigStore, resolve_config_dir
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..permissions import PermissionEngine, apply_firewall_flags
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
-from .dependencies import ServiceRegistry, install_registry
+from .dependencies import ServiceRegistry, install_permission_engine, install_registry
 from .routers import (
     agents,
     ai_chat,
+    auth,
     billing,
     branches,
     components,
@@ -79,6 +81,16 @@ logger = logging.getLogger(__name__)
 # a section to the end of the sidebar with no description.
 OPENAPI_TAGS: list[dict[str, str]] = [
     # ---- Project Management ----
+    {
+        "name": "auth",
+        "description": (
+            "**Project Management.** "
+            "Read/audit the current browser-login session and register its "
+            "accessible projects as local aliases. `login` / `login-password` "
+            "/ `logout` have no endpoint here -- see `server/routers/auth.py`. "
+            "Mirrors `kbagent auth status|register-projects` (partially)."
+        ),
+    },
     {
         "name": "projects",
         "description": (
@@ -337,10 +349,11 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "agents",
         "description": (
             "**AI & Tools.** "
-            "Scheduled / on-demand AI agent tasks. Server-only feature "
-            "(no CLI equivalent) -- the scheduler loop runs inside "
-            "`kbagent serve` and persists tasks + runs to the config "
-            "directory."
+            "Scheduled / on-demand AI agent tasks. Mirrors `kbagent agent "
+            "list|show|create|update|delete|run|runs|test`, which reads and "
+            "writes the same `agents.json` offline. What is server-only is "
+            "the CRON LOOP: it runs inside `kbagent serve`, so a task with a "
+            "schedule only fires while the server is up."
         ),
     },
     # ---- System ----
@@ -485,9 +498,11 @@ def _format_error(
 
 # A browser-login session backing a session-registered project is USER-scoped
 # and lives on the host, so its failures are the caller's authentication
-# problem rather than an upstream fault: they answer 401, not the 502 every
-# other `KeboolaApiError` maps to. The server cannot renew such a session
-# itself -- a browser login only completes where a human sits.
+# problem rather than an upstream fault: they answer 401, not the 502 a
+# `KeboolaApiError` maps to by default (NOT_FOUND is the other exception --
+# it answers 404; an upstream "no such resource" is not a Bad Gateway). The
+# server cannot renew such a session itself -- a browser login only completes
+# where a human sits.
 _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
 
 _SESSION_REMEDY_ON_HOST = (
@@ -542,6 +557,40 @@ def _resolve_cors_origins(cors_origins: list[str] | None) -> list[str]:
     return origins
 
 
+def _default_permission_engine(
+    config_store: ConfigStore,
+    *,
+    deny_writes: bool = False,
+    deny_destructive: bool = False,
+) -> PermissionEngine:
+    """Build the REST surface's permission engine for the config dir being served.
+
+    Mirrors the CLI's own bootstrap (``cli.py``): the ``permissions`` block of
+    config.json is the policy, the session flags are merged on top through the
+    shared :func:`~keboola_agent_cli.permissions.apply_firewall_flags`, and an
+    unreadable/corrupted config degrades to "no policy" rather than refusing to
+    start -- a broken config file must not take the server down.
+
+    The policy deliberately comes from ``config_store`` -- the store
+    ``create_app`` resolved -- and never from the CLI callback's own store.
+    ``kbagent --config-dir A serve --config-dir B`` serves B, so B's persisted
+    policy is the one that must apply; only the two session flags travel from
+    the CLI invocation, because they are a property of the invocation rather
+    than of a directory.
+    """
+    try:
+        persisted_policy = config_store.load().permissions
+    except Exception:
+        persisted_policy = None
+    return PermissionEngine(
+        apply_firewall_flags(
+            persisted_policy,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
+        )
+    )
+
+
 def create_app(
     *,
     config_dir: str | None = None,
@@ -549,6 +598,10 @@ def create_app(
     cors_origins: list[str] | None = None,
     serve_url: str | None = None,
     ui_dist: str | None = None,
+    ui_banner: bool = True,
+    deny_writes: bool = False,
+    deny_destructive: bool = False,
+    permission_engine: PermissionEngine | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI application.
 
@@ -569,12 +622,30 @@ def create_app(
                we do it server-side via an ASGI path-rewrite middleware),
             2) mounts the dist directory at ``/`` so static assets and the
                SPA fallback are served by uvicorn directly,
-            3) intercepts ``GET /`` to inject ``window.__KBAGENT_TOKEN`` into
-               ``index.html`` so the SPA boots already authenticated -- no
-               BFF and no manual paste step.
+            3) intercepts ``GET /`` to set the HttpOnly ``kbagent_session``
+               cookie so the SPA boots already authenticated -- no BFF and no
+               manual paste step. Nothing is injected into ``index.html``;
+               see :func:`_install_ui` for why the older
+               ``window.__KBAGENT_TOKEN`` script injection was removed.
 
             If the path does not exist, the UI mount is skipped silently and
             a warning is logged so ``--ui`` typos don't break the API path.
+        ui_banner: Whether the web UI may show its unsolicited "What's new"
+            popup. Surfaced to the SPA over ``GET /ui-config`` rather than
+            injected into the page -- see that endpoint's docstring.
+        deny_writes: Apply the ``--deny-writes`` session flag to the engine
+            built for the resolved config dir. ``kbagent serve`` forwards the
+            CLI invocation's own flag here (not a pre-built engine) so the
+            persisted policy that applies is always the SERVED directory's --
+            ``kbagent --config-dir A serve --config-dir B`` serves B, and B's
+            policy is the one a route is checked against.
+        deny_destructive: Same, for ``--deny-destructive``.
+        permission_engine: Explicit override for embedders and tests. When
+            given it wins outright: the persisted policy of the resolved config
+            dir and both ``deny_*`` flags are ignored, and this engine is what
+            routes declaring ``Depends(require_permission(...))`` are checked
+            against. Leave it None (the ``kbagent serve`` path) to get the
+            served directory's policy plus the flags above.
 
     Returns:
         Configured FastAPI app ready for uvicorn.
@@ -645,6 +716,22 @@ def create_app(
     )
     install_registry(app, registry)
 
+    # The engine lives on app.state, NOT on the registry: server tests routinely
+    # override `get_registry` with a hand-built mock, and an engine reachable
+    # only through the registry would be silently dropped by every such test --
+    # enforcement that disappears under a test override is enforcement nobody
+    # can trust. `require_permission` reads it from `request.app.state` and
+    # fails closed when it is absent, so the attribute must always be set here.
+    install_permission_engine(
+        app,
+        permission_engine
+        or _default_permission_engine(
+            config_store,
+            deny_writes=deny_writes,
+            deny_destructive=deny_destructive,
+        ),
+    )
+
     app.state.agent_store = AgentStore(resolved_dir)
 
     from .run_broadcaster import install_broadcaster
@@ -666,7 +753,20 @@ def create_app(
         msg = getattr(exc, "message", str(exc)) or str(exc)
         if code in _SESSION_CREDENTIAL_CODES:
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
+        if code == ErrorCode.NOT_FOUND:
+            # An upstream 404 is a statement about the requested resource, not
+            # about the gateway: reporting it as 502 made callers retry (and
+            # page on-call for) a request that can never succeed.
+            return _format_error(msg, code, http_status=404)
         return _format_error(msg, code, http_status=502)
+
+    @app.exception_handler(PermissionDeniedError)
+    async def _permission_denied_handler(_request, exc: PermissionDeniedError):
+        # 403, not 401: the caller authenticated fine (the bearer token was
+        # accepted) -- the operation itself is what the active policy blocks.
+        # Same `PERMISSION_DENIED` code the CLI prints for the same denial, so
+        # a caller can branch on one value across both surfaces.
+        return _format_error(exc.message, ErrorCode.PERMISSION_DENIED, http_status=403)
 
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(_request, exc: StarletteHTTPException):
@@ -680,6 +780,7 @@ def create_app(
         return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(members.router)
     app.include_router(feature.router)
@@ -710,6 +811,10 @@ def create_app(
     app.include_router(agents.router)
 
     app.state.auth_token = resolved_token
+    # Read back by GET /ui-config. Set unconditionally (not only under
+    # ``ui_dist``) because the SPA also runs against a bare `kbagent serve`
+    # through the Vite dev server / Node BFF, where no UI is mounted here.
+    app.state.ui_banner = ui_banner
 
     if ui_dist:
         _install_ui(app, ui_dist=ui_dist, token=resolved_token)
@@ -730,19 +835,26 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
        (auth doesn't care about path, but PUBLIC_PATHS exact-matches do).
     2) **Cookie-setting** ``GET /`` and ``GET /index.html``: read the built
        ``index.html``, return it with a ``Set-Cookie: kbagent_session=<token>;
-       HttpOnly; SameSite=Strict; Path=/`` header. Public (no auth) so the
-       SPA can bootstrap. The browser then attaches the cookie to every
-       same-origin REST + SSE request automatically. The token is HttpOnly
-       (no JS access -- XSS-resistant), SameSite=Strict (no cross-origin
-       sends -- CSRF-resistant), and lives only for the browser session.
+       HttpOnly; SameSite=Strict; Path=/`` header and ``Cache-Control:
+       no-cache`` (revalidate-always -- a cached shell served without a
+       request would keep a stale cookie alive across server restarts).
+       Public (no auth) so the SPA can bootstrap. The browser then attaches
+       the cookie to every same-origin REST + SSE request automatically. The
+       token is HttpOnly (no JS access -- XSS-resistant), SameSite=Strict
+       (no cross-origin sends -- CSRF-resistant), and lives only for the
+       browser session.
 
        This replaces the older "inject ``window.__KBAGENT_TOKEN`` into a
        ``<script>`` tag" approach. The injected token landed in the JS heap
        (XSS-readable) and the EventSource fallback (``?_kbagent_token=...``
        query param) put it into uvicorn's access log -- both attack surfaces
        are gone with the cookie-only design.
-    3) **StaticFiles mount at ``/``** with ``html=True`` so missing paths fall
-       through to ``index.html`` for SPA client-side routing.
+    3) **StaticFiles mount at ``/``** serving the built assets. The SPA is
+       hash-routed (deep links are ``/#/jobs/...``), so every shell load goes
+       through the ``GET /`` route above; the mount only ever serves real
+       files. (``html=True`` is kept for directory-index behavior -- note
+       Starlette's not-found fallback serves ``404.html``, which a Vite build
+       does not emit, so unknown non-API paths answer 404, not the shell.)
 
     The mount is appended *after* all API routers, so any registered route
     (``/projects``, ``/configs``, ``/agents``, ...) wins over a hypothetical
@@ -794,6 +906,15 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
     async def _serve_ui_index() -> HTMLResponse:
         html = (dist / "index.html").read_text(encoding="utf-8")
         response = HTMLResponse(html)
+        # The shell is the cookie-delivery vehicle, so a browser must never
+        # satisfy a reload from its cache without asking the server: after a
+        # `kbagent serve` restart (new bearer token) a heuristically-cached
+        # index.html boots the SPA with the stale cookie and every /api/*
+        # call answers 401 with nothing visibly wrong. `no-cache` means
+        # "store, but revalidate every time" -- and since this route
+        # implements no conditional-request handling, revalidation is always
+        # a full 200 that re-sets the cookie below.
+        response.headers["Cache-Control"] = "no-cache"
         # Browser session cookie: HttpOnly + SameSite=Strict + Path=/. No
         # ``Secure`` flag because kbagent serve defaults to plain http on
         # 127.0.0.1; setting Secure would prevent the cookie from ever being
@@ -811,9 +932,9 @@ def _install_ui(app: FastAPI, *, ui_dist: str, token: str) -> None:
         )
         return response
 
-    # SPA fallback + assets. ``html=True`` makes StaticFiles serve index.html
-    # for unknown paths (so /workspaces, /jobs, etc. client-side routes work
-    # on direct navigation). The auth middleware will still gate API calls;
+    # Assets + directory-index. The SPA is hash-routed, so client-side
+    # routes never reach this mount as paths -- it serves the built files
+    # only. The auth middleware will still gate API calls;
     # static files are served before it sees them only because StaticFiles
     # is the LAST mount and middleware runs on the unified scope -- so we
     # widen PUBLIC_PATHS via prefix logic in the auth middleware itself.
@@ -829,8 +950,10 @@ def _allow_static_through_auth(app: FastAPI) -> None:
 
     The auth middleware exempts ``PUBLIC_PATHS`` (docs, openapi, health). In UI
     mode the SPA also needs ``GET /``, ``GET /index.html``, ``GET /assets/*``,
-    favicons, and the SPA's client-side routes (which resolve to index.html via
-    the StaticFiles ``html=True`` fallback) to load without a token.
+    favicons, and any path matching no registered endpoint to load without a
+    token. (The SPA is hash-routed, so its client-side routes never reach the
+    server as paths; an unknown path 404s from the static mount -- the property
+    that matters here is that it is *not* auth-walled into a 401.)
 
     Route-aware (GHSA-ffpq-prmh-3gx2): a real endpoint must authenticate; only
     genuine client-side SPA routes fall through to the public index.html shell.

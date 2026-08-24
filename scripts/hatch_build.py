@@ -15,9 +15,14 @@ must already carry the SPA. This hook arranges that by:
 2. **Building it on the fly** if missing AND ``npm`` is available --
    covers the ``uv tool install git+...`` happy path on machines that
    already have Node 20+ for other reasons.
-3. **Copying** the dist into ``src/keboola_agent_cli/_ui_dist/`` so
-   hatchling's normal package collection picks it up (the dir is in
-   ``.gitignore`` to avoid checking in generated assets).
+3. **Copying** the dist into ``src/keboola_agent_cli/_ui_dist/``, which
+   reaches the wheel *only* through ``force-include``. The wheel target
+   deliberately ``exclude``s that (gitignored) dir from hatchling's normal
+   package collection, because having both paths pick it up aborts the build
+   with "A second file is being added to the wheel archive at the same path".
+   Dropping either half breaks a build: no ``force-include`` ships a UI-less
+   wheel, no ``exclude`` reintroduces the duplicate. See the comment on
+   ``[tool.hatch.build.targets.wheel].exclude`` in ``pyproject.toml``.
 
 If neither a prebuilt dist nor ``npm`` is available, the hook logs a
 warning and lets the wheel build proceed without the UI. The CLI will

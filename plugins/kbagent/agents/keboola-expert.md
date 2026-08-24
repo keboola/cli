@@ -178,6 +178,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   Service-Account component (`keboola.ex-linkedin-ads`, ...) fails with an
   opaque empty-body 400 -- check the version before blaming the action or the
   credentials.
+- `component detail` on **0.90.0+** falls back to the project's Storage catalog
+  when the AI Service does not index the component (private/deprecated:
+  `keboola.mcp-server-tool`, `keboola.data-apps`) -- it used to NOT_FOUND there
+  while `component list` showed the component. Read `documentation_source`
+  before concluding anything from counts: on `storage_catalog` the
+  `examples_count` is always 0 because that source carries no examples, NOT
+  because the component ships none. Reach for `config examples` or an existing
+  config in the project instead.
 
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's

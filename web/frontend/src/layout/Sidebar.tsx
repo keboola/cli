@@ -107,6 +107,27 @@ export const SECTIONS: NavSection[] = [
   },
 ];
 
+/**
+ * Pages reachable from the command palette but deliberately absent from the
+ * sidebar: the cross-project views are entered through the "All projects"
+ * button on their per-project sibling, so a second permanent nav entry would
+ * only duplicate it. The palette still needs them as jump targets.
+ */
+export const PALETTE_ONLY_PAGES: NavItem[] = [
+  { id: "jobs-all", label: "All Jobs (all projects)", icon: PlayCircle },
+  { id: "tokens-all", label: "All Tokens (all projects)", icon: KeyRound },
+];
+
+/**
+ * While a cross-project page is open, its per-project sibling stays
+ * highlighted in the sidebar -- the palette-only pages have no row of their
+ * own, and a nav with nothing lit reads as broken.
+ */
+const ACTIVE_ALIASES: Partial<Record<PageId, PageId>> = {
+  "jobs-all": "jobs",
+  "tokens-all": "tokens",
+};
+
 export function Sidebar() {
   const { page, setPage } = useUIState();
   return (
@@ -128,7 +149,7 @@ export function Sidebar() {
             <ul className="space-y-0.5">
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const active = page === item.id;
+                const active = page === item.id || ACTIVE_ALIASES[page] === item.id;
                 return (
                   <li key={item.id}>
                     <button

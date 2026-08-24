@@ -2759,7 +2759,7 @@ SAMPLE_JOBS = [
         "id": 1001,
         "status": "success",
         "component": "keboola.ex-db-snowflake",
-        "configId": "101",
+        "config": "101",
         "createdTime": "2026-02-26T10:00:00Z",
         "durationSeconds": 45,
     },
@@ -2767,7 +2767,7 @@ SAMPLE_JOBS = [
         "id": 1002,
         "status": "error",
         "component": "keboola.wr-db-snowflake",
-        "configId": "201",
+        "config": "201",
         "createdTime": "2026-02-26T11:00:00Z",
         "durationSeconds": 120,
     },
@@ -2778,7 +2778,7 @@ SAMPLE_JOBS_2 = [
         "id": 2001,
         "status": "processing",
         "component": "keboola.python-transformation-v2",
-        "configId": "301",
+        "config": "301",
         "createdTime": "2026-02-26T12:00:00Z",
     },
 ]
@@ -3065,6 +3065,220 @@ class TestJobServiceListJobs:
         assert len(jobs) == 2
         assert all(j["project_alias"] == "prod" for j in jobs)
         dev_client.list_jobs.assert_not_called()
+
+    def test_list_jobs_sorts_globally_by_start_time_desc(self, tmp_config_dir: Path) -> None:
+        """Aggregate sort is chronological across projects, not grouped by alias.
+
+        Each project's page is already sorted server-side, but a naive
+        concatenation would still read as "all of project A, then all of
+        project B". This asserts the merged feed interleaves by
+        startTime desc regardless of which project a job came from.
+        """
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "alpha",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-alpha-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "beta",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-beta-abcdefghijklmnopq",
+            ),
+        )
+
+        alpha_jobs = [
+            {"id": 1, "startTime": "2026-02-26T10:00:00Z"},
+            {"id": 2, "startTime": "2026-02-26T12:00:00Z"},
+        ]
+        beta_jobs = [
+            {"id": 3, "startTime": "2026-02-26T11:00:00Z"},
+            {"id": 4, "startTime": "2026-02-26T13:00:00Z"},
+        ]
+
+        alpha_client = _make_list_jobs_client(alpha_jobs)
+        beta_client = _make_list_jobs_client(beta_jobs)
+
+        def factory(url, token):
+            if "901" in token:
+                return alpha_client
+            return beta_client
+
+        service = JobService(config_store=store, client_factory=factory)
+
+        result = service.list_jobs(sort_by="startTime", sort_order="desc")
+        jobs = result["jobs"]
+
+        # Newest first, interleaved across alpha/beta by actual timestamp.
+        assert [j["id"] for j in jobs] == [4, 2, 3, 1]
+
+    def test_list_jobs_sorts_globally_by_start_time_asc(self, tmp_config_dir: Path) -> None:
+        """Same interleaved merge, ascending direction."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "alpha",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-alpha-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "beta",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-beta-abcdefghijklmnopq",
+            ),
+        )
+
+        alpha_jobs = [
+            {"id": 1, "startTime": "2026-02-26T10:00:00Z"},
+            {"id": 2, "startTime": "2026-02-26T12:00:00Z"},
+        ]
+        beta_jobs = [
+            {"id": 3, "startTime": "2026-02-26T11:00:00Z"},
+            {"id": 4, "startTime": "2026-02-26T13:00:00Z"},
+        ]
+
+        alpha_client = _make_list_jobs_client(alpha_jobs)
+        beta_client = _make_list_jobs_client(beta_jobs)
+
+        def factory(url, token):
+            if "901" in token:
+                return alpha_client
+            return beta_client
+
+        service = JobService(config_store=store, client_factory=factory)
+
+        result = service.list_jobs(sort_by="startTime", sort_order="asc")
+        jobs = result["jobs"]
+
+        assert [j["id"] for j in jobs] == [1, 3, 2, 4]
+
+    def test_list_jobs_missing_start_time_sorts_last_desc(self, tmp_config_dir: Path) -> None:
+        """A job with no startTime (e.g. still waiting) sorts last, not first, on desc."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ),
+        )
+
+        jobs_data = [
+            {"id": 1, "status": "waiting"},  # no startTime -- must NOT read as "oldest"
+            {"id": 2, "startTime": "2026-02-26T10:00:00Z"},
+            {"id": 3, "startTime": "2026-02-26T12:00:00Z"},
+        ]
+        service = JobService(
+            config_store=store,
+            client_factory=lambda url, token: _make_list_jobs_client(jobs_data),
+        )
+
+        result = service.list_jobs(sort_by="startTime", sort_order="desc")
+        jobs = result["jobs"]
+
+        assert [j["id"] for j in jobs] == [3, 2, 1]
+
+    def test_list_jobs_missing_start_time_sorts_last_asc(self, tmp_config_dir: Path) -> None:
+        """Missing startTime also sorts last on asc -- never "earliest"."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ),
+        )
+
+        jobs_data = [
+            {"id": 1, "status": "waiting"},  # no startTime
+            {"id": 2, "startTime": "2026-02-26T10:00:00Z"},
+            {"id": 3, "startTime": "2026-02-26T12:00:00Z"},
+        ]
+        service = JobService(
+            config_store=store,
+            client_factory=lambda url, token: _make_list_jobs_client(jobs_data),
+        )
+
+        result = service.list_jobs(sort_by="startTime", sort_order="asc")
+        jobs = result["jobs"]
+
+        assert [j["id"] for j in jobs] == [2, 3, 1]
+
+    def test_list_jobs_sort_by_duration_seconds_asc(self, tmp_config_dir: Path) -> None:
+        """sort_by=durationSeconds asc orders numerically, missing values last."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ),
+        )
+
+        jobs_data = [
+            {"id": 1, "durationSeconds": 120},
+            {"id": 2, "status": "processing"},  # no durationSeconds yet -- last
+            {"id": 3, "durationSeconds": 5},
+            {"id": 4, "durationSeconds": 45},
+        ]
+        service = JobService(
+            config_store=store,
+            client_factory=lambda url, token: _make_list_jobs_client(jobs_data),
+        )
+
+        result = service.list_jobs(sort_by="durationSeconds", sort_order="asc")
+        jobs = result["jobs"]
+
+        assert [j["id"] for j in jobs] == [3, 4, 1, 2]
+
+    def test_list_jobs_tiebreak_deterministic_on_equal_values(self, tmp_config_dir: Path) -> None:
+        """Equal sort-field values break ties by (project_alias, str(id))."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "beta",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-beta-abcdefghijklmnop",
+            ),
+        )
+        store.add_project(
+            "alpha",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="532-alpha-abcdefghijklmnop",
+            ),
+        )
+
+        same_time = "2026-02-26T10:00:00Z"
+        beta_jobs = [{"id": 20, "startTime": same_time}, {"id": 10, "startTime": same_time}]
+        alpha_jobs = [{"id": 15, "startTime": same_time}]
+
+        beta_client = _make_list_jobs_client(beta_jobs)
+        alpha_client = _make_list_jobs_client(alpha_jobs)
+
+        def factory(url, token):
+            if "901" in token:
+                return beta_client
+            return alpha_client
+
+        service = JobService(config_store=store, client_factory=factory)
+
+        result = service.list_jobs(sort_by="startTime", sort_order="desc")
+        jobs = result["jobs"]
+
+        # All timestamps tie -- break by project_alias asc ("alpha" < "beta"),
+        # then within "beta" by str(id) asc ("10" < "20"). Deterministic
+        # regardless of which project's worker thread finished first.
+        assert [(j["project_alias"], j["id"]) for j in jobs] == [
+            ("alpha", 15),
+            ("beta", 10),
+            ("beta", 20),
+        ]
 
 
 class TestJobServiceGetJobDetail:

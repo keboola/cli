@@ -111,6 +111,39 @@ def test_find_drift_detects_missing_documentation() -> None:
     assert "commands-reference.md" in blob
 
 
+def test_serve_only_key_is_exempt_from_the_dead_key_check() -> None:
+    surfaces = _clean_surfaces()
+    surfaces["registry_keys"] = {"config", "config.list", "auth.projects"}
+    problems = _mod.find_drift(
+        [("config", "list")],
+        [("config",)],
+        serve_only_keys=frozenset({"auth.projects"}),
+        **surfaces,
+    )
+    assert problems == []
+
+
+def test_serve_only_key_still_counts_as_categorised_once_a_cli_leaf_exists() -> None:
+    """The exemption must not leak into the MISSING-registry check.
+
+    If `auth projects` ever becomes a real CLI leaf, its registry key is
+    already there -- reporting it as missing would send the author to add a
+    duplicate entry.
+    """
+    surfaces = _clean_surfaces()
+    surfaces["registry_keys"] = {"config", "config.list", "auth", "auth.projects"}
+    surfaces["claude_text"] = "kbagent config list --project NAME\nkbagent auth projects"
+    surfaces["context_text"] = "config list\nauth projects"
+    surfaces["reference_text"] = "config list\nauth projects"
+    problems = _mod.find_drift(
+        [("config", "list"), ("auth", "projects")],
+        [("config",), ("auth",)],
+        serve_only_keys=frozenset({"auth.projects"}),
+        **surfaces,
+    )
+    assert problems == []
+
+
 def test_claude_is_full_leaf_while_reference_is_two_segment() -> None:
     """A 3-level leaf: CLAUDE.md needs the full path; context/reference the 2-seg prefix."""
     leaves = [("grp", "add", "metric")]

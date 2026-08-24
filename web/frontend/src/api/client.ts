@@ -35,6 +35,45 @@ export class ApiError extends Error {
 
 const API_BASE = "/api";
 
+/**
+ * Fired on `window` when an API call still answers 401 after the session
+ * cookie has been re-bootstrapped. At that point the client cannot
+ * self-heal; the shell shows a visible "session expired" banner instead of
+ * letting every list silently render empty.
+ */
+export const SESSION_EXPIRED_EVENT = "kbagent:session-expired";
+
+export interface SessionExpiredDetail {
+  code: string;
+  message: string;
+}
+
+let shellRefresh: Promise<void> | null = null;
+
+/**
+ * Re-fetch the SPA shell to pick up a fresh `kbagent_session` cookie.
+ *
+ * `GET /` is the cookie-setting bootstrap route in single-process UI mode.
+ * `cache: "reload"` is load-bearing: a plain `fetch("/")` could be answered
+ * from the browser cache without any request reaching the server -- which is
+ * exactly how the cookie went stale in the first place (a reload after a
+ * `kbagent serve` restart served the cached shell, so no fresh Set-Cookie
+ * ever happened).
+ *
+ * Single-flight: a burst of parallel queries that all 401 shares one
+ * bootstrap fetch. Failures are swallowed -- the caller's retry surfaces
+ * the real error.
+ */
+function refreshSessionCookie(): Promise<void> {
+  shellRefresh ??= fetch("/", { cache: "reload", credentials: "include" })
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      shellRefresh = null;
+    });
+  return shellRefresh;
+}
+
 interface RequestOptions {
   manageToken?: string;
   signal?: AbortSignal;
@@ -61,6 +100,7 @@ async function request<T>(
   method: string,
   path: string,
   opts: RequestOptions = {},
+  isRetry = false,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) {
@@ -79,6 +119,13 @@ async function request<T>(
     // is a no-op (browser sends an empty cookie jar for the BFF origin).
     credentials: "include",
   });
+  if (res.status === 401 && !isRetry) {
+    // Stale session cookie (server restarted with a new bearer token):
+    // re-bootstrap the cookie and retry exactly once. Safe for mutations
+    // too -- a 401 means the request was rejected on auth, not applied.
+    await refreshSessionCookie();
+    return request<T>(method, path, opts, true);
+  }
   if (!res.ok) {
     let payload: KbagentError | null = null;
     try {
@@ -88,6 +135,13 @@ async function request<T>(
     }
     const message = payload?.error?.message ?? res.statusText;
     const code = payload?.error?.code ?? "HTTP_ERROR";
+    if (res.status === 401) {
+      window.dispatchEvent(
+        new CustomEvent<SessionExpiredDetail>(SESSION_EXPIRED_EVENT, {
+          detail: { code, message },
+        }),
+      );
+    }
     throw new ApiError(code, message, res.status);
   }
   // 204 No Content

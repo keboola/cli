@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -14,11 +14,16 @@ install-server: ## Install FastAPI/uvicorn for `kbagent serve` (web UI backend)
 sync: ## Sync dependencies from lockfile
 	uv sync
 
+# `-n auto` fans the suite across every core (~6k tests, all HTTP mocked, no
+# shared mutable state). Measured 152s -> 29s on an 11-core machine. `-v` is
+# dropped with it: interleaved per-worker output is unreadable, and a failing
+# test prints its own node id. Use `make test-file FILE=...` for a sequential,
+# verbose run while debugging a single file.
 test: ## Run all tests (excluding e2e — use test-e2e separately)
-	uv run pytest tests/ -v -m "not e2e"
+	uv run pytest tests/ -m "not e2e" -n auto
 
 test-unit: ## Run unit tests only (exclude integration and e2e)
-	uv run pytest tests/ -v -m "not integration and not e2e"
+	uv run pytest tests/ -m "not integration and not e2e" -n auto
 
 test-integration: ## Run integration tests only
 	uv run pytest tests/ -v -m integration
@@ -46,7 +51,7 @@ test-file: ## Run a specific test file (FILE=tests/test_cli.py)
 	uv run pytest $(FILE) -v
 
 test-cov: ## Run the unit suite with a coverage report (informational; no threshold gate)
-	uv run pytest tests/ -v -m "not integration" --cov --cov-report=term-missing
+	uv run pytest tests/ -m "not integration" -n auto --cov --cov-report=term-missing
 
 lint: ## Run ruff linter
 	uv run ruff check src/ tests/ scripts/
@@ -116,18 +121,46 @@ command-sync-check: ## Verify every CLI command is registered + documented (sile
 version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unreleased version
 	uv run python scripts/check_version_gates.py
 
+vnext-check: ## Reject an unresolved version-gate placeholder -- run in the RELEASE PR
+	uv run python scripts/check_version_gates.py --release
+
 check-sentinel-guards: ## Reject an unguarded kbc-session:// sentinel path (silent-drift gate)
 	uv run python scripts/check_sentinel_guards.py
 
 gen-command-reference: ## Generate command-reference.md from the live Typer app (release asset)
 	uv run python scripts/gen_command_reference.py --output command-reference.md
 
+endpoints-gen: ## Regenerate docs/web-server-endpoints.md from the live FastAPI app
+	uv run --extra server python scripts/gen_endpoint_reference.py
+
+endpoints-check: ## Check the serve endpoint reference is up-to-date (fails if stale)
+# stdout is dropped, stderr is not: a generator crash must show its traceback
+# rather than degrading into a confusing "doc is out-of-date".
+	@uv run --extra server python scripts/gen_endpoint_reference.py > /dev/null
+# Two conditions, because either one alone has a blind spot. `git diff --quiet`
+# reports NOTHING for an untracked path, so a doc that fell out of the index
+# would pass while documenting nothing; `git status --porcelain` closes that but
+# flags a staged-new file (`A `) whose content is perfectly correct -- the state
+# of every PR that introduces a generated file. So: git must know the file, AND
+# the regenerated content must match what git holds.
+	@if ! git ls-files --error-unmatch docs/web-server-endpoints.md > /dev/null 2>&1; then \
+		echo "ERROR: docs/web-server-endpoints.md is untracked. Run 'make endpoints-gen' and 'git add' it."; \
+		exit 1; \
+	fi
+	@if git diff --quiet docs/web-server-endpoints.md; then \
+		echo "docs/web-server-endpoints.md is up-to-date"; \
+	else \
+		echo "ERROR: docs/web-server-endpoints.md is out-of-date. Run 'make endpoints-gen' and commit."; \
+		git diff docs/web-server-endpoints.md; \
+		exit 1; \
+	fi
+
 hooks: ## Install git pre-commit hook (lint + format on staged files)
 	cp scripts/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + changelog + error-codes + sentinel-guards + file-size + test)
+check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check endpoints-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + endpoints + changelog + error-codes + sentinel-guards + file-size + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -12,14 +12,22 @@ The two bugs are reproduced *without a Windows machine*:
   any OS.
 - **Bug 2** -- an early ``return`` left ``_ui_dist/`` missing, and hatchling's
   ``force-include`` then failed the whole build. We assert every code path
-  leaves ``_ui_dist/`` existing on disk. (The force-include interaction itself
-  is OS-independent and is additionally exercised end-to-end by the CI wheel
-  build.)
+  leaves ``_ui_dist/`` existing on disk.
+
+Also covers the duplicate-path failure that the wheel ``exclude`` in
+``pyproject.toml`` guards against: with ``_ui_dist/`` populated at collection
+time, hatchling's ``packages`` selection picks it up alongside the
+``force-include`` and the build aborts with "A second file is being added to
+the wheel archive at the same path". That reproduces on an ordinary checkout
+(``.git`` and ``.gitignore`` both present) from hatchling 1.30.0 onwards --
+1.29.0 and earlier build fine -- so it is not tied to any VCS layout. See
+``TestForceIncludeNoDuplicate`` below for the end-to-end regression test.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -39,6 +47,22 @@ assert _spec is not None and _spec.loader is not None
 hatch_build = importlib.util.module_from_spec(_spec)
 sys.modules["hatch_build"] = hatch_build
 _spec.loader.exec_module(hatch_build)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_skip_ui_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the ambient ``KBAGENT_SKIP_UI_BUILD`` knob for every test here.
+
+    Not a CI concern: ``ci.yml`` scopes that flag to a single step's ``env:``,
+    so it never reaches the pytest step. This guards the developer who
+    exported it in their shell. Left set, ``_bundle_ui`` ships an EMPTY
+    ``_ui_dist/``, and 5 tests in this module then fail with messages about
+    bundle contents instead of naming the env var -- including the end-to-end
+    wheel build, which inherits this environment through ``uv build``. Tests
+    that exercise the skip path opt in explicitly with ``monkeypatch.setenv``.
+    """
+    monkeypatch.delenv(hatch_build.SKIP_UI_BUILD_ENV, raising=False)
+
 
 # The CI wheel-content assertion helper lives in ``scripts/`` -- load it the
 # same way so its logic is regression-tested in normal (ubuntu) CI, not only by
@@ -289,3 +313,62 @@ class TestCheckWheelUiHelper:
 
     def test_missing_wheel_is_an_error(self, tmp_path: Path) -> None:
         assert check_wheel_ui.main(["--expect-ui", "--dist", str(tmp_path)]) == 1
+
+
+class TestForceIncludeNoDuplicate:
+    """A populated ``_ui_dist/`` must not land in the wheel twice.
+
+    Reproduces the real failure end-to-end (not mocked): a minimal project
+    laid out with the actual ``pyproject.toml`` / ``hatch_build.py`` and a
+    prebuilt SPA dist on disk, so the hook populates ``_ui_dist/`` with a real
+    file.
+
+    The fixture also puts hatchling's .gitignore-based exclusion deliberately
+    out of reach. That exclusion is *not* what ``exclude`` stands in for --
+    the duplicate reproduces in a normal checkout too on hatchling >= 1.30 --
+    but pinning it here stops the assertion from passing for an incidental
+    reason, e.g. under a ``TMPDIR`` that happens to sit below some other
+    ``.gitignore``.
+    """
+
+    def test_wheel_build_does_not_duplicate_ui_dist(self, tmp_path: Path) -> None:
+        if shutil.which("uv") is None:
+            pytest.skip("uv not on PATH")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        project = tmp_path / "project"
+        (project / "src" / "keboola_agent_cli").mkdir(parents=True)
+        (project / "src" / "keboola_agent_cli" / "__init__.py").write_text("", encoding="utf-8")
+        (project / "src" / "keboola_agent_cli" / "py.typed").write_text("", encoding="utf-8")
+        (project / "scripts").mkdir()
+        shutil.copy(
+            repo_root / "scripts" / "hatch_build.py", project / "scripts" / "hatch_build.py"
+        )
+        shutil.copy(repo_root / "pyproject.toml", project / "pyproject.toml")
+        (project / "README.md").write_text("test project", encoding="utf-8")
+
+        dist = project / "web" / "frontend" / "dist"
+        dist.mkdir(parents=True)
+        (dist / "index.html").write_text("<html>app</html>", encoding="utf-8")
+
+        # An empty ``.git`` dir is the boundary that halts hatchling's upward
+        # ``.gitignore`` search, so no ancestor ``.gitignore`` can quietly
+        # supply an exclusion. Verified load-bearing: without it, a ``TMPDIR``
+        # below any tree carrying a matching ``.gitignore`` makes this test
+        # pass even with the ``exclude`` fix reverted.
+        (project / ".git").mkdir()
+        assert not (project / ".gitignore").exists()
+
+        result = subprocess.run(
+            ["uv", "build", "--wheel", "-o", str(tmp_path / "out")],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        assert result.returncode == 0, result.stderr
+
+        (wheel,) = list((tmp_path / "out").glob("*.whl"))
+        with zipfile.ZipFile(wheel) as zf:
+            ui_entries = [n for n in zf.namelist() if n.endswith("_ui_dist/index.html")]
+        assert ui_entries == ["keboola_agent_cli/_ui_dist/index.html"]

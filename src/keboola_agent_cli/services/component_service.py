@@ -7,6 +7,7 @@ local-first development workflows.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ import yaml
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
 from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
 from ..sync.config_format import api_config_to_local, dump_config_yaml
@@ -25,6 +26,20 @@ from .org_service import slugify
 logger = logging.getLogger(__name__)
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
+
+
+@dataclass(frozen=True)
+class ResolvedProject:
+    """A project resolved together with the alias it was resolved under.
+
+    ``alias`` is the caller's alias when one was given, otherwise the first
+    configured project's -- the value response payloads report as
+    ``project_alias``. A dataclass rather than a bare 2-tuple per
+    CONTRIBUTING.md's multi-value-return rule.
+    """
+
+    alias: str
+    project: ProjectConfig
 
 
 def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
@@ -461,6 +476,17 @@ def _build_flow_config_yml(name: str, component_id: str = "keboola.flow") -> str
     return "\n".join(lines) + "\n"
 
 
+# Where a `component detail` response came from. The AI Service indexes the
+# PUBLIC component catalog only, so a component a project can actually run but
+# that the index does not carry (private/deprecated ones such as
+# ``keboola.mcp-server-tool`` or ``keboola.data-apps``) 404s there while still
+# being listed by ``component list``. The Storage catalog is the fallback; it
+# carries no configuration examples, so consumers need to tell the two apart
+# instead of reading an empty ``examples_count`` as "this component has none".
+DOCUMENTATION_SOURCE_AI_SERVICE = "ai_service"
+DOCUMENTATION_SOURCE_STORAGE_CATALOG = "storage_catalog"
+
+
 class ComponentService(BaseService):
     """Business logic for component discovery and scaffold generation.
 
@@ -511,29 +537,87 @@ class ComponentService(BaseService):
             return self._list_via_ai(aliases, component_type, query)
         return self._list_via_storage(aliases, component_type)
 
-    def get_component_detail(self, alias: str, component_id: str) -> dict[str, Any]:
-        """Fetch detailed component documentation via AI Service.
+    def _resolve_alias_or_first(self, alias: str | None) -> ResolvedProject:
+        """Resolve *alias* to a project, defaulting to the first configured one.
+
+        :meth:`BaseService.resolve_projects` falls back to "all projects" only
+        when the alias LIST itself is empty/None -- a ``[None]`` element goes
+        down its strict lookup and raises "Project 'None' not found". Commands
+        that document ``--project`` as optional (``component detail``,
+        ``config examples``, ``config new`` without ``--push``) must therefore
+        normalise an omitted alias here instead of passing it through.
+
+        Raises:
+            ConfigError: If *alias* is given but unknown, or when no projects
+                are configured at all.
+        """
+        projects = self.resolve_projects([alias] if alias else None)
+        if not projects:
+            raise ConfigError(
+                "No projects configured. Use 'kbagent project add' to connect a project first."
+            )
+        resolved_alias = alias or next(iter(projects))
+        return ResolvedProject(alias=resolved_alias, project=projects[resolved_alias])
+
+    def get_component_detail(self, alias: str | None, component_id: str) -> dict[str, Any]:
+        """Fetch detailed component documentation, AI Service first.
+
+        The AI Service (``/docs/components/{id}``) indexes the PUBLIC component
+        catalog only, so its 404 is NOT proof the component does not exist: a
+        private or deprecated component the project can actually run --
+        ``keboola.mcp-server-tool``, ``keboola.data-apps`` -- is listed by
+        ``component list`` (Storage API) yet missing from the index. Erroring
+        out there made ``component detail`` unusable for exactly the components
+        an operator is least likely to know by heart.
+
+        A NOT_FOUND therefore falls back to the project's own Storage component
+        catalog and returns the same response shape filled from the catalog
+        entry. Fields only the AI Service has come back empty rather than
+        absent (``examples_count`` / ``row_examples_count`` are always 0, and
+        ``schema_summary`` counts stay at 0 unless the catalog entry itself
+        carries a configuration schema), so no consumer has to branch on the
+        source to read a field. ``documentation_source`` is what tells the two
+        apart: ``"ai_service"`` vs ``"storage_catalog"``.
+
+        Any other AI Service failure (auth, network, 5xx) is re-raised as
+        itself -- only the ambiguous 404 is worth a second lookup.
 
         Args:
-            alias: Project alias (used to derive stack URL and token).
+            alias: Project alias (used to derive stack URL and token). When
+                None, the first available project is used.
             component_id: The component identifier (e.g. 'keboola.ex-aws-s3').
 
         Returns:
-            Dict with component detail including schema summary,
-            examples count, and full documentation.
+            Dict with component detail including schema summary, example
+            counts, ``documentation_source``, and full documentation.
 
         Raises:
-            ConfigError: If the alias is not found.
-            KeboolaApiError: If the AI Service call fails.
+            ConfigError: If the alias is not found or no projects are
+                configured.
+            KeboolaApiError: If the AI Service call fails; a NOT_FOUND is
+                re-raised unchanged only when the Storage catalog does not know
+                the component either (i.e. the id really is wrong).
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        resolved = self._resolve_alias_or_first(alias)
+        project = resolved.project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
+        not_found: KeboolaApiError | None = None
+        raw: dict[str, Any] = {}
         try:
             raw = ai_client.get_component_detail(component_id)
+        except KeboolaApiError as exc:
+            if exc.error_code != ErrorCode.NOT_FOUND:
+                raise
+            not_found = exc
         finally:
             ai_client.close()
+
+        if not_found is not None:
+            catalog_entry = self._find_catalog_component(project, component_id)
+            if catalog_entry is None:
+                raise not_found
+            return self._catalog_detail_payload(catalog_entry, resolved.alias)
 
         detail = ComponentDetail(**raw)
 
@@ -558,7 +642,62 @@ class ComponentService(BaseService):
             },
             "examples_count": len(detail.root_configuration_examples),
             "row_examples_count": len(detail.row_configuration_examples),
+            "project_alias": resolved.alias,
+            "documentation_source": DOCUMENTATION_SOURCE_AI_SERVICE,
+        }
+
+    def _find_catalog_component(
+        self, project: ProjectConfig, component_id: str
+    ) -> dict[str, Any] | None:
+        """Return the project's Storage catalog entry for *component_id*, or None.
+
+        Reads the same listing :meth:`_list_via_storage` uses
+        (``GET /v2/storage/components``) and matches on the exact id, so
+        anything ``component list`` shows stays inspectable through
+        ``component detail``.
+        """
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            for entry in client.list_components():
+                if entry.get("id") == component_id:
+                    return entry
+        finally:
+            client.close()
+        return None
+
+    @staticmethod
+    def _catalog_detail_payload(entry: dict[str, Any], alias: str) -> dict[str, Any]:
+        """Shape a Storage catalog entry like an AI Service detail response.
+
+        Every key the AI path returns is present. ``or``-defaults rather than
+        ``dict.get`` defaults throughout: the Storage API sends explicit
+        ``null`` for an absent description / documentation URL, and a ``None``
+        would break the human formatter's string rendering.
+        """
+        schema = entry.get("configurationSchema") or {}
+        properties = schema.get("properties") or {}
+        required = schema.get("required") or []
+        return {
+            "component_id": entry.get("id") or "",
+            "component_name": entry.get("name") or "",
+            "component_type": entry.get("type") or "",
+            "categories": entry.get("categories") or [],
+            "flags": entry.get("flags") or [],
+            "description": entry.get("description") or "",
+            "long_description": entry.get("longDescription") or "",
+            "documentation_url": entry.get("documentationUrl") or "",
+            "schema_summary": {
+                "property_count": len(properties),
+                "required_count": len(required),
+                "has_row_schema": bool(entry.get("configurationRowSchema")),
+            },
+            # The Storage catalog has no configuration examples at all; a
+            # consumer that needs them must read `documentation_source`
+            # instead of concluding the component ships none.
+            "examples_count": 0,
+            "row_examples_count": 0,
             "project_alias": alias,
+            "documentation_source": DOCUMENTATION_SOURCE_STORAGE_CATALOG,
         }
 
     def get_config_examples(self, alias: str | None, component_id: str) -> dict[str, Any]:
@@ -583,13 +722,7 @@ class ComponentService(BaseService):
             ConfigError: If the alias is not found or no projects are configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        projects = self.resolve_projects([alias] if alias else None)
-        if not projects:
-            raise ConfigError(
-                "No projects configured. Use 'kbagent project add' to connect a project first."
-            )
-        resolved_alias = alias or next(iter(projects))
-        project = projects[resolved_alias]
+        project = self._resolve_alias_or_first(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
@@ -712,7 +845,7 @@ class ComponentService(BaseService):
 
     def generate_scaffold(
         self,
-        alias: str,
+        alias: str | None,
         component_id: str,
         name: str | None = None,
     ) -> dict[str, Any]:
@@ -722,7 +855,9 @@ class ComponentService(BaseService):
         configuration files based on component type and schema.
 
         Args:
-            alias: Project alias (used to derive stack URL and token).
+            alias: Project alias (used to derive stack URL and token). When
+                None, the first available project is used (`config new`
+                without --push documents --project as optional).
             component_id: The component identifier.
             name: Configuration name. If None, defaults to
                 "{component_name} Configuration".
@@ -731,11 +866,11 @@ class ComponentService(BaseService):
             Dict with scaffold metadata and generated files list.
 
         Raises:
-            ConfigError: If the alias is not found.
+            ConfigError: If the alias is not found or no projects are
+                configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        project = self._resolve_alias_or_first(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:

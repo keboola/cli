@@ -582,6 +582,8 @@ file — point them at it and rerun.
 
 - [`docs/web-server.md`](web-server.md) — architectural overview of
   `kbagent serve` and the scheduler loop.
+- [`docs/web-server-endpoints.md`](web-server-endpoints.md) — every route,
+  generated from the app's own OpenAPI spec, so it never lags the server.
 - [`web/README.md`](../web/README.md) — running the bundled SPA, both
   single-process and dev-mode flows.
 - [`src/keboola_agent_cli/server/routers/`](../src/keboola_agent_cli/server/routers/)

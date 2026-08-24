@@ -92,6 +92,15 @@ export interface Job {
   endTime?: string;
   durationSeconds?: number;
   url?: string;
+  /**
+   * Queue API metrics passthrough. Deliberately untyped: the platform adds
+   * keys here freely and the row is the API resource verbatim. The only part
+   * the UI reads is the container size --
+   * `metrics.backend.containerSize ?? metrics.backend.size` -- and it goes
+   * through `getContainerSize()` in `config/credits.ts` rather than being
+   * indexed at call sites.
+   */
+  metrics?: Record<string, unknown>;
 }
 
 export interface Branch {

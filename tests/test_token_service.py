@@ -430,3 +430,222 @@ class TestListTokensWithLastUsed:
         _svc(store, factory).list_tokens(alias=ALIAS, with_last_used=True)
 
         mock.close.assert_called_once()
+
+
+class TestListTokensAll:
+    """`list_tokens_all` -- cross-project token listing (mirrors JobService.list_jobs)."""
+
+    def _store_with_two_projects(self, tmp_config_dir: Path) -> ConfigStore:
+        s = ConfigStore(config_dir=tmp_config_dir)
+        s.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-prod-fakeTestTokenDoNotUseXXXXXX",
+            ),
+        )
+        s.add_project(
+            "dev",
+            ProjectConfig(
+                stack_url="https://connection.north-europe.azure.keboola.com",
+                token="901-dev-fakeTestTokenDoNotUseXXXXXXX",
+            ),
+        )
+        return s
+
+    def test_multi_project_aggregation_stamps_project_alias(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [
+            {"id": "1", "description": "prod-a"},
+            {"id": "2", "description": "prod-b"},
+        ]
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = [{"id": "3", "description": "dev-a"}]
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        service = TokenService(store, client_factory=factory)
+        result = service.list_tokens_all()
+
+        assert result["count"] == 3
+        assert result["errors"] == []
+        by_id = {t["id"]: t for t in result["tokens"]}
+        assert by_id["1"]["project_alias"] == "prod"
+        assert by_id["2"]["project_alias"] == "prod"
+        assert by_id["3"]["project_alias"] == "dev"
+        # grouped by project_alias ("dev" < "prod"), per-project order preserved
+        # within each group (id "1" before id "2", both from prod).
+        assert [t["id"] for t in result["tokens"]] == ["3", "1", "2"]
+        prod_client.close.assert_called_once()
+        dev_client.close.assert_called_once()
+
+    def test_secrets_stripped_across_projects(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [
+            {"id": "1", "token": "1-liveSecretValue", "description": "master"}
+        ]
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = [
+            {"id": "2", "token": "2-anotherSecret", "description": "device"}
+        ]
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        result = TokenService(store, client_factory=factory).list_tokens_all()
+
+        assert "liveSecretValue" not in str(result)
+        assert "anotherSecret" not in str(result)
+        for token in result["tokens"]:
+            assert "token" not in token
+
+    def test_partial_failure_degrades_into_errors(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [{"id": "1", "description": "ok"}]
+        dev_client = MagicMock()
+        dev_client.list_tokens.side_effect = KeboolaApiError(
+            message="Token expired",
+            status_code=401,
+            error_code="INVALID_TOKEN",
+            retryable=False,
+        )
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        result = TokenService(store, client_factory=factory).list_tokens_all()
+
+        assert result["count"] == 1
+        assert result["tokens"][0]["project_alias"] == "prod"
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["project_alias"] == "dev"
+        assert result["errors"][0]["error_code"] == "INVALID_TOKEN"
+
+    def test_aliases_none_resolves_all_registered_projects(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = []
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = []
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        TokenService(store, client_factory=factory).list_tokens_all(aliases=None)
+
+        prod_client.list_tokens.assert_called_once()
+        dev_client.list_tokens.assert_called_once()
+
+    def test_alias_filter_only_queries_specified_projects(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [{"id": "1"}]
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = [{"id": "2"}]
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        result = TokenService(store, client_factory=factory).list_tokens_all(aliases=["prod"])
+
+        assert result["count"] == 1
+        assert result["tokens"][0]["project_alias"] == "prod"
+        dev_client.list_tokens.assert_not_called()
+
+    def test_unknown_alias_raises(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        service = TokenService(store, client_factory=MagicMock())
+        with pytest.raises(ConfigError):
+            service.list_tokens_all(aliases=["nope"])
+
+    def test_with_last_used_global_dormant_first_ordering(self, tmp_config_dir: Path) -> None:
+        """Dormant-first ordering spans ALL projects together, not grouped per project.
+
+        `prod` has a token used recently and one never used; `dev` has one
+        token whose activity has aged out of retention. The global order must
+        be never -> unknown -> recent-use, regardless of which project each
+        token belongs to.
+        """
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [
+            {"id": "prod-recent", "created": _ago(days=10)},
+            {"id": "prod-never", "created": _ago(days=10)},
+        ]
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = [
+            {"id": "dev-unknown", "created": _ago(days=400)},
+        ]
+
+        prod_events = {
+            "prod-recent": [
+                {"created": "2026-08-20T09:00:00+0200", "event": "storage.tablesListed"}
+            ],
+            "prod-never": [],
+        }
+        dev_events: dict[str, list] = {"dev-unknown": []}
+        prod_client.list_token_events.side_effect = lambda token_id: prod_events[token_id]
+        dev_client.list_token_events.side_effect = lambda token_id: dev_events[token_id]
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        result = TokenService(store, client_factory=factory).list_tokens_all(with_last_used=True)
+
+        assert [t["id"] for t in result["tokens"]] == [
+            "prod-never",
+            "dev-unknown",
+            "prod-recent",
+        ]
+
+    def test_with_last_used_per_token_errors_carry_project_alias(
+        self, tmp_config_dir: Path
+    ) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = [
+            {"id": "1", "description": "boom", "created": _ago(days=10)}
+        ]
+        prod_client.list_token_events.side_effect = KeboolaApiError(
+            "nope", error_code=ErrorCode.API_ERROR
+        )
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = []
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        result = TokenService(store, client_factory=factory).list_tokens_all(with_last_used=True)
+
+        # Per-token lookup failures land in token_errors, NOT errors: the
+        # project itself listed fine, so reporting it as unlistable (the
+        # errors[] meaning) would be wrong.
+        assert result["errors"] == []
+        assert len(result["token_errors"]) == 1
+        assert result["token_errors"][0]["token_id"] == "1"
+        assert result["token_errors"][0]["project_alias"] == "prod"
+
+    def test_no_projects_configured_returns_empty(self, tmp_config_dir: Path) -> None:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        service = TokenService(store, client_factory=MagicMock())
+        result = service.list_tokens_all()
+        assert result == {"tokens": [], "count": 0, "errors": [], "token_errors": []}
+
+    def test_clients_are_closed_for_every_project(self, tmp_config_dir: Path) -> None:
+        store = self._store_with_two_projects(tmp_config_dir)
+        prod_client = MagicMock()
+        prod_client.list_tokens.return_value = []
+        dev_client = MagicMock()
+        dev_client.list_tokens.return_value = []
+
+        def factory(url, token):
+            return prod_client if "prod" in token else dev_client
+
+        TokenService(store, client_factory=factory).list_tokens_all()
+
+        prod_client.close.assert_called_once()
+        dev_client.close.assert_called_once()

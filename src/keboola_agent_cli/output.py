@@ -409,7 +409,7 @@ def format_jobs_table(console: Console, data: dict[str, Any]) -> None:
             str(job.get("id", "")),
             status_display,
             job.get("component", ""),
-            str(job.get("configId", job.get("config_id", ""))),
+            str(job.get("config", job.get("configId", ""))),
             job.get("createdTime", ""),
             duration,
         )

@@ -11,14 +11,72 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
+import { useHashSelection } from "../useHashSelection";
 import type { Branch, Bucket, ProjectError, Table as TableT } from "../types";
+
+type StorageTab = "buckets" | "tables" | "files";
+
+const STORAGE_TABS: readonly StorageTab[] = ["buckets", "tables", "files"];
+
+/**
+ * This page's `?sel=` grammar: `<tab>`, `tables/<tableId>` or
+ * `bucket/<bucketId>`.
+ *
+ * The tab is part of the selection because it is what the link has to restore
+ * before anything can be opened -- the tables query is gated on it. Only the
+ * tables tab has a detail view (the table drawer), so it is the only one that
+ * carries a table id.
+ *
+ * The `bucket/` form encodes the bucket FILTER, which arrived with the command
+ * palette: picking a bucket there is a NAVIGATION target ("show me this
+ * bucket"), not the transient narrowing it is when you click a row on the way
+ * down the list -- and a destination has to survive a reload and a paste into
+ * chat. Both entry points write it, so the filter chip you see always matches
+ * the URL you can copy.
+ *
+ * A table id already carries its bucket (`in.c-oltp.orders`), so an open
+ * drawer needs no separate bucket part: `tables/<tableId>` wins over the
+ * filter, and restoring it leaves the list unfiltered, exactly as a table
+ * deep link behaved before the bucket form existed.
+ */
+export function parseStorageSel(sel: string | null): {
+  tab: StorageTab;
+  tableId: string | null;
+  bucketId: string | null;
+} {
+  if (!sel) return { tab: "buckets", tableId: null, bucketId: null };
+  const slash = sel.indexOf("/");
+  const head = slash === -1 ? sel : sel.slice(0, slash);
+  const rest = slash === -1 ? "" : sel.slice(slash + 1);
+  if (head === "bucket") {
+    // A bucket-less `bucket/` is meaningless; fall back to the plain list.
+    return rest
+      ? { tab: "tables", tableId: null, bucketId: rest }
+      : { tab: "buckets", tableId: null, bucketId: null };
+  }
+  const tab = (STORAGE_TABS as readonly string[]).includes(head)
+    ? (head as StorageTab)
+    : "buckets";
+  return { tab, tableId: tab === "tables" && rest ? rest : null, bucketId: null };
+}
+
+export function buildStorageSel(
+  tab: StorageTab,
+  tableId: string | null,
+  bucketId: string | null = null,
+): string | null {
+  if (tab === "tables" && tableId) return `tables/${tableId}`;
+  if (tab === "tables" && bucketId) return `bucket/${bucketId}`;
+  // The landing view needs no `sel` at all -- keeps a plain project link clean.
+  return tab === "buckets" ? null : tab;
+}
 
 interface TablePreview {
   header: string[];
@@ -89,9 +147,45 @@ function formatBytes(n: number): string {
 
 export function StoragePage() {
   const { project, branchId } = useUIState();
-  const [tab, setTab] = useState<"buckets" | "tables" | "files">("buckets");
-  const [bucketFilter, setBucketFilter] = useState<string | null>(null);
+  // Deep link: `?sel=tables/<tableId>` restores the tab AND opens the drawer;
+  // `?sel=bucket/<bucketId>` restores the tab AND the bucket filter.
+  const [sel, setSel] = useHashSelection();
+  const [tab, setTabState] = useState<StorageTab>(() => parseStorageSel(sel).tab);
+  const [bucketFilter, setBucketFilter] = useState<string | null>(
+    () => parseStorageSel(sel).bucketId,
+  );
   const [selectedTable, setSelectedTable] = useState<TableT | null>(null);
+
+  // Switching tabs drops the open table: the drawer belongs to the tables tab.
+  // The bucket filter survives the trip (it is still shown as a chip), so it
+  // stays in the URL whenever the tables tab is the one being shown.
+  const setTab = (t: StorageTab) => {
+    setTabState(t);
+    setSelectedTable(null);
+    setSel(buildStorageSel(t, null, bucketFilter));
+  };
+  const openTable = (t: TableT) => {
+    setSelectedTable(t);
+    setSel(buildStorageSel("tables", t.id));
+  };
+  const closeTable = () => {
+    setSelectedTable(null);
+    setSel(buildStorageSel(tab, null, bucketFilter));
+  };
+  // Narrowing to a bucket -- from a row click here or from the command
+  // palette's deep link -- lands on the tables tab with the filter applied.
+  // Written as one function because `setTab` would otherwise capture the
+  // pre-update `bucketFilter` and drop it from the URL.
+  const openBucket = (bucketId: string) => {
+    setBucketFilter(bucketId);
+    setTabState("tables");
+    setSelectedTable(null);
+    setSel(buildStorageSel("tables", null, bucketId));
+  };
+  const clearBucketFilter = () => {
+    setBucketFilter(null);
+    setSel(buildStorageSel(tab, null, null));
+  };
 
   const bucketsQ = useQuery<BucketsResp>({
     queryKey: ["buckets", project, branchId],
@@ -112,6 +206,39 @@ export function StoragePage() {
     enabled: !!project && tab === "tables",
   });
 
+  // Adopt a `sel` that arrived from OUTSIDE this page. On a cold deep link
+  // that is the initial state, but the command palette can also retarget the
+  // page while it is already mounted -- so this cannot be a mount-only read.
+  // The page's own clicks write `sel` and the matching local state together,
+  // so they arrive here as no-ops.
+  useEffect(() => {
+    const { tab: wantTab, tableId, bucketId } = parseStorageSel(sel);
+    if (wantTab === "tables") setTabState("tables");
+    if (bucketId) setBucketFilter(bucketId);
+    // A table target resolves against the project-wide list, so a filter that
+    // cannot contain it would hide the very row we are opening. Drop that one;
+    // keep a filter the table does belong to -- it is the context the reader
+    // is already in, and the chip should not blink out from under them.
+    if (tableId) setBucketFilter((f) => (f && tableId.startsWith(`${f}.`) ? f : null));
+  }, [sel]);
+
+  // Open the table named by `?sel=` once a list containing it has loaded.
+  //
+  // Deliberately NOT guarded by a "we already tried this id" flag. Dropping an
+  // incompatible bucket filter (above) swaps the tables query onto a new key,
+  // and this effect runs once more against the OLD, still-filtered rows before
+  // the wider list arrives -- a give-up flag set on that pass would strand the
+  // drawer shut. A miss simply changes nothing and waits for the next data.
+  //
+  // It cannot re-open a drawer the user closed either: closing rewrites `sel`
+  // without a table part, so `wanted` is null from then on.
+  useEffect(() => {
+    const wanted = parseStorageSel(sel).tableId;
+    if (!wanted || wanted === selectedTable?.id || !tablesQ.data) return;
+    const hit = tablesQ.data.tables.find((t) => t.id === wanted);
+    if (hit) setSelectedTable(hit);
+  }, [sel, selectedTable, tablesQ.data]);
+
   return (
     <div className="space-y-4">
       <PageTitle
@@ -119,7 +246,7 @@ export function StoragePage() {
         description={`Buckets, tables and files in ${project ?? "(no project)"}`}
       />
       <div className="flex gap-2">
-        {(["buckets", "tables", "files"] as const).map((t) => (
+        {STORAGE_TABS.map((t) => (
           <button
             key={t}
             type="button"
@@ -133,7 +260,7 @@ export function StoragePage() {
           <button
             type="button"
             className="nerd-btn text-xs hover:text-amber-700 dark:hover:text-amber-400"
-            onClick={() => setBucketFilter(null)}
+            onClick={clearBucketFilter}
           >
             ✕ filter: {bucketFilter}
           </button>
@@ -151,10 +278,7 @@ export function StoragePage() {
           <DataTable
             rows={bucketsQ.data?.buckets ?? []}
             rowKey={(b) => `${b.project_alias}/${b.id}`}
-            onRowClick={(b) => {
-              setBucketFilter(b.id);
-              setTab("tables");
-            }}
+            onRowClick={(b) => openBucket(b.id)}
             columns={[
               {
                 header: "Bucket",
@@ -180,7 +304,7 @@ export function StoragePage() {
           <DataTable
             rows={tablesQ.data?.tables ?? []}
             rowKey={(t) => `${t.project_alias}/${t.id}`}
-            onRowClick={(t) => setSelectedTable(t)}
+            onRowClick={openTable}
             columns={[
               { header: "Table", cell: (t) => <span className="text-accent">{t.id}</span> },
               { header: "Name", cell: (t) => t.display_name },
@@ -195,10 +319,7 @@ export function StoragePage() {
         <FilesTab />
       )}
 
-      <TableDetailDrawer
-        table={selectedTable}
-        onClose={() => setSelectedTable(null)}
-      />
+      <TableDetailDrawer table={selectedTable} onClose={closeTable} />
     </div>
   );
 }

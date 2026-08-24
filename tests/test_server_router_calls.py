@@ -1416,8 +1416,8 @@ def test_config_examples_project_optional(tmp_path: Path) -> None:
     assert component_svc.get_config_examples.call_args.kwargs["alias"] is None
 
 
-def test_config_examples_api_error_is_502(tmp_path: Path) -> None:
-    """AI Service failure (KeboolaApiError) -> HTTP 502 error envelope."""
+def test_config_examples_not_found_is_404(tmp_path: Path) -> None:
+    """An upstream NOT_FOUND is about the resource, so it answers 404, not 502."""
     from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
     component_svc = MagicMock()
@@ -1430,8 +1430,82 @@ def test_config_examples_api_error_is_502(tmp_path: Path) -> None:
     with TestClient(app) as client:
         res = client.get(f"/configs/examples/{COMPONENT}", headers=AUTH)
 
-    assert res.status_code == 502, res.text
+    assert res.status_code == 404, res.text
+    assert res.json()["error"]["code"] == "NOT_FOUND"
     assert "Component not found" in res.json()["error"]["message"]
+
+
+def test_config_examples_api_error_is_502(tmp_path: Path) -> None:
+    """A genuine upstream fault (non-NOT_FOUND KeboolaApiError) keeps its 502."""
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    component_svc = MagicMock()
+    component_svc.get_config_examples.side_effect = KeboolaApiError(
+        message="AI Service is unavailable", status_code=503, error_code=ErrorCode.API_ERROR
+    )
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/configs/examples/{COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 502, res.text
+    assert res.json()["error"]["code"] == "API_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# components.py  GET /components/{component_id}
+# Service: component.get_component_detail(alias=..., component_id=...)
+# ---------------------------------------------------------------------------
+
+
+def test_component_detail_not_found_is_404_not_502(tmp_path: Path) -> None:
+    """A component neither source knows answers 404 -- it is not a gateway fault.
+
+    Regression: `GET /components/keboola.mcp-server-tool` used to answer 502
+    with a NOT_FOUND body, so callers retried a request that can never succeed.
+    """
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    component_svc = MagicMock()
+    component_svc.get_component_detail.side_effect = KeboolaApiError(
+        message='Resource not found: Component "nope.nope" not found',
+        status_code=404,
+        error_code=ErrorCode.NOT_FOUND,
+    )
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/components/nope.nope", params={"project": PROJECT}, headers=AUTH)
+
+    assert res.status_code == 404, res.text
+    body = res.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_component_detail_returns_storage_catalog_source(tmp_path: Path) -> None:
+    """The catalog fallback reaches the REST caller with its discriminator intact."""
+    component_svc = MagicMock()
+    component_svc.get_component_detail.return_value = {
+        "component_id": "keboola.mcp-server-tool",
+        "component_name": "MCP Server Tool",
+        "documentation_source": "storage_catalog",
+    }
+    registry = _mock_registry(component=component_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/components/keboola.mcp-server-tool", params={"project": PROJECT}, headers=AUTH
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["documentation_source"] == "storage_catalog"
+    component_svc.get_component_detail.assert_called_once_with(
+        alias=PROJECT, component_id="keboola.mcp-server-tool"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1677,8 +1751,8 @@ def test_transformation_show_forwards_kwargs(tmp_path: Path) -> None:
     )
 
 
-def test_transformation_show_not_found_is_502(tmp_path: Path) -> None:
-    """Config not found under any SQL component -> KeboolaApiError -> HTTP 502."""
+def test_transformation_show_not_found_is_404(tmp_path: Path) -> None:
+    """Config not found under any SQL component -> KeboolaApiError(NOT_FOUND) -> HTTP 404."""
     from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
     tf = MagicMock()
@@ -1692,7 +1766,8 @@ def test_transformation_show_not_found_is_502(tmp_path: Path) -> None:
     with TestClient(app) as client:
         res = client.get(f"/transformations/{PROJECT}/{CONFIG_ID}", headers=AUTH)
 
-    assert res.status_code == 502, res.text
+    assert res.status_code == 404, res.text
+    assert res.json()["error"]["code"] == "NOT_FOUND"
     assert "was not found" in res.json()["error"]["message"]
 
 
@@ -2143,6 +2218,44 @@ def test_token_list_defaults_with_last_used_to_false(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert token_svc.list_tokens.call_args.kwargs.get("with_last_used") is False
+
+
+# ---------------------------------------------------------------------------
+# token.py  GET /list?project=&project=&with_last_used=
+# Service: token.list_tokens_all(aliases=..., with_last_used=...)
+# Cross-project token audit for the web UI's "All Tokens" page -- mirrors the
+# `/jobs` and `/billing/credits` repeatable-`project` convention.
+# ---------------------------------------------------------------------------
+
+
+def test_token_list_all_forwards_repeated_project_and_with_last_used(tmp_path: Path) -> None:
+    """`?project=a&project=b&with_last_used=true` must reach `list_tokens_all`."""
+    token_svc = MagicMock()
+    token_svc.list_tokens_all.return_value = {"tokens": [], "count": 0, "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get(
+            "/token/list",
+            headers=AUTH,
+            params=[("project", "a"), ("project", "b"), ("with_last_used", "true")],
+        )
+
+    assert res.status_code == 200, res.text
+    token_svc.list_tokens_all.assert_called_once_with(aliases=["a", "b"], with_last_used=True)
+
+
+def test_token_list_all_defaults_to_none_aliases_and_false_last_used(tmp_path: Path) -> None:
+    """A bare `GET /token/list` must forward `aliases=None, with_last_used=False`."""
+    token_svc = MagicMock()
+    token_svc.list_tokens_all.return_value = {"tokens": [], "count": 0, "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/token/list", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    token_svc.list_tokens_all.assert_called_once_with(aliases=None, with_last_used=False)
 
 
 # 0.88.0 MCP-parity flags: every one must be reachable over `kbagent serve`,

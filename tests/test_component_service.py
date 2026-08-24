@@ -8,9 +8,12 @@ import pytest
 import yaml
 
 from helpers import setup_single_project
+from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SECRET_PLACEHOLDER
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.services.component_service import (
+    DOCUMENTATION_SOURCE_AI_SERVICE,
+    DOCUMENTATION_SOURCE_STORAGE_CATALOG,
     ComponentService,
     _detect_component_category,
     _generate_from_schema,
@@ -154,6 +157,27 @@ SCHEMA_ONLY_RESPONSE: dict[str, Any] = {
     "configurationRowSchema": {},
     "rootConfigurationExamples": [],
     "rowConfigurationExamples": [],
+}
+
+# A Storage API `/v2/storage/components` entry (snake-less API shape: `id` /
+# `name` / `type`, not the AI Service's `componentId` / ...). This is the
+# private component the AI Service index does NOT carry, so `component detail`
+# has to fall back to it.
+CATALOG_ONLY_COMPONENT: dict[str, Any] = {
+    "id": "keboola.mcp-server-tool",
+    "name": "MCP Server Tool",
+    "type": "application",
+    "categories": ["AI"],
+    "flags": ["excludeFromNewList"],
+    "description": "Internal MCP tool runner",
+    "longDescription": "Runs MCP server tools.",
+    "documentationUrl": "https://help.keboola.com/mcp/",
+    "configurationSchema": {
+        "type": "object",
+        "required": ["tool"],
+        "properties": {"tool": {"type": "string"}},
+    },
+    "configurationRowSchema": {},
 }
 
 EMPTY_SCHEMA_RESPONSE: dict[str, Any] = {
@@ -345,27 +369,187 @@ class TestGetComponentDetail:
 
         assert result["examples_count"] == 1
         assert result["row_examples_count"] == 0
+        assert result["documentation_source"] == DOCUMENTATION_SOURCE_AI_SERVICE
 
         mock_ai.get_component_detail.assert_called_once_with("keboola.ex-http")
         mock_ai.close.assert_called_once()
 
     def test_get_component_detail_not_found(self, tmp_config_dir: Path) -> None:
-        """Raises KeboolaApiError when AI service returns 404."""
+        """Re-raises the AI Service 404 when the Storage catalog misses too.
+
+        Both sources agreeing is the only case where the id really is wrong,
+        so the original NOT_FOUND has to survive the fallback unchanged.
+        """
         mock_ai = MagicMock()
         mock_ai.get_component_detail.side_effect = KeboolaApiError(
             message="Component not found",
             status_code=404,
-            error_code="NOT_FOUND",
+            error_code=ErrorCode.NOT_FOUND,
             retryable=False,
         )
-        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+        mock_storage = _make_storage_client([])
+        service = _make_service(tmp_config_dir, ai_client=mock_ai, storage_client=mock_storage)
 
         with pytest.raises(KeboolaApiError) as exc_info:
             service.get_component_detail(alias="prod", component_id="nonexistent.component")
 
-        assert exc_info.value.error_code == "NOT_FOUND"
+        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
         assert exc_info.value.status_code == 404
         mock_ai.close.assert_called_once()
+        mock_storage.close.assert_called_once()
+
+    def test_get_component_detail_falls_back_to_storage_catalog(self, tmp_config_dir: Path) -> None:
+        """A component the AI Service does not index is served from the catalog.
+
+        Private/deprecated components (keboola.mcp-server-tool,
+        keboola.data-apps) are listed by `component list` but 404 in the AI
+        Service index -- before the fallback, `component detail` was unusable
+        for them (and `serve` answered 502).
+        """
+        mock_ai = MagicMock()
+        mock_ai.get_component_detail.side_effect = KeboolaApiError(
+            message='Component "keboola.mcp-server-tool" not found',
+            status_code=404,
+            error_code=ErrorCode.NOT_FOUND,
+            retryable=False,
+        )
+        mock_storage = _make_storage_client([CATALOG_ONLY_COMPONENT])
+        service = _make_service(tmp_config_dir, ai_client=mock_ai, storage_client=mock_storage)
+
+        result = service.get_component_detail(alias="prod", component_id="keboola.mcp-server-tool")
+
+        assert result["documentation_source"] == DOCUMENTATION_SOURCE_STORAGE_CATALOG
+        assert result["component_id"] == "keboola.mcp-server-tool"
+        assert result["component_name"] == "MCP Server Tool"
+        assert result["component_type"] == "application"
+        assert result["categories"] == ["AI"]
+        assert result["flags"] == ["excludeFromNewList"]
+        assert result["description"] == "Internal MCP tool runner"
+        assert result["long_description"] == "Runs MCP server tools."
+        assert result["documentation_url"] == "https://help.keboola.com/mcp/"
+        assert result["project_alias"] == "prod"
+        # Schema counts come from the catalog entry when it carries a schema.
+        assert result["schema_summary"] == {
+            "property_count": 1,
+            "required_count": 1,
+            "has_row_schema": False,
+        }
+        # The Storage catalog has no configuration examples at all.
+        assert result["examples_count"] == 0
+        assert result["row_examples_count"] == 0
+
+        mock_ai.close.assert_called_once()
+        mock_storage.close.assert_called_once()
+
+    def test_fallback_response_has_same_keys_as_ai_response(self, tmp_config_dir: Path) -> None:
+        """Both sources return the same key set, so consumers never branch to read a field."""
+        ai_only = _make_service(
+            tmp_config_dir, ai_client=_make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        )
+        ai_result = ai_only.get_component_detail(alias="prod", component_id="keboola.ex-http")
+
+        mock_ai = MagicMock()
+        mock_ai.get_component_detail.side_effect = KeboolaApiError(
+            message="not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        # A second alias, because setup_single_project() refuses to re-add one.
+        fallback_service = _make_service(
+            tmp_config_dir,
+            ai_client=mock_ai,
+            storage_client=_make_storage_client([CATALOG_ONLY_COMPONENT]),
+            alias="catalog-proj",
+        )
+        fallback_result = fallback_service.get_component_detail(
+            alias="catalog-proj", component_id="keboola.mcp-server-tool"
+        )
+
+        assert set(fallback_result) == set(ai_result)
+
+    def test_catalog_entry_with_null_fields_renders_as_empty_strings(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Storage sends explicit null for absent docs; the payload must not leak None."""
+        mock_ai = MagicMock()
+        mock_ai.get_component_detail.side_effect = KeboolaApiError(
+            message="not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        sparse_entry = {
+            "id": "keboola.data-apps",
+            "name": "Data Apps",
+            "type": "application",
+            "description": None,
+            "longDescription": None,
+            "documentationUrl": None,
+            "categories": None,
+            "flags": None,
+        }
+        service = _make_service(
+            tmp_config_dir, ai_client=mock_ai, storage_client=_make_storage_client([sparse_entry])
+        )
+
+        result = service.get_component_detail(alias="prod", component_id="keboola.data-apps")
+
+        assert result["description"] == ""
+        assert result["long_description"] == ""
+        assert result["documentation_url"] == ""
+        assert result["categories"] == []
+        assert result["flags"] == []
+        assert result["schema_summary"] == {
+            "property_count": 0,
+            "required_count": 0,
+            "has_row_schema": False,
+        }
+
+    def test_non_not_found_ai_error_is_not_masked_by_fallback(self, tmp_config_dir: Path) -> None:
+        """An auth/network failure must surface as itself, never as a catalog hit."""
+        mock_ai = MagicMock()
+        mock_ai.get_component_detail.side_effect = KeboolaApiError(
+            message="Invalid or expired token",
+            status_code=401,
+            error_code=ErrorCode.INVALID_TOKEN,
+            retryable=False,
+        )
+        mock_storage = _make_storage_client([CATALOG_ONLY_COMPONENT])
+        service = _make_service(tmp_config_dir, ai_client=mock_ai, storage_client=mock_storage)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.get_component_detail(alias="prod", component_id="keboola.mcp-server-tool")
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_TOKEN
+        mock_storage.list_components.assert_not_called()
+        mock_ai.close.assert_called_once()
+
+    def test_alias_none_uses_first_project(self, tmp_config_dir: Path) -> None:
+        """When alias is None the first configured project is used.
+
+        The `component detail` CLI documents --project as "uses first
+        available if not set"; passing the omitted alias through as [None]
+        used to hit resolve_projects' strict path and raise
+        "Project 'None' not found".
+        """
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.get_component_detail(alias=None, component_id="keboola.ex-http")
+
+        assert result["component_id"] == "keboola.ex-http"
+        assert result["project_alias"] == "prod"
+        mock_ai.get_component_detail.assert_called_once_with("keboola.ex-http")
+        mock_ai.close.assert_called_once()
+
+    def test_alias_none_no_projects_raises_config_error(self, tmp_config_dir: Path) -> None:
+        """Without any configured project a ConfigError is raised, not a crash."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = ComponentService(
+            config_store=store,
+            ai_client_factory=lambda url, token: mock_ai,
+        )
+
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.get_component_detail(alias=None, component_id="keboola.ex-http")
+
+        mock_ai.get_component_detail.assert_not_called()
 
 
 # ===========================================================================
@@ -398,6 +582,37 @@ class TestGenerateScaffold:
         assert parsed["name"] == "HTTP Configuration"
 
         mock_ai.close.assert_called_once()
+
+    def test_scaffold_alias_none_uses_first_project(self, tmp_config_dir: Path) -> None:
+        """When alias is None the first configured project is used.
+
+        `config new` without --push documents --project as optional (only the
+        AI Service auth is derived from it) and passes alias=None through.
+        """
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = _make_service(tmp_config_dir, ai_client=mock_ai)
+
+        result = service.generate_scaffold(alias=None, component_id="keboola.ex-http")
+
+        assert result["component_id"] == "keboola.ex-http"
+        assert result["config_name"] == "HTTP Configuration"
+        mock_ai.get_component_detail.assert_called_once_with("keboola.ex-http")
+
+    def test_scaffold_alias_none_no_projects_raises_config_error(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Without any configured project a ConfigError is raised, not a crash."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        service = ComponentService(
+            config_store=store,
+            ai_client_factory=lambda url, token: mock_ai,
+        )
+
+        with pytest.raises(ConfigError, match="No projects configured"):
+            service.generate_scaffold(alias=None, component_id="keboola.ex-http")
+
+        mock_ai.get_component_detail.assert_not_called()
 
     def test_scaffold_sql_transformation(self, tmp_config_dir: Path) -> None:
         """SQL transformation generates _config.yml and transform.sql."""

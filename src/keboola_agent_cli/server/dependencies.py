@@ -8,13 +8,17 @@ per request.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 
 from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
+from ..errors import PermissionDeniedError
+from ..permissions import PermissionEngine
+from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
 from ..services.component_service import ComponentService
@@ -130,6 +134,7 @@ class ServiceRegistry:
     docs: DocsService = field(init=False)
     transformation: TransformationService = field(init=False)
     billing: BillingService = field(init=False)
+    auth: AuthService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -173,6 +178,11 @@ class ServiceRegistry:
         self.docs = DocsService(config_store=cs)
         self.transformation = TransformationService(config_store=cs)
         self.billing = BillingService(config_store=cs)
+        # AuthService's browser-facing seams (client factory, browser opener,
+        # sleep) all have safe defaults and are never reached by the read-only
+        # session/project methods the REST surface exposes -- a browser login
+        # only ever completes on the host, never for a REST caller.
+        self.auth = AuthService(config_store=cs)
 
 
 def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:
@@ -183,6 +193,66 @@ def install_registry(app: FastAPI, registry: ServiceRegistry) -> None:
 def get_registry(request: Request) -> ServiceRegistry:
     """FastAPI dependency: return the registry from app state."""
     return request.app.state.registry  # type: ignore[no-any-return]
+
+
+def install_permission_engine(app: FastAPI, engine: PermissionEngine) -> None:
+    """Attach the REST surface's session firewall to the FastAPI app state.
+
+    Called exactly once by ``create_app``. The engine deliberately does NOT
+    live on :class:`ServiceRegistry`: server tests routinely replace the
+    registry via ``dependency_overrides[get_registry]``, and an engine reachable
+    only through the registry would vanish with it -- enforcement that a test
+    override can silently switch off is not enforcement. ``app.state`` also
+    survives a second registry-construction site being added later.
+    """
+    app.state.permission_engine = engine
+
+
+def get_permission_engine(request: Request) -> PermissionEngine:
+    """Return the app's permission engine, failing CLOSED when it is missing.
+
+    ``create_app`` always calls :func:`install_permission_engine`, so an absent
+    attribute means the app was assembled some other way. Treating that as "no
+    policy" would turn an assembly bug into a silently open firewall, so it
+    raises instead -- an app that cannot say whether an operation is permitted
+    must not perform it. "No policy configured" is expressed by an engine
+    wrapping a ``None`` policy, exactly as on the CLI side.
+    """
+    engine = getattr(request.app.state, "permission_engine", None)
+    if engine is None:
+        raise PermissionDeniedError(
+            "Permission engine unavailable: this app was not built by create_app(), "
+            "so no policy can be evaluated. Refusing the operation."
+        )
+    return engine  # type: ignore[no-any-return]
+
+
+def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
+    """Build a FastAPI dependency enforcing the permission policy for ``operation``.
+
+    ``operation`` is an :data:`~keboola_agent_cli.permissions.OPERATION_REGISTRY`
+    key (``"auth.register-projects"``, ``"config.delete"``, ...). Use it as a
+    route dependency::
+
+        @router.post("/auth/register-projects",
+                     dependencies=[Depends(require_permission("auth.register-projects"))])
+
+    A denial raises :class:`~keboola_agent_cli.errors.PermissionDeniedError`,
+    which ``server/app.py`` maps centrally to HTTP 403 with
+    ``error_code: PERMISSION_DENIED`` -- the same code and message the CLI
+    prints, so a caller can branch on one value across both surfaces.
+
+    The engine comes from :func:`get_permission_engine` (app state), never from
+    the registry, so overriding ``get_registry`` in a test cannot disable the
+    check.
+    """
+
+    def _check_permission(
+        engine: PermissionEngine = Depends(get_permission_engine),
+    ) -> None:
+        engine.check_or_raise(operation)
+
+    return _check_permission
 
 
 def get_manage_token(request: Request) -> str | None:

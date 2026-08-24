@@ -133,7 +133,41 @@ def _write_banner(text: str) -> None:
     sys.stdout.flush()
 
 
+def _effective_config_dir(serve_config_dir: str | None, ctx: typer.Context) -> str | None:
+    """Pick the config directory ``create_app`` should serve.
+
+    Most specific wins -- the same precedence `kbagent repl` applies when it
+    forwards the root flags into a subcommand's argv:
+
+    1. ``serve --config-dir X`` -- the subcommand's own flag, unchanged, so
+       every script written against the old behavior keeps working.
+    2. root ``kbagent --config-dir Y serve`` -- returned here (issue #679).
+       Before this, `serve` ignored the root flag entirely and silently served
+       a different directory: the caller's projects were not the ones exposed,
+       and since the `/auth/*` routes started enforcing `permissions`, the
+       policy stored next to those projects was not read either.
+    3. neither -- ``None``, leaving ``create_app`` to run its own fallback
+       chain (``KBAGENT_CONFIG_DIR`` -> ``.kbagent`` walk-up -> global).
+
+    Only a ``cli-flag`` source is propagated. For ``env-var`` / ``local`` /
+    ``global``, ``create_app`` resolves the identical directory on its own, and
+    forwarding those would pin a resolution made at a different moment (a
+    different CWD for the walk-up, a since-changed env var) instead of the one
+    the server would make for itself.
+
+    ``ctx.obj`` is ``None`` when the root callback never ran (a direct
+    invocation of the command in tests).
+    """
+    if serve_config_dir is not None:
+        return serve_config_dir
+    root_store = (ctx.obj or {}).get("config_store")
+    if root_store is not None and root_store.source == "cli-flag":
+        return str(root_store.config_dir)
+    return None
+
+
 def serve_command(
+    ctx: typer.Context,
     host: str = typer.Option(
         "127.0.0.1",
         "--host",
@@ -162,7 +196,11 @@ def serve_command(
     config_dir: str | None = typer.Option(
         None,
         "--config-dir",
-        help="Override config directory path (matches kbagent --config-dir).",
+        help=(
+            "Config directory to serve. Wins over a root-level "
+            "`kbagent --config-dir`; when neither is given, the server falls "
+            "back to KBAGENT_CONFIG_DIR, then the .kbagent walk-up, then global."
+        ),
     ),
     ui: bool = typer.Option(
         False,
@@ -183,6 +221,11 @@ def serve_command(
             "<repo>/web/frontend/dist relative to the package, or $KBAGENT_UI_DIST. "
             "Implies --ui."
         ),
+    ),
+    no_banner: bool = typer.Option(
+        False,
+        "--no-banner",
+        help="Suppress the What's-new popup in the web UI.",
     ),
 ) -> None:
     """Launch the kbagent HTTP API server.
@@ -268,11 +311,24 @@ def serve_command(
         resolved_ui_dist = str(candidate)
 
     app = create_app(
-        config_dir=config_dir,
+        config_dir=_effective_config_dir(config_dir, ctx),
         auth_token=auth_token,
         cors_origins=cors,
         serve_url=serve_url,
         ui_dist=resolved_ui_dist,
+        # Inverted at the boundary: the CLI flag is opt-OUT ("--no-banner"),
+        # the app-level switch is a plain positive ("is the banner allowed").
+        ui_banner=not no_banner,
+        # Carry the process-global session firewall flags into the REST
+        # surface; without them the flags would guard the CLI while every route
+        # on the same process stayed wide open. Only the FLAGS travel -- the
+        # persisted policy is loaded by create_app from the config dir it
+        # actually serves, because `serve --config-dir` may still point
+        # somewhere else than the root callback's own `--config-dir`, and the
+        # served directory's policy is the one that must apply. `ctx.obj` is
+        # None when the callback never ran (direct invocation in tests).
+        deny_writes=bool((ctx.obj or {}).get("deny_writes")),
+        deny_destructive=bool((ctx.obj or {}).get("deny_destructive")),
     )
 
     if resolved_ui_dist:

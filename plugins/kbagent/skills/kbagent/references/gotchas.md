@@ -1197,7 +1197,9 @@ events and emits a final `done` SSE frame mirroring the same record.
 ## `kbagent config new --push` is one-shot remote create; default is scaffold-only (since v0.33.0)
 
 - **Pre-v0.33.0**, `kbagent config new` was scaffold-only -- it wrote
-  boilerplate files to `--output-dir` (or stdout) and made **zero API calls**.
+  boilerplate files to `--output-dir` (or stdout) and made **no Storage
+  write calls** (scaffold mode has always made one AI Service read to fetch
+  the component schema -- that is what `--project` authenticates).
   The intended flow was scaffold → edit → `kbagent sync push`. The agent docs
   in `keboola-expert.md` and SKILL.md conflated this with "create config"
   intent, which was wrong if the goal was an API mutation.
@@ -4384,3 +4386,161 @@ documented multi-branch pull was enough (issue #649).
   manifest to the branch you are actually on. `--json` callers should treat a
   non-zero `summary.orphaned` as "the manifest is pointing at another branch",
   not as a per-config problem.
+
+## `component detail` falls back to the Storage catalog for un-indexed components (since 0.90.0)
+
+`component detail` reads the AI Service (`/docs/components/{id}`), which indexes
+the **public** component catalog only. A private or deprecated component the
+project can actually run -- `keboola.mcp-server-tool`, `keboola.data-apps` --
+is listed by `component list` (Storage API) yet missing from that index, so the
+command used to fail with `NOT_FOUND` for exactly the components an operator is
+least likely to know by heart. Over `kbagent serve` it was worse: the global
+handler mapped it to **HTTP 502**, so `GET /components/keboola.mcp-server-tool`
+looked like an upstream outage worth retrying.
+
+- **An AI Service `NOT_FOUND` now falls back to the project's Storage component
+  catalog** and returns the same response shape filled from the catalog entry.
+- **`documentation_source` is the discriminator**: `"ai_service"` (full detail)
+  vs `"storage_catalog"` (fallback). It is present on BOTH paths, so a `--json`
+  consumer can branch on it without a version check once it is on 0.90.0+.
+- **The fallback carries no configuration examples.** `examples_count` /
+  `row_examples_count` are always `0` there, and `schema_summary` counts are `0`
+  unless the catalog entry itself ships a `configurationSchema`. Read
+  `documentation_source` before concluding "this component has no examples" --
+  use `config examples` / the component's own docs instead.
+- **A NOT_FOUND is still raised when both sources miss** -- that is the case
+  where the component id really is wrong. Any non-404 AI Service failure (auth,
+  network, 5xx) is re-raised as itself and never masked by a catalog hit.
+- **Over `serve`, a `KeboolaApiError` with code `NOT_FOUND` now answers HTTP
+  404, not 502** (all routers, not just components). Branch on
+  `error.code`, not on the HTTP status alone.
+
+## `component detail` / `config new` without `--project` really uses the first project (since 0.90.0)
+
+`component detail --component-id ID` and `config new --component-id ID`
+(scaffold-only, no `--push`) have always documented `--project` as optional
+("uses first available if not set" / "for AI Service auth; required with
+--push"). On every version before 0.90.0 that promise was broken: omitting the
+flag failed with `CONFIG_ERROR: Project 'None' not found ...`, because the
+omitted alias was passed into project resolution as a literal `None` element
+and took the strict-lookup path instead of the "first available project"
+fallback (`config examples` already resolved it correctly).
+
+- **0.90.0+**: omitting `--project` resolves to the first configured project;
+  `component detail`'s `project_alias` reports the alias actually used (never
+  `None`). With NO projects configured at all, the failure is an actionable
+  `CONFIG_ERROR: No projects configured. Use 'kbagent project add' ...`.
+- **<= 0.89.x**: pass `--project` explicitly to these two commands -- the help
+  text's "first available" promise does not work there.
+- `component sync-action` is unaffected: its `--project` is genuinely required
+  (exit 2 without it) on every version.
+
+## Multi-project `job list` now merges chronologically, not grouped by project (since v0.90.1)
+
+`kbagent job list` without `--project` (and `kbagent serve`'s `GET /jobs`) fans
+out to every resolved project's Queue API in parallel. Each project's own page
+already comes back sorted server-side by `--sort-by`/`--sort-order`, but the
+old aggregation step then re-sorted the MERGED list by
+`(project_alias, str(id))` regardless of what sort the caller asked for -- so
+the output read as "every job from project A, then every job from project B",
+never interleaved by time. That made the aggregate view useless for "what ran
+most recently across all my projects" (the driving use case for a cross-project
+"All Jobs" feed) and made multi-project `job list` non-chronological even
+though single-project `job list` looked correctly time-ordered.
+
+- **Fixed**: the merged `jobs` list is now sorted globally by the SAME
+  `sort_by`/`sort_order` passed to (and already applied per-project by) the
+  Queue API -- default `startTime desc`, so the default view is one
+  chronological feed interleaved across every project. `sort_by` accepts the
+  same `JOB_SORT_FIELDS` as before (`startTime`, `endTime`, `createdTime`,
+  `durationSeconds`, `id`).
+- **Missing values always sort last, in both `asc` and `desc`.** A job with no
+  `startTime` yet (e.g. still `waiting`) is "not yet comparable", not "the
+  oldest job" -- it never gets pulled to the front of a `desc` sort just
+  because the field is absent. Same rule for `endTime`/`createdTime` (empty or
+  absent) and `durationSeconds` (`None`, not `0` -- a genuine `0`-second job is
+  a real value and sorts normally).
+- **Deterministic tiebreak**: ties on the sort field -- including the entire
+  missing-value group, and jobs that happen to share the exact same
+  timestamp across projects -- break on `(project_alias, str(id))` ascending.
+  The result never depends on which project's worker thread happened to
+  finish first.
+- `id` sorts numerically when the value coerces to a number, else falls back
+  to string comparison (defensive only -- Queue API ids are numeric in
+  practice).
+- Single-project `job list` is unaffected in practice (its one page was
+  already server-sorted); the fix only changes behavior once 2+ projects are
+  queried together.
+
+## `kbagent serve` permission enforcement is `/auth/*`-only so far (since v0.90.1)
+
+`create_app` builds a `PermissionEngine` from the persisted `permissions`
+policy of **the config dir `serve` resolves** (its own `--config-dir`, then --
+since vNEXT -- an explicit root-level `kbagent --config-dir`, then
+`KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
+forwards only the session FLAGS of the invocation on top. But of the ~30
+routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
+`Depends(require_permission(...))` -- see `docs/web-server.md` for the endpoint
+shapes.
+
+- **`kbagent --deny-writes serve` cannot start the server** -- do not
+  recommend it. `serve` is classified `admin` in `permissions.py`, and
+  `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so
+  the CLI callback blocks the `serve` command itself: `Error: Operation
+  'serve' is blocked by the active permission policy.`, exit code 6, no
+  uvicorn. `--deny-destructive` does start the server, but no `/auth/*`
+  operation is destructive, so it changes nothing on this router.
+- **The reachable recipe is a persisted policy in the SERVED config dir.**
+  Verified live:
+
+  ```bash
+  # in a real terminal: `permissions set` demands a typed confirmation code
+  kbagent --config-dir /path/to/cfg permissions set \
+      --mode allow --deny auth.register-projects
+  kbagent serve --config-dir /path/to/cfg --port 8001
+  # POST /auth/register-projects -> 403 {"error":{"code":"PERMISSION_DENIED"}}
+  # GET  /auth/status            -> 200
+  # GET  /auth/projects          -> 200 (401 SESSION_NOT_FOUND when no session)
+  ```
+
+  A `--mode deny` policy works too, but then `serve` (and the reads you want to
+  keep) must be in its allow list, or the server will not start either.
+- **A deny policy does NOT firewall the whole REST surface.**
+  `permissions set --mode deny --deny cli:write` blocks `POST
+  /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
+  does nothing to `POST /storage/tables/{project}` (create a table) or any
+  other write route on any other router -- those still execute unchecked.
+- `GET /auth/projects` backs a registry key (`auth.projects`) with no CLI leaf
+  command -- `auth register-projects`'s interactive picker is its terminal
+  equivalent. It is exempted from `scripts/check_command_sync.py`'s dead-key
+  check via `SERVE_ONLY_OPERATIONS` in `permissions.py`; see CONTRIBUTING.md's
+  command-sync gate section for the general rule when adding another
+  serve-only operation.
+- Treat this as a gap being closed incrementally, not the design end state:
+  today a deny policy gates only `/auth/*`, not the ~30 other routers a
+  session token can otherwise reach.
+
+## `serve` honors the root-level `--config-dir` (since vNEXT)
+
+`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+flag has two possible positions. The precedence is **most specific wins**,
+matching what `kbagent repl` does with the root flags:
+
+1. `kbagent serve --config-dir X` -> serves `X`.
+2. `kbagent --config-dir Y serve` -> serves `Y`.
+3. neither -> `KBAGENT_CONFIG_DIR`, then the `.kbagent` walk-up, then global.
+
+Passing both is not an error and produces no warning -- rule 1 simply wins.
+Only an *explicit* root flag is forwarded; an env-var / walk-up / global
+resolution is left to the server, which lands on the same directory anyway.
+
+- **On 0.90.1 and older, rule 2 did not exist** (issue #679) and nothing was
+  printed about it: `kbagent --config-dir A serve` served whatever rule 3
+  resolved instead, so `GET /projects` listed a
+  different set of aliases than the caller named, and the `permissions` policy
+  enforced on `/auth/*` came from that other directory too. If you are on
+  <= 0.90.1, always pass `--config-dir` to `serve` itself.
+- Quick check on any version: start the server and
+  `curl -s -H "Authorization: Bearer $KBAGENT_SERVE_TOKEN" localhost:PORT/projects`
+  -- if the aliases are not the ones in the directory you named, the flag was
+  in the position your version ignores.

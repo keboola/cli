@@ -170,14 +170,25 @@ The flow is instead:
    the literal placeholder **`vNEXT`** -- `(since vNEXT)` / `vNEXT+`.
    `make version-gate-check` ignores the placeholder (it only matches numeric
    versions) but rejects a guessed numeric version with no changelog entry,
-   so a numeric future tag cannot even pass CI.
+   so a numeric future tag cannot even pass CI. Writing `vNEXT` in a feature
+   PR is correct and stays green -- the placeholder only becomes fatal in a
+   version-raising PR (below).
 2. **Release PR** (its only job): bump `pyproject.toml`, review everything
    merged since the last release (`git log v<last>..origin/main`), write ONE
    changelog entry covering all of it (one bullet per logical change, with
    `(#PR)` references), replace every `vNEXT` placeholder with the real
-   version, run `make version-sync`. Merge, then tag -- the release pipeline
-   renders the GitHub release notes from the changelog entry
-   (`scripts/gen_release_notes.py`). Full checklist: `CONTRIBUTING.md` >
+   version (`make vnext-check` verifies it -- CI runs the same check
+   automatically on any PR that raises the version, so a missed placeholder
+   is a red build, not a silent ship), add the curated What's-new entry to
+   `web/frontend/src/whatsnew.ts` when the release ships UI-visible features
+   (skipping it errors nowhere -- the popup falls back to the previous reel
+   and the release's UI work ships dark), run `make version-sync`. Merge,
+   then tag the merge commit -- **the tag push is the ONLY manual action**:
+   the pipeline renders the release notes from the changelog entry
+   (`scripts/gen_release_notes.py`; never write them by hand), publishes
+   PyPI + native binaries, and creates + fills the GitHub Release. Verify
+   afterwards: pipeline green, `gh release view` shows a non-empty body and
+   both wheels. Full checklist: `CONTRIBUTING.md` >
    "Releasing a new version".
 
 **Inside the release PR**: edit `pyproject.toml`, add the changelog entry to `src/keboola_agent_cli/changelog.py`, then run `make version-sync`. Do not edit `__init__.py` or `plugin.json` manually. `make changelog-check` (release-time, needs `gh`) enforces changelog completeness in both directions.
@@ -268,7 +279,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     - `plugins/kbagent/agents/keboola-expert.md` -- **highest risk** (Rule 6 VERSION GATE, tool selection matrix, inline gotchas)
     - `plugins/kbagent/skills/kbagent/SKILL.md` -- description triggers and workflow links (the auto-generated table is CI-checked, the rest is not)
     - `plugins/kbagent/skills/kbagent/references/commands-reference.md`
-    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since vNEXT)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR)
+    - `plugins/kbagent/skills/kbagent/references/gotchas.md` (every new gotcha **MUST** be tagged with a version -- `(since v0.90.1)` in a feature PR, replaced with the real `(since vX.Y.Z)` by the release PR; the *replacement* is now CI-enforced on any version-raising PR, the *tagging* still is not)
     - `plugins/kbagent/skills/kbagent/references/<topic>-workflow.md` (e.g. `semantic-layer-workflow.md`, `workspace-workflow.md`, `sync-workflow.md`)
 
     Forgetting any of these does not fail tests or lint -- it ships an AI agent that quietly recommends commands that do not exist on the user's installed kbagent version, or refuses commands that do. Treat the change as **not done** until every applicable file has been updated.
@@ -282,15 +293,28 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `auth register-projects` disclose and every doc surface defers to. Run
     `python scripts/check_sentinel_guards.py --list` to see the inventory.
 
-## Claude Code Plugin (Marketplace)
+## Claude Code Plugin
 
-This repo doubles as a Claude Code plugin marketplace. The plugin lives in `plugins/kbagent/` and exposes: a CLI (`kbagent`), skills (`kbagent` + siblings), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
+The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
+
+**Source here, publication there.** The source stays in this repo because four CI gates validate it against the live command tree (`make skill-gen` / `make skill-check`, `scripts/sync_version.py`, `scripts/check_command_sync.py`, `make version-check`) -- none of which exist in ai-kit. What ai-kit owns is the *catalogue*: its `keboola-claude-kit` marketplace carries an external `git-subdir` entry pointing at `plugins/kbagent` in this repo, pinned to a release tag. Keboola has ONE Claude Code marketplace, and it is not this one.
+
+**Install path users are told to use:**
+```
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
+/kbagent:setup
+```
+
+**The sync mechanism** is the `ai-kit-marketplace` job in `.github/workflows/release-kbagent.yml`: on every stable tag it rewrites the kbagent entry's `version` + `source.ref` in ai-kit and opens a PR there (a PR, not a push -- ai-kit's evals must see it). It needs `secrets.AI_KIT_TOKEN` in the `release` environment. No-op safe: an entry already at this version opens nothing.
+
+**`.claude-plugin/marketplace.json` in this repo is a DEPRECATED SHIM.** Do not delete it and do not remove its `kbagent` entry: existing installs from `keboola-agent-cli` resolve updates through it, and `scripts/sync_version.py` + `make version-check` still keep its `version` in lock-step with `pyproject.toml`. Its entry `description` carries the migration notice users see in `/plugin` listings. Plan: keep for ~3 releases, then drop the entry and leave a `renames` tombstone. `renames` cannot redirect across marketplaces, so the migration is necessarily a manual two-line user action -- which is why the notice lives in the description.
 
 **Update rules** -- see `CONTRIBUTING.md` > "Documentation changes (mandatory!)", "Plugin synchronization map", and "Releasing a new version" for the binding checklists. Coding convention #17 above is the short version. Do **not** maintain a parallel update list here -- it always drifts.
 
 **Structure:**
 ```
-.claude-plugin/marketplace.json                        # Repo-level marketplace definition
+.claude-plugin/marketplace.json                        # DEPRECATED shim marketplace (kept so old installs keep updating)
 plugins/kbagent/
   .claude-plugin/
     plugin.json                                        # Plugin manifest (auto-synced from pyproject.toml)
@@ -384,6 +408,28 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   applies retroactively to `auth login --register-projects` (now suffixes on an alias collision
 #   instead of silently skipping the second project). See docs/programmatic-auth-login-plan.md
 #   section 4.5 for the full design.
+# `auth` over `kbagent serve` (since v0.90.1): `register-projects` / `status` / the project-candidate
+#   listing get a `server/routers/auth.py` counterpart -- `POST /auth/register-projects`,
+#   `GET /auth/status`, `GET /auth/projects` (the interactive picker's data source; no CLI leaf
+#   command of its own). `login` / `login-password` / `logout` deliberately have NO endpoint -- a
+#   browser login only completes on the host, a password grant must never sit behind the serve
+#   bearer token, and revoking the session is a host-operator action, not a remote one. `/auth/*`
+#   is also the FIRST router to enforce the `permissions` policy: every route declares
+#   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
+#   exactly as on the CLI. The other ~30 routers do not check the engine yet.
+#   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then -- since
+#   vNEXT, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
+#   local/global chain) plus the session flags of the invocation. On 0.90.1 the root-level
+#   `--config-dir` was IGNORED here, so a policy stored beside the projects the caller named was
+#   silently not the one enforced; on that version pass --config-dir to `serve` itself.
+#   Reachable ways to enforce: a persisted narrow policy
+#   (`kbagent permissions set --mode allow --deny auth.register-projects`, needs a real
+#   terminal for the confirmation code), or `--mode deny` with `serve` (and the reads you want) in
+#   the allow list. `kbagent --deny-writes serve` does NOT work: `serve` is admin-class and
+#   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so the CLI callback
+#   blocks the `serve` command itself (exit 6) and no server ever starts. `--deny-destructive`
+#   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
+#   See docs/web-server.md.
 
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
@@ -470,6 +516,11 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
 kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
+# job list (0.90.1+, #675): without --project the multi-project fan-out is merged GLOBALLY by
+#   --sort-by/--sort-order (default startTime desc), missing values last in both directions,
+#   deterministic (project_alias, id) tiebreak. Before 0.90.1 rows came back grouped alias-then-id,
+#   which destroyed the chronological order the fan-out exists to produce. Same change applies to
+#   `kbagent serve`'s GET /jobs. Anything relying on per-project blocks must group them itself.
 kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
@@ -721,6 +772,16 @@ kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_ke
 
 kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
+# component detail (since 0.90.0): the AI Service indexes the PUBLIC catalog only, so a private/
+#   deprecated component the project can run (keboola.mcp-server-tool, keboola.data-apps) 404'd
+#   there while `component list` showed it -- over `serve` as an HTTP 502. A NOT_FOUND now falls
+#   back to the project's Storage component catalog; `documentation_source` ("ai_service" vs
+#   "storage_catalog") tells the two apart and is present on BOTH paths. The fallback has NO
+#   configuration examples (examples_count/row_examples_count always 0, schema_summary counts 0
+#   unless the catalog entry ships a configurationSchema) -- check documentation_source before
+#   reading 0 as "this component has none". NOT_FOUND still raised when both sources miss; a
+#   non-404 AI Service failure is never masked. Over `serve`, ErrorCode.NOT_FOUND now maps to
+#   HTTP 404 (was 502) on EVERY route -- branch on error.code, not on the status alone.
 kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
 # sync-action (0.73.0+): POST sync-actions.{stack}/actions; ACTION_NAME freeform (component-defined,
 #   e.g. testConnection/getTables); --row-id shallow-merges row over root at TOP level only (row
@@ -957,5 +1018,20 @@ kbagent update [--beta]
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
-kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR]
+kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# `--config-dir` on serve (since vNEXT, #679): `serve` is the only subcommand with a --config-dir of
+#   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
+#   which in turn beats KBAGENT_CONFIG_DIR / the .kbagent walk-up / global. Passing both is NOT an
+#   error. Up to 0.90.1 the ROOT flag was ignored by serve entirely, silently: `kbagent --config-dir A
+#   serve` exposed a different project set than the caller named, and (since 0.90.1's /auth/*
+#   enforcement) applied a different directory's `permissions` policy. On <=0.90.1 always pass
+#   --config-dir to `serve` itself. Only an explicit root flag propagates -- an env-var/walk-up/global
+#   resolution is left to the server, which reaches the identical directory on its own.
+# `--no-banner` (since 0.90.0): suppress the web UI's "What's new" popup. The UI shows a curated
+#   per-version highlights modal once per version (localStorage `kbagent.whatsnew.seen`); this flag
+#   turns the UNSOLICITED popup off fleet-wide. Surfaced to the SPA via `GET /ui-config`
+#   ({"banner": bool}) -- NOT injected into index.html: that injection point was removed in favour of
+#   the session cookie, and an injected copy would miss the StaticFiles fallback that serves the shell
+#   for deep links, silently re-enabling the popup the operator suppressed. The command palette's
+#   "What's new" action still opens it on request -- the flag governs what appears uninvited.
 ```

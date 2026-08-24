@@ -17,7 +17,7 @@ process, localhost-only, bearer-auth, scoped to one config directory.
 │   │  injects bearer token                                   │
 │   ▼                                                         │
 │ kbagent serve (Python FastAPI :8001)                        │
-│   ├─ 150+ REST endpoints over every kbagent service         │
+│   ├─ REST endpoints over every kbagent service              │
 │   ├─ asyncio cron scheduler (agent_runner)                  │
 │   └─ subprocesses: kbagent CLI / claude / codex / gemini    │
 │       └─ they call back via `kbagent http` to *this* serve  │
@@ -74,35 +74,75 @@ else lives here, with their own agents that know their projects.
 
 ### REST API (`/api/*` after BFF, `/` directly on serve)
 
-150+ endpoints, one router per kbagent service area:
+One router per kbagent service area, each mirroring that area's CLI
+commands. **The endpoint list is not maintained here** — it lives in
+[`web-server-endpoints.md`](web-server-endpoints.md), generated from the
+running app's own OpenAPI spec and gated in CI by `make endpoints-check`,
+so it cannot drift from the server. This section describes the shape of
+the surface; that file is the inventory.
 
-| Surface | Routes | What it covers |
-|---|---|---|
-| `/projects` | CRUD, status, `use`, info, description | All `kbagent project *` commands |
-| `/configs` | list, search, detail, update (dry-run / merge / set-paths), variables, metadata, rows, OAuth URL | All `kbagent config *` commands |
-| `/components` | list (AI-assisted), detail, scaffold | Component catalog browsing |
-| `/storage/{buckets,tables,files,…}` | CRUD, upload, **synchronous data preview**, async download, swap, describe, columns | All `kbagent storage *` commands |
-| `/jobs` | list, detail, run (with `--wait`), terminate, **SSE log stream** | All `kbagent job *` commands |
-| `/branches` | lifecycle (create/use/reset/delete/merge), metadata | All `kbagent branch *` commands |
-| `/workspaces` | CRUD, password reset, load tables, **SQL query** | All `kbagent workspace *` commands |
-| `/flows` `/schedules` | CRUD, schedules, find by cron / inactivity | All `kbagent flow|schedule *` |
-| `/lineage` | sharing graph, deep-lineage `build` + `show` | `lineage *` + `sync pull` wrapper |
-| `/sharing` | share/unshare/link/unlink | `kbagent sharing *` |
-| `/data-apps` | CRUD, deploy, start/stop, **secrets** | `kbagent data-app *` |
-| `/kai/*` | ping, ask, chat, history | `kbagent kai *` |
-| `/encrypt` | encrypt secret values | `kbagent encrypt values` |
-| `/search` | textual + config-based cross-project search | `kbagent search` |
-| `/org` `/members` | bulk org setup, invite, remove, role (manage token) | `kbagent org|project member-* *` |
-| `/agents` | **scheduled tasks** CRUD, run-now, history, cron preview, ad-hoc test | NEW (no CLI counterpart yet) |
-| `/health` `/version` `/changelog` `/doctor` | readiness, version info, doctor checks | Top-level CLI commands |
+The routers group into the categories declared in
+`server/app.py::OPENAPI_TAGS` (which is also what tabs the Swagger UI):
+
+| Category | Routers |
+|---|---|
+| Project Management | `auth` `projects` `members` `org` `feature` `billing` `token` |
+| Configurations | `configs` `components` `transformations` `encrypt` |
+| Data | `storage` `stream` `search` `sharing` |
+| Execution | `jobs` `flows` `schedules` `notifications` `data-apps` `workspaces` |
+| Development | `branches` `lineage` `semantic-layer` |
+| AI & Tools | `kai` `documentation` `ai-chat` `agents` |
+| Read-only | `dev-portal` |
+| System | `health` (plus `/version`, `/changelog`, `/doctor`, `/ui-config`) |
+
+`ai-chat` is the one router with no CLI counterpart — it exists to stream
+the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
+same `agents.json`); what is serve-only there is the cron loop, so a
+scheduled task fires only while the server runs. `auth` mirrors only the
+read/audit half of `kbagent auth` *(since v0.90.1)* — `login` /
+`login-password` / `logout` deliberately have no endpoint — and it is so far
+the only router that enforces the permission policy; see "`/auth/*` — three
+read/audit endpoints, three deliberate gaps" below.
+
+Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
+(filesystem-local by design), `permissions`, and `init`. The mirrors still
+considered missing are tracked in #657, and the fact that `permissions`
+constrains only `/auth/*` and not the other ~30 routers is #655.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
+An upstream Keboola failure surfaces through one global handler: a
+`NOT_FOUND` answers **404** (since 0.90.0 — it used to be 502, which told
+callers to retry a request that can never succeed), an expired/missing browser
+session answers **401**, and every other `KeboolaApiError` answers **502**. The
+body is always the `{"status": "error", "error": {"code", "message"}}`
+envelope, so the `error.code` — not the HTTP status alone — is what a client
+should branch on. `GET /components/{id}` in particular no longer 404s for a
+component the AI Service does not index: it falls back to the project's Storage
+catalog and marks the response `documentation_source: "storage_catalog"`.
+
 ### Streaming endpoints (Server-Sent Events)
 
-- `/jobs/{project}/{job_id}/stream` — live job status transitions + log tail.
-- (designed-for, not yet wired) `/branches/{project}/reset/stream`,
-  `/lineage/build/stream`, `/kai/chat/stream`.
+Six routes stream instead of returning a body. They are ordinary entries in
+the generated reference, so this list is about *why* each one streams:
+
+- `GET /jobs/{project}/{job_id}/stream` — live job status transitions + log
+  tail. The only one using `sse_starlette`'s `EventSourceResponse`; the rest
+  return a `StreamingResponse` with `media_type="text/event-stream"`.
+- `POST /agents/{task_id}/run/stream` — a scheduled task run, streamed as it
+  happens rather than polled.
+- `POST /agents/test/stream` — the same for an ad-hoc (unsaved) action.
+- `POST /agents/prompt/improve/stream` — AI prompt rewriting; streams because
+  the underlying AI CLI does.
+- `POST /ai/chat/stream` — local AI chat responses, token by token.
+- `POST /workspaces/sql/improve/stream` — AI SQL helper over a workspace.
+
+Note that `GET /agents/{task_id}/runs/{run_id}/events` looks like a stream but
+is not: it replays a finished run's event timeline as one JSON response.
+
+Never wired (no route exists): `/branches/{project}/reset/stream`,
+`/lineage/build/stream`, `/kai/chat/stream` — all three remain plain
+request/response despite being long-running.
 
 ### Agent scheduler
 
@@ -121,8 +161,12 @@ and `next_run_at` so re-runs after restarts pick up where they left off.
 A NERD-themed React SPA that drives the API:
 
 - **Command palette** — `Ctrl+K` / `Cmd+K` anywhere: fuzzy jump to any
-  page, switch the active project, toggle the theme, open Swagger `/docs`.
-  Arrows + enter, esc closes.
+  page, switch the active project, toggle the theme, open Swagger `/docs`,
+  reopen **What's new**. Arrows + enter, esc closes.
+- **What's new popup** *(since 0.90.0)* — a curated per-version highlights
+  modal, shown once per version. See
+  [What's-new popup](#whats-new-popup) below for the curated
+  list's location, the storage key, and the `--no-banner` opt-out.
 - **Dashboard** — greeting, big Kai chat input, stat tiles (projects /
   agents / doctor / recent jobs / PAYG credits), scheduled-agent
   activity, suggested next steps, recent jobs panel. The credits tile
@@ -134,7 +178,12 @@ A NERD-themed React SPA that drives the API:
   (`/token/{p}/list`): create / rotate / revoke, with the secret revealed
   ONCE in a copy-to-clipboard block, and an opt-in "derive last-used"
   toggle (`with_last_used=true`) that sorts dormant tokens first and
-  renders `never` / `unknown` / `error` as distinct pills.
+  renders `never` / `unknown` / `error` as distinct pills. A cross-project
+  **All Tokens** view reads `GET /token/list` (repeatable `?project=`,
+  same convention as `/jobs` and `/billing/credits`; omitted = every
+  registered project) — every row carries `project_alias`, and
+  `with_last_used=true` sorts dormant-first across every project's tokens
+  together rather than grouped per project.
 - **Configs, Components (AI search), Storage (with per-column data
   preview), Jobs (cards layout + SSE log stream), Search** — browse a
   selected project.
@@ -167,6 +216,27 @@ A NERD-themed React SPA that drives the API:
   Manage API token. The UI prompts for it per-action via a hidden modal,
   forwards as `X-Manage-Token` for that one request, never persists.
 
+**Shareable deep links.** Every view is addressable, so a URL copied out
+of the address bar reopens exactly what the sender was looking at. The
+whole navigation state lives in the location hash: `#/<page>` for a page
+with no project context, `#/p/<project>/<page>` once a project is
+selected, `?branch=<id>` for a dev branch, and `?sel=<object>` for the
+page's selected object — a job id on Jobs, `<component>/<config>` on
+Configs, and so on. The hash rather than a path, because the SPA is
+mounted at the **root** of the same FastAPI app that serves the REST API:
+a history-mode `/projects` would collide with the endpoint that returns
+JSON, while everything after `#` is never sent to the server at all.
+`sel` is opaque to the router — the page that writes it defines its
+shape, and it is dropped on any page / project / branch change, since an
+object id from one context means nothing in the next. A link whose object
+no longer resolves in the current project simply opens the page with no
+drawer.
+
+Detail drawers render an **Overview** tab (the payload's fields as
+labelled sections, with pills for status and nested blobs kept verbatim)
+and keep the untouched response one click away under **Raw JSON** with a
+copy button, so nothing the API returned is ever hidden.
+
 ## Architecture
 
 Three processes, three languages, one HTTP/JSON contract between each
@@ -178,11 +248,17 @@ touching the others.
 `src/keboola_agent_cli/server/`:
 
 ```
-__init__.py        FastAPI app factory, lifespan that starts the scheduler
+app.py             create_app() factory, lifespan that starts the scheduler,
+                   OPENAPI_TAGS, global exception handlers, UI mount
+__init__.py        PEP 562 lazy re-export of create_app, so importing a
+                   pure-logic sibling does not drag in FastAPI
 auth.py            BearerAuthMiddleware (random token on startup)
 dependencies.py    ServiceRegistry — singleton holding every kbagent service
 agents_store.py    AgentTask / AgentRun + JSON file persistence
 agent_runner.py    cron loop + per-action-type dispatch + subprocess env
+run_broadcaster.py one live run per task, fanned out to every watching tab
+                   (late attach replays what earlier viewers already saw)
+pricing.py         per-model USD cost + token breakdown on each persisted run
 sse.py             SSE helpers
 routers/           one file per service area (jobs.py, storage.py, …)
 ```
@@ -280,6 +356,77 @@ stdout, and refuses any request that does not present it as
 `Authorization: Bearer <token>`. Public paths: `/health/ping`,
 `/health/auth-info`, `/openapi.json`, `/docs`, `/redoc`.
 
+### Session cookie in single-process UI mode
+
+With `kbagent serve --ui`, the browser never sees the bearer token:
+`GET /` (and `GET /index.html`) answers the SPA shell with a
+`Set-Cookie: kbagent_session=<token>; HttpOnly; SameSite=Strict; Path=/`
+session cookie, and the auth middleware accepts that cookie whenever no
+`Authorization` header is present. Scripted callers keep using the header.
+
+Two layers keep that cookie from going stale across server restarts
+*(since 0.90.0)* — previously a restart (new token) could leave a tab that
+reloaded from the browser cache silently 401-ing on every API call, with
+each list rendering as empty:
+
+- The shell is served with `Cache-Control: no-cache`, so a reload always
+  revalidates against the server — and the bootstrap route always answers
+  a full `200` with a fresh `Set-Cookie`.
+- The SPA's API client treats a `401` as "cookie may be stale": it
+  re-fetches `/` once with `cache: "reload"` (bypassing every cache
+  layer), retries the request, and only if the retry still answers `401`
+  shows a visible **Session expired** banner (for `SESSION_EXPIRED` /
+  `SESSION_NOT_FOUND` the banner carries the server message, which names
+  the on-host `kbagent auth login` remedy).
+
+### What's-new popup
+
+*(since 0.90.0)* The web UI shows a curated per-version highlights modal on
+load, once per version, so features like the command palette get discovered
+instead of waiting to be stumbled upon.
+
+**Curated list — `web/frontend/src/whatsnew.ts`.** A hand-maintained
+`WhatsNewRelease[]`, deliberately *not* the raw `changelog.py` output: the
+changelog records everything, this reel records the handful of things a UI
+user should look at. **Release PRs that ship user-visible UI features must
+add an entry here** — same pass that resolves `vNEXT` placeholders. Adding
+one is a single array element:
+
+```ts
+{ version: "0.90.0", items: [{ title: "…", body: "…", hint: "ctrl+k" }] }
+```
+
+A release with no entry of its own is **not** silent: the UI falls back to
+the newest entry at or below the running version, so users still see the
+most recent curated reel (each shown at most once). Exact matching would
+make the feature ship dark — the popup first runs in the release *after*
+the one whose highlights seeded the list. Silence happens only when no
+entry is `<=` the running version.
+
+**Mechanics.**
+
+- Dismissal is persisted to `localStorage["kbagent.whatsnew.seen"]` as the
+  release version string; the popup reappears only when the running version
+  moves to another curated entry. A PEP 440 pre-release suffix is stripped
+  before matching, so `0.90.0b1` sees the `0.90.0` reel.
+- Esc, a backdrop click, and the "got it" button all dismiss and persist.
+- The command palette's **What's new** action reopens it on demand,
+  ignoring both the seen marker and `--no-banner`.
+
+**Opt-out — `kbagent serve --no-banner`.** Suppresses the *unsolicited*
+popup fleet-wide (an explicit palette request still works). The SPA reads
+the switch from `GET /ui-config` -> `{"banner": bool}`, and fails **closed**
+— while that request is in flight or if it fails, no popup.
+
+It is an endpoint rather than something injected into `index.html`, for two
+reasons. There is no injection point to extend: the one that existed
+(`window.__KBAGENT_TOKEN`) was removed in favour of the session cookie, and
+`tests/test_serve_ui.py` asserts it stays gone. And injection would only
+cover `GET /` and `GET /index.html` — the SPA shell is *also* served by the
+StaticFiles `html=True` fallback for any unmatched path, and that copy would
+carry no config, silently re-enabling the popup an operator had suppressed.
+For a suppression flag, failing open is the wrong direction.
+
 ### Session-registered projects
 
 Projects registered through `kbagent auth login --register-projects` carry a
@@ -318,19 +465,113 @@ a session-backed project from the web UI at all:
 For a project you would rather not expose this way, register it with a static
 Storage token (`kbagent project add --token`) — that path has neither property.
 
-### The `auth` command group has no REST router — including `login-password`
+### `/auth/*` — three read/audit endpoints, three deliberate gaps
 
-`kbagent auth login` / `login-password` / `status` / `logout` /
-`register-projects` have no `server/routers/auth.py` counterpart; this is a
-whole-group skip (CONTRIBUTING.md's 1:1 CLI/REST convention), not a per-command
-gap. It is a deliberate omission for `login-password` specifically: exposing a
-password grant over `serve` would let whoever holds `KBAGENT_SERVE_TOKEN`
-submit arbitrary account credentials through this process, which is a strictly
-worse blast radius than the existing "serve token borrows a session identity"
-tradeoff above — that one requires a session to already exist; this one would
-let a caller mint one. Sign in via the CLI directly (`kbagent auth
-login-password`, or `auth login` for a human), then register the resulting
-session's projects for `serve` to use.
+*(since v0.90.1)* `kbagent auth` now has a `server/routers/auth.py` counterpart,
+but it mirrors only the read/audit half of the CLI group:
+
+| Endpoint | CLI equivalent | Permission op |
+|---|---|---|
+| `GET /auth/projects?stack=` | the interactive picker inside `auth register-projects` (no CLI leaf command of its own) | `auth.projects` (read) |
+| `POST /auth/register-projects` | `auth register-projects --all` / `--project-id ID ...` | `auth.register-projects` (write) |
+| `GET /auth/status?stack=` | `auth status` | `auth.status` (read) |
+
+`POST /auth/register-projects` takes a body of `{stack?, all?, project_ids?,
+aliases?}` (`all` is the wire alias for the service's `select_all`; `aliases`
+maps a numeric project id to an alias override, coerced from the JSON body's
+string keys) and returns the same `registered` / `exists` / `skipped`
+per-project statuses the CLI prints — an existing alias is never overwritten.
+None of the three response shapes (`ProjectCandidatesResult`,
+`RegisterProjectsResult`, `AuthStatusResult`) ever carries a token value,
+including the `kbc-session://` sentinel.
+
+`/auth/*` is also the **first router to enforce the permission policy**: every
+route above declares `Depends(require_permission(...))`, so a denied operation
+answers **HTTP 403** with `error_code: PERMISSION_DENIED` — the same code the
+CLI exits on. The other ~30 routers do not check the engine yet; see the
+gotchas entry on this before assuming a deny policy firewalls the whole REST
+surface.
+
+The policy in force is the **persisted `permissions` block of the config dir
+`serve` resolves**, plus whichever session flags the `kbagent` invocation
+carried. Two consequences worth knowing before you reach for a flag:
+
+- **`kbagent --deny-writes serve` never starts the server.** `serve` is
+  classified `admin`, and `--deny-writes` appends `cli:write`, which spans
+  write + destructive + admin — so the CLI callback blocks the `serve` command
+  itself (exit code 6, `Operation 'serve' is blocked by the active permission
+  policy`). `--deny-destructive` does start the server, but no `/auth/*`
+  operation is destructive, so it changes nothing here.
+- **Use a persisted policy instead.** Run, on the host, in a real terminal
+  (`permissions set` requires a typed confirmation code — there is no `--yes`):
+
+  ```bash
+  kbagent --config-dir /path/to/cfg permissions set \
+      --mode allow --deny auth.register-projects
+  kbagent serve --config-dir /path/to/cfg --port 8001
+  ```
+
+  `POST /auth/register-projects` then answers 403 `PERMISSION_DENIED` while
+  `GET /auth/projects` and `GET /auth/status` stay reachable. A `--mode deny`
+  policy works too, but its allow list must then include `serve` (and the reads
+  you want to keep), or the server will not start for the same reason as above.
+
+  Either spelling of `--config-dir` selects the served directory *(since
+  vNEXT)* — see [Which config directory `serve`
+  uses](#which-config-directory-serve-uses) below. On **0.90.1 and older**,
+  only `serve --config-dir` did: a root-level `kbagent --config-dir ... serve`
+  was ignored, so the policy above was silently not the one enforced.
+
+A missing or expired session reaches `GET /auth/projects` and `POST
+/auth/register-projects` as a **thrown error**, both funnelled through
+`AuthService._introspect_accessible_projects`: no stored session raises
+`SESSION_NOT_FOUND`, a stored session whose refresh fails raises
+`SESSION_EXPIRED` (via `provider.introspect()`) — both answer **HTTP 401**,
+same as every other session-project failure documented above. `GET
+/auth/status` is the deliberate exception: it is the probe you call *to find
+out* whether a session is dead, so it must not itself fail that way.
+`AuthService.status()` catches both cases and always answers **HTTP 200**,
+reporting session health in the response body's `status` field instead —
+`"missing"` (no stored session), `"expired"` (refresh failed),
+`"degraded"` (the auth service was unreachable; locally stored data is shown),
+`"refreshed"` (introspection rotated the access token), or `"live"`.
+
+Scope that exactly: **for a missing or expired session `/auth/status` answers
+200 and reports health in `status`; an unresolvable stack (4xx) or an
+unexpected auth-service failure (502) still surface as errors.** The stack must
+resolve before any session is looked at — with no `?stack=` and no default
+project to fall back on, `AuthService.status()` raises `ConfigError` and the
+route answers 4xx — and any `KeboolaApiError` that is neither
+`SESSION_EXPIRED` nor a network code is re-raised rather than swallowed, so it
+reaches the central handler (502, or 401 for a session-credential code such as
+`SESSION_NOT_FOUND`). So a client detecting a dead session by HTTP status alone
+must call `/auth/projects` or `/auth/register-projects`; on `/auth/status` a
+200 is the normal answer for a dead session and the caller must read `status`
+from the body.
+
+Registering a project through `POST /auth/register-projects` writes the same
+`kbc-session://<project_id>` sentinel `auth login --register-projects` would —
+so whoever holds `KBAGENT_SERVE_TOKEN` can grow the set of session-backed
+projects this server exposes, still acting as the signed-in user for all of
+them, per "Session-registered projects" above.
+
+`login` / `login-password` / `logout` deliberately have **no** endpoint:
+
+- `auth login` opens a browser (or prints a device-flow code) on the host and
+  only completes there — a REST caller has no way to sit in that loop.
+- `auth login-password` takes a plaintext password (and, for MFA accounts, a
+  TOTP seed) meant to flow from a CI secrets store into one `kbagent` CLI
+  invocation, never as a REST request body sitting behind this server's own
+  bearer token.
+- `auth logout` revokes the live session backing every session-registered
+  project reachable through this very server. Destroying that session is a
+  deliberate host-operator action taken at the CLI, not something a REST
+  client holding the serve bearer token should be able to trigger remotely.
+
+Sign in via the CLI directly (`kbagent auth login-password`, or `auth login`
+for a human), then use `POST /auth/register-projects` — or `auth
+register-projects` on the CLI — to register the resulting session's projects
+for `serve` to use.
 
 ### Manage tokens are per-request
 
@@ -356,9 +597,30 @@ that is the preferred path because it shares state with this very
 process, instead of forking a CLI tree against possibly stale config."
 
 This is what lets a midnight agent task do meaningful work: it has
-the same view of Keboola the operator does, it can call any of the
-150 endpoints, and its full response (including any tools it called)
+the same view of Keboola the operator does, it can call any endpoint in
+the reference, and its full response (including any tools it called)
 is captured into the run history.
+
+### Which config directory `serve` uses
+
+`serve` is the only subcommand with a `--config-dir` of its own, so there are
+two places the flag can appear. Most specific wins *(since vNEXT)*:
+
+1. `kbagent serve --config-dir X` → serves `X`.
+2. `kbagent --config-dir Y serve` → serves `Y`.
+3. Neither → `KBAGENT_CONFIG_DIR`, then the `.kbagent` walk-up from the CWD,
+   then the global directory (`config_store.resolve_config_dir`).
+
+Giving both is not an error — the `serve`-level flag simply wins, as in rule 1.
+Only an explicit root flag is forwarded; an env-var/walk-up/global resolution is
+left to the server, which reaches the identical directory on its own.
+
+> **On 0.90.1 and older, rule 2 did not exist** (issue #679): the root-level
+> `--config-dir` was ignored by `serve` entirely, with no warning. The server
+> then exposed a different set of projects than the caller named, and — once
+> `/auth/*` began enforcing `permissions` in 0.90.1 — enforced a different
+> directory's policy. On those versions always pass `--config-dir` to `serve`
+> itself.
 
 ### State on disk
 
@@ -383,7 +645,11 @@ the personal-control-plane vision; multi-tenant comes later if at all.
 ## Where to look next
 
 - `src/keboola_agent_cli/commands/serve.py` — CLI entry point, argv parsing.
-- `src/keboola_agent_cli/server/__init__.py` — `create_app()` + lifespan.
+- [`web-server-endpoints.md`](web-server-endpoints.md) — every route, generated.
+- `src/keboola_agent_cli/server/app.py` — `create_app()` + lifespan +
+  `OPENAPI_TAGS` (the router categories above).
+- `scripts/gen_endpoint_reference.py` — generates the endpoint reference;
+  `make endpoints-gen` after adding a route, or CI fails.
 - `src/keboola_agent_cli/server/agent_runner.py` — scheduler + dispatch.
 - `src/keboola_agent_cli/server/routers/agents.py` — agent-tasks API.
 - `src/keboola_agent_cli/commands/http_client.py` — `kbagent http` subcommand
