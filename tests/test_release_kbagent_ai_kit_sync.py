@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,10 +41,20 @@ JOB_ID = "ai-kit-marketplace"
 STEP_ID = "bump"
 MARKETPLACE_PATH = ".claude-plugin/marketplace.json"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("jq") is None,
-    reason="the job's rewrite is implemented in jq; skip where jq is unavailable",
-)
+# The job under test runs on `ubuntu-latest` and is written in POSIX shell, so
+# these tests drive it through `bash` + `jq`. Same explicit POSIX-only skip the
+# rest of the suite uses (see tests/test_file_locking.py) rather than pretending
+# the harness is portable: the Windows CI leg runs the full suite too.
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="the release job is POSIX shell on ubuntu-latest; harness needs bash",
+    ),
+    pytest.mark.skipif(
+        shutil.which("jq") is None or shutil.which("bash") is None,
+        reason="the job's rewrite is implemented in jq and driven through bash",
+    ),
+]
 
 
 def _bump_job() -> dict:
