@@ -269,3 +269,86 @@ class TestVnextFencedBlocks:
     def test_inline_backticks_remain_the_escape_hatch(self, tmp_path: Path) -> None:
         f = _write(tmp_path, "doc.md", "Resolve them: run `grep -rn '(since vNEXT)' docs/`\n")
         assert residue([f]) == []
+
+
+class TestPythonSourcesAreScanned:
+    """``src/**/*.py`` is in scope -- its absence shipped a placeholder in 0.90.1.
+
+    A gate in a Python comment is agent-facing documentation exactly like a
+    markdown one, and until this glob existed only one hand-picked file under
+    ``src/`` was read: the placeholder in ``permissions.py`` went out in a
+    release, and a stale ``v0.26.1`` marker in ``commands/project.py`` -- a
+    version that never shipped -- sat undetected for three months.
+    """
+
+    def test_scanned_globs_cover_python_sources(self) -> None:
+        """Cheap guard: the glob cannot be dropped again without a red test."""
+        assert any(
+            pattern.startswith("src/") and pattern.endswith("*.py")
+            for pattern in check_version_gates.SCANNED_GLOBS
+        ), f"src Python sources must stay in scope: {check_version_gates.SCANNED_GLOBS}"
+
+    def test_the_scan_reaches_a_file_that_used_to_be_invisible(self) -> None:
+        """Behavioural half: a glob can be present and still resolve to nothing.
+
+        ``permissions.py`` is the file whose placeholder shipped in 0.90.1 and
+        was never covered by the old hand-picked entry, so it is the honest
+        witness that the widened scan actually reads more than it used to.
+        """
+        scanned = {p.name for p in check_version_gates.resolve_paths()}
+        assert "permissions.py" in scanned
+        assert "project.py" in scanned
+
+    def test_scripts_are_not_scanned(self) -> None:
+        """The gate script names the placeholder it hunts -- scanning it self-flags."""
+        assert not any(
+            pattern.startswith("scripts/") for pattern in check_version_gates.SCANNED_GLOBS
+        ), "scripts/ cannot be scanned: check_version_gates.py itself quotes vNEXT"
+
+    def test_bare_placeholder_in_a_python_comment_is_a_gate(self, tmp_path: Path) -> None:
+        """The exact 0.90.1 shape: a registry comment tagged with the placeholder."""
+        f = _write(
+            tmp_path,
+            "registry.py",
+            '"""Module docstring."""\n\n# Serve-only (since vNEXT): a new REST operation.\nX = 1\n',
+        )
+        found = residue([f])
+        assert len(found) == 1
+        assert found[0].line == 3
+
+    def test_python_files_contribute_numeric_gates(self, tmp_path: Path) -> None:
+        """A `(since vX.Y.Z)` in a comment is audited against CHANGELOG like any other."""
+        f = _write(tmp_path, "cmd.py", "# ── Project members (since v0.29.0) ──\n")
+        assert list(collect([f])) == ["0.29.0"]
+
+
+class TestDoubleBacktickSpans:
+    """RST-style ``x`` spans count as inline code -- the docstring style under ``src/``.
+
+    Without this the first ``(since vNEXT)`` written in a Python docstring
+    becomes a false positive; with it, markdown behaviour is unchanged (a
+    single-backtick span is still a span, and a bare placeholder is still live).
+    """
+
+    def test_double_backtick_span_is_prose(self, tmp_path: Path) -> None:
+        f = _write(
+            tmp_path, "mod.py", '"""Tag new behavior ``(since vNEXT)`` in a feature PR."""\n'
+        )
+        assert residue([f]) == []
+
+    def test_single_backtick_span_is_still_prose(self, tmp_path: Path) -> None:
+        """Regression: widening the pattern must not break the markdown case."""
+        f = _write(tmp_path, "doc.md", "the literal `vNEXT` placeholder\n")
+        assert residue([f]) == []
+
+    def test_bare_placeholder_beside_a_double_backtick_span_still_flags(
+        self, tmp_path: Path
+    ) -> None:
+        """One quoted mention must not launder a live gate sharing the line."""
+        f = _write(tmp_path, "mod.py", '"""``vNEXT`` is the token; (since vNEXT) is live."""\n')
+        assert len(residue([f])) == 1
+
+    def test_double_backticks_do_not_hide_numeric_gates(self, tmp_path: Path) -> None:
+        """The GATE_RE asymmetry survives: code spans are never stripped for versions."""
+        f = _write(tmp_path, "mod.py", '"""Device-enrollment primitives (``0.66.0+``)."""\n')
+        assert list(collect([f])) == ["0.66.0"]

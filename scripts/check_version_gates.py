@@ -70,12 +70,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The silent-drift surfaces from CONTRIBUTING.md's "Plugin synchronization map".
 # Anything an AI agent reads to decide whether a command exists belongs here.
+#
+# ``src/**/*.py`` is in scope because a version gate written in a Python
+# comment is agent-facing documentation exactly like a markdown one -- and its
+# absence is not hypothetical: ``(since vNEXT)`` in ``permissions.py`` survived
+# the 0.90.1 release precisely because nothing under ``src/`` was scanned
+# (``commands/context.py`` used to be listed alone; this glob subsumes it).
+# Its first run also surfaced a stale ``(since v0.26.1)`` in ``commands/
+# project.py`` -- a version that never shipped, left behind by a renumber.
+#
+# ``scripts/*.py`` is deliberately NOT scanned. This module has to NAME the
+# placeholder it is looking for (its ``--release`` usage line and the
+# ``VNEXT_TOKEN`` constant), so it would flag itself forever -- a self-
+# referencing failure no regex can tell apart from a real gate. Do not retry it.
 SCANNED_GLOBS: tuple[str, ...] = (
     "CLAUDE.md",
     "docs/*.md",
     "plugins/kbagent/**/*.md",
     "plugins/kbagent/.claude-plugin/CLAUDE.md",
-    "src/keboola_agent_cli/commands/context.py",
+    "src/**/*.py",
 )
 
 # ``(since v0.84.0)`` / ``(since 0.84.0)`` and ``0.73.0+`` / ``v0.73.0+``.
@@ -85,10 +98,15 @@ GATE_RE = re.compile(r"\(since v?(\d+\.\d+\.\d+)\)|(?<![\w.])v?(\d+\.\d+\.\d+)\+
 # The placeholder a feature PR writes when it cannot know its release version.
 VNEXT_TOKEN = "vNEXT"
 
-# An inline-code span. Stripping these before looking for VNEXT_TOKEN is what
-# separates a live gate from prose quoting the token (see the module docstring
-# for why this must not be applied to GATE_RE).
-INLINE_CODE_RE = re.compile(r"`[^`]*`")
+# An inline-code span, single- OR double-backtick. Stripping these before
+# looking for VNEXT_TOKEN is what separates a live gate from prose quoting the
+# token (see the module docstring for why this must not be applied to GATE_RE).
+# The double-backtick alternative must come FIRST -- regex alternation is
+# left-biased, so a single-backtick-first pattern would match the empty span
+# between the two opening backticks of ``x`` and leave the token exposed.
+# It matters because Python docstrings under ``src/`` use the RST convention:
+# a ``(since vNEXT)`` written there is prose, not a gate, exactly as in markdown.
+INLINE_CODE_RE = re.compile(r"``[^`]*``|`[^`]*`")
 
 # Fenced blocks are deliberately NOT stripped, even though the same "code means
 # quotation" argument seems to apply. Measured: CLAUDE.md's `## All CLI

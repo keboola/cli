@@ -836,7 +836,7 @@ def project_info(
     formatter.output(result, _format_info_table)
 
 
-# ── Project members & invitations (since v0.26.1) ─────────────────────
+# ── Project members & invitations (since v0.29.0) ─────────────────────
 
 
 def _format_invite_result(console: Console, data: dict[str, Any]) -> None:
