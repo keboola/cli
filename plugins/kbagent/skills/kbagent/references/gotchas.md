@@ -4506,6 +4506,19 @@ shapes.
   keep) must be in its allow list, or the server will not start either.
   Pass `--config-dir` to `serve` itself: the root-level `kbagent --config-dir
   ... serve` sets the dir for the CLI invocation, not for the server process.
+- **Three `serve` mirrors landed in vNEXT (#657) with a deliberately different
+  shape from their CLI command** -- `POST /storage/describe-batch/{project}`
+  takes the `buckets`/`tables`/`columns` sections INLINE in the body (no
+  `--from-file` path: a REST caller's filesystem is not the server's), and it
+  answers **422** for a malformed document where the CLI exits 2
+  `INVALID_ARGUMENT` -- same message, different code, so branch on the status.
+  `POST /storage/tables/{project}/{table_id}/unload` has no `--download` /
+  `--output`; it returns the Storage `file_id` and you fetch the bytes with
+  `GET /storage/files/{project}/{file_id}/download` (the only shape that works
+  for `file_type: "parquet"`, whose export is sliced). `POST /jobs/{p}/run`
+  finally accepts `idempotency_key` / `force_rerun` -- retrying a POST is
+  exactly what #427's store is for, and before vNEXT the REST caller could not
+  reach it; dedup is scoped to the SERVED config dir, i.e. per machine.
 - **A deny policy does NOT firewall the whole REST surface.**
   `permissions set --mode deny --deny cli:write` blocks `POST
   /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but

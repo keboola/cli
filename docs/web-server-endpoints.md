@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**231 operations** across **202 paths** and **30 routers**.
+**233 operations** across **204 paths** and **30 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -166,7 +166,7 @@ Encrypt secret values for a specific project + component using the Keboola encry
 
 ## Data
 
-### `storage` (32 operations)
+### `storage` (34 operations)
 
 Buckets, tables, columns, files. Create, upload, download, describe, swap, delete. Mirrors `kbagent storage *`.
 
@@ -196,7 +196,9 @@ Buckets, tables, columns, files. Create, upload, download, describe, swap, delet
 | `POST` | `/storage/table-from-snapshot/{project}` | Create a NEW table from a snapshot |
 | `POST` | `/storage/tables/{project}/{table_id}/describe` | Set table description |
 | `POST` | `/storage/columns/{project}/{table_id}/describe` | Set column descriptions |
+| `POST` | `/storage/describe-batch/{project}` | Apply descriptions in bulk |
 | `POST` | `/storage/columns/{project}/describe-migrate` | Migrate legacy column descriptions |
+| `POST` | `/storage/tables/{project}/{table_id}/unload` | Export a table to a file |
 | `GET` | `/storage/files` | List storage files |
 | `POST` | `/storage/files/upload` | Upload a file to Storage |
 | `GET` | `/storage/files/{project}/{file_id}` | Get file detail |

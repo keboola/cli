@@ -31,6 +31,14 @@ class JobRun(BaseModel):
     variable_values_id: str | None = None
     no_variables: bool = False
     mode: str = DEFAULT_JOB_MODE
+    # Client-side de-duplication (#427, exposed over REST by #657). Retrying a
+    # POST is the canonical case the store was built for -- a timed-out or
+    # replayed request must not start a second job -- so the REST mirror
+    # dropping these two fields left the one caller that needs them most
+    # without them. The store is keyed inside the SERVED config dir, so dedup
+    # is per-machine, exactly as on the CLI.
+    idempotency_key: str | None = None
+    force_rerun: bool = False
 
 
 class JobTerminate(BaseModel):
@@ -93,7 +101,14 @@ def run(
     log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Run a component configuration and optionally wait for completion. Mirrors `kbagent job run`."""
+    """Run a component configuration and optionally wait for completion.
+
+    Mirrors `kbagent job run`, including its client-side idempotency
+    (`idempotency_key` / `force_rerun`, #427): replaying this POST under the
+    same key returns the recorded job instead of starting a second one, unless
+    that job failed or `force_rerun` is set. Reusing a key for a *different*
+    component/config raises rather than return the wrong job.
+    """
     return registry.job.run_job(
         alias=project,
         component_id=body.component_id,
@@ -107,6 +122,8 @@ def run(
         poll_strategy=poll_strategy,
         log_tail_lines=log_tail_lines,
         mode=body.mode,
+        idempotency_key=body.idempotency_key,
+        force_rerun=body.force_rerun,
     )
 
 

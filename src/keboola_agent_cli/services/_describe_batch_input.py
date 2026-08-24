@@ -180,6 +180,41 @@ def _columns_section(raw: dict[str, Any]) -> dict[str, dict[str, str]]:
     return parsed
 
 
+def parse_describe_batch_document(raw: Any, source_label: str) -> DescribeBatchInput:
+    """Validate an already-loaded describe-batch document.
+
+    Split out from :func:`parse_describe_batch_file` so the REST mirror
+    (``POST /storage/describe-batch/{project}``, issue #657) validates the
+    JSON body through exactly the same rules as the CLI's YAML file. Two
+    copies of these rules would drift, and the half that drifted would be the
+    one that lets a malformed section reach the write loop.
+
+    Args:
+        raw: The parsed document -- YAML from a file, or a JSON request body.
+        source_label: What to name in an error message ("describe.yml",
+            "request body"). Only ever used for the top-level shape error;
+            per-section errors already name their own key.
+
+    Returns:
+        The validated sections, descriptions coerced to ``str``. Absent,
+        ``None`` and empty sections come back empty.
+
+    Raises:
+        ValueError: The document is not a mapping at the top level, or any
+            section/entry has a wrong non-empty shape, a null description, or
+            a duplicate coerced key.
+    """
+    if _is_empty(raw):
+        return DescribeBatchInput()
+    if not isinstance(raw, dict):
+        raise _shape_error(source_label, _TOP_LEVEL_SUBJECT, raw, _TOP_LEVEL_EXAMPLE)
+    return DescribeBatchInput(
+        buckets=_scalar_section(raw, "buckets"),
+        tables=_scalar_section(raw, "tables"),
+        columns=_columns_section(raw),
+    )
+
+
 def parse_describe_batch_file(from_file: Path) -> DescribeBatchInput:
     """Read and validate a describe-batch YAML file.
 
@@ -191,10 +226,9 @@ def parse_describe_batch_file(from_file: Path) -> DescribeBatchInput:
         ``None`` and empty sections come back empty.
 
     Raises:
-        ValueError: The file is missing, is not valid YAML, is not a mapping
-            at the top level, or any section/entry has a wrong non-empty
-            shape, a null description, or a duplicate coerced key. The command
-            layer maps this to ``INVALID_ARGUMENT`` and exit 2.
+        ValueError: The file is missing, is not valid YAML, or fails any check
+            in :func:`parse_describe_batch_document`. The command layer maps
+            this to ``INVALID_ARGUMENT`` and exit 2.
     """
     import yaml
 
@@ -204,12 +238,4 @@ def parse_describe_batch_file(from_file: Path) -> DescribeBatchInput:
         raw = yaml.safe_load(from_file.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ValueError(f"Batch file is not valid YAML: {exc}") from None
-    if _is_empty(raw):
-        return DescribeBatchInput()
-    if not isinstance(raw, dict):
-        raise _shape_error(from_file.name, _TOP_LEVEL_SUBJECT, raw, _TOP_LEVEL_EXAMPLE)
-    return DescribeBatchInput(
-        buckets=_scalar_section(raw, "buckets"),
-        tables=_scalar_section(raw, "tables"),
-        columns=_columns_section(raw),
-    )
+    return parse_describe_batch_document(raw, from_file.name)
