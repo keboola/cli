@@ -1125,7 +1125,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
                              --channel email|webhook --address ADDR
                              [--component-id ID] [--config-id ID]
                              [--branch ID] [--expires-at TS]
-    Create a subscription (since vNEXT). --address carries the email address
+    Create a subscription (since 0.91.0). --address carries the email address
     (--channel email) or the webhook URL (--channel webhook) -- the wire shape
     is channel-discriminated, the CLI takes one flag either way. An invalid
     --channel is a structured INVALID_ARGUMENT, exit 2.
@@ -1134,13 +1134,13 @@ remain branch-aware because modifying a dev branch is the expected intent.
     a subscription fires for jobs on EVERY branch.
 
   kbagent notification delete --project ALIAS --subscription-id ID [--yes]
-    Delete a subscription (since vNEXT). Confirms unless --yes or --json.
+    Delete a subscription (since 0.91.0). Confirms unless --yes or --json.
 
   kbagent notification replace-recipient --project ALIAS
                                         --subscription-id ID
                                         --address NEW_ADDR
                                         [--channel email|webhook] [--yes]
-    Swap a subscription's recipient (since vNEXT), keeping the event, filters
+    Swap a subscription's recipient (since 0.91.0), keeping the event, filters
     and expiry. This is delete+recreate -- the API has NO update primitive.
     The NEW subscription is created FIRST, then the old one deleted, so a NEW
     subscription_id is ALWAYS minted: never cache the old id, read
@@ -1216,7 +1216,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     clone_ineligible_reason). --load-type forces clone/copy/view for every table -- an
     ineligible explicit choice fails loudly, it never silently degrades. A COPY over 1 GiB
     needs interactive confirmation or --force. --timeout defaults to 300s; on timeout the
-    job keeps running server-side (exit 4, not 1). (since vNEXT)
+    job keeps running server-side (exit 4, not 1). (since 0.91.0)
 
   kbagent workspace query --project ALIAS --workspace-id ID --sql "SQL" [--file F] [--transactional] [--full] [--limit N]
     Execute SQL via Query Service. No Snowflake credentials needed.
@@ -1423,7 +1423,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
-    Ignored components (since vNEXT, #689): keboola.sandboxes + keboola.mcp-server-tool are
+    Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded, unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
     component newly ignored has its manifest entry dropped and local dir removed on the next
@@ -1455,7 +1455,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
     non-zero summary.orphaned with `sync pull`; promote dev-only configs with
     `branch merge`, never by pushing them to production.
-    Ignored components (since vNEXT, #689) are excluded from BOTH sides of the comparison,
+    Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
     so a stale manifest entry or leftover dir for one of them contributes nothing --
     not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
     for them either (closes the delete-dir-then-push trap for ignored components).
@@ -1982,7 +1982,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     they matched is gone. A persisted policy still loads with them, but they
     match nothing, so a mode=deny policy whose only allowance was `tool:read`
     now denies everything. Rewrite such a policy with `cli:read`.
-    Since vNEXT (issue #688): every pattern is validated BEFORE the
+    Since 0.91.0 (issue #688): every pattern is validated BEFORE the
     interactive confirmation -- it must be a cli:* category, an exact
     operation name, or a glob matching >=1 known operation, or the whole
     call fails with VALIDATION_ERROR (exit 2, invalid patterns listed) and

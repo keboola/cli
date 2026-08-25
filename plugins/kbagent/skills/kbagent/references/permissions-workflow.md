@@ -28,7 +28,7 @@ The agent CANNOT:
 > show` names any such pattern (key `inert_patterns` in `--json`) and `kbagent
 > doctor` WARNs via its `inert_permission_patterns` check.
 >
-> **(since vNEXT)** `permissions set` now validates every `--allow`/`--deny`
+> **(since 0.91.0)** `permissions set` now validates every `--allow`/`--deny`
 > pattern before persisting it: it must be a `cli:*` category, an exact
 > operation name, or a glob matching >=1 known operation, else the call fails
 > with `VALIDATION_ERROR`, exit 2, before the confirmation prompt is even
@@ -106,7 +106,7 @@ kbagent --json permissions list
 | `cli:read` | All read-only CLI commands |
 | `branch.delete` | Exact command match |
 | `sync.*` | All sync subcommands (glob) |
-| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone); `permissions set` REJECTS it as input (since vNEXT) -- only an already-persisted `tool:*` sticks around |
+| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone); `permissions set` REJECTS it as input (since 0.91.0) -- only an already-persisted `tool:*` sticks around |
 
 ## Session firewall flags
 

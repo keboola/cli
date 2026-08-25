@@ -517,7 +517,7 @@ carried. Two consequences worth knowing before you reach for a flag:
   you want to keep), or the server will not start for the same reason as above.
 
   Either spelling of `--config-dir` selects the served directory *(since
-  vNEXT)* — see [Which config directory `serve`
+  0.91.0)* — see [Which config directory `serve`
   uses](#which-config-directory-serve-uses) below. On **0.90.1 and older**,
   only `serve --config-dir` did: a root-level `kbagent --config-dir ... serve`
   was ignored, so the policy above was silently not the one enforced.
@@ -604,7 +604,7 @@ is captured into the run history.
 ### Which config directory `serve` uses
 
 `serve` is the only subcommand with a `--config-dir` of its own, so there are
-two places the flag can appear. Most specific wins *(since vNEXT)*:
+two places the flag can appear. Most specific wins *(since 0.91.0)*:
 
 1. `kbagent serve --config-dir X` → serves `X`.
 2. `kbagent --config-dir Y serve` → serves `Y`.

@@ -458,7 +458,7 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
-## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries (since vNEXT, #686)
+## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries (since 0.91.0, #686)
 
 `pull_config_hash` in `.keboola/manifest.json` is the 3-way diff's base, and it
 means "the hash of this config **as the API returns it**". `sync pull` and the
@@ -494,7 +494,7 @@ it, and the next deploy re-created it (field report: 18 phantom configs hiding
   statement array -- i.e. when the API's elements carry no trailing `;`. A
   `;`-terminated file is byte-identical to what earlier versions wrote, so
   existing trees produce no spurious diff. This closes a SILENT failure: before
-  vNEXT, a script like `["SELECT 1", "SELECT 2"]` lost its boundary on pull and
+  0.91.0, a script like `["SELECT 1", "SELECT 2"]` lost its boundary on pull and
   push rewrote production as ONE statement (the `MULTI_STATEMENT_COUNT=1` crash
   shape) while `sync diff` reported "in sync".
   - Markers are guaranteed boundaries, but `;` splitting still runs INSIDE each
@@ -527,7 +527,7 @@ it, and the next deploy re-created it (field report: 18 phantom configs hiding
   statements into one. Run `sync pull` for that project, then push again.
   Genuine SQL edits are never blocked by this guard.
 
-## `sync push` runs the same script-shape guard as `config update` (since vNEXT)
+## `sync push` runs the same script-shape guard as `config update` (since 0.91.0)
 
 `sync push` now runs `normalize_blocks_codes_script` -- the runtime-safety guard
 `config update` and `transformation edit/create` have always run -- on every
@@ -1424,7 +1424,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   subscription is inactive.
 ## Notification subscriptions can now be written, and the write path has sharp edges
 
-*(since vNEXT)*
+*(since 0.91.0)*
 
 - **`notification replace-recipient` always mints a NEW `subscription_id`.**
   The Notification Service has **no update primitive** -- there is no PATCH or
@@ -4601,7 +4601,7 @@ though single-project `job list` looked correctly time-ordered.
 
 `create_app` builds a `PermissionEngine` from the persisted `permissions`
 policy of **the config dir `serve` resolves** (its own `--config-dir`, then --
-since vNEXT -- an explicit root-level `kbagent --config-dir`, then
+since 0.91.0 -- an explicit root-level `kbagent --config-dir`, then
 `KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
 forwards only the session FLAGS of the invocation on top. But of the ~30
 routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
@@ -4647,7 +4647,7 @@ shapes.
 
 ## `serve` honors the root-level `--config-dir`
 
-*(since vNEXT)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
+*(since 0.91.0)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
 flag has two possible positions. The precedence is **most specific wins**,
 matching what `kbagent repl` does with the root flags:
 
@@ -4672,7 +4672,7 @@ resolution is left to the server, which lands on the same directory anyway.
 
 ## `workspace load` now auto-CLONEs eligible tables instead of always COPYing
 
-*(since vNEXT, closes #687)* Before this, `workspace load` always sent a plain `copy` (the API's own
+*(since 0.91.0, closes #687)* Before this, `workspace load` always sent a plain `copy` (the API's own
 default when `loadType` is omitted) -- a 282 GB table load burned warehouse
 credits for hours where `clone` is metadata-only and finishes in seconds.
 kbagent now mirrors the server's `LoadTypeDecider` per table.
@@ -4729,7 +4729,7 @@ materialized inside the workspace.
 
 ## `permissions set` now rejects unknown patterns instead of silently persisting them
 
-*(since vNEXT)* Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
+*(since 0.91.0)* Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
 accepted any string with zero validation. A typo like `tool.admin` or
 `stroage.upload-table` (missing the `-` in `storage`) was written straight to
 `config.json` as a dead rule that would never match anything -- the failure
@@ -4766,13 +4766,13 @@ was silent, and the only way to notice was reading `permissions show` (or
   persist the pattern.
 - **`doctor --json`'s `inert_permission_patterns` check carries
   `details.inert_since` only when at least one offending pattern is
-  `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
+  `tool:`-prefixed** (since 0.91.0) -- a purely typo'd policy (e.g.
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
 
 ## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
 
-*(since vNEXT)* `ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
+*(since 0.91.0)* `ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
 alongside `keboola.sandboxes`. The Keboola MCP server auto-creates one empty
 workspace-record config per project it touches (`configuration: {}`, name like
 `mcp-workspace-<hex>`); those configs carry no configuration and are managed

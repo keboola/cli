@@ -416,13 +416,13 @@ Stored in `.keboola/branch-mapping.json`:
 - **Pull protects local edits**: locally-modified files are skipped by default
 - **`--force` is conflict-aware (since 0.53.0)**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
-- **Push records the API's own view of what it wrote (since vNEXT, #686)**: the
+- **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
-  read-back), never from the files on disk. Before vNEXT the two producers
+  read-back), never from the files on disk. Before 0.91.0 the two producers
   disagreed and every pushed multi-statement SQL transformation showed
   permanent phantom `REMOTE MODIFIED` drift
 - **Push runs the same runtime-safety script normalization as `config update`
-  (since vNEXT)**: `parameters.blocks[].codes[].script` is normalized to the
+  (since 0.91.0)**: `parameters.blocks[].codes[].script` is normalized to the
   runtime's shape (one element = one executable statement) before every write.
   A no-op for a normally pulled tree; it catches a hand-authored `_config.yml`
   with inline `parameters.blocks` and no `transform.sql`. Any fix is reported
@@ -437,7 +437,7 @@ Stored in `.keboola/branch-mapping.json`:
 
 ## Ignored components
 
-*(since vNEXT)* Some components are excluded from every sync operation (`pull`, `diff`,
+*(since 0.91.0)* Some components are excluded from every sync operation (`pull`, `diff`,
 `push`) because they are managed through separate APIs and have volatile
 internal state:
 
@@ -489,7 +489,7 @@ the 3-way diff state per config (and per row):
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > delete the file (or the config directory) and pull.
 
-## Migrating a tree pulled before vNEXT (#686)
+## Migrating a tree pulled before 0.91.0 (#686)
 
 `sync push` used to stamp the manifest baseline from the files on disk while
 `sync pull` / `sync diff` computed it from the API. Any config the two
@@ -508,7 +508,7 @@ gained markers) and the phantom entries are gone for good -- no more
 content-free "refresh the baseline" PR after each deploy.
 
 Until that pull happens, kbagent is lenient with unversioned entries: a stored
-hash that matches the pre-vNEXT hash of the same remote config is treated as in
+hash that matches the pre-0.91.0 hash of the same remote config is treated as in
 sync. The leniency covers ONLY that difference -- a genuinely changed remote
 still reports `REMOTE MODIFIED`.
 

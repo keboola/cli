@@ -68,7 +68,7 @@ The agent can browse configs, list jobs and trace lineage -- but cannot create b
 | `cli:read` | All read-only CLI commands |
 | `branch.delete` | Exact command |
 | `sync.*` | All sync subcommands |
-| `tool:*` | Nothing -- inert since 0.85.0 (the MCP passthrough is gone); a `--mode deny` policy that only allowed `tool:read` now denies everything; `permissions set` REJECTS it as input (since vNEXT) -- only an already-persisted `tool:*` sticks around |
+| `tool:*` | Nothing -- inert since 0.85.0 (the MCP passthrough is gone); a `--mode deny` policy that only allowed `tool:read` now denies everything; `permissions set` REJECTS it as input (since 0.91.0) -- only an already-persisted `tool:*` sticks around |
 
 ### Management commands
 
