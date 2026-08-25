@@ -489,7 +489,9 @@ the 3-way diff state per config (and per row):
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > delete the file (or the config directory) and pull.
 
-## Migrating a tree pulled before 0.91.0 (#686)
+## Migrating a legacy sync tree (#686)
+
+*Applies to any tree last pulled before 0.91.0.*
 
 `sync push` used to stamp the manifest baseline from the files on disk while
 `sync pull` / `sync diff` computed it from the API. Any config the two
