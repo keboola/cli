@@ -258,6 +258,10 @@ printf '  %s%s%s %s%s%s  %s  %s\n' "$GREEN" "$CHECK" "$RESET" "$BOLD" "$ver_str"
 printf '  %sno sudo required%s\n' "$DIM" "$RESET" >&2
 info ""
 printf '  %sNext steps%s\n' "$BOLD" "$RESET" >&2
+printf '    %sIn Claude Code:%s %s/kbagent:setup%s   %s# connect + verify in one command%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
+printf '    %s(needs the plugin:%s %skbagent doctor%s %sprints the exact /plugin commands)%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
+info ""
+printf '  %sOr do it by hand%s\n' "$BOLD" "$RESET" >&2
 printf '    %skbagent project add%s --project myproject \\\n' "$BOLD" "$RESET" >&2
 printf '        --url https://connection.keboola.com --token YOUR_TOKEN   %s# connect a project%s\n' "$DIM" "$RESET" >&2
 printf '    %skbagent --help%s     %s# see everything you can do%s\n' "$BOLD" "$RESET" "$DIM" "$RESET" >&2

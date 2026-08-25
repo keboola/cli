@@ -1,9 +1,15 @@
 # kbagent plugin — operational guidance
 
-This plugin exposes a CLI (`kbagent`), a skill (`kbagent`), two slash
-commands (`/keboola`, `/kbagent:review`), and two specialist subagents
-(`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under
-`kbagent:`. The two subagents serve disjoint domains:
+This plugin exposes a CLI (`kbagent`), three skills (`kbagent`,
+`kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash
+commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two
+specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are
+namespaced under `kbagent:`.
+
+`/kbagent:setup` is the first-run entry point: it installs the CLI if
+missing, connects a project, and verifies with `kbagent doctor` -- every
+step conditional, so it is safe to re-run. It runs in the main context and
+spawns no subagent. The two subagents serve disjoint domains:
 
 | Subagent | Use for | Slash command | Trigger phrases |
 |---|---|---|---|
@@ -124,7 +130,12 @@ When the subagent returns:
 
 ## For Claude Code users
 
-- Install the kbagent CLI: `uv tool install git+https://github.com/keboola/cli`
+- **Start here: run `/kbagent:setup`.** One command -- it installs the
+  kbagent CLI if it is missing, connects a Keboola project (browser
+  login, falling back to `auth login-password` from the environment and
+  then a static token, per the order above), and verifies the result with
+  `kbagent doctor`. Idempotent, so re-running it after a partial setup
+  only fills the gaps.
 - Initialize a project workspace: `kbagent init --from-global`
   (writes `.kbagent/config.json` whose first field is a `_warning`
   steering any LLM that reads the file away from direct REST calls)

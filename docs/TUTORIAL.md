@@ -309,10 +309,23 @@ In Claude Code, run:
 ```
 /plugin marketplace add keboola/ai-kit
 /plugin install kbagent@keboola-claude-kit
+/kbagent:setup
 ```
 
 Claude Code clones the marketplace and drops the plugin into
 `~/.claude/plugins/cache/keboola-claude-kit/kbagent/<version>/`.
+
+`/kbagent:setup` then does everything else in one command: installs the
+`kbagent` CLI if it is missing (handling the installer's PATH caveat),
+connects a project via `kbagent auth login --register-projects` (browser
+login -- nothing to paste; on a headless host it drops to `kbagent auth
+login-password` when `KBC_LOGIN_EMAIL`/`KBC_LOGIN_PASSWORD` are already in
+the environment, and only then to a `kbagent project add` static token --
+which is also the direct answer for a surface no browser session can serve,
+since a password login yields the same restricted session),
+and finishes with `kbagent doctor`, interpreting the result for you. Each
+step runs only if its check fails, so it is safe to re-run at any point
+-- including if you already followed §1-§4 by hand.
 
 ### Verify
 
@@ -337,6 +350,7 @@ you to run `/plugin update kbagent` in Claude Code.
 | Component | What it does |
 |---|---|
 | `kbagent` skill | Loaded into the main agent when it recognises Keboola-related prompts. 10 rules + a decision table mapping goals to commands. |
+| `/kbagent:setup` slash command | One-command first-run setup: install the CLI, connect a project, verify with `doctor`. Idempotent. |
 | `/keboola <task>` slash command | Explicitly delegates a Keboola task to the specialist subagent (see §6). |
 | `kbagent:keboola-expert` subagent | Fresh-context specialist with non-negotiable rules, tool matrix, inline gotchas, and a JSON verification payload output contract. |
 | Plugin-level `CLAUDE.md` | Instructs the main agent *when* to delegate vs. handle inline. |

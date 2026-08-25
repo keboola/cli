@@ -295,7 +295,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 ## Claude Code Plugin
 
-The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes four AI surfaces: a CLI (`kbagent`), a skill (`kbagent`), a slash command (`/keboola`), and a specialist subagent (`keboola-expert`). All are namespaced under `kbagent:`.
+The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
 
 **Source here, publication there.** The source stays in this repo because four CI gates validate it against the live command tree (`make skill-gen` / `make skill-check`, `scripts/sync_version.py`, `scripts/check_command_sync.py`, `make version-check`) -- none of which exist in ai-kit. What ai-kit owns is the *catalogue*: its `keboola-claude-kit` marketplace carries an external `git-subdir` entry pointing at `plugins/kbagent` in this repo, pinned to a release tag. Keboola has ONE Claude Code marketplace, and it is not this one.
 
@@ -303,6 +303,7 @@ The plugin lives here in `plugins/kbagent/` and is **published through `keboola/
 ```
 /plugin marketplace add keboola/ai-kit
 /plugin install kbagent@keboola-claude-kit
+/kbagent:setup
 ```
 
 **The sync mechanism** is the `ai-kit-marketplace` job in `.github/workflows/release-kbagent.yml`: on every stable tag it rewrites the kbagent entry's `version` + `source.ref` in ai-kit and opens a PR there (a PR, not a push -- ai-kit's evals must see it). It needs `secrets.AI_KIT_TOKEN` in the `release` environment. No-op safe: an entry already at this version opens nothing.
@@ -320,14 +321,20 @@ plugins/kbagent/
     CLAUDE.md                                          # Operational guidance for Claude Code main agents
   agents/
     keboola-expert.md                                  # Specialist subagent system prompt (HIGHEST silent-drift risk)
+    kbagent-pr-reviewer.md                             # Read-only PR-review subagent system prompt
   commands/
+    setup.md                                           # /kbagent:setup slash command (one-command first-run setup)
     keboola.md                                         # /keboola slash command
-  skills/kbagent/
-    SKILL.md                                           # Trigger rules + auto-generated decision table
-    references/
-      commands-reference.md                            # Per-command notes (hand-maintained)
-      gotchas.md                                       # Response parsing + (since vX.Y.Z) behavior log
-      <topic>-workflow.md                              # One file per workflow (workspace, branch, sync, ...)
+    review.md                                          # /kbagent:review slash command
+  skills/
+    kbagent/
+      SKILL.md                                         # Trigger rules + auto-generated decision table
+      references/
+        commands-reference.md                          # Per-command notes (hand-maintained)
+        gotchas.md                                     # Response parsing + (since vX.Y.Z) behavior log
+        <topic>-workflow.md                            # One file per workflow (workspace, branch, sync, ...)
+    kbagent-cicd-migration/                            # CI/CD migration skill
+    kbagent-promotion-pipeline/                        # Promotion-pipeline skill
 ```
 
 `SKILL.md` instructs Claude to run `kbagent context` as its first step, which dynamically loads the full CLI documentation. That keeps command *signatures* in sync automatically -- but it does **not** save the agent's tool-selection matrix, the gotchas log, or the version-gate examples in `keboola-expert.md`. Those are static and must be updated by hand whenever the CLI changes.
