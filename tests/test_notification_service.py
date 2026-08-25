@@ -1,4 +1,4 @@
-"""Unit tests for NotificationService -- issue #600.
+"""Unit tests for NotificationService -- issue #600 (read path), #690 (write path).
 
 Tests the business logic in isolation using a mocked KeboolaClient. Covers:
 
@@ -9,6 +9,12 @@ Tests the business logic in isolation using a mocked KeboolaClient. Covers:
   filters, config-name join (pair match + unique-config-id fallback), the
   project-wide exclusion counter, and error accumulation.
 - ``get_subscription_detail``: name join and tolerance of a deleted parent.
+- ``TestCreateSubscription``: recipient/filter construction, and the created
+  audit row.
+- ``TestDeleteSubscription``: the delete call and its envelope.
+- ``TestReplaceSubscriptionRecipient``: create-before-delete ordering, verbatim
+  carry-over of the old event/filters/expiresAt, and the non-raising delete
+  failure path (any exception, not just ``KeboolaApiError``).
 """
 
 from __future__ import annotations
@@ -818,6 +824,66 @@ class TestReplaceSubscriptionRecipient:
         assert any("1234" in w for w in result["warnings"])
         assert result["new_subscription_id"] == "9101"
 
+    def test_non_api_delete_failure_also_sets_old_deleted_false_without_raising(self) -> None:
+        """A raw transport failure on the delete must be swallowed too.
+
+        ``_do_request`` lets httpx transport errors (``ReadError``,
+        ``WriteError``, ``RemoteProtocolError``, ``ProxyError``, ...)
+        propagate as-is -- they are not wrapped into ``KeboolaApiError``. The
+        new subscription already exists by the time the delete runs, so ANY
+        exception here must degrade to ``old_deleted: False`` + a warning,
+        never escape: letting it escape would lose ``new_subscription_id``
+        from the response, and a caller's retry would then mint a THIRD
+        subscription.
+        """
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9103",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        client.delete_project_subscription.side_effect = RuntimeError("connection reset")
+        _wire_configs(client, [])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        assert result["old_deleted"] is False
+        assert any("1234" in w for w in result["warnings"])
+        assert result["new_subscription_id"] == "9103"
+
+    def test_expires_at_is_forwarded_verbatim(self) -> None:
+        """The old subscription's ``expiresAt`` must ride along untouched.
+
+        Every other replace test uses ``FLOW_SUBSCRIPTION``, which has no
+        ``expiresAt`` key, so the 4th positional arg to
+        ``create_project_subscription`` was previously only ever pinned to
+        ``None`` -- never actually exercising the pass-through.
+        """
+        old_with_expiry = {**FLOW_SUBSCRIPTION, "expiresAt": "2027-01-01T00:00:00+01:00"}
+        client = MagicMock()
+        client.get_project_subscription.return_value = old_with_expiry
+        client.create_project_subscription.return_value = {
+            "id": "9104",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "expiresAt": "2027-01-01T00:00:00+01:00",
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        _wire_configs(client, [])
+
+        _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "new@example.com"},
+            FLOW_SUBSCRIPTION["filters"],
+            "2027-01-01T00:00:00+01:00",
+        )
+
     def test_new_channel_webhook_switches_recipient_key(self) -> None:
         client = MagicMock()
         client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
@@ -846,6 +912,27 @@ class TestReplaceSubscriptionRecipient:
             "id": "1234",
             "event": "job-failed",
             "recipient": {},
+        }
+
+        with pytest.raises(ConfigError):
+            _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_not_called()
+        client.delete_project_subscription.assert_not_called()
+
+    def test_non_dict_old_recipient_raises_config_error_not_attribute_error(self) -> None:
+        """A malformed ``recipient`` (not a dict) must degrade to ConfigError.
+
+        Mirrors the same guard on the read path (``_extract_subscription_fields``)
+        -- without it, ``old_recipient.get(...)`` on a non-dict value would
+        raise a raw ``AttributeError`` instead of the intended "channel is
+        unknown, pass one explicitly" error.
+        """
+        client = MagicMock()
+        client.get_project_subscription.return_value = {
+            "id": "1234",
+            "event": "job-failed",
+            "recipient": "not-a-dict",
         }
 
         with pytest.raises(ConfigError):

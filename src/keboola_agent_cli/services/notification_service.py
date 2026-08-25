@@ -469,7 +469,11 @@ class NotificationService(BaseService):
         one: a duplicate alert, recoverable with a follow-up
         :meth:`delete_subscription` call. Deleting first would instead risk
         losing the alert entirely if the create then failed -- unrecoverable,
-        and silently so. A failed delete therefore does NOT raise: it is
+        and silently so. A failed delete therefore does NOT raise -- ANY
+        exception, not just :class:`KeboolaApiError` (a raw transport failure
+        such as ``httpx.RemoteProtocolError`` is just as possible, and letting
+        it escape here would lose ``new_subscription_id`` from the response
+        entirely, inviting a retry that mints a THIRD subscription): it is
         reported via ``old_deleted: False`` plus a warning naming the old
         subscription id, leaving the caller to decide whether to retry.
 
@@ -499,8 +503,9 @@ class NotificationService(BaseService):
                 the old recipient's channel is empty/unknown with no
                 ``new_channel`` override.
             KeboolaApiError: fetching the old subscription or creating the new
-                one failed. A failure to delete the old one is caught and
-                reported instead -- see above.
+                one failed. A failure to delete the old one is caught (any
+                exception, not just this one) and reported instead -- see
+                above.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -510,6 +515,8 @@ class NotificationService(BaseService):
         try:
             old = client.get_project_subscription(subscription_id)
             old_recipient = old.get("recipient") or {}
+            if not isinstance(old_recipient, dict):
+                old_recipient = {}
             old_address = _recipient_address(old_recipient)
             channel = new_channel or str(old_recipient.get("channel", ""))
             if not channel:
@@ -530,11 +537,26 @@ class NotificationService(BaseService):
             try:
                 client.delete_project_subscription(subscription_id)
                 old_deleted = True
-            except KeboolaApiError as exc:
+            except Exception as exc:
+                # Deliberately broad: the new subscription already exists at
+                # this point, so ANY failure here -- a KeboolaApiError, or a
+                # raw transport failure (httpx.ReadError / WriteError /
+                # RemoteProtocolError / ProxyError, none of which
+                # ``_do_request`` wraps) -- must be swallowed the same way.
+                # Letting one of those escape would lose ``new_subscription_id``
+                # from the response entirely, and a caller's retry would then
+                # mint a THIRD subscription -- exactly what create-first
+                # ordering exists to avoid.
                 old_deleted = False
+                logger.warning(
+                    "Failed to delete old notification subscription %s after "
+                    "replacing its recipient: %s",
+                    subscription_id,
+                    exc,
+                )
                 warnings.append(
                     f"Old subscription {subscription_id} was not deleted "
-                    f"(a duplicate now exists alongside the new one): {exc.message}"
+                    f"(a duplicate now exists alongside the new one): {exc}"
                 )
 
             row = _extract_subscription_fields(created)
