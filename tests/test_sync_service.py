@@ -4479,8 +4479,9 @@ class TestIssue689IgnoredComponents:
     ``ignoredComponents`` field -- declared in the schema since v3 -- was read
     by nothing. Both leave the local and remote sides of ``diff`` disagreeing
     about what exists: a manifest entry whose remote counterpart is filtered
-    out classifies as ``deleted``, and ``sync push`` then deletes a live
-    production configuration.
+    out classifies as ``added`` while keeping its live config id, and
+    ``sync push`` then creates a duplicate of that live production
+    configuration -- once per push.
     """
 
     def _init(self, tmp_config_dir: Path, project_root: Path) -> ConfigStore:
@@ -4495,11 +4496,16 @@ class TestIssue689IgnoredComponents:
         ).init_sync(alias="prod", project_root=project_root)
         return store
 
-    def _svc(self, store: ConfigStore, components: list) -> SyncService:
+    def _svc_with_client(
+        self, store: ConfigStore, components: list
+    ) -> tuple[SyncService, MagicMock]:
+        """Build a service plus the mock client tests assert write-calls on."""
         client = _make_sync_mock_client(components_response=components)
         svc = SyncService(config_store=store, client_factory=lambda url, token: client)
-        # Tests assert on the mock, so keep it reachable from the service.
-        svc._test_client = client  # type: ignore[attr-defined]
+        return svc, client
+
+    def _svc(self, store: ConfigStore, components: list) -> SyncService:
+        svc, _ = self._svc_with_client(store, components)
         return svc
 
     def _tracked_candidate(
@@ -4669,14 +4675,14 @@ class TestIssue689IgnoredComponents:
         self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).pull(alias="prod", project_root=project_root)
         _inject_stale_entry(project_root)
 
-        svc = self._svc(store, [*SAMPLE_COMPONENTS_NO_ROWS, MCP_TOOL_COMPONENT])
+        svc, client = self._svc_with_client(store, [*SAMPLE_COMPONENTS_NO_ROWS, MCP_TOOL_COMPONENT])
         push_result = svc.push(alias="prod", project_root=project_root, force=True)
 
         assert push_result["status"] == "no_changes"
         assert push_result["deleted"] == 0
         assert push_result["created"] == 0
-        svc._test_client.create_config.assert_not_called()  # type: ignore[attr-defined]
-        svc._test_client.delete_config.assert_not_called()  # type: ignore[attr-defined]
+        client.create_config.assert_not_called()
+        client.delete_config.assert_not_called()
 
     def test_diff_ignores_leftover_untracked_directory(
         self, tmp_config_dir: Path, tmp_path: Path
