@@ -6,6 +6,7 @@ import pytest
 
 from keboola_agent_cli.sync.config_format import (
     _normalize_scripts,
+    _normalize_scripts_legacy,
     api_config_to_local,
     api_row_to_local,
     classify_component_type,
@@ -38,6 +39,11 @@ SAMPLE_API_CONFIG: dict[str, Any] = {
 
 SAMPLE_COMPONENT_ID = "keboola.ex-http"
 SAMPLE_CONFIG_ID = "cfg-123"
+
+# Script normalization is component-aware (issue #686): SQL transformations
+# split one element per statement, everything else joins into one string.
+SQL_COMPONENT = "keboola.snowflake-transformation"
+NON_SQL_COMPONENT = "keboola.python-transformation-v2"
 
 
 class TestClassifyComponentType:
@@ -171,16 +177,22 @@ class TestLocalConfigToApiRoundTrip:
 
 
 class TestNormalizeScripts:
-    """Tests for _normalize_scripts() -- script array normalization."""
+    """Tests for _normalize_scripts() -- script array normalization.
+
+    The normalization is component-aware since issue #686: SQL
+    transformations split into one element per statement (the runtime's
+    own semantics, matching ``_lines_to_script`` on the push side), every
+    other component keeps the historical join-into-one-string behaviour.
+    """
 
     def test_per_line_array_joined_to_single_string(self) -> None:
-        """Per-line script array is joined into a single string."""
+        """Per-line script array is joined into a single string (non-SQL)."""
         params = {
             "blocks": [
                 {"codes": [{"script": ["CREATE TABLE foo AS", "    SELECT col1", "    FROM bar;"]}]}
             ]
         }
-        result = _normalize_scripts(params)
+        result = _normalize_scripts(params, NON_SQL_COMPONENT)
         script = result["blocks"][0]["codes"][0]["script"]
         assert len(script) == 1
         assert script[0] == "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"
@@ -192,7 +204,7 @@ class TestNormalizeScripts:
                 {"codes": [{"script": ["CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"]}]}
             ]
         }
-        result = _normalize_scripts(params)
+        result = _normalize_scripts(params, NON_SQL_COMPONENT)
         script = result["blocks"][0]["codes"][0]["script"]
         assert len(script) == 1
         assert script[0] == "CREATE TABLE foo AS\n    SELECT col1\n    FROM bar;"
@@ -200,7 +212,7 @@ class TestNormalizeScripts:
     def test_trailing_whitespace_stripped(self) -> None:
         """Trailing whitespace per line is stripped during normalization."""
         params = {"blocks": [{"codes": [{"script": ["SELECT 1  ", "FROM bar   "]}]}]}
-        result = _normalize_scripts(params)
+        result = _normalize_scripts(params, NON_SQL_COMPONENT)
         script = result["blocks"][0]["codes"][0]["script"]
         assert len(script) == 1
         assert script[0] == "SELECT 1\nFROM bar"
@@ -208,19 +220,19 @@ class TestNormalizeScripts:
     def test_empty_script_preserved(self) -> None:
         """Empty script array stays empty."""
         params = {"blocks": [{"codes": [{"script": []}]}]}
-        result = _normalize_scripts(params)
+        result = _normalize_scripts(params, NON_SQL_COMPONENT)
         assert result["blocks"][0]["codes"][0]["script"] == []
 
     def test_no_blocks_passthrough(self) -> None:
         """Parameters without blocks are returned unchanged."""
         params = {"key": "value"}
-        result = _normalize_scripts(params)
+        result = _normalize_scripts(params, NON_SQL_COMPONENT)
         assert result == {"key": "value"}
 
     def test_non_dict_passthrough(self) -> None:
         """Non-dict input is returned as-is."""
-        assert _normalize_scripts("not a dict") == "not a dict"
-        assert _normalize_scripts(42) == 42
+        assert _normalize_scripts("not a dict", NON_SQL_COMPONENT) == "not a dict"
+        assert _normalize_scripts(42, NON_SQL_COMPONENT) == 42
 
     def test_does_not_mutate_input(self) -> None:
         """Original parameters are not mutated."""
@@ -228,8 +240,70 @@ class TestNormalizeScripts:
         import copy
 
         original = copy.deepcopy(params)
-        _normalize_scripts(params)
+        _normalize_scripts(params, NON_SQL_COMPONENT)
         assert params == original
+
+    # -- SQL transformations: one element per statement (issue #686) --------
+
+    def test_sql_splits_each_element_into_statements(self) -> None:
+        """Each element is split on statement boundaries and flattened."""
+        params = {"blocks": [{"codes": [{"script": ["SELECT 1;\nSELECT 2;", "SELECT 3;"]}]}]}
+        result = _normalize_scripts(params, SQL_COMPONENT)
+        assert result["blocks"][0]["codes"][0]["script"] == [
+            "SELECT 1;",
+            "SELECT 2;",
+            "SELECT 3;",
+        ]
+
+    def test_sql_never_joins_elements_before_splitting(self) -> None:
+        """Elements without trailing semicolons stay separate statements (R1)."""
+        params = {"blocks": [{"codes": [{"script": ["SELECT 1", "SELECT 2"]}]}]}
+        result = _normalize_scripts(params, SQL_COMPONENT)
+        assert result["blocks"][0]["codes"][0]["script"] == ["SELECT 1", "SELECT 2"]
+
+    def test_sql_multiline_single_statement_stays_one_element(self) -> None:
+        """A multi-line single statement is not exploded per line."""
+        params = {
+            "blocks": [
+                {"codes": [{"script": ["CREATE TABLE foo AS", "    SELECT col1", "    FROM bar;"]}]}
+            ]
+        }
+        result = _normalize_scripts(params, SQL_COMPONENT)
+        assert result["blocks"][0]["codes"][0]["script"] == [
+            "CREATE TABLE foo AS",
+            "SELECT col1",
+            "FROM bar;",
+        ]
+
+    def test_legacy_normalization_still_collapses(self) -> None:
+        """The legacy producer (migration compat only) keeps collapsing to one."""
+        params = {"blocks": [{"codes": [{"script": ["SELECT 1;", "SELECT 2;"]}]}]}
+        result = _normalize_scripts_legacy(params)
+        assert result["blocks"][0]["codes"][0]["script"] == ["SELECT 1;\nSELECT 2;"]
+
+    def test_api_config_to_local_splits_for_sql_component(self) -> None:
+        """The pull-side converter emits the split shape for SQL components."""
+        api_config = {
+            "id": "1",
+            "name": "t",
+            "description": "",
+            "configuration": {
+                "parameters": {
+                    "blocks": [{"name": "B", "codes": [{"name": "C", "script": ["S1;", "S2;"]}]}]
+                }
+            },
+        }
+        local = api_config_to_local(SQL_COMPONENT, api_config, "1")
+        assert local["parameters"]["blocks"][0]["codes"][0]["script"] == ["S1;", "S2;"]
+
+        legacy = api_config_to_local(SQL_COMPONENT, api_config, "1", legacy_scripts=True)
+        assert legacy["parameters"]["blocks"][0]["codes"][0]["script"] == ["S1;\nS2;"]
+
+    def test_broad_predicate_sql_variant_also_splits(self) -> None:
+        """A SQL backend matched only by fragment (exasol) splits too (R1)."""
+        params = {"blocks": [{"codes": [{"script": ["SELECT 1;", "SELECT 2;"]}]}]}
+        result = _normalize_scripts(params, "keboola.exasol-transformation")
+        assert result["blocks"][0]["codes"][0]["script"] == ["SELECT 1;", "SELECT 2;"]
 
 
 class TestRowConversion:

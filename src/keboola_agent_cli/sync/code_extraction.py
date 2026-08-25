@@ -6,10 +6,28 @@ On push: reads code files back into config parameters.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, cast
 
 from keboola_agent_cli.sync.sql_split import split_statements
+
+logger = logging.getLogger(__name__)
+
+# Explicit statement boundary written into ``transform.sql`` when semicolons
+# alone cannot recover the canonical ``script[]`` array -- i.e. when the API's
+# elements carry no trailing ``;`` (issue #686 part 3). Without it,
+# ``merge_code_files`` collapses several statements into one element and
+# ``sync push`` silently rewrites production into the
+# ``MULTI_STATEMENT_COUNT=1`` crash shape of issues #119/#120/#274.
+#
+# Emission is CONDITIONAL: a ``;``-terminated script round-trips on its own, so
+# existing trees stay byte-identical. Recognition is an exact full-line match
+# after stripping. Auto-appending the missing ``;`` was rejected as the
+# alternative: it changes content, and Oracle (ODBC) rejects a trailing
+# semicolon outright (ORA-00911). The marker never changes content and is
+# backend-neutral.
+SQL_STATEMENT_MARKER = "/* ===== STATEMENT ===== */"
 
 
 def _strip_trailing_empty(lines: list[str]) -> list[str]:
@@ -20,16 +38,59 @@ def _strip_trailing_empty(lines: list[str]) -> list[str]:
     return result
 
 
+def canonical_sql_script(script: list[Any]) -> list[str]:
+    """Return the canonical ``script[]`` array for a SQL transformation code.
+
+    ONE array element = ONE executable statement (the Keboola runtime's own
+    semantics -- the premise of issues #119/#120/#274). Each existing element
+    is split independently and the results are flattened; the array is NEVER
+    joined first, so two elements without trailing semicolons stay two
+    statements instead of silently merging into one (issue #686).
+
+    This is the single producer of that shape: the API side
+    (``config_format._normalize_scripts``) and the file side
+    (:func:`_lines_to_script`) both agree with it, which is what makes the
+    stored ``pull_config_hash`` comparable across pull, push and diff.
+    """
+    canonical: list[str] = []
+    for element in script:
+        if isinstance(element, str):
+            canonical.extend(split_statements(element))
+        elif element is not None:
+            canonical.append(element)
+    return canonical
+
+
+def _split_on_statement_markers(lines: list[str]) -> list[list[str]]:
+    """Split collected code lines into segments on marker lines."""
+    segments: list[list[str]] = [[]]
+    for line in lines:
+        if line.strip() == SQL_STATEMENT_MARKER:
+            segments.append([])
+            continue
+        segments[-1].append(line)
+    return segments
+
+
 def _lines_to_script(lines: list[str], *, is_sql: bool = False) -> list[str]:
     """Convert collected lines back into the ``script[]`` array.
 
     For SQL transformations: splits on semicolons using a state machine,
     producing one element per statement (matching Keboola runtime semantics).
+    :data:`SQL_STATEMENT_MARKER` lines, when present, are GUARANTEED
+    boundaries -- but :func:`split_statements` still runs *within* each
+    segment, so a user who types ``; SELECT ...`` inside a marked segment
+    still gets it split correctly.
     For Python/other: joins all lines into a single element.
     """
     stripped = _strip_trailing_empty(lines)
     if not stripped:
         return []
+    if is_sql and any(line.strip() == SQL_STATEMENT_MARKER for line in stripped):
+        script: list[str] = []
+        for segment in _split_on_statement_markers(stripped):
+            script.extend(split_statements("\n".join(segment)))
+        return script
     content = "\n".join(stripped)
     if is_sql:
         return split_statements(content)
@@ -311,6 +372,54 @@ def merge_code_files(
 # ---- SQL Transformations ----
 
 
+def _render_sql_script_lines(scripts: list[Any], *, with_markers: bool) -> list[str]:
+    """Render one code's ``script[]`` as ``transform.sql`` lines."""
+    lines: list[str] = []
+    for si, script in enumerate(scripts):
+        if si > 0:
+            lines.append("")  # blank line between statements
+            if with_markers:
+                lines.append(SQL_STATEMENT_MARKER)
+                lines.append("")
+        if isinstance(script, str) and "\n" in script:
+            lines.extend(script.split("\n"))
+        else:
+            lines.append(script)
+    return lines
+
+
+def _render_sql_code(scripts: list[Any], code_name: str) -> list[str]:
+    """Render one code block, adding statement markers only when needed.
+
+    Markers are emitted only when the plain rendering cannot be parsed back
+    into the canonical statement array (:func:`canonical_sql_script`) -- i.e.
+    when the elements carry no trailing semicolons. The ``;``-terminated case
+    (the overwhelming majority) renders exactly as before, so existing trees
+    are byte-stable and produce no spurious diff.
+
+    Collision guard: if a statement's own text already contains a
+    marker-identical line, emitting boundaries would make the file ambiguous.
+    Markers are then suppressed for that code and a warning is logged -- the
+    round-trip degrades to the pre-#686 semicolon-only behaviour for it.
+    """
+    plain = _render_sql_script_lines(scripts, with_markers=False)
+    canonical = canonical_sql_script(scripts)
+    if _lines_to_script(plain, is_sql=True) == canonical:
+        return plain
+    if any(
+        isinstance(s, str) and any(line.strip() == SQL_STATEMENT_MARKER for line in s.split("\n"))
+        for s in scripts
+    ):
+        logger.warning(
+            "Code %r contains a line identical to the statement-boundary marker; "
+            "writing transform.sql without boundary markers. Statements without a "
+            "trailing semicolon may be merged on the next push.",
+            code_name,
+        )
+        return plain
+    return _render_sql_script_lines(scripts, with_markers=True)
+
+
 def _extract_sql_transformation(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Extract SQL blocks from parameters.blocks into transform.sql."""
     parameters = config_data.get("parameters") or {}
@@ -330,15 +439,7 @@ def _extract_sql_transformation(config_data: dict[str, Any], config_dir: Path) -
         for code in block.get("codes", []):
             code_name = code.get("name", "unnamed")
             lines.append(SQL_CODE_MARKER.format(name=code_name))
-
-            scripts = code.get("script") or []
-            for si, script in enumerate(scripts):
-                if si > 0:
-                    lines.append("")  # blank line between statements
-                if isinstance(script, str) and "\n" in script:
-                    lines.extend(script.split("\n"))
-                else:
-                    lines.append(script)
+            lines.extend(_render_sql_code(code.get("script") or [], code_name))
             lines.append("")
 
     sql_content = "\n".join(lines).rstrip() + "\n"

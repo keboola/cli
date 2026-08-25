@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from keboola_agent_cli.sync.code_extraction import (
+    SQL_STATEMENT_MARKER,
+    canonical_sql_script,
     extract_code_files,
     merge_code_files,
 )
@@ -693,3 +695,100 @@ class TestNonExtractableComponent:
         extract_code_files(component_id, config_data, config_dir)
 
         assert (config_dir / "transform.sql").exists()
+
+
+# ===================================================================
+# Statement-boundary markers (issue #686, part 3)
+# ===================================================================
+
+
+SQL_COMPONENT = "keboola.snowflake-transformation"
+
+
+def _sql_config(script: list[str]) -> dict[str, Any]:
+    """Build a minimal SQL-transformation config carrying one code block."""
+    return {
+        "parameters": {
+            "blocks": [{"name": "Block 1", "codes": [{"name": "Code 1", "script": list(script)}]}]
+        }
+    }
+
+
+def _script_of(config_data: dict[str, Any]) -> list[str]:
+    """Return the first code's script array."""
+    return config_data["parameters"]["blocks"][0]["codes"][0]["script"]
+
+
+class TestStatementMarkers:
+    """``transform.sql`` carries explicit statement boundaries when needed."""
+
+    def test_marker_written_when_semicolons_cannot_recover_boundaries(self, tmp_path: Path) -> None:
+        """No trailing semicolons -> an explicit marker separates the statements."""
+        config_data = _sql_config(["SELECT 1", "SELECT 2"])
+        config_dir = tmp_path / "no-semicolons"
+
+        extract_code_files(SQL_COMPONENT, config_data, config_dir)
+
+        content = (config_dir / "transform.sql").read_text(encoding="utf-8")
+        assert SQL_STATEMENT_MARKER in content
+
+    def test_marker_round_trip_preserves_statement_count(self, tmp_path: Path) -> None:
+        """The marked file merges back to the exact original array."""
+        original = ["SELECT 1", "SELECT 2", "SELECT 3"]
+        config_data = _sql_config(original)
+        config_dir = tmp_path / "no-semicolons-rt"
+
+        extract_code_files(SQL_COMPONENT, config_data, config_dir)
+        merge_code_files(SQL_COMPONENT, config_data, config_dir)
+
+        assert _script_of(config_data) == original
+
+    def test_no_marker_for_semicolon_terminated_scripts(self, tmp_path: Path) -> None:
+        """The common ``;``-terminated case stays byte-identical to before."""
+        config_data = _sql_config(["SELECT 1;", "SELECT 2;"])
+        config_dir = tmp_path / "semicolons"
+
+        extract_code_files(SQL_COMPONENT, config_data, config_dir)
+
+        content = (config_dir / "transform.sql").read_text(encoding="utf-8")
+        assert SQL_STATEMENT_MARKER not in content
+        assert "STATEMENT" not in content
+
+    def test_marker_segment_is_still_split_on_semicolons(self, tmp_path: Path) -> None:
+        """A user adding ``; SELECT ...`` inside a marked segment gets split (R3)."""
+        config_data = _sql_config(["SELECT 1", "SELECT 2"])
+        config_dir = tmp_path / "resplit-segment"
+        extract_code_files(SQL_COMPONENT, config_data, config_dir)
+
+        sql_file = config_dir / "transform.sql"
+        content = sql_file.read_text(encoding="utf-8")
+        sql_file.write_text(content.replace("SELECT 1", "SELECT 1; SELECT 9;"), encoding="utf-8")
+
+        merged: dict[str, Any] = {"parameters": {}}
+        merge_code_files(SQL_COMPONENT, merged, config_dir)
+
+        assert _script_of(merged) == ["SELECT 1;", "SELECT 9;", "SELECT 2"]
+
+    def test_marker_collision_falls_back_to_no_markers(self, tmp_path: Path) -> None:
+        """A statement whose own text holds a marker line disables marker emission."""
+        config_data = _sql_config([f"SELECT 1\n{SQL_STATEMENT_MARKER}", "SELECT 2"])
+        config_dir = tmp_path / "collision"
+
+        extract_code_files(SQL_COMPONENT, config_data, config_dir)
+
+        content = (config_dir / "transform.sql").read_text(encoding="utf-8")
+        # The marker text appears only as part of the statement itself -- exactly
+        # once -- never as an emitted boundary.
+        assert content.count(SQL_STATEMENT_MARKER) == 1
+
+    def test_canonical_sql_script_splits_each_element(self) -> None:
+        """Each element is split independently and the results flattened."""
+        assert canonical_sql_script(["SELECT 1; SELECT 2;", "SELECT 3"]) == [
+            "SELECT 1;",
+            "SELECT 2;",
+            "SELECT 3",
+        ]
+
+    def test_canonical_sql_script_drops_blank_elements(self) -> None:
+        """Whitespace-only elements vanish, matching the file round-trip."""
+        assert canonical_sql_script(["SELECT 1;", "   ", ""]) == ["SELECT 1;"]
