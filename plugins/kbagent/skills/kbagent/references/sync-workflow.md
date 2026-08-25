@@ -416,6 +416,11 @@ Stored in `.keboola/branch-mapping.json`:
 - **Pull protects local edits**: locally-modified files are skipped by default
 - **`--force` is conflict-aware (since 0.53.0)**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
+- **Push records the API's own view of what it wrote (since vNEXT, #686)**: the
+  manifest baseline (`pull_config_hash`) comes from the API response (or a
+  read-back), never from the files on disk. Before vNEXT the two producers
+  disagreed and every pushed multi-statement SQL transformation showed
+  permanent phantom `REMOTE MODIFIED` drift
 - **Encrypted values**: nonce differences are ignored in diff (no false positives)
 - **New configs**: push auto-assigns IDs from the API, updates manifest
 - **Storage metadata is read-only**: not tracked in manifest, excluded from diff/push
@@ -442,6 +447,39 @@ the 3-way diff state per config (and per row):
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > delete the file (or the config directory) and pull.
+
+## Migrating a tree pulled before vNEXT (#686)
+
+`sync push` used to stamp the manifest baseline from the files on disk while
+`sync pull` / `sync diff` computed it from the API. Any config the two
+producers disagreed about -- in practice every SQL transformation with two or
+more statements, plus anything disabled in the UI whose local YAML has no
+`is_disabled` key -- came back as `~ REMOTE MODIFIED` after every deploy, with
+the tree byte-identical to the remote.
+
+**What to do once per project: `kbagent sync pull --project <alias>`.**
+
+That single pull re-extracts the code files (writing
+`/* ===== STATEMENT ===== */` boundary markers where semicolons cannot recover
+the statement array) and stamps `metadata.config_hash_version` on each manifest
+entry. Commit the resulting `manifest.json` (plus any `transform.sql` that
+gained markers) and the phantom entries are gone for good -- no more
+content-free "refresh the baseline" PR after each deploy.
+
+Until that pull happens, kbagent is lenient with unversioned entries: a stored
+hash that matches the pre-vNEXT hash of the same remote config is treated as in
+sync. The leniency covers ONLY that difference -- a genuinely changed remote
+still reports `REMOTE MODIFIED`.
+
+One case is refused rather than pushed: if a pre-markers tree's only difference
+from the remote is the lost statement boundaries, `sync push` aborts THAT change
+with `SYNC_LEGACY_BOUNDARY` (other changes in the same push still go through)
+because pushing it would merge separate SQL statements into one -- the
+`MULTI_STATEMENT_COUNT=1` runtime failure. Pull the project, then push.
+
+If a config cannot be read back after a successful write, push leaves its
+baseline untouched and reports it under `warnings[]` in the result envelope;
+run `sync pull` to refresh it.
 
 ## Cloning a reference project (`sync clone`, since v0.63.0)
 

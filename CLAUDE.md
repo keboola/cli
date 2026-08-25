@@ -807,6 +807,18 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync push (since vNEXT, #686): the manifest baseline `pull_config_hash` is stamped from the API
+#   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
+#   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
+#   phantom `~ REMOTE MODIFIED` drift in `sync diff`. Unreadable-after-write leaves the baseline
+#   UNTOUCHED + a `warnings[]` entry (never a disk-derived fallback). One canonical script[] shape now
+#   (one element = one statement) and `transform.sql` gains `/* ===== STATEMENT ===== */` markers when
+#   semicolons cannot recover the boundaries -- which also closes a SILENT pre-vNEXT rewrite that
+#   collapsed such scripts to one statement (MULTI_STATEMENT_COUNT=1) while diff said "in sync".
+#   Migration: entries carry `metadata.config_hash_version`; unversioned ones match leniently (pre-vNEXT
+#   hash of the SAME remote counts as in sync, nothing else), and ONE `sync pull` per project migrates.
+#   A pre-markers tree whose only difference from the remote is the lost boundaries is REFUSED per-change
+#   with SYNC_LEGACY_BOUNDARY telling you to pull first; genuine edits push normally.
 # sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID.

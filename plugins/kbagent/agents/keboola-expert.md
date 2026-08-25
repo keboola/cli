@@ -256,7 +256,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
   `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
   branch's tree -- `sync pull` to re-target, never push. `sync status`
-  is local-only -- audit real drift with `sync diff`.
+  is local-only -- audit real drift with `sync diff`. On <= 0.90.1 a
+  `~ REMOTE MODIFIED ... codes changed` on a config nobody touched is usually
+  PHANTOM (issue #686: push stamped the baseline from disk); fixed in vNEXT --
+  one `sync pull` per project migrates a tree pulled by an older version, and
+  a `SYNC_LEGACY_BOUNDARY` push error means exactly that: pull first.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
   `--not-null` / `--default` must name a defined `--column`. In a dev branch
