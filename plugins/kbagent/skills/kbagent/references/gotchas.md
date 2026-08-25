@@ -4642,9 +4642,9 @@ directly to a workspace via the `KBC_<STACK>_<PROJECT>` shared database --
 Reach for `workspace load` only when the workflow actually needs the data
 materialized inside the workspace.
 
-## `permissions set` now rejects unknown patterns instead of silently persisting them (since vNEXT)
+## `permissions set` now rejects unknown patterns instead of silently persisting them
 
-Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
+*(since vNEXT)* Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
 accepted any string with zero validation. A typo like `tool.admin` or
 `stroage.upload-table` (missing the `-` in `storage`) was written straight to
 `config.json` as a dead rule that would never match anything -- the failure
