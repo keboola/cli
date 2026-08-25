@@ -7,10 +7,12 @@ import pytest
 from keboola_agent_cli.errors import PermissionDeniedError
 from keboola_agent_cli.models import PermissionPolicy
 from keboola_agent_cli.permissions import (
+    CLI_CATEGORY_PATTERNS,
     FLAG_ESCALATIONS,
     OPERATION_REGISTRY,
     PermissionEngine,
     find_inert_patterns,
+    pattern_matches_known_operation,
 )
 
 
@@ -107,6 +109,19 @@ class TestPermissionEngineAllowMode:
         engine = PermissionEngine(policy)
         assert engine.is_allowed("config.update") is True
         assert engine.is_allowed("job.run") is True
+        assert engine.is_allowed("config.list") is True
+
+    def test_persisted_typo_patterns_are_inert(self) -> None:
+        """Runtime evaluation stays lenient for ANY unmatched pattern, not just tool:*.
+
+        `permissions set` gates NEW writes against `pattern_matches_known_operation`,
+        but a policy already on disk from before that gate existed must still
+        load and evaluate without raising -- a dead pattern is a no-op, not a
+        crash. Only `permissions set` is strict; `PermissionEngine` stays lenient.
+        """
+        policy = PermissionPolicy(mode="allow", deny=["stroage.upload-table", "cli:reed"])
+        engine = PermissionEngine(policy)
+        assert engine.is_allowed("storage.upload-table") is True
         assert engine.is_allowed("config.list") is True
 
     def test_deny_with_allow_override(self) -> None:
@@ -417,22 +432,80 @@ class TestFlagEscalations:
         assert entry["status"] == "denied"
 
 
+class TestPatternMatchesKnownOperation:
+    """Tests for pattern_matches_known_operation() -- the shared validity check
+    used by both `permissions set` (to reject unknown patterns at write time)
+    and `find_inert_patterns` (to flag dead patterns already on disk).
+    """
+
+    def test_cli_category_patterns_are_valid(self) -> None:
+        for pattern in CLI_CATEGORY_PATTERNS:
+            assert pattern_matches_known_operation(pattern) is True
+
+    def test_exact_registry_key_is_valid(self) -> None:
+        assert pattern_matches_known_operation("config.list") is True
+        assert pattern_matches_known_operation("branch.delete") is True
+
+    def test_glob_matching_at_least_one_operation_is_valid(self) -> None:
+        # "storage.delete-*" matches storage.delete-table/-column/-bucket.
+        assert pattern_matches_known_operation("storage.delete-*") is True
+        # "sync.*" matches sync.push, sync.pull, ...
+        assert pattern_matches_known_operation("sync.*") is True
+
+    def test_flag_escalation_key_is_valid(self) -> None:
+        # Flag-escalated strings are real operation strings passed to
+        # is_allowed() (see commands/auth.py), so an exact match is valid.
+        assert pattern_matches_known_operation("auth.logout --remove-projects") is True
+
+    def test_unmatched_patterns_are_invalid(self) -> None:
+        assert pattern_matches_known_operation("tool.admin") is False
+        assert pattern_matches_known_operation("tool:read") is False
+        assert pattern_matches_known_operation("stroage.upload-table") is False
+        assert pattern_matches_known_operation("cli:reed") is False
+        assert pattern_matches_known_operation("") is False
+        assert pattern_matches_known_operation("   ") is False
+
+
 class TestFindInertPatterns:
-    """Tests for find_inert_patterns() -- dead rules in a pre-0.85 policy."""
+    """Tests for find_inert_patterns() -- dead rules in a persisted policy.
+
+    Generalized (issue #688): any pattern matching zero known operations is
+    flagged, not only the retired `tool:` namespace -- that namespace is now
+    just the most common historical cause.
+    """
 
     def test_none_policy_returns_empty(self) -> None:
         assert find_inert_patterns(None) == []
 
-    def test_returns_only_tool_namespace_patterns(self) -> None:
+    def test_flags_any_pattern_matching_no_operation(self) -> None:
+        """A typo'd operation is flagged exactly like a `tool:` pattern.
+
+        Order is preserved (allow first, then deny) and each dead pattern
+        that is well-formed (`cli:read`, `config.list`, `storage.*`) is left
+        out entirely.
+        """
         policy = PermissionPolicy(
             mode="deny",
-            allow=["tool:read", "cli:read", "config.list"],
-            deny=["tool:write", "branch.delete", "storage.*"],
+            allow=["tool:read", "cli:read", "config.list", "stroage.upload-table"],
+            deny=["tool:write", "branch.delete", "storage.*", "cli:reed"],
         )
-        assert find_inert_patterns(policy) == ["tool:read", "tool:write"]
+        assert find_inert_patterns(policy) == [
+            "tool:read",
+            "stroage.upload-table",
+            "tool:write",
+            "cli:reed",
+        ]
 
     def test_clean_policy_returns_empty(self) -> None:
         policy = PermissionPolicy(mode="allow", deny=["cli:write", "branch.delete"])
+        assert find_inert_patterns(policy) == []
+
+    def test_valid_globs_and_categories_are_not_flagged(self) -> None:
+        policy = PermissionPolicy(
+            mode="allow",
+            allow=["cli:admin", "sync.*"],
+            deny=["cli:write", "storage.delete-*"],
+        )
         assert find_inert_patterns(policy) == []
 
     def test_duplicates_are_reported_once(self) -> None:
