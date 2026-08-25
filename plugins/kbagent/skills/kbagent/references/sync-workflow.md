@@ -423,6 +423,40 @@ Stored in `.keboola/branch-mapping.json`:
 - **Data samples auto-trim**: tables with >30 columns export only first 30 (API sync limit)
 - **Encrypted columns masked**: columns starting with `#` show `***ENCRYPTED***` in samples
 
+## Ignored components
+
+*(since vNEXT)* Some components are excluded from every sync operation (`pull`, `diff`,
+`push`) because they are managed through separate APIs and have volatile
+internal state:
+
+- **Always ignored** -- `keboola.sandboxes` (Workspaces API) and
+  `keboola.mcp-server-tool` (the Keboola MCP server auto-creates one empty
+  workspace-record config per project it touches, `configuration: {}`, name
+  like `mcp-workspace-<hex>`). This is a hardcoded floor; no flag disables it.
+- **Project-configurable** -- the manifest field `ignoredComponents` in
+  `.keboola/manifest.json` adds project-specific exclusions on top of the
+  hardcoded list, without waiting for an upstream kbagent release:
+
+  ```json
+  {
+    "ignoredComponents": ["keboola.some-noisy-component"]
+  }
+  ```
+
+  The two sets are **unioned**: a component is ignored if it is hardcoded OR
+  listed in `ignoredComponents`.
+
+- **Pull cleanup.** When a component becomes ignored (either newly hardcoded
+  by a kbagent upgrade, or newly added to `ignoredComponents`), the next
+  `sync pull` drops its manifest entries and removes their local directories.
+  Those removals are reported with pull action `"ignored"` -- distinct from
+  `"removed"`, which means the config was genuinely deleted on the remote.
+- **Diff/push never see ignored configs**, on either side of the comparison:
+  a stale local directory for an ignored component is filtered out too, so it
+  can never be classified as `DELETED` and pushed as a remote deletion.
+- **Un-ignoring** a component: remove it from `ignoredComponents` and run
+  `sync pull` again -- it re-materializes like any newly-tracked config.
+
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 
 `--force` no longer blindly overwrites locally-modified configs. It branches on

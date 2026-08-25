@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands.sync import _pull_one_liner
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError, SyncConflictError
@@ -386,6 +387,65 @@ class TestSyncPullCli:
         assert "3" in result.output  # configs_pulled
         assert "1" in result.output  # rows_pulled
         assert "main" in result.output  # branch_dir
+
+    def test_sync_pull_renders_ignored_action(self, tmp_path: Path) -> None:
+        """The #689 ``ignored`` action gets its own line and is never folded
+        into "Removed from remote" -- the config still exists on the remote."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.pull.return_value = {
+            "status": "pulled",
+            "project_alias": "prod",
+            "branch_id": 12345,
+            "branch_dir": "main",
+            "configs_pulled": 1,
+            "rows_pulled": 0,
+            "files_written": 1,
+            "details": [
+                {
+                    "action": "ignored",
+                    "component_id": "keboola.mcp-server-tool",
+                    "config_name": "",
+                    "path": "application/keboola.mcp-server-tool/mcp",
+                },
+            ],
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+
+            result = runner.invoke(
+                app,
+                ["sync", "pull", "--project", "prod", "--directory", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "component now ignored" in result.output
+        assert "keboola.mcp-server-tool" in result.output
+        assert "Removed from remote" not in result.output
+
+    def test_pull_one_liner_counts_ignored(self) -> None:
+        """The multi-project one-liner reports ignored drops instead of
+        collapsing a pull that did something into "up to date"."""
+        details = [
+            {"action": "ignored", "component_id": "keboola.mcp-server-tool", "path": "a"},
+            {"action": "ignored", "component_id": "keboola.mcp-server-tool", "path": "b"},
+        ]
+
+        line = _pull_one_liner({"details": details})
+
+        assert "2 ignored" in line
+        assert "up to date" not in line
 
     def test_sync_pull_not_initialized_error(self, tmp_path: Path) -> None:
         """sync pull returns exit code 1 when project not initialized."""

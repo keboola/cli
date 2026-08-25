@@ -258,6 +258,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
   branch's tree -- `sync pull` to re-target, never push. `sync status`
   is local-only -- audit real drift with `sync diff`.
+- **Ignored components** (vNEXT, #689): `keboola.sandboxes` +
+  `keboola.mcp-server-tool` are always excluded from `pull`/`diff`/`push`,
+  unioned with the manifest's `ignoredComponents` list. A component newly
+  ignored is cleaned up on the next pull (manifest entry + local dir removed,
+  action `"ignored"`, distinct from `"removed"`); a stale local dir for an
+  already-ignored component can never classify as `DELETED` -- so
+  delete-dir-then-push is safe for those, but on <= 0.90.1 it still deletes
+  the config in production.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
   `--not-null` / `--default` must name a defined `--column`. In a dev branch

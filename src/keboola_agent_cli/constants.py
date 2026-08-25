@@ -665,9 +665,15 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # --- Ignored Components ---
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
+# A project may extend this set per working tree via the manifest's
+# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile
+        # MCP server workspace record: an empty configuration created
+        # automatically once per project by the Keboola MCP server. Carries no
+        # user-authored state, so syncing it is pure noise in every tree.
+        "keboola.mcp-server-tool",
     }
 )
 

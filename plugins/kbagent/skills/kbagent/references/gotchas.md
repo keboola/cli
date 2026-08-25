@@ -1337,7 +1337,9 @@ events and emits a final `done` SSE frame mirroring the same record.
   components sharing a config ID, a deleted parent config, or a failed lookup
   all yield `""` rather than a guess. A blank name never means the
   subscription is inactive.
-## Notification subscriptions can now be written, and the write path has sharp edges (since vNEXT)
+## Notification subscriptions can now be written, and the write path has sharp edges
+
+*(since vNEXT)*
 
 - **`notification replace-recipient` always mints a NEW `subscription_id`.**
   The Notification Service has **no update primitive** -- there is no PATCH or
@@ -4558,9 +4560,9 @@ shapes.
   today a deny policy gates only `/auth/*`, not the ~30 other routers a
   session token can otherwise reach.
 
-## `serve` honors the root-level `--config-dir` (since vNEXT)
+## `serve` honors the root-level `--config-dir`
 
-`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+*(since vNEXT)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
 flag has two possible positions. The precedence is **most specific wins**,
 matching what `kbagent repl` does with the root flags:
 
@@ -4583,9 +4585,9 @@ resolution is left to the server, which lands on the same directory anyway.
   -- if the aliases are not the ones in the directory you named, the flag was
   in the position your version ignores.
 
-## `workspace load` now auto-CLONEs eligible tables instead of always COPYing (since vNEXT, closes #687)
+## `workspace load` now auto-CLONEs eligible tables instead of always COPYing
 
-Before this, `workspace load` always sent a plain `copy` (the API's own
+*(since vNEXT, closes #687)* Before this, `workspace load` always sent a plain `copy` (the API's own
 default when `loadType` is omitted) -- a 282 GB table load burned warehouse
 credits for hours where `clone` is metadata-only and finishes in seconds.
 kbagent now mirrors the server's `LoadTypeDecider` per table.
@@ -4640,9 +4642,9 @@ directly to a workspace via the `KBC_<STACK>_<PROJECT>` shared database --
 Reach for `workspace load` only when the workflow actually needs the data
 materialized inside the workspace.
 
-## `permissions set` now rejects unknown patterns instead of silently persisting them (since vNEXT)
+## `permissions set` now rejects unknown patterns instead of silently persisting them
 
-Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
+*(since vNEXT)* Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
 accepted any string with zero validation. A typo like `tool.admin` or
 `stroage.upload-table` (missing the `-` in `storage`) was written straight to
 `config.json` as a dead rule that would never match anything -- the failure
@@ -4682,3 +4684,41 @@ was silent, and the only way to notice was reading `permissions show` (or
   `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
+
+## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
+
+*(since vNEXT)* `ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
+alongside `keboola.sandboxes`. The Keboola MCP server auto-creates one empty
+workspace-record config per project it touches (`configuration: {}`, name like
+`mcp-workspace-<hex>`); those configs carry no configuration and are managed
+through separate APIs, so `sync pull` no longer materializes them and
+`sync diff` / `sync push` no longer see them.
+
+The manifest field `ignoredComponents` (`.keboola/manifest.json`) was declared
+but dead before this change -- it is now **live**: components listed there are
+unioned with `ALWAYS_IGNORED_COMPONENTS` and excluded from `sync pull`,
+`sync diff`, and `sync push` (push builds on diff), letting a repo exclude
+volatile components without waiting for an upstream kbagent release.
+
+```json
+{
+  "ignoredComponents": ["keboola.some-noisy-component"]
+}
+```
+
+- **`pull` cleans up stale entries for a newly-ignored component**: the next
+  `sync pull` drops the manifest entry and removes the local directory,
+  reported with pull action `"ignored"` -- a distinct action from `"removed"`
+  (which means the config was genuinely deleted on remote). Do not conflate
+  the two when reading pull output.
+- **The delete-dir-then-push trap is closed for ignored components.** Because
+  `sync diff` also filters the LOCAL side by the ignored set, a stale manifest
+  entry for an ignored component can never classify as `DELETED` -- so
+  hand-deleting the directory of e.g. a `keboola.mcp-server-tool` config and
+  running `sync push` is now a no-op for that config instead of an accidental
+  production delete.
+- **On kbagent <= 0.90.1 the trap is still armed.** `keboola.mcp-server-tool`
+  configs were tracked like any other config, so deleting the local directory
+  and pushing DELETED the config in production. If you are stuck on an older
+  version, do not delete-dir-then-push a `keboola.mcp-server-tool` (or any
+  MCP-workspace) directory -- upgrade instead.

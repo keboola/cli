@@ -1423,6 +1423,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
+    Ignored components (since vNEXT, #689): keboola.sandboxes + keboola.mcp-server-tool are
+    always excluded, unioned with the manifest's ignoredComponents list
+    (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
+    component newly ignored has its manifest entry dropped and local dir removed on the next
+    pull, reported with details[].action "ignored" -- distinct from "removed", which means
+    the config was genuinely deleted on the remote.
 
   kbagent sync status [--directory DIR]
     Show local changes since last pull (SHA256-based). LOCAL check only --
@@ -1449,6 +1455,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
     non-zero summary.orphaned with `sync pull`; promote dev-only configs with
     `branch merge`, never by pushing them to production.
+    Ignored components (since vNEXT, #689) are excluded from BOTH sides of the comparison,
+    so a stale manifest entry or leftover dir for one of them contributes nothing --
+    not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
+    for them either (closes the delete-dir-then-push trap for ignored components).
 
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
