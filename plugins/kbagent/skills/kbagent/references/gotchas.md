@@ -4634,3 +4634,8 @@ was silent, and the only way to notice was reading `permissions show` (or
   pattern already on disk is a silent no-op when the policy is enforced, not
   a crash. Only `permissions set` is strict; this preserves backward
   compatibility for a pre-existing policy that happens to carry a typo.
+- **Version skew is a real rejection case, not just a typo.** A pattern
+  naming an operation that only exists on a newer kbagent version (a command
+  added after the running build was installed) is rejected the same as a
+  typo -- it would be inert on this build anyway -- so upgrade first, then
+  persist the pattern.

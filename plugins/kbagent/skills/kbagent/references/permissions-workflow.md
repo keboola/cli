@@ -27,6 +27,16 @@ The agent CANNOT:
 > denies everything. Rewrite such a policy with `cli:read`. `kbagent permissions
 > show` names any such pattern (key `inert_patterns` in `--json`) and `kbagent
 > doctor` WARNs via its `inert_permission_patterns` check.
+>
+> **(since vNEXT)** `permissions set` now validates every `--allow`/`--deny`
+> pattern before persisting it: it must be a `cli:*` category, an exact
+> operation name, or a glob matching >=1 known operation, else the call fails
+> with `VALIDATION_ERROR`, exit 2, before the confirmation prompt is even
+> shown. `permissions show` / `doctor` are generalized the same way -- they
+> now flag ANY persisted pattern matching zero operations (a typo included),
+> not only `tool:*`. `tool:*` remains the one historical case with its own
+> "MCP passthrough removed" hint; every other dead pattern gets a generic
+> "check for typos" hint instead.
 
 ## Common restriction recipes
 
@@ -96,7 +106,7 @@ kbagent --json permissions list
 | `cli:read` | All read-only CLI commands |
 | `branch.delete` | Exact command match |
 | `sync.*` | All sync subcommands (glob) |
-| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone) |
+| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone); `permissions set` REJECTS it as input (since vNEXT) -- only an already-persisted `tool:*` sticks around |
 
 ## Session firewall flags
 

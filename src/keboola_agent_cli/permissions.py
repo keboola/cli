@@ -417,7 +417,8 @@ INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-m
 # INERT_PATTERN_HINT so `permissions show` / `doctor` can point at the right
 # fix instead of always mentioning the MCP migration.
 UNMATCHED_PATTERN_HINT = (
-    "Check for typos against `kbagent permissions list`, or use cli:* categories."
+    "Check for typos against `kbagent permissions list`, or use a cli:* category "
+    "(cli:read, cli:write, cli:destructive, cli:admin)."
 )
 
 # The four risk-category patterns `_matches_pattern` special-cases. Exported

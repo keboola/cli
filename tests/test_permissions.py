@@ -11,6 +11,7 @@ from keboola_agent_cli.permissions import (
     FLAG_ESCALATIONS,
     OPERATION_REGISTRY,
     PermissionEngine,
+    _matches_pattern,
     find_inert_patterns,
     pattern_matches_known_operation,
 )
@@ -511,3 +512,55 @@ class TestFindInertPatterns:
     def test_duplicates_are_reported_once(self) -> None:
         policy = PermissionPolicy(mode="deny", allow=["tool:read"], deny=["tool:read"])
         assert find_inert_patterns(policy) == ["tool:read"]
+
+
+class TestValidatorEngineParity:
+    """`pattern_matches_known_operation` (the `permissions set` validator) must
+    never drift from `_matches_pattern` (the `PermissionEngine` matcher) --
+    that drift is exactly what issue #688 was: a pattern the validator judged
+    one way while the engine judged another, so a rejected-looking pattern
+    still silently matched nothing at runtime (or vice versa). This test pins
+    both sides against the same sample patterns so a future change to either
+    function that reopens the gap fails here, not in production.
+    """
+
+    ACCEPTED_GLOB_OR_EXACT: ClassVar[list[str]] = [
+        "sync.*",
+        "storage.delete-*",
+        "config.list",  # exact OPERATION_REGISTRY key
+        "auth.logout --remove-projects",  # exact FLAG_ESCALATIONS key
+        "*--remove-projects",  # glob matching a FLAG_ESCALATIONS key
+    ]
+
+    REJECTED_PATTERNS: ClassVar[list[str]] = [
+        "cli:*",  # looks like a category but is not one of the four literals
+        "tool:*",  # retired MCP-passthrough namespace
+        "tool.admin",
+        "stroage.upload-table",  # typo (missing the '-' in storage)
+        "",
+    ]
+
+    def test_accepted_glob_or_exact_patterns_match_at_least_one_known_operation(self) -> None:
+        """For non-category patterns, validator acceptance implies the engine
+        actually matches >=1 known operation string with the same pattern."""
+        known_ops = {**OPERATION_REGISTRY, **FLAG_ESCALATIONS}
+        for pattern in self.ACCEPTED_GLOB_OR_EXACT:
+            assert pattern_matches_known_operation(pattern) is True, pattern
+            assert any(_matches_pattern(op, pattern) for op in known_ops), pattern
+
+    def test_accepted_cli_categories_are_valid_via_the_category_branch(self) -> None:
+        """cli:* categories are valid by construction (CLI_CATEGORY_PATTERNS),
+        not by matching any operation string -- they are evaluated by
+        `_matches_pattern`'s dedicated category branch instead."""
+        for pattern in CLI_CATEGORY_PATTERNS:
+            assert pattern_matches_known_operation(pattern) is True, pattern
+
+    def test_rejected_patterns_are_invalid_and_never_match_any_operation(self) -> None:
+        """Every pattern `permissions set` refuses must also be one the engine
+        would never match -- otherwise the validator is rejecting something
+        that would actually work, or (for cli:*/tool:*) the rejection would
+        not mirror the engine's own "this never matches" behavior."""
+        known_ops = {**OPERATION_REGISTRY, **FLAG_ESCALATIONS}
+        for pattern in self.REJECTED_PATTERNS:
+            assert pattern_matches_known_operation(pattern) is False, pattern
+            assert not any(_matches_pattern(op, pattern) for op in known_ops), pattern
