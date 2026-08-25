@@ -5733,18 +5733,22 @@ class TestE2EBillingCredits:
 @skip_without_credentials
 @pytest.mark.e2e
 class TestE2ENotificationSubscriptions:
-    """End-to-end test for `kbagent notification list` / `detail` (issue #600).
+    """End-to-end test for `kbagent notification list` / `detail` / the write path (issue #600, #690).
 
-    The CLI has no write path for subscriptions, so this test cannot create
-    its own fixture: whether the E2E project has any Notifications-tab
-    subscription at all is out of its control. The honest contract to assert
-    is therefore the envelope and the live auth path -- that a plain project
-    Storage token reaches the notification sibling host and gets a well-formed
+    Most of the read-path tests below still cannot create their own fixture
+    for the *pre-existing* subscriptions they inspect: whether the E2E
+    project already has any Notifications-tab subscription (and how many
+    distinct events it spans) is out of their control -- creating a
+    subscription now costs a real write against the notification sibling
+    host, which most of these read-only assertions have no reason to pay for.
+    The honest contract for those is therefore the envelope and the live
+    auth path -- that a plain project Storage token reaches the notification
+    sibling host and gets a well-formed
     ``{"subscriptions": [...], "errors": [...], "project_wide_excluded": N}``
     back with exit 0, and that per-row shape and ``detail`` hold *when* rows
-    exist. That makes the test meaningful on an empty project (it still proves
-    the host derivation, auth, and envelope) and start covering the row path
-    the day a subscription is added, without needing a rewrite.
+    exist. That makes those tests meaningful on an empty project (they still
+    prove the host derivation, auth, and envelope) and start covering the
+    row path the day a subscription is added, without needing a rewrite.
 
     That vacuity is not free, and it already cost us once: the service turned
     out to IGNORE its documented ``?event=`` filter, and the assertion that
@@ -5754,6 +5758,11 @@ class TestE2ENotificationSubscriptions:
     visible gap; a green vacuous one is not. Populate the E2E project with a
     couple of Notifications-tab subscriptions on different events to turn
     them on.
+
+    Since #690 the CLI *does* have a write path (`create` / `delete` /
+    `replace-recipient`), and ``test_create_replace_recipient_delete_round_trip``
+    below uses it to create, mutate, and tear down its own subscription --
+    no pre-existing project data required, and no vacuity to skip around.
     """
 
     @pytest.fixture(autouse=True)
