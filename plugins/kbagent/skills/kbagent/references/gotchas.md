@@ -4639,3 +4639,8 @@ was silent, and the only way to notice was reading `permissions show` (or
   added after the running build was installed) is rejected the same as a
   typo -- it would be inert on this build anyway -- so upgrade first, then
   persist the pattern.
+- **`doctor --json`'s `inert_permission_patterns` check carries
+  `details.inert_since` only when at least one offending pattern is
+  `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
+  `stroage.upload-table`) omits the key entirely, so JSON consumers must not
+  assume `inert_since` is always present on `status: "warn"`.
