@@ -135,6 +135,7 @@ def scope_manifest(
     project_root: Path,
     source_branch_path: str,
     remote_keys: set[str],
+    ignored_components: frozenset[str] = frozenset(),
 ) -> TreeScope:
     """Partition ``manifest.configurations`` around *source_branch_path*.
 
@@ -146,6 +147,10 @@ def scope_manifest(
             only to word the orphan hint -- an entry that exists on the target
             needs a ``sync pull`` to re-target the manifest, one that does not
             needs ``branch merge`` to be promoted first.
+        ignored_components: Effective ignored-component set for this operation
+            (``ALWAYS_IGNORED_COMPONENTS`` plus the manifest's
+            ``ignoredComponents``). Entries for these components are dropped
+            from EVERY partition -- see below.
 
     Returns:
         A :class:`TreeScope`.
@@ -156,6 +161,19 @@ def scope_manifest(
     claims: dict[str, list[Claim]] = {}
 
     for cfg in manifest.configurations:
+        # Ignored-component guard (issue #689). The remote side of the diff
+        # filters these out, so a manifest entry left behind by an older pull
+        # -- or by the user adding a component to ``ignoredComponents`` and
+        # running diff/push before the next pull -- has no remote counterpart.
+        # ``compute_changeset`` reads that as "added" (keeping the existing
+        # config id), so every push CREATES a duplicate of a live config, and
+        # keeps doing so. Dropping the entry outright -- not into ``orphaned``:
+        # it is not another branch's business either, and ignoring is a
+        # deliberate choice rather than drift worth warning about -- keeps it
+        # out of the changeset and out of the claim map.
+        if cfg.component_id in ignored_components:
+            continue
+
         tree_path = branch_tree_path(manifest, cfg.branch_id)
         key = config_key(cfg.component_id, cfg.id)
 

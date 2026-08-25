@@ -37,14 +37,19 @@ def _setup_config(config_dir: Path, projects: dict[str, dict] | None = None) -> 
     return store
 
 
-def _run(args: list[str], store: ConfigStore, mock_service: MagicMock) -> Any:
+def _run(
+    args: list[str],
+    store: ConfigStore,
+    mock_service: MagicMock,
+    input: str | None = None,
+) -> Any:
     with (
         patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
         patch("keboola_agent_cli.cli.NotificationService") as MockNS,
     ):
         MockStore.return_value = store
         MockNS.return_value = mock_service
-        return runner.invoke(app, args)
+        return runner.invoke(app, args, input=input)
 
 
 def _row(**overrides: Any) -> dict[str, Any]:
@@ -305,6 +310,351 @@ class TestNotificationDetailCli:
 
 
 # ---------------------------------------------------------------------------
+# notification create
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationCreateCli:
+    def test_json_output_calls_service_with_all_args(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.return_value = _row()
+
+        result = _run(
+            [
+                "--json",
+                "notification",
+                "create",
+                "--project",
+                "prod",
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                "ops@example.com",
+                "--component-id",
+                "keboola.flow",
+                "--config-id",
+                "98765",
+                "--branch",
+                "123",
+                "--expires-at",
+                "2027-01-01T00:00:00Z",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = service.create_subscription.call_args.kwargs
+        assert kwargs["alias"] == "prod"
+        assert kwargs["event"] == "job-failed"
+        assert kwargs["channel"] == "email"
+        assert kwargs["address"] == "ops@example.com"
+        assert kwargs["component_id"] == "keboola.flow"
+        assert kwargs["config_id"] == "98765"
+        assert kwargs["branch_id"] == 123
+        assert kwargs["expires_at"] == "2027-01-01T00:00:00Z"
+        assert json.loads(result.output)["data"]["subscription_id"] == "1234"
+
+    def test_invalid_channel_exits_2_and_service_not_called(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "notification",
+                "create",
+                "--project",
+                "prod",
+                "--event",
+                "job-failed",
+                "--channel",
+                "slack",
+                "--address",
+                "ops@example.com",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 2
+        service.create_subscription.assert_not_called()
+
+    def test_human_output_renders_recipient(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.return_value = _row()
+
+        result = _run(
+            [
+                "notification",
+                "create",
+                "--project",
+                "prod",
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                "ops@example.com",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "ops@example.com" in result.output
+
+    def test_config_error_exits_5(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.side_effect = ConfigError("Project 'nope' not found")
+
+        result = _run(
+            [
+                "notification",
+                "create",
+                "--project",
+                "nope",
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                "ops@example.com",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 5
+
+
+# ---------------------------------------------------------------------------
+# notification delete
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationDeleteCli:
+    def test_yes_flag_calls_service(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.delete_subscription.return_value = {
+            "project_alias": "prod",
+            "subscription_id": "1234",
+            "deleted": True,
+        }
+
+        result = _run(
+            [
+                "notification",
+                "delete",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        service.delete_subscription.assert_called_once_with(alias="prod", subscription_id="1234")
+
+    def test_human_mode_without_yes_aborts_on_no(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            ["notification", "delete", "--project", "prod", "--subscription-id", "1234"],
+            store,
+            service,
+            input="n\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+        service.delete_subscription.assert_not_called()
+
+    def test_json_mode_needs_no_confirm(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.delete_subscription.return_value = {
+            "project_alias": "prod",
+            "subscription_id": "1234",
+            "deleted": True,
+        }
+
+        result = _run(
+            [
+                "--json",
+                "notification",
+                "delete",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        service.delete_subscription.assert_called_once()
+
+    def test_api_error_maps_to_exit_code(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.delete_subscription.side_effect = KeboolaApiError(
+            message="Not found", error_code="NOT_FOUND", status_code=404
+        )
+
+        result = _run(
+            [
+                "notification",
+                "delete",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "9",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# notification replace-recipient
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationReplaceRecipientCli:
+    def test_passes_address_and_channel_through(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.replace_subscription_recipient.return_value = {
+            "old_subscription_id": "1234",
+            "new_subscription_id": "5678",
+            "old_address": "old@example.com",
+            "old_deleted": True,
+            "warnings": [],
+            **_row(subscription_id="5678", address="new@example.com"),
+        }
+
+        result = _run(
+            [
+                "--json",
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+                "--channel",
+                "webhook",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = service.replace_subscription_recipient.call_args.kwargs
+        assert kwargs["alias"] == "prod"
+        assert kwargs["subscription_id"] == "1234"
+        assert kwargs["new_address"] == "new@example.com"
+        assert kwargs["new_channel"] == "webhook"
+
+    def test_human_output_prints_ids_and_warnings(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.replace_subscription_recipient.return_value = {
+            "old_subscription_id": "1234",
+            "new_subscription_id": "5678",
+            "old_address": "old@example.com",
+            "old_deleted": False,
+            "warnings": ["Old subscription 1234 was not deleted (a duplicate now exists)."],
+            **_row(subscription_id="5678", address="new@example.com"),
+        }
+
+        result = _run(
+            [
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "1234" in result.output
+        assert "5678" in result.output
+        assert "was not deleted" in result.output
+
+    def test_confirm_behavior_same_as_delete(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+            ],
+            store,
+            service,
+            input="n\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+        service.replace_subscription_recipient.assert_not_called()
+
+    def test_invalid_channel_exits_2_and_service_not_called(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+                "--channel",
+                "slack",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 2
+        service.replace_subscription_recipient.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # permissions
 # ---------------------------------------------------------------------------
 
@@ -322,3 +672,116 @@ class TestNotificationPermissions:
         result = _run(["--deny-writes", "notification", "list"], store, service)
 
         assert result.exit_code == 0
+
+    def test_deny_writes_blocks_create(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--deny-writes",
+                "notification",
+                "create",
+                "--project",
+                "prod",
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                "ops@example.com",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 6
+        service.create_subscription.assert_not_called()
+
+    def test_deny_writes_blocks_replace_recipient(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--deny-writes",
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 6
+        service.replace_subscription_recipient.assert_not_called()
+
+    def test_deny_writes_blocks_delete(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--deny-writes",
+                "notification",
+                "delete",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 6
+        service.delete_subscription.assert_not_called()
+
+    def test_deny_destructive_blocks_delete_but_allows_create(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        delete_result = _run(
+            [
+                "--deny-destructive",
+                "notification",
+                "delete",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--yes",
+            ],
+            store,
+            service,
+        )
+        assert delete_result.exit_code == 6
+        service.delete_subscription.assert_not_called()
+
+        service.create_subscription.return_value = _row()
+        create_result = _run(
+            [
+                "--deny-destructive",
+                "notification",
+                "create",
+                "--project",
+                "prod",
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                "ops@example.com",
+            ],
+            store,
+            service,
+        )
+        assert create_result.exit_code == 0, create_result.output
+        service.create_subscription.assert_called_once()

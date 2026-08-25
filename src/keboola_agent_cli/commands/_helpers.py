@@ -104,9 +104,14 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
     - INVALID_TOKEN -> 3 (authentication error)
-    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT -> 4
+    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT /
+      STORAGE_JOB_TIMEOUT -> 4
       (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
-      remote-kill attempt also failed, so the job may still be running)
+      remote-kill attempt also failed, so the job may still be running.
+      STORAGE_JOB_TIMEOUT is the same shape -- the Storage API has no
+      cancel, so the job is definitely still running server-side -- and it
+      used to fall through to the generic exit 1, which scripts could not
+      tell apart from a real failure.)
     - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
       (local --timeout elapsed and we successfully cancelled the remote
       job; scripts can distinguish "we killed it" from "it failed on its own")
@@ -129,6 +134,7 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
         "CONNECTION_ERROR",
         "RETRY_EXHAUSTED",
         "QUEUE_JOB_TIMEOUT",
+        ErrorCode.STORAGE_JOB_TIMEOUT,
     ):
         return 4
     if exc.error_code == ErrorCode.AUTH_FLOW_TIMEOUT:

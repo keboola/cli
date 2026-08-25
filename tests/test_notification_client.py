@@ -18,6 +18,8 @@ which the issue's original draft got wrong.
 
 from __future__ import annotations
 
+import json
+
 from keboola_agent_cli.client import KeboolaClient
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -153,6 +155,88 @@ class TestGetProjectSubscription:
             client.get_project_subscription("12/34")
 
         assert str(httpx_mock.get_requests()[0].url).endswith("/project-subscriptions/12%2F34")
+
+
+class TestCreateProjectSubscription:
+    def test_posts_minimal_body(self, httpx_mock) -> None:
+        response_payload = {
+            "id": "9999",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions",
+            method="POST",
+            json=response_payload,
+            status_code=201,
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            result = client.create_project_subscription(
+                event="job-failed",
+                recipient={"channel": "email", "address": "ops@example.com"},
+            )
+
+        assert result == response_payload
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 1
+        assert requests[0].method == "POST"
+        assert str(requests[0].url) == f"{NOTIFICATION_URL}/project-subscriptions"
+        assert json.loads(requests[0].content) == {
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+    def test_posts_filters_and_expires_at(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions",
+            method="POST",
+            json={"id": "9999"},
+            status_code=201,
+        )
+
+        filters = [{"field": "job.component.id", "value": "keboola.flow"}]
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            client.create_project_subscription(
+                event="job-failed",
+                recipient={"channel": "webhook", "url": "https://hooks.example.com/kbc"},
+                filters=filters,
+                expires_at="2027-01-01T00:00:00+00:00",
+            )
+
+        sent_body = json.loads(httpx_mock.get_requests()[0].content)
+        assert sent_body["filters"] == filters
+        assert sent_body["expiresAt"] == "2027-01-01T00:00:00+00:00"
+
+
+class TestDeleteProjectSubscription:
+    def test_deletes_by_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions/1234",
+            method="DELETE",
+            status_code=204,
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            result = client.delete_project_subscription("1234")
+
+        assert result is None
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 1
+        assert requests[0].method == "DELETE"
+        assert str(requests[0].url) == f"{NOTIFICATION_URL}/project-subscriptions/1234"
+
+    def test_delete_quotes_hostile_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions/..%2Fevil",
+            method="DELETE",
+            status_code=204,
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            client.delete_project_subscription("../evil")
+
+        assert str(httpx_mock.get_requests()[0].url).endswith("/project-subscriptions/..%2Fevil")
 
 
 class TestSubClientLifecycle:

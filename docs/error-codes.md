@@ -121,6 +121,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 |---|---|
 | `MISSING_QUERY` | No SQL query was provided |
 | `WORKSPACE_NOT_FOUND` | Workspace not found in the project |
+| `WORKSPACE_LOAD_COPY_TOO_LARGE` | `workspace load` refused to COPY a table over the 1 GB guard without confirmation; re-run with `--force` (or `--load-type clone` where the backend supports it) |
 
 ### Sync
 

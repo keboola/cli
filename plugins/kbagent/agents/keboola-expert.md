@@ -101,6 +101,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project P` (fetches the live schema; loop until clean) then `kbagent flow new` / `flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (0.66.1+; older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
 | Who gets notified when a flow fails | `kbagent notification list [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
+| Add / remove / re-point a notification recipient | `kbagent notification create --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (vNEXT+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
 | Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping derived from the name | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
 | Edit SQL transformation blocks/codes | `kbagent transformation show` (FRESH ids) then `kbagent transformation edit --config-id K --change-description T --op '{"op":"set_code",...}'` -- 9 ops, ids `b{i}` / `b{i}.c{j}`, `--storage` REPLACES wholesale | `kbagent config update --configuration @body.json` (auto-normalizes `script[]`) | `transformation edit` without a fresh `show` (positional ids renumber); raw `PUT` (skips `script[]` normalization) |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | -- | `job run` without `--wait` when the user expects the result |
@@ -123,7 +124,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Re-seed a table without losing schema / PK / dependents | `kbagent storage truncate-table --project P --table-id in.c-foo.data [--dry-run] [--yes]` -- rows only, uniformly async-via-job on every branch; batch via repeated `--table-id` | -- | drop + recreate (loses descriptions, PK, sharing edges, and breaks every downstream reference); deleting rows via raw SQL in a workspace (bypasses the Storage audit trail) |
 | Back up / restore a table around a risky change | `kbagent storage snapshot-create --table-id ...` then, to restore, `kbagent storage table-from-snapshot --snapshot-id ID --bucket-id B --name NEW` -- restore is always a NEW table (`--name` REQUIRED, no overwrite): verify it, then `swap-tables`. See [snapshot-workflow.md](../skills/kbagent/references/snapshot-workflow.md) | `storage snapshots` / `snapshot-detail` to find one | exporting to CSV as a "backup" (loses column types + PK); `create-table --snapshot-id` (not a thing) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
-| Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `workspace load` + `kbagent workspace query --sql "..."` -- results are inline and fast but **capped at `--limit`, default 500**: check `statements[].truncated` / `total_rows`, use `COUNT(*)` for counts, `--full` for the complete set | `kbagent workspace from-transformation` for existing-transform debugging; `workspace list --qs-compatible` for data-app reuse | trusting a default `SELECT *` as the full result; querying Storage via raw Snowflake credentials outside the workspace abstraction |
+| Ad-hoc SQL / row-count / type audit | `kbagent workspace create` + `workspace load` (since vNEXT auto-CLONEs eligible tables, else COPY; `--load-type` forces one and fails loudly if ineligible; COPY > 1 GiB needs `--force` outside a TTY) + `kbagent workspace query --sql "..."` -- results are inline and fast but **capped at `--limit`, default 500**: check `statements[].truncated` / `total_rows`, use `COUNT(*)` for counts, `--full` for the complete set | `kbagent workspace from-transformation` for existing-transform debugging; `workspace list --qs-compatible` for data-app reuse; read-only input-mapping (`KBC_<STACK>_<PROJECT>`) to query prod with no load at all | trusting a default `SELECT *` as the full result; querying Storage via raw Snowflake credentials outside the workspace abstraction |
 | Export a FILTERED or INCREMENTAL slice of a table (no workspace) | `kbagent storage download-table --table-id ... --where-column status --where-value active [--where-operator eq\|neq] [--changed-since "-2 days"]` -- server-side filter on the credential-only export path | `kbagent workspace query` with a `WHERE` clause when you need real SQL | downloading the whole table then filtering locally |
 | Run Keboola SQL / read-write Storage Files from INSIDE a Python process you control | `from keboola_agent_cli import Client` -- stateless `Client(url, token)`; `.query(workspace_id, sql)`, `.files.upload/.read_bytes/.list`; no subprocess, no `serve`, no config-dir. See [library-workflow.md](../skills/kbagent/references/library-workflow.md) | the CLI or `kbagent serve` REST when you are NOT already inside Python | shelling out to the `kbagent` binary from Python you control; using it for open-ended exploration (fixed set of typed ops) |
 | Inspect dev branch | `kbagent branch list --project P`, `kbagent branch use --project P --branch ID` | -- | acting on `main` when a dev branch exists |
@@ -261,6 +262,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   PHANTOM (issue #686: push stamped the baseline from disk); fixed in vNEXT --
   one `sync pull` per project migrates a tree pulled by an older version, and
   a `SYNC_LEGACY_BOUNDARY` push error means exactly that: pull first.
+- **Ignored components** (vNEXT, #689): `keboola.sandboxes` +
+  `keboola.mcp-server-tool` are always excluded from `pull`/`diff`/`push`,
+  unioned with the manifest's `ignoredComponents` list. A component newly
+  ignored is cleaned up on the next pull (manifest entry + local dir removed,
+  action `"ignored"`, distinct from `"removed"`); a stale local dir for an
+  already-ignored component can never classify as `DELETED` -- so
+  delete-dir-then-push is safe for those, but on <= 0.90.1 it still deletes
+  the config in production.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
   `--not-null` / `--default` must name a defined `--column`. In a dev branch
@@ -376,6 +385,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
   skill).
 
+**`permissions set --allow/--deny` validates patterns (since vNEXT)**
+- A typo'd or fabricated pattern (`tool.admin`, `stroage.*`) fails fast with
+  `VALIDATION_ERROR`, exit 2, instead of persisting silently -- valid inputs
+  are `cli:*` categories, exact operation names, or globs matching >=1
+  operation (check with `kbagent permissions list`).
+
 ---
 
 ## 4. WORKFLOWS (reference playbooks)
@@ -447,7 +462,8 @@ kbagent --json job run --project P --component-id keboola.flow --config-id F --w
 # Spin up fresh workspace
 kbagent --json workspace create --project P --name debug-$(date +%s)
 
-# Load tables, run query
+# Load tables, run query (default auto-CLONEs eligible tables, else COPY;
+# a COPY over 1 GiB needs --force outside a TTY)
 kbagent --json workspace load --project P --workspace-id W --tables in.c-bucket.tbl
 kbagent --json workspace query --project P --workspace-id W --sql "SELECT ..."
 

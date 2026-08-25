@@ -161,6 +161,22 @@ STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
+# --- Workspace Table Loading ---
+# A workspace load is NOT fire-and-forget: when the local poller gives up, the
+# server-side job keeps running (and keeps consuming warehouse resources). The
+# 60s STORAGE_JOB_MAX_WAIT default was far too short for a real COPY, so a
+# perfectly healthy load routinely surfaced as a timeout. A zero-copy CLONE
+# finishes in seconds; a COPY of a multi-GB table can take minutes.
+WORKSPACE_LOAD_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace-load jobs
+# Above this on-disk size, a COPY (physical data movement, billed warehouse
+# time) needs an explicit confirmation or --force. CLONE is zero-copy and is
+# never guarded.
+WORKSPACE_LOAD_COPY_GUARD_BYTES: int = 1024**3  # 1 GiB
+# Load types accepted by `workspace load --load-type` (lowercase on the CLI,
+# uppercased on the wire -- the Storage API validator matches the uppercase
+# enum). Omitting the flag means "auto": CLONE where eligible, else COPY.
+WORKSPACE_LOAD_TYPES: tuple[str, ...] = ("clone", "copy", "view")
+
 # --- Queue Job Polling ---
 # Piecewise curve matching FIIA's existing Queue API polling contract
 # (same cadence as the official keboola-as-code Go CLI): fast initial polls
@@ -656,9 +672,15 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # --- Ignored Components ---
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
+# A project may extend this set per working tree via the manifest's
+# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile
+        # MCP server workspace record: an empty configuration created
+        # automatically once per project by the Keboola MCP server. Carries no
+        # user-authored state, so syncing it is pure noise in every tree.
+        "keboola.mcp-server-tool",
     }
 )
 

@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import (
-    ALWAYS_IGNORED_COMPONENTS,
     CONFIG_FILENAME,
     CONFIG_HASH_VERSION,
     CONFIG_HASH_VERSION_KEY,
@@ -450,6 +449,7 @@ def detect_force_pull_conflicts(
     components: list[dict[str, Any]],
     branch_dir: Path,
     *,
+    ignored_components: frozenset[str],
     existing_keys: set[str],
     existing_paths: dict[str, str],
     existing_file_hashes: dict[str, str],
@@ -475,11 +475,16 @@ def detect_force_pull_conflicts(
     mistaken for a remote edit and does not abort an otherwise clean
     ``--force`` pull. Rows are compared strictly -- their hash producer never
     changed.
+
+    ``ignored_components`` is the caller's pre-computed effective set
+    (``SyncService._effective_ignored_components``: the hardcoded always-ignored
+    components plus the manifest's ``ignoredComponents``, issue #689) so this
+    guard can never disagree with pull/diff about what is ignored.
     """
     conflicts: list[dict[str, str]] = []
     for component in components:
         component_id = component.get("id", "")
-        if component_id in ALWAYS_IGNORED_COMPONENTS:
+        if component_id in ignored_components:
             continue
         for cfg in component.get("configurations", []):
             config_id = str(cfg.get("id", ""))

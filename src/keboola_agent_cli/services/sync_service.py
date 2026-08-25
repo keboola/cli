@@ -448,6 +448,21 @@ class SyncService(BaseService):
                 return False
         return True
 
+    @staticmethod
+    def _effective_ignored_components(manifest: Manifest) -> frozenset[str]:
+        """Components excluded from this working tree's sync operations.
+
+        The hardcoded :data:`ALWAYS_IGNORED_COMPONENTS` plus the manifest's
+        ``ignoredComponents``, which was declared in the schema from day one
+        but read by nothing until issue #689. Computed ONCE per pull/diff and
+        threaded through every filtering site so the remote side, the local
+        side and the force-pull conflict guard can never disagree about what is
+        ignored -- a disagreement is what turns a tracked-but-unfetchable
+        config into a phantom "added" that ``sync push`` duplicates on the
+        remote, once per push.
+        """
+        return ALWAYS_IGNORED_COMPONENTS | frozenset(manifest.ignored_components)
+
     def pull(
         self,
         alias: str,
@@ -598,6 +613,10 @@ class SyncService(BaseService):
                     "pull_config_hash": r.metadata.get("pull_config_hash", ""),
                 }
 
+        # Resolved once and shared by the conflict guard, the fetch loop and
+        # the stale-entry sweep below -- see ``_effective_ignored_components``.
+        ignored_components = self._effective_ignored_components(manifest)
+
         # Force-pull conflict guard (force-pull baseline corruption fix).
         # ``--force`` bypasses the "preserve locally-modified files" guard
         # below, so a config edited locally AND changed on the remote since the
@@ -615,6 +634,7 @@ class SyncService(BaseService):
                 self,
                 components,
                 branch_dir,
+                ignored_components=ignored_components,
                 existing_keys=existing_keys,
                 existing_paths=existing_paths,
                 existing_file_hashes=existing_file_hashes,
@@ -626,7 +646,7 @@ class SyncService(BaseService):
 
         for component in components:
             component_id = component.get("id", "")
-            if component_id in ALWAYS_IGNORED_COMPONENTS:
+            if component_id in ignored_components:
                 continue
             component_type = classify_component_type(component.get("type", "other"))
             configs = component.get("configurations", [])
@@ -974,24 +994,35 @@ class SyncService(BaseService):
                     )
                 )
 
-        # Detect configs removed from remote (in old manifest but not in new)
+        # Detect configs dropped from the manifest (in old manifest but not in
+        # new). Two distinct causes, reported apart (issue #689): the config was
+        # deleted on the remote ("removed"), or its component is now ignored
+        # ("ignored" -- the fetch loop above never produced an entry for it).
+        # Conflating them would report a live production config as gone from
+        # the remote, which is exactly the wrong thing to tell a user deciding
+        # whether to restore it. The on-disk cleanup is identical either way:
+        # an ignored config has no business sitting in the tree, and git keeps
+        # the removal reviewable.
         new_keys = {f"{c.component_id}/{c.id}" for c in new_configurations}
         for old_cfg in manifest.configurations:
             old_key = f"{old_cfg.component_id}/{old_cfg.id}"
             if old_key not in new_keys:
+                stale_action = (
+                    "ignored" if old_cfg.component_id in ignored_components else "removed"
+                )
                 pull_details.append(
                     {
-                        "action": "removed",
+                        "action": stale_action,
                         "component_id": old_cfg.component_id,
                         "config_name": "",
                         "path": old_cfg.path,
                     }
                 )
 
-        # Delete orphaned directories for removed configurations
+        # Delete orphaned directories for removed / newly-ignored configurations
         if not dry_run:
             for detail in pull_details:
-                if detail["action"] == "removed" and detail.get("path"):
+                if detail["action"] in ("removed", "ignored") and detail.get("path"):
                     orphan_dir = branch_dir / detail["path"]
                     if orphan_dir.exists() and orphan_dir.is_dir():
                         shutil.rmtree(orphan_dir)
@@ -1172,6 +1203,10 @@ class SyncService(BaseService):
             components = client.list_components_with_configs(branch_id=branch_id)
             self._ensure_branch_registered(manifest, branch_id, client)
 
+        # One ignored set for BOTH sides of this diff -- the remote lookups
+        # below and the local scoping further down.
+        ignored_components = self._effective_ignored_components(manifest)
+
         # Build remote lookups:
         #   remote_configs: "{component_id}/{config_id}" -> parent config data
         #   remote_rows:    "{component_id}/{parent_config_id}/rows/{row_id}" -> row data
@@ -1183,7 +1218,7 @@ class SyncService(BaseService):
         remote_raw: dict[str, dict[str, Any]] = {}
         for component in components:
             component_id = component.get("id", "")
-            if component_id in ALWAYS_IGNORED_COMPONENTS:
+            if component_id in ignored_components:
                 continue
             for cfg in component.get("configurations", []):
                 config_id = str(cfg.get("id", ""))
@@ -1207,7 +1242,13 @@ class SyncService(BaseService):
         # They are excluded and reported under ``orphaned`` instead.
         source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
         remote_keys = set(remote_configs)
-        scope = scope_manifest(manifest, project_root, source_branch_path, remote_keys)
+        scope = scope_manifest(
+            manifest,
+            project_root,
+            source_branch_path,
+            remote_keys,
+            ignored_components=ignored_components,
+        )
         never_fetched = scope.never_fetched
         never_fetched_keys = scope.never_fetched_keys
         tracked_keys = scope.tracked_keys
@@ -1286,11 +1327,16 @@ class SyncService(BaseService):
         for added_cfg in self._find_untracked_configs(
             project_root, manifest, only_branch_path=source_branch_path
         ):
+            component_id = added_cfg.get("component_id", "unknown")
+            # An ignored component's leftover directory (its manifest entry is
+            # gone, so the walk sees it as untracked) must not be planned as a
+            # create -- push would re-add exactly what pull refuses to fetch.
+            if component_id in ignored_components:
+                continue
             config_dir = project_root / source_branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
-            component_id = added_cfg.get("component_id", "unknown")
             merge_code_files(component_id, local_data, config_dir)
             # Adopt-by-id guard (issues #482 / #649): an untracked file whose
             # ``_keboola.config_id`` resolves on the target branch and is not
@@ -1393,6 +1439,11 @@ class SyncService(BaseService):
         for untracked in self._find_untracked_rows(
             project_root, manifest, only_branch_path=source_branch_path
         ):
+            # Same guard as the untracked configs above: the row walk keys off
+            # ``manifest.configurations`` directly, so a still-tracked ignored
+            # parent would otherwise contribute row creates.
+            if untracked["component_id"] in ignored_components:
+                continue
             local_rows.append(
                 {
                     "component_id": untracked["component_id"],

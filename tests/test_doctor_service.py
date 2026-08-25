@@ -872,6 +872,39 @@ class TestDoctorServiceCheckInertPermissionPatterns:
         assert result["details"]["inert_since"] == "0.85.0"
         assert result["details"]["mode"] == "deny"
 
+    def test_warn_lists_generic_dead_patterns_without_tool_prefix(self) -> None:
+        """Generalized detection (issue #688): a typo'd pattern is flagged too,
+        with no MCP-migration hint or `inert_since` (that context is meaningless
+        for a pattern that never had anything to do with the retired `tool:`
+        namespace)."""
+        config = AppConfig(
+            permissions=PermissionPolicy(mode="allow", deny=["stroage.upload-table", "cli:reed"])
+        )
+
+        result = DoctorService._check_inert_permission_patterns(config)
+
+        assert result["status"] == "warn"
+        assert "stroage.upload-table" in result["message"]
+        assert "cli:reed" in result["message"]
+        assert "match no known operation" in result["message"]
+        assert "docs/mcp-migration.md" not in result["message"]
+        assert result["details"]["patterns"] == ["stroage.upload-table", "cli:reed"]
+        assert "inert_since" not in result["details"]
+        assert result["details"]["mode"] == "allow"
+
+    def test_warn_mentions_both_hints_for_a_mixed_policy(self) -> None:
+        """A policy carrying both a `tool:` pattern and a plain typo gets both hints."""
+        config = AppConfig(
+            permissions=PermissionPolicy(mode="allow", deny=["tool:write", "cli:reed"])
+        )
+
+        result = DoctorService._check_inert_permission_patterns(config)
+
+        assert result["status"] == "warn"
+        assert "docs/mcp-migration.md" in result["message"]
+        assert "kbagent permissions list" in result["message"]
+        assert result["details"]["inert_since"] == "0.85.0"
+
     def test_check_is_registered_in_run_checks(self, tmp_config_dir: Path) -> None:
         store = ConfigStore(config_dir=tmp_config_dir)
         config = store.load()
