@@ -13,46 +13,91 @@ from typing import Any
 import yaml
 
 from ..constants import CONFIG_YML_VERSION
+from .code_extraction import canonical_sql_script, is_sql_transformation_component
 
 
-def _normalize_scripts(parameters: Any) -> Any:
+def _iter_codes(parameters: dict[str, Any]) -> Any:
+    """Yield every ``blocks[].codes[]`` dict in a transformation's parameters."""
+    for block in parameters.get("blocks", []):
+        if not isinstance(block, dict):
+            continue
+        for code in block.get("codes", []):
+            if isinstance(code, dict):
+                yield code
+
+
+def _join_script(scripts: list[Any]) -> list[str]:
+    """Collapse a code's ``script[]`` into a single joined string.
+
+    The non-SQL shape: Python / R / custom-app components carry ONE code
+    body per code block, and the push side (``_lines_to_script`` without
+    ``is_sql``) produces exactly one element, so both sides agree.
+    """
+    all_lines: list[str] = []
+    for s in scripts:
+        if isinstance(s, str) and "\n" in s:
+            all_lines.extend(s.split("\n"))
+        else:
+            all_lines.append(s)
+    # Strip trailing whitespace per line (YAML roundtrip strips it) and
+    # remove trailing empty lines.
+    all_lines = [line.rstrip() for line in all_lines]
+    while all_lines and all_lines[-1] == "":
+        all_lines.pop()
+    return ["\n".join(all_lines)] if all_lines else []
+
+
+def _normalize_scripts(parameters: Any, component_id: str) -> Any:
     """Normalize script arrays in transformation parameters.
 
     The Keboola API inconsistently returns code scripts as either:
     - ``["line1", "line2", ...]`` (per-line array)
     - ``["full\\ncode\\nwith\\nnewlines"]`` (single multiline string)
 
-    This normalizes to single-string-per-code-block format so that local
-    merge (which produces single-string via ``_lines_to_script``) and
-    remote data compare identically.  The Keboola transformation runner
-    treats each array element as a separate executable statement, so each
-    CODE block must be a single joined string.
+    The normalization is COMPONENT-AWARE (issue #686). Both sides of every
+    hash comparison must agree on what ``script[]`` looks like, and the push
+    side (``code_extraction._lines_to_script``) has split SQL on statement
+    boundaries since PR #120:
+
+    - **SQL transformations** (:func:`is_sql_transformation_component`):
+      one element per executable statement, via
+      :func:`canonical_sql_script` -- each existing element split
+      independently and flattened, never joined first.
+    - **Everything else**: joined into a single string per code block,
+      matching ``_lines_to_script``'s non-SQL branch.
+
+    Until #686 this function always collapsed to one element, which no SQL
+    transformation with two or more statements could ever match -- the
+    permanent ``~ REMOTE MODIFIED`` phantom drift after every ``sync push``.
     """
     if not isinstance(parameters, dict):
         return parameters
     params = copy.deepcopy(parameters)
-    for block in params.get("blocks", []):
-        if not isinstance(block, dict):
-            continue
-        for code in block.get("codes", []):
-            if not isinstance(code, dict):
-                continue
-            scripts = code.get("script")
-            if isinstance(scripts, list) and scripts:
-                # Flatten everything into individual lines first.
-                all_lines: list[str] = []
-                for s in scripts:
-                    if isinstance(s, str) and "\n" in s:
-                        all_lines.extend(s.split("\n"))
-                    else:
-                        all_lines.append(s)
-                # Strip trailing whitespace per line (YAML roundtrip
-                # strips it) and remove trailing empty lines.
-                all_lines = [line.rstrip() for line in all_lines]
-                while all_lines and all_lines[-1] == "":
-                    all_lines.pop()
-                # Join into a single string per code block.
-                code["script"] = ["\n".join(all_lines)] if all_lines else []
+    is_sql = is_sql_transformation_component(component_id)
+    for code in _iter_codes(params):
+        scripts = code.get("script")
+        if isinstance(scripts, list) and scripts:
+            code["script"] = canonical_sql_script(scripts) if is_sql else _join_script(scripts)
+    return params
+
+
+def _normalize_scripts_legacy(parameters: Any) -> Any:
+    """Pre-#686 normalization: collapse every code's ``script[]`` into one.
+
+    Kept for ONE purpose: recomputing the hash a pre-#686 kbagent would have
+    stored, so a manifest entry without ``config_hash_version`` can be
+    recognised as "in sync apart from the script shape" instead of being
+    re-classified as drift on the first run after the upgrade. It is never
+    used to produce data that is written anywhere -- only to compare against
+    an already-stored hash, and always from the RAW API config.
+    """
+    if not isinstance(parameters, dict):
+        return parameters
+    params = copy.deepcopy(parameters)
+    for code in _iter_codes(params):
+        scripts = code.get("script")
+        if isinstance(scripts, list) and scripts:
+            code["script"] = _join_script(scripts)
     return params
 
 
@@ -109,7 +154,11 @@ def classify_component_type(api_type: str) -> str:
 
 
 def api_config_to_local(
-    component_id: str, config_data: dict[str, Any], config_id: str
+    component_id: str,
+    config_data: dict[str, Any],
+    config_id: str,
+    *,
+    legacy_scripts: bool = False,
 ) -> dict[str, Any]:
     """Convert an API configuration response to the local ``_config.yml`` structure.
 
@@ -128,6 +177,13 @@ def api_config_to_local(
     Any remaining keys inside ``configuration`` that are not explicitly
     promoted are preserved under a ``_configuration_extra`` key so that
     round-tripping does not lose data.
+
+    Args:
+        legacy_scripts: Migration compatibility only (issue #686). When True,
+            ``parameters`` is normalized with the pre-#686 collapse
+            (:func:`_normalize_scripts_legacy`) so the caller can recompute
+            the hash an older kbagent would have stored for this same remote
+            config. Never pass it on a path that WRITES the result.
     """
     configuration: dict[str, Any] = config_data.get("configuration") or {}
 
@@ -141,7 +197,11 @@ def api_config_to_local(
 
     # Promote well-known nested keys
     if "parameters" in configuration:
-        local["parameters"] = _normalize_scripts(configuration["parameters"])
+        local["parameters"] = (
+            _normalize_scripts_legacy(configuration["parameters"])
+            if legacy_scripts
+            else _normalize_scripts(configuration["parameters"], component_id)
+        )
 
     storage: dict[str, Any] = configuration.get("storage") or {}
     if "input" in storage:

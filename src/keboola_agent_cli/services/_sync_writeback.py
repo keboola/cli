@@ -15,13 +15,104 @@ from typing import TYPE_CHECKING, Any
 from ..errors import KeboolaApiError
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
-from ._sync_models import WritebackResult
+from ._sync_baseline import apply_stamp, config_baseline
+from ._sync_models import LocalConfigHashes, WritebackResult
 
 if TYPE_CHECKING:
     from ..sync.manifest import Manifest
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
+
+
+def stamp_created_config(
+    client: Any,
+    *,
+    manifest: Manifest,
+    component_id: str,
+    branch_id: int | None,
+    config_path_str: str,
+    new_id: str,
+    hashes: LocalConfigHashes,
+    response: Any,
+    warnings: list[dict[str, str]],
+) -> WritebackResult:
+    """Record a created config with an API-derived ``pull_config_hash`` (#686).
+
+    ``pull_hash`` describes the local file and stays disk-derived; the config
+    hash is the API's own view of what was just written, so the next
+    ``sync diff`` compares like with like.
+    """
+    stamp = config_baseline(
+        client,
+        component_id=component_id,
+        config_id=new_id,
+        branch_id=branch_id,
+        response=response,
+    )
+    if stamp.warning is not None:
+        warnings.append(stamp.warning)
+    writeback = writeback_create_config_in_manifest(
+        manifest=manifest,
+        component_id=component_id,
+        branch_id=branch_id,
+        config_path_str=config_path_str,
+        new_id=new_id,
+        file_hash=hashes.file_hash,
+        cfg_hash=stamp.cfg_hash,
+    )
+    apply_stamp(writeback.entry.metadata, stamp)
+    return writeback
+
+
+def stamp_updated_config(
+    client: Any,
+    *,
+    manifest: Manifest,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    config_path_str: str,
+    hashes: LocalConfigHashes,
+    response: Any,
+    warnings: list[dict[str, str]],
+) -> None:
+    """Refresh a pushed config's manifest bookkeeping from the API state (#686).
+
+    When the API state cannot be established (partial response AND a failed
+    read-back), ``pull_config_hash`` is left exactly as it was: visibly stale
+    beats confidently wrong, and a disk-derived value is what created the
+    phantom drift in the first place.
+
+    An update that finds no manifest entry is an adopted-by-id config (issue
+    #497) -- an untracked local file whose ``_keboola.config_id`` resolved on
+    the branch. It is registered here so later diffs read a stable entry.
+    """
+    stamp = config_baseline(
+        client,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        response=response,
+    )
+    if stamp.warning is not None:
+        warnings.append(stamp.warning)
+    for cfg in manifest.configurations:
+        if cfg.component_id == component_id and cfg.id == config_id:
+            cfg.metadata["pull_hash"] = hashes.file_hash
+            cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+            apply_stamp(cfg.metadata, stamp)
+            return
+    entry = writeback_create_config_in_manifest(
+        manifest=manifest,
+        component_id=component_id,
+        branch_id=branch_id,
+        config_path_str=config_path_str,
+        new_id=config_id,
+        file_hash=hashes.file_hash,
+        cfg_hash=stamp.cfg_hash,
+    ).entry
+    apply_stamp(entry.metadata, stamp)
 
 
 def writeback_create_config_in_manifest(

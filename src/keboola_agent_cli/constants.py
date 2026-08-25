@@ -645,6 +645,13 @@ DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
 # Manifest v3 introduces ManifestConfigRow.metadata (row-level pull hashes) but does
 # not change the on-disk YAML shape, so CONFIG_YML_VERSION stays at 2.
 CONFIG_YML_VERSION: int = 2
+# Shape version of the manifest's ``pull_config_hash``, stored per entry under
+# ``metadata.config_hash_version`` (issue #686). Version 2 = SQL transformation
+# ``script[]`` normalized to one element per statement. An entry WITHOUT the key
+# predates the fix: its stored hash may be the legacy collapsed shape, which
+# `sync diff` / `sync pull` accept leniently until the next pull re-stamps it.
+CONFIG_HASH_VERSION: int = 2
+CONFIG_HASH_VERSION_KEY: str = "config_hash_version"
 SANITIZE_NAME_MAX_LENGTH: int = 100
 # How many `orphaned` rows `sync diff` / `sync push` print in human mode before
 # collapsing the rest into a count. A manifest re-targeted by

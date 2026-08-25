@@ -838,6 +838,18 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync push (since vNEXT, #686): the manifest baseline `pull_config_hash` is stamped from the API
+#   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
+#   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
+#   phantom `~ REMOTE MODIFIED` drift in `sync diff`. Unreadable-after-write leaves the baseline
+#   UNTOUCHED + a `warnings[]` entry (never a disk-derived fallback). One canonical script[] shape now
+#   (one element = one statement) and `transform.sql` gains `/* ===== STATEMENT ===== */` markers when
+#   semicolons cannot recover the boundaries -- which also closes a SILENT pre-vNEXT rewrite that
+#   collapsed such scripts to one statement (MULTI_STATEMENT_COUNT=1) while diff said "in sync".
+#   Migration: entries carry `metadata.config_hash_version`; unversioned ones match leniently (pre-vNEXT
+#   hash of the SAME remote counts as in sync, nothing else), and ONE `sync pull` per project migrates.
+#   A pre-markers tree whose only difference from the remote is the lost boundaries is REFUSED per-change
+#   with SYNC_LEGACY_BOUNDARY telling you to pull first; genuine edits push normally.
 # sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
 # Ignored components (since vNEXT, #689): keboola.mcp-server-tool joins keboola.sandboxes on ALWAYS_IGNORED_COMPONENTS (the MCP server's auto-created empty mcp-workspace-<hex> configs); the manifest field ignoredComponents (.keboola/manifest.json) is now LIVE and unions with the hardcoded set, honored by pull/diff/push. pull drops manifest entries + local dirs for a newly-ignored component, reported with action "ignored" (distinct from "removed" = deleted on remote); diff filters the local side too, so a stale dir for an ignored component can never classify as DELETED -- closes the delete-dir-then-push trap that used to destroy production keboola.mcp-server-tool configs.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]

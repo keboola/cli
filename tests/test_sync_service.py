@@ -3540,6 +3540,32 @@ class TestFreshCreateVariableBinding:
         client.create_config.side_effect = fake_create_config
         client.create_config_row.return_value = {"id": "VALS-9"}
         client.update_config.return_value = {"id": "TX-9"}
+
+        # ``sync push`` reads each written config/row back to stamp an
+        # API-derived manifest baseline (issue #686). The mutation responses
+        # above are id-only, so serve the read-back from the post-push remote.
+        remote = self._remote_after_create()
+
+        def fake_detail(component_id: str, config_id: str, branch_id: Any = None) -> dict[str, Any]:
+            for component in remote:
+                if component["id"] != component_id:
+                    continue
+                for config in component["configurations"]:
+                    if config["id"] == config_id:
+                        return dict(config)
+            raise KeyError(config_id)
+
+        def fake_row(
+            component_id: str, config_id: str, row_id: str, branch_id: Any = None
+        ) -> dict[str, Any]:
+            parent = fake_detail(component_id, config_id)
+            for row in parent.get("rows", []):
+                if row["id"] == row_id:
+                    return dict(row)
+            raise KeyError(row_id)
+
+        client.get_config_detail.side_effect = fake_detail
+        client.get_config_row.side_effect = fake_row
         return client
 
     def _remote_after_create(self) -> list[dict[str, Any]]:

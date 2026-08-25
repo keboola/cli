@@ -458,6 +458,75 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries (since vNEXT, #686)
+
+`pull_config_hash` in `.keboola/manifest.json` is the 3-way diff's base, and it
+means "the hash of this config **as the API returns it**". `sync pull` and the
+remote side of `sync diff` always computed it that way. `sync push` computed it
+from the **files on disk** instead -- and the two producers disagreed about
+`parameters.blocks[].codes[].script`, so every multi-statement SQL
+transformation deployed through `sync push` was reported
+`~ REMOTE MODIFIED ... codes changed` by every later `sync diff`, forever, with
+the working tree byte-identical to the remote. Only a real `sync pull` cleared
+it, and the next deploy re-created it (field report: 18 phantom configs hiding
+2 real UI changes across 21 projects).
+
+- **What changed.** Push now stamps the baseline from the API's own view of
+  what it just wrote -- at all six sites (config create/update, row
+  create/update, and the Phase C/D link backfills). `pull_hash` and
+  `pull_extra_hashes` stay disk-derived; they describe local files.
+- **The same fix closes the `is_disabled` phantom.** A config (or row) disabled
+  in the UI whose local YAML has no `is_disabled` key drifted permanently after
+  every push for the same reason. No workaround needed any more.
+- **If the config cannot be read back after the write** (a partial mutation
+  response AND a failed re-read), `pull_config_hash` is left EXACTLY as it was
+  and the push envelope carries a `warnings[]` entry telling you to run
+  `sync pull`. Visibly stale beats confidently wrong -- push never falls back
+  to a disk-derived baseline.
+- **One `script[]` shape now, everywhere: one element = one executable
+  statement.** That is what the Keboola runtime means by the array
+  (#119/#120/#274), and `sync push` has produced it since 0.30.x. The API side
+  used to collapse each code into ONE joined string, which no multi-statement
+  SQL config could ever match. Non-SQL components (Python, R, custom apps) are
+  unchanged -- there both sides always agreed on the single joined string.
+- **`transform.sql` can now contain `/* ===== STATEMENT ===== */` marker
+  lines.** They are written only when semicolons alone cannot recover the
+  statement array -- i.e. when the API's elements carry no trailing `;`. A
+  `;`-terminated file is byte-identical to what earlier versions wrote, so
+  existing trees produce no spurious diff. This closes a SILENT failure: before
+  vNEXT, a script like `["SELECT 1", "SELECT 2"]` lost its boundary on pull and
+  push rewrote production as ONE statement (the `MULTI_STATEMENT_COUNT=1` crash
+  shape) while `sync diff` reported "in sync".
+  - Markers are guaranteed boundaries, but `;` splitting still runs INSIDE each
+    marked segment -- typing `; SELECT ...` in a marked segment splits
+    correctly.
+  - Do not hand-write a line identical to the marker inside a statement: when
+    extraction sees one it suppresses markers for that code entirely (logging a
+    warning) rather than writing an ambiguous file.
+
+**Migration -- one `sync pull` per project, then the noise is gone:**
+
+- Each manifest entry now carries `metadata.config_hash_version` (currently
+  `2`) next to a hash the current producer computed.
+- An entry WITHOUT that key predates the fix, so it is compared **leniently**:
+  a stored hash equal to the pre-fix hash of the SAME remote config counts as
+  in sync. Every other field is pinned by that same hash, so the leniency
+  cannot hide real drift -- a renamed or edited remote still reports
+  `REMOTE MODIFIED`.
+- `sync pull` re-runs extraction (writing the markers where needed) and stamps
+  the version, which ends the leniency for that entry. `sync diff` stays
+  read-only and migrates nothing.
+- A migration pull will NOT overwrite an edited `transform.sql` /
+  `_description.md`: unlike the ordinary overwrite-guard (which only ever
+  checked `_config.yml`), the migration path checks the companion files too,
+  and preserves the entry unstamped when any of them changed.
+- **`sync push` refuses ONE specific legacy change** with
+  `SYNC_LEGACY_BOUNDARY` (per-change error, exit 1, the rest of the push
+  proceeds): a tree pulled before markers existed whose only difference from
+  the remote is the lost statement boundaries. Pushing it would merge separate
+  statements into one. Run `sync pull` for that project, then push again.
+  Genuine SQL edits are never blocked by this guard.
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`
