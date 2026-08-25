@@ -19,11 +19,18 @@ re-running this after a partial setup only fills the gaps.
   Never *solicit* a password or TOTP seed either -- if those are not
   already in the environment, that route is simply closed.
 - **Use `--json`** for every check you have to parse. Parse the JSON;
-  do not scrape human-mode Rich output.
+  do not scrape human-mode Rich output. One exception to know about: in
+  `--json` mode the auth commands print their human panel -- including a
+  device-login URL and code -- to **stderr**, and it is not in the JSON. If
+  you ever run one of those yourself, capture `2>&1`.
 - **Do not re-run a step that already passes.** Never re-register or
   overwrite an existing project or alias.
 - **When a step needs a human, say so and stop guessing.** Browser login
-  is a human action; announce it, then wait for the outcome.
+  (3a) and the hidden token prompt (3c) are human actions you hand over
+  rather than attempt: announce the command, then wait for the outcome. If
+  any login call you did run gets interrupted, check `kbagent --json auth
+  status` before re-running anything -- a blind retry is what orphans a
+  session.
 
 ## Behavior
 
@@ -36,15 +43,32 @@ re-running this after a partial setup only fills the gaps.
      winget, an unpacked archive, ...). **Respect it** -- do not run the
      installer over it; the JSON's `upgrade_command` / `upgrade_hint` is
      the only sanctioned way that install gets updated.
-   - **Not found** -> install it:
+   - **Not found** -> install it, but **check the platform first**: the
+     one-liner and its PATH fix-up are both POSIX-only.
+
+     *macOS / Linux / WSL / Git Bash:*
      ```bash
      curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
      ```
      The installer puts `kbagent` on `PATH` for **its own process only**.
      If `kbagent --json version` still fails right after, run
      `source $HOME/.local/bin/env` (or tell the user to open a new shell)
-     and retry once. If it fails a second time, stop and report the
-     installer output -- do not attempt a third install.
+     and retry once.
+
+     *Windows with no POSIX shell:* there is no `install.sh` route here and
+     `$HOME/.local/bin/env` does not exist. Quote the user the PowerShell
+     block from README's Install section
+     (<https://github.com/keboola/cli#install>) -- `winget install --id
+     astral-sh.uv -e`, then `uv tool install` of the release wheel, then
+     `uv tool update-shell` -- and tell them `update-shell` edits the
+     *persisted* PATH, so they must open a **new** shell before `kbagent`
+     resolves. If Git for Windows is installed, README's documented
+     alternative is to run the POSIX one-liner through its bash instead.
+     Quote README rather than paraphrasing it; that block is versioned and
+     this file is not.
+
+     Either way, if it fails a second time, stop and report the installer
+     output -- do not attempt a third install.
 
 2. **Is a project already connected?**
    ```bash
@@ -67,20 +91,40 @@ re-running this after a partial setup only fills the gaps.
    `skills/kbagent/references/auth-workflow.md`): browser login -> account
    login from the environment -> static token.
 
-   **3a. Browser login -- the default, and nothing to paste.**
+   **3a. Browser login -- the default, and nothing to paste. Hand this one
+   to the user; do not run it yourself.**
    ```bash
-   kbagent --json auth login --stack <STACK_URL> --register-projects
+   kbagent auth login --stack <STACK_URL> --register-projects
    ```
-   PKCE loopback with an automatic device-code fallback, registering every
-   project the session can reach under a local alias. Tell the user a browser
-   window / verification code is coming and that this step is theirs to
-   complete -- then wait for it.
+   This is the single step in this file that is **not** yours to execute.
+   `auth login`'s own docstring says an AI agent must not attempt it
+   headlessly, and the mechanics agree: PKCE waits `AUTH_CALLBACK_TIMEOUT`
+   (115 s) on the loopback callback, and the device-code fallback polls until
+   the server's `expires_in` -- minutes. A tool-run shell on a ~120 s
+   timeout gets **killed mid-flow**, and the kill tells you nothing: the
+   login may well have landed a second later. Re-running it blind is exactly
+   how you produce the `orphaned_session_id` warning, leaving a session
+   `kbagent auth logout` then has to chase.
 
-   The result carries `session_unsupported_features`: the command surfaces
-   a browser session does not serve, whose canonical list is
-   `SESSION_UNSUPPORTED_FEATURES` in
-   `src/keboola_agent_cli/services/_auth_registration.py`. Read the key off
-   the result and relay it verbatim; never hand-list it from memory.
+   So print the command, say that it opens a browser (or prints a device
+   code) and that finishing it is theirs, and wait to be told it is done.
+   Note it is deliberately **without `--json`**: a human reading their own
+   terminal wants the panel, and in `--json` mode the verification URL and
+   code are written to **stderr**, not into the JSON payload.
+
+   Then confirm it landed -- this part *is* yours:
+   ```bash
+   kbagent --json auth status
+   ```
+
+   `auth status` deliberately does **not** carry
+   `session_unsupported_features` (the surfaces a browser session cannot
+   serve). The login command prints them in the user's own terminal; to read
+   the list yourself, `kbagent --json auth register-projects --all` ships it
+   and is a no-op on anything already registered (status `exists`). Either
+   way relay it verbatim and never hand-list it from memory -- the canonical
+   copy is `SESSION_UNSUPPORTED_FEATURES` in
+   `src/keboola_agent_cli/services/_auth_registration.py`.
 
    **If 3a is not the answer, route on *why*** -- the two reasons are not
    interchangeable, and treating them as one strands the user:

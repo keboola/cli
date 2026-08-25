@@ -326,12 +326,15 @@ plugins/kbagent/
     setup.md                                           # /kbagent:setup slash command (one-command first-run setup)
     keboola.md                                         # /keboola slash command
     review.md                                          # /kbagent:review slash command
-  skills/kbagent/
-    SKILL.md                                           # Trigger rules + auto-generated decision table
-    references/
-      commands-reference.md                            # Per-command notes (hand-maintained)
-      gotchas.md                                       # Response parsing + (since vX.Y.Z) behavior log
-      <topic>-workflow.md                              # One file per workflow (workspace, branch, sync, ...)
+  skills/
+    kbagent/
+      SKILL.md                                         # Trigger rules + auto-generated decision table
+      references/
+        commands-reference.md                          # Per-command notes (hand-maintained)
+        gotchas.md                                     # Response parsing + (since vX.Y.Z) behavior log
+        <topic>-workflow.md                            # One file per workflow (workspace, branch, sync, ...)
+    kbagent-cicd-migration/                            # CI/CD migration skill
+    kbagent-promotion-pipeline/                        # Promotion-pipeline skill
 ```
 
 `SKILL.md` instructs Claude to run `kbagent context` as its first step, which dynamically loads the full CLI documentation. That keeps command *signatures* in sync automatically -- but it does **not** save the agent's tool-selection matrix, the gotchas log, or the version-gate examples in `keboola-expert.md`. Those are static and must be updated by hand whenever the CLI changes.
