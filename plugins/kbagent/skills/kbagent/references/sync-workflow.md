@@ -421,6 +421,13 @@ Stored in `.keboola/branch-mapping.json`:
   read-back), never from the files on disk. Before vNEXT the two producers
   disagreed and every pushed multi-statement SQL transformation showed
   permanent phantom `REMOTE MODIFIED` drift
+- **Push runs the same runtime-safety script normalization as `config update`
+  (since vNEXT)**: `parameters.blocks[].codes[].script` is normalized to the
+  runtime's shape (one element = one executable statement) before every write.
+  A no-op for a normally pulled tree; it catches a hand-authored `_config.yml`
+  with inline `parameters.blocks` and no `transform.sql`. Any fix is reported
+  in the push envelope's `warnings[]` as `change_type: "script_normalization"`
+  (human mode prints it; `--json` carries `path` / `action` / `after_length`)
 - **Encrypted values**: nonce differences are ignored in diff (no false positives)
 - **New configs**: push auto-assigns IDs from the API, updates manifest
 - **Storage metadata is read-only**: not tracked in manifest, excluded from diff/push

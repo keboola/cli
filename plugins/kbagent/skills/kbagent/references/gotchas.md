@@ -527,6 +527,22 @@ it, and the next deploy re-created it (field report: 18 phantom configs hiding
   statements into one. Run `sync pull` for that project, then push again.
   Genuine SQL edits are never blocked by this guard.
 
+## `sync push` runs the same script-shape guard as `config update` (since vNEXT)
+
+`sync push` now runs `normalize_blocks_codes_script` -- the runtime-safety guard
+`config update` and `transformation edit/create` have always run -- on every
+config body it sends (create, update, and the Phase C variables backfill). After
+the #686 fix above it is a no-op on the GitOps path by construction; it still
+catches a hand-authored `_config.yml` that carries `parameters.blocks` inline
+with NO companion `transform.sql`, which code merging passes through verbatim
+(a `script` string, or one element packing several `;`-separated statements,
+passes the Storage API and fails the JOB).
+
+Each fix is surfaced -- never silent -- as a push-envelope `warnings[]` entry with
+`change_type: "script_normalization"` carrying `path` / `action` / `after_length`
+(printed in human mode like any other push warning, structured under `warnings`
+in `--json`). `config update` keeps its own dedicated `normalizations` key.
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`

@@ -34,6 +34,7 @@ from ._sync_models import (
     FlowBindingResult,
     VariableBindingResult,
 )
+from ._sync_push_ops import guard_script_shape
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -257,7 +258,7 @@ def _apply_variable_binding(
     row_ulid: str | None,
     manifest: Manifest,
     branch_id: int | None,
-    warnings: list[dict[str, str]],
+    warnings: list[dict[str, Any]],
 ) -> None:
     """PUT the resolved variables link, rewrite local, refresh manifest hashes.
 
@@ -269,6 +270,12 @@ def _apply_variable_binding(
     merged = copy.deepcopy(local_data)
     merge_code_files(created.component_id, merged, created.config_dir)
     _name, _description, configuration = local_config_to_api(merged)
+    # This backfill PUTs the WHOLE configuration again, so it is the LAST write
+    # a freshly-created transformation receives -- an unguarded body here would
+    # undo the normalization ``push_create`` just applied.
+    configuration = guard_script_shape(
+        created.component_id, configuration, warnings, config_id=created.config_id
+    )
     configuration["variables_id"] = parent_ulid
     if row_ulid:
         configuration["variables_values_id"] = row_ulid
@@ -317,7 +324,7 @@ def _refresh_binding_hashes(
     manifest: Manifest,
     branch_id: int | None,
     response: Any,
-    warnings: list[dict[str, str]],
+    warnings: list[dict[str, Any]],
 ) -> None:
     """Re-stamp a rebound config's manifest bookkeeping after the backfill PUT.
 
@@ -457,7 +464,7 @@ def _apply_flow_task_binding(
     local_data: dict[str, Any],
     manifest: Manifest,
     branch_id: int | None,
-    warnings: list[dict[str, str]],
+    warnings: list[dict[str, Any]],
 ) -> None:
     """PUT a remapped flow, rewrite local ``_config.yml``, refresh hashes.
 
