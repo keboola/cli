@@ -423,9 +423,9 @@ Stored in `.keboola/branch-mapping.json`:
 - **Data samples auto-trim**: tables with >30 columns export only first 30 (API sync limit)
 - **Encrypted columns masked**: columns starting with `#` show `***ENCRYPTED***` in samples
 
-## Ignored components (since vNEXT)
+## Ignored components
 
-Some components are excluded from every sync operation (`pull`, `diff`,
+*(since vNEXT)* Some components are excluded from every sync operation (`pull`, `diff`,
 `push`) because they are managed through separate APIs and have volatile
 internal state:
 

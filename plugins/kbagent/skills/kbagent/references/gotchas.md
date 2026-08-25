@@ -4558,9 +4558,9 @@ shapes.
   today a deny policy gates only `/auth/*`, not the ~30 other routers a
   session token can otherwise reach.
 
-## `serve` honors the root-level `--config-dir` (since vNEXT)
+## `serve` honors the root-level `--config-dir`
 
-`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+*(since vNEXT)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
 flag has two possible positions. The precedence is **most specific wins**,
 matching what `kbagent repl` does with the root flags:
 
@@ -4683,9 +4683,9 @@ was silent, and the only way to notice was reading `permissions show` (or
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
 
-## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live (since vNEXT)
+## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
 
-`ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
+*(since vNEXT)* `ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
 alongside `keboola.sandboxes`. The Keboola MCP server auto-creates one empty
 workspace-record config per project it touches (`configuration: {}`, name like
 `mcp-workspace-<hex>`); those configs carry no configuration and are managed
