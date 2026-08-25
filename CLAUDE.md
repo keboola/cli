@@ -715,7 +715,30 @@ kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-com
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
-kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
+kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
+# workspace load (since vNEXT, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
+#   server's LoadTypeDecider -- zero-copy CLONE when eligible (same backend as the workspace,
+#   backend snowflake/bigquery, full load -- kbagent never sends filters here, no
+#   external-schema bucket, alias only when column-auto-sync is ON and unfiltered, and on
+#   BigQuery not an Analytics-Hub-linked bucket), otherwise plain COPY with a per-table
+#   `clone_ineligible_reason` in the JSON. Before this, kbagent always sent a bare COPY (the
+#   API's own default when loadType is omitted) -- a 282 GB table load burned warehouse credits
+#   for hours where CLONE is metadata-only and finishes in seconds.
+#   --load-type clone|copy|view FORCES the type for every table; an ineligible explicit choice
+#   fails loudly with the server's HTTP 400 message -- it never silently degrades to COPY.
+#   `view` is a zero-storage read-only view (BigQuery: any same-backend bucket; Snowflake: only
+#   external-schema buckets + the project feature `input-mapping-read-only-storage`).
+#   Size guard: a table resolved/forced to COPY whose dataSizeBytes exceeds 1 GiB requires
+#   interactive confirmation (TTY human mode) or --force (JSON/non-interactive) -- a huge copy
+#   never starts silently. --timeout SECONDS (default 300 here; other storage-job commands keep
+#   60): on timeout the error now says the job CONTINUES RUNNING server-side and keeps consuming
+#   resources, names the job id, and how to poll it (GET /v2/storage/jobs/{id});
+#   STORAGE_JOB_TIMEOUT now maps to exit code 4 (network/retryable) instead of 1. JSON result
+#   gains per-table `load_type` / `data_size_bytes` / `clone_ineligible_reason` plus a top-level
+#   `load_type_requested` (`auto` when the flag was omitted); existing keys are unchanged.
+#   Cheap alternative for analytics-only access: with the read-only input-mapping feature, a
+#   workspace can query production data directly via the `KBC_<STACK>_<PROJECT>` shared
+#   database (zero load, zero storage) -- `workspace query` works on it, no load needed.
 kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional] [--full] [--limit N]
 kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 # query: default reads results inline via Query Service `GET .../results` (fast, JSON columns+rows),

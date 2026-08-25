@@ -88,6 +88,9 @@ class ErrorCode(StrEnum):
     # Workspace / Query
     MISSING_QUERY = "MISSING_QUERY"
     WORKSPACE_NOT_FOUND = "WORKSPACE_NOT_FOUND"
+    # `workspace load` refused to start a COPY of a table larger than
+    # WORKSPACE_LOAD_COPY_GUARD_BYTES without confirmation / --force.
+    WORKSPACE_LOAD_COPY_TOO_LARGE = "WORKSPACE_LOAD_COPY_TOO_LARGE"
 
     # Sync
     PARENT_CONFIG_NOT_TRACKED = "PARENT_CONFIG_NOT_TRACKED"
@@ -326,6 +329,9 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     # it inherits the right category instead of silently taking the "api"
     # default -- a missing project feature is a configuration problem.
     ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
+    # A refused-by-us safety guard, not an upstream fault: nothing was sent to
+    # the API, and the caller fixes it by re-issuing the request with --force.
+    ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
 }
 
 

@@ -2655,7 +2655,13 @@ class TestFullE2E:
             self._created_file_ids.remove(meta.id)
 
     def _test_workspace_load(self, workspace_id: int, table_id: str) -> None:
-        """Load a table into the workspace."""
+        """Load a table into the workspace.
+
+        Deliberately left on the DEFAULT (auto) load type -- that is the path
+        real users take, and it is the one that decides CLONE vs COPY per
+        table. The per-table report is asserted so a silently-dropped
+        ``loadType`` shows up here rather than as a mysteriously slow load.
+        """
         data = self._run_ok(
             "workspace",
             "load",
@@ -2667,6 +2673,10 @@ class TestFullE2E:
             table_id,
         )
         assert data["status"] == "ok"
+        assert data["data"]["load_type_requested"] == "auto"
+        loaded = data["data"]["tables"]
+        assert [entry["table_id"] for entry in loaded] == [table_id]
+        assert loaded[0]["load_type"] in {"clone", "copy"}
 
     def _test_workspace_query(self, workspace_id: int, table_id: str) -> None:
         """Run a SQL query in the workspace and verify result.
