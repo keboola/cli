@@ -1337,7 +1337,9 @@ events and emits a final `done` SSE frame mirroring the same record.
   components sharing a config ID, a deleted parent config, or a failed lookup
   all yield `""` rather than a guess. A blank name never means the
   subscription is inactive.
-## Notification subscriptions can now be written, and the write path has sharp edges (since vNEXT)
+## Notification subscriptions can now be written, and the write path has sharp edges
+
+*(since vNEXT)*
 
 - **`notification replace-recipient` always mints a NEW `subscription_id`.**
   The Notification Service has **no update primitive** -- there is no PATCH or
