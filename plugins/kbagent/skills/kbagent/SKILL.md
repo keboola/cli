@@ -227,6 +227,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |
 | List notification subscriptions (Flow Notifications tab) across projects | `kbagent notification list` |
 | Show one notification subscription, including its raw filter list | `kbagent notification detail --project PROJECT --subscription-id SUBSCRIPTION-ID` |
+| Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
+| Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
+| Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |

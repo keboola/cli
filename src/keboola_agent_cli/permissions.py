@@ -356,9 +356,13 @@ OPERATION_REGISTRY: dict[str, str] = {
     "flow.delete": "destructive",
     "flow.schedule": "write",
     "flow.schedule-remove": "destructive",
-    # Schedule discovery / audit (read-only)
+    # Notification subscription audit + write path (issue #600, #690)
     "notification.list": "read",
     "notification.detail": "read",
+    "notification.create": "write",
+    "notification.delete": "destructive",
+    "notification.replace-recipient": "write",
+    # Schedule discovery / audit (read-only)
     "schedule.list": "read",
     "schedule.detail": "read",
     "schedule.find": "read",
