@@ -16,6 +16,11 @@ a pre-#686 kbagent readable:
 - :func:`raise_on_legacy_boundary` -- refuses to push a legacy tree whose
   ``transform.sql`` cannot represent the remote's statement boundaries, which
   would silently collapse several statements into one.
+
+:func:`detect_force_pull_conflicts` lives here for the same reason: it is the
+third place a stored baseline is weighed against a fresh API hash, and it must
+apply the same leniency or a ``--force`` pull would abort on a shape-only
+difference.
 """
 
 from __future__ import annotations
@@ -25,7 +30,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
+from ..constants import (
+    ALWAYS_IGNORED_COMPONENTS,
+    CONFIG_FILENAME,
+    CONFIG_HASH_VERSION,
+    CONFIG_HASH_VERSION_KEY,
+)
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.code_extraction import (
     is_sql_transformation_component,
@@ -404,3 +414,129 @@ def raise_on_legacy_boundary(
         status_code=0,
         error_code=ErrorCode.SYNC_LEGACY_BOUNDARY,
     )
+
+
+# ---------------------------------------------------------------------------
+# Force-pull conflict detection
+# ---------------------------------------------------------------------------
+
+
+def _is_conflict(
+    service: SyncService,
+    config_file: Path,
+    old_pull_hash: str,
+    old_cfg_hash: str,
+    api_cfg_hash: str,
+) -> bool:
+    """True iff the file is locally modified AND the remote also changed.
+
+    A 3-way conflict needs both a stored ``pull_hash`` (the synced file
+    state) and a stored ``pull_config_hash`` (the synced remote state);
+    without either we cannot prove a conflict, so return False -- be
+    conservative, ``--force`` must not abort on incomplete bookkeeping.
+    A missing local file is not a content conflict (nothing to lose).
+    """
+    if not old_pull_hash or not old_cfg_hash:
+        return False
+    if not config_file.exists():
+        return False
+    locally_modified = service._file_hash(config_file) != old_pull_hash
+    remote_changed = api_cfg_hash != old_cfg_hash
+    return locally_modified and remote_changed
+
+
+def detect_force_pull_conflicts(
+    service: SyncService,
+    components: list[dict[str, Any]],
+    branch_dir: Path,
+    *,
+    existing_keys: set[str],
+    existing_paths: dict[str, str],
+    existing_file_hashes: dict[str, str],
+    existing_metadata: dict[str, dict[str, Any]],
+    existing_rows: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    """Return configs/rows a ``--force`` pull would clobber as conflicts.
+
+    A *conflict* is a config (or row) that is BOTH locally modified (its
+    on-disk ``_config.yml`` hash differs from the manifest ``pull_hash``)
+    AND changed on the remote since the last pull (the freshly fetched
+    config hash differs from ``pull_config_hash``).  That is the only case
+    where ``--force`` must stop: local and remote have diverged, so neither
+    "take remote" nor "keep local" is safe without the user deciding.
+
+    Configs only locally modified (remote unchanged) are NOT conflicts --
+    ``--force`` preserves them so their pending delta stays pushable.
+    Brand-new remote configs and configs whose local file is missing are
+    skipped (nothing local to lose).  Read-only: hashes but writes nothing.
+
+    The stored config hash goes through :func:`effective_stored_hash`, so a
+    baseline written before the script-shape change (issue #686) is not
+    mistaken for a remote edit and does not abort an otherwise clean
+    ``--force`` pull. Rows are compared strictly -- their hash producer never
+    changed.
+    """
+    conflicts: list[dict[str, str]] = []
+    for component in components:
+        component_id = component.get("id", "")
+        if component_id in ALWAYS_IGNORED_COMPONENTS:
+            continue
+        for cfg in component.get("configurations", []):
+            config_id = str(cfg.get("id", ""))
+            lookup_key = f"{component_id}/{config_id}"
+            if lookup_key not in existing_keys:
+                continue  # brand-new remote config -- nothing local to lose
+
+            rel_path = existing_paths.get(lookup_key, "")
+            remote_local = api_config_to_local(component_id, cfg, config_id)
+            if _is_conflict(
+                service,
+                branch_dir / rel_path / CONFIG_FILENAME,
+                existing_file_hashes.get(lookup_key, ""),
+                effective_stored_hash(
+                    existing_metadata.get(lookup_key, {}),
+                    component_id=component_id,
+                    config_id=config_id,
+                    raw_remote=cfg,
+                    remote_local=remote_local,
+                ),
+                config_hash(remote_local),
+            ):
+                conflicts.append(
+                    {
+                        "scope": "config",
+                        "component_id": component_id,
+                        "config_id": config_id,
+                        "config_name": str(cfg.get("name", "untitled")),
+                        "path": rel_path,
+                    }
+                )
+
+            # Row-level conflicts (same 3-way rule, per row).
+            config_dir = branch_dir / rel_path
+            for row in cfg.get("rows", []):
+                row_id = str(row.get("id", ""))
+                existing_row = existing_rows.get(f"{component_id}/{config_id}/{row_id}")
+                if not existing_row:
+                    continue
+                row_rel_path = existing_row.get("path", "")
+                if _is_conflict(
+                    service,
+                    config_dir / row_rel_path / CONFIG_FILENAME,
+                    existing_row.get("pull_hash", ""),
+                    existing_row.get("pull_config_hash", ""),
+                    config_hash(api_row_to_local(row, component_id)),
+                ):
+                    conflicts.append(
+                        {
+                            "scope": "row",
+                            "component_id": component_id,
+                            "config_id": config_id,
+                            "config_name": (
+                                f"{cfg.get('name', 'untitled')}/{row.get('name', 'untitled')}"
+                            ),
+                            "path": f"{rel_path}/{row_rel_path}",
+                            "row_id": row_id,
+                        }
+                    )
+    return conflicts

@@ -678,3 +678,28 @@ def test_genuine_edit_on_legacy_tree_still_pushes(tmp_config_dir: Path, tmp_path
     assert result["errors"] == []
     assert result["updated"] == 1
     assert _remote_script(api) == ["SELECT 1;", "SELECT 42;"]
+
+
+def test_force_pull_does_not_abort_on_legacy_shape(tmp_config_dir: Path, tmp_path: Path) -> None:
+    """A shape-only baseline is not a remote change, so --force must not abort."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;", "SELECT 2;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    _downgrade_to_legacy(project_root, api)
+
+    # Local edit + a legacy baseline: strict comparison would read the remote
+    # as "changed" and raise SyncConflictError.
+    config_file = _config_file(project_root)
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    data["description"] = "edited locally"
+    config_file.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+
+    _service(store, api).pull(
+        alias="prod", project_root=project_root, force=True, no_storage=True, no_jobs=True
+    )
+
+    # The un-pushed edit survives (force preserves a locally-modified config
+    # whose remote did not move).
+    assert (
+        yaml.safe_load(config_file.read_text(encoding="utf-8"))["description"] == "edited locally"
+    )

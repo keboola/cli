@@ -71,6 +71,7 @@ from ._encryption import (
     find_plaintext_secret_keys,
 )
 from ._sync_baseline import (
+    detect_force_pull_conflicts,
     effective_stored_hash,
     extras_modified,
     needs_shape_migration,
@@ -447,111 +448,6 @@ class SyncService(BaseService):
                 return False
         return True
 
-    def _is_conflict(
-        self,
-        config_file: Path,
-        old_pull_hash: str,
-        old_cfg_hash: str,
-        api_cfg_hash: str,
-    ) -> bool:
-        """True iff the file is locally modified AND the remote also changed.
-
-        A 3-way conflict needs both a stored ``pull_hash`` (the synced file
-        state) and a stored ``pull_config_hash`` (the synced remote state);
-        without either we cannot prove a conflict, so return False -- be
-        conservative, ``--force`` must not abort on incomplete bookkeeping.
-        A missing local file is not a content conflict (nothing to lose).
-        """
-        if not old_pull_hash or not old_cfg_hash:
-            return False
-        if not config_file.exists():
-            return False
-        locally_modified = self._file_hash(config_file) != old_pull_hash
-        remote_changed = api_cfg_hash != old_cfg_hash
-        return locally_modified and remote_changed
-
-    def _detect_force_pull_conflicts(
-        self,
-        components: list[dict[str, Any]],
-        branch_dir: Path,
-        *,
-        existing_keys: set[str],
-        existing_paths: dict[str, str],
-        existing_file_hashes: dict[str, str],
-        existing_config_hashes: dict[str, str],
-        existing_rows: dict[str, dict[str, str]],
-    ) -> list[dict[str, str]]:
-        """Return configs/rows a ``--force`` pull would clobber as conflicts.
-
-        A *conflict* is a config (or row) that is BOTH locally modified (its
-        on-disk ``_config.yml`` hash differs from the manifest ``pull_hash``)
-        AND changed on the remote since the last pull (the freshly fetched
-        config hash differs from ``pull_config_hash``).  That is the only case
-        where ``--force`` must stop: local and remote have diverged, so neither
-        "take remote" nor "keep local" is safe without the user deciding.
-
-        Configs only locally modified (remote unchanged) are NOT conflicts --
-        ``--force`` preserves them so their pending delta stays pushable.
-        Brand-new remote configs and configs whose local file is missing are
-        skipped (nothing local to lose).  Read-only: hashes but writes nothing.
-        """
-        conflicts: list[dict[str, str]] = []
-        for component in components:
-            component_id = component.get("id", "")
-            if component_id in ALWAYS_IGNORED_COMPONENTS:
-                continue
-            for cfg in component.get("configurations", []):
-                config_id = str(cfg.get("id", ""))
-                lookup_key = f"{component_id}/{config_id}"
-                if lookup_key not in existing_keys:
-                    continue  # brand-new remote config -- nothing local to lose
-
-                rel_path = existing_paths.get(lookup_key, "")
-                api_cfg_hash = config_hash(api_config_to_local(component_id, cfg, config_id))
-                if self._is_conflict(
-                    branch_dir / rel_path / CONFIG_FILENAME,
-                    existing_file_hashes.get(lookup_key, ""),
-                    existing_config_hashes.get(lookup_key, ""),
-                    api_cfg_hash,
-                ):
-                    conflicts.append(
-                        {
-                            "scope": "config",
-                            "component_id": component_id,
-                            "config_id": config_id,
-                            "config_name": str(cfg.get("name", "untitled")),
-                            "path": rel_path,
-                        }
-                    )
-
-                # Row-level conflicts (same 3-way rule, per row).
-                config_dir = branch_dir / rel_path
-                for row in cfg.get("rows", []):
-                    row_id = str(row.get("id", ""))
-                    existing_row = existing_rows.get(f"{component_id}/{config_id}/{row_id}")
-                    if not existing_row:
-                        continue
-                    row_rel_path = existing_row.get("path", "")
-                    if self._is_conflict(
-                        config_dir / row_rel_path / CONFIG_FILENAME,
-                        existing_row.get("pull_hash", ""),
-                        existing_row.get("pull_config_hash", ""),
-                        config_hash(api_row_to_local(row, component_id)),
-                    ):
-                        conflicts.append(
-                            {
-                                "scope": "row",
-                                "component_id": component_id,
-                                "config_id": config_id,
-                                "config_name": (
-                                    f"{cfg.get('name', 'untitled')}/{row.get('name', 'untitled')}"
-                                ),
-                                "path": f"{rel_path}/{row_rel_path}",
-                                "row_id": row_id,
-                            }
-                        )
-        return conflicts
-
     def pull(
         self,
         alias: str,
@@ -715,13 +611,14 @@ class SyncService(BaseService):
         # ``--theirs`` skips the guard entirely: the user explicitly asked for
         # remote to win, so conflicts are resolved by overwriting, not aborting.
         if force and not theirs:
-            conflicts = self._detect_force_pull_conflicts(
+            conflicts = detect_force_pull_conflicts(
+                self,
                 components,
                 branch_dir,
                 existing_keys=existing_keys,
                 existing_paths=existing_paths,
                 existing_file_hashes=existing_file_hashes,
-                existing_config_hashes=existing_config_hashes,
+                existing_metadata=existing_metadata,
                 existing_rows=existing_rows,
             )
             if conflicts:
