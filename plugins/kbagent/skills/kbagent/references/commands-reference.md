@@ -93,8 +93,8 @@ All seven commands authenticate via `KBC_MANAGE_API_TOKEN` (Manage API), not the
 ## Permissions (session firewall commands)
 The `permissions` subcommands persist a write/destructive policy to config.json (the `--deny-*` flags above are the one-shot form). The engine guards against agent mistakes; it is not a sandbox.
 - `permissions list [--category read|write|destructive|admin]` -- list all operations with their risk category and current allowed/denied status
-- `permissions show` -- show the current active permission policy
-- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:read`, `cli:write`, `cli:destructive`. `tool:*` patterns are INERT since v0.85.0 (the MCP passthrough is gone) -- they load but match nothing, so a `--mode deny` policy whose only allowance was `tool:read` now denies everything
+- `permissions show` -- show the current active permission policy. *(since vNEXT)* also flags ANY persisted pattern matching zero known operations, not only the retired `tool:*` namespace (same generalization applies to `kbagent doctor`) -- a typo like `cli:reed` or `stroage.upload-table` is surfaced too, with a generic "check for typos" hint instead of the MCP-migration one
+- `permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]` -- set the permission policy (firewall rules); patterns like `cli:read`, `cli:write`, `cli:destructive`. `tool:*` patterns are INERT since v0.85.0 (the MCP passthrough is gone) -- they load but match nothing, so a `--mode deny` policy whose only allowance was `tool:read` now denies everything. *(since vNEXT, issue #688)* Every pattern is validated BEFORE the interactive confirmation: it must be a `cli:*` category, an exact operation name, or a glob matching at least one known operation, or the call fails fast with `VALIDATION_ERROR` (exit 2, `error.details.invalid_patterns` in `--json`) and nothing is written
 - `permissions reset` -- remove all permission restrictions
 - `permissions check OPERATION` -- check if a specific operation is allowed (e.g. `permissions check storage.delete-table`)
 

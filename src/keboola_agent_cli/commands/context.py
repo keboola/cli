@@ -1941,6 +1941,12 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     they matched is gone. A persisted policy still loads with them, but they
     match nothing, so a mode=deny policy whose only allowance was `tool:read`
     now denies everything. Rewrite such a policy with `cli:read`.
+    Since vNEXT (issue #688): every pattern is validated BEFORE the
+    interactive confirmation -- it must be a cli:* category, an exact
+    operation name, or a glob matching >=1 known operation, or the whole
+    call fails with VALIDATION_ERROR (exit 2, invalid patterns listed) and
+    nothing is written. `permissions show` / `kbagent doctor` likewise flag
+    ANY dead pattern already on disk, not only `tool:*`.
 
   kbagent permissions reset
     Remove all restrictions.
