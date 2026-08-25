@@ -16,7 +16,8 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, undelete config.
+  restore config, undelete config, zero-copy clone, workspace load type,
+  table too big to load, load table into workspace cheaply.
 ---
 
 # kbagent -- Keboola Agent CLI
