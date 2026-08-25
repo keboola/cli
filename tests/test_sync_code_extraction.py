@@ -792,3 +792,106 @@ class TestStatementMarkers:
     def test_canonical_sql_script_drops_blank_elements(self) -> None:
         """Whitespace-only elements vanish, matching the file round-trip."""
         assert canonical_sql_script(["SELECT 1;", "   ", ""]) == ["SELECT 1;"]
+
+
+class TestPullPushDiffShapeParity:
+    """The issue #686 repro table, at the hash level.
+
+    Drives the real pull -> push -> diff producers over one code block and
+    asserts the two sides agree (no phantom drift) and that the statement
+    array survives the file round-trip.
+    """
+
+    @staticmethod
+    def _api(script: list[str]) -> dict[str, Any]:
+        return {
+            "id": "1",
+            "name": "c",
+            "description": "",
+            "configuration": {
+                "parameters": {
+                    "blocks": [{"name": "B", "codes": [{"name": "C", "script": list(script)}]}]
+                }
+            },
+        }
+
+    @pytest.mark.parametrize(
+        ("api_script", "expected_sent"),
+        [
+            # ;-terminated, several elements: unchanged, was PHANTOM before.
+            (["SELECT 1;", "SELECT 2;"], ["SELECT 1;", "SELECT 2;"]),
+            # No semicolons: boundaries survive via the marker. Before the fix
+            # push silently sent ONE element (MULTI_STATEMENT_COUNT=1).
+            (["SELECT 1", "SELECT 2"], ["SELECT 1", "SELECT 2"]),
+            # One element packing two statements is NOT a canonical array: the
+            # runtime wants one statement per element, so it is split. That is
+            # the #274 normalization, deliberate -- and now no longer phantom.
+            (["SELECT 1;\nSELECT 2;"], ["SELECT 1;", "SELECT 2;"]),
+            (["SELECT 1"], ["SELECT 1"]),
+        ],
+    )
+    def test_push_matches_remote_and_diff_is_in_sync(
+        self, api_script: list[str], expected_sent: list[str], tmp_path: Path
+    ) -> None:
+        from keboola_agent_cli.sync.config_format import api_config_to_local
+        from keboola_agent_cli.sync.diff_engine import config_hash
+
+        component = "keboola.snowflake-transformation"
+        config_dir = tmp_path / "cfg"
+
+        local = api_config_to_local(component, self._api(api_script), "1")  # pull
+        extract_code_files(component, local, config_dir)
+        pushed = copy.deepcopy(local)
+        merge_code_files(component, pushed, config_dir)  # push
+        sent = pushed["parameters"]["blocks"][0]["codes"][0]["script"]
+
+        assert sent == expected_sent
+        # diff: remote side of what push just wrote vs the pushed baseline
+        remote_hash = config_hash(api_config_to_local(component, self._api(sent), "1"))
+        assert remote_hash == config_hash(pushed)
+
+
+class TestBroadPredicateSqlComponent:
+    """SQL backends matched only by fragment keep both sides consistent (R1).
+
+    ``keboola.exasol-transformation`` is SQL for normalization purposes but is
+    not in the exact extraction set, so its blocks stay inside ``_config.yml``
+    and the merge is an identity. The split shape must therefore survive
+    untouched -- the local data IS the normalized data.
+    """
+
+    COMPONENT = "keboola.exasol-transformation"
+
+    def test_yaml_identity_round_trip_preserves_split_shape(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.sync.config_format import api_config_to_local
+        from keboola_agent_cli.sync.diff_engine import config_hash
+
+        api_config = {
+            "id": "1",
+            "name": "c",
+            "description": "",
+            "configuration": {
+                "parameters": {
+                    "blocks": [
+                        {
+                            "name": "B",
+                            "codes": [{"name": "C", "script": ["SELECT 1;", "SELECT 2;"]}],
+                        }
+                    ]
+                }
+            },
+        }
+        config_dir = tmp_path / "exasol"
+
+        local = api_config_to_local(self.COMPONENT, api_config, "1")
+        extract_code_files(self.COMPONENT, local, config_dir)
+        # No code file is written -- the blocks stay in the YAML body.
+        assert not (config_dir / "transform.sql").exists()
+        assert local["parameters"]["blocks"][0]["codes"][0]["script"] == [
+            "SELECT 1;",
+            "SELECT 2;",
+        ]
+
+        pushed = copy.deepcopy(local)
+        merge_code_files(self.COMPONENT, pushed, config_dir)
+        assert config_hash(pushed) == config_hash(local)
