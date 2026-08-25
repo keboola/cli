@@ -18,17 +18,92 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
-from ..sync.code_extraction import merge_code_files
+from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_script
 from ..sync.config_format import local_config_to_api, local_row_to_api
-from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import encrypt_secrets_in_config
+from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
+
+
+def guard_script_shape(
+    component_id: str,
+    configuration: dict[str, Any],
+    warnings: list[dict[str, Any]] | None,
+    *,
+    config_id: str = "",
+    config_path: str = "",
+) -> dict[str, Any]:
+    """Run the runtime-safety ``script[]`` guard on an outgoing push body.
+
+    ``sync push`` is the one deploy route that used to reach the Storage API
+    without :func:`normalize_blocks_codes_script` -- ``config update`` and
+    ``transformation edit/create`` have run it since 0.28.0 / 0.30.8. The
+    Storage API accepts a ``script`` string, or a list element packing several
+    ``;``-separated statements; the Keboola runtime then fails the job
+    ("Expected array, got string" / ``MULTI_STATEMENT_COUNT``, issues
+    #245/#274).
+
+    After issue #686 parts 2+3 this is a no-op on the GitOps path *by
+    construction*: ``merge_code_files`` rebuilds ``parameters.blocks`` from
+    ``transform.sql`` through the single canonical producer
+    (``canonical_sql_script``). It is wired in as a REGRESSION BACKSTOP -- and
+    it still covers the shape that bypasses code extraction entirely: a
+    hand-authored ``_config.yml`` carrying ``parameters.blocks`` inline with no
+    companion code file, which ``merge_code_files`` passes through verbatim.
+
+    The semantics of the guard are untouched; only its records are re-shaped
+    into the push envelope's ``warnings[]`` entries (``change_type``
+    ``script_normalization``) so both ``--json`` and human mode surface them
+    through the channel every other non-fatal push warning already uses.
+    ``config update`` surfaces the same records under its own dedicated
+    ``normalizations`` key -- a per-config envelope can afford one; a push
+    envelope spans many configs, so each record carries its own identity.
+    """
+    configuration, records = normalize_blocks_codes_script(component_id, configuration)
+    if warnings is None:
+        return configuration
+    for record in records:
+        warnings.append(
+            _script_normalization_warning(
+                component_id=component_id,
+                config_id=config_id,
+                config_path=config_path,
+                record=record,
+            )
+        )
+    return configuration
+
+
+def _script_normalization_warning(
+    *,
+    component_id: str,
+    config_id: str,
+    config_path: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    """Wrap one normalization record as a push-envelope warning."""
+    label = config_id or config_path or "(new config)"
+    message = (
+        f"Normalized {component_id}/{label} {record['path']} before the write "
+        f"({record['action']} -> {record['after_length']} element(s)): the local files held a "
+        f"script shape the Keboola runtime rejects. Run 'kbagent sync pull' to bring the "
+        f"local tree in line with what was sent."
+    )
+    logger.warning("%s", message)
+    return {
+        "change_type": "script_normalization",
+        "component_id": component_id,
+        "config_id": config_id,
+        "config_path": config_path,
+        "message": message,
+        **record,
+    }
 
 
 def push_row_change(
@@ -44,6 +119,7 @@ def push_row_change(
     manifest: Manifest,
     branch_id: int | None,
     allow_plaintext_fallback: bool = False,
+    warnings: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Dispatch a single row-level change (added/modified/deleted) to the API.
 
@@ -56,6 +132,11 @@ def push_row_change(
     CREATE the caller remaps the diff-time placeholder to the API-assigned ULID
     before dispatch, so both the manifest parent lookup and
     ``create_config_row(config_id=...)`` hit the real config (KFR-05).
+
+    ``warnings`` accumulates non-fatal baseline-stamping warnings (issue #686)
+    for the push envelope; when the API state cannot be read back after the
+    write, the row's ``pull_config_hash`` is left untouched rather than
+    recomputed from disk.
 
     Returns the API-assigned row id on ``added`` (so the caller can map
     placeholder -> ULID for variable-link backfill), else ``None``.
@@ -108,6 +189,7 @@ def push_row_change(
             branch_id=branch_id,
             project_id=project_id,
             allow_plaintext_fallback=allow_plaintext_fallback,
+            warnings=warnings,
         )
 
     if change_type == "modified":
@@ -122,6 +204,7 @@ def push_row_change(
             branch_id=branch_id,
             project_id=project_id,
             allow_plaintext_fallback=allow_plaintext_fallback,
+            warnings=warnings,
         )
         return None
 
@@ -140,6 +223,7 @@ def _push_create_row(
     branch_id: int | None,
     project_id: int | None,
     allow_plaintext_fallback: bool,
+    warnings: list[dict[str, Any]] | None = None,
 ) -> str:
     """POST a new row; record API-assigned id + hashes in the parent's row list.
 
@@ -178,14 +262,24 @@ def _push_create_row(
 
     row_file = row_dir / CONFIG_FILENAME
     new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
-    cfg_hash_value = config_hash(pristine_data)
-    writeback_create_row_in_manifest(
+    stamp = row_baseline(
+        client,
+        component_id=component_id,
+        config_id=parent_config_id,
+        row_id=new_row_id,
+        branch_id=branch_id,
+        response=result,
+    )
+    row_entry = writeback_create_row_in_manifest(
         parent=parent,
         row_path_str=row_path_str,
         new_row_id=new_row_id,
         file_hash=new_file_hash,
-        cfg_hash=cfg_hash_value,
+        cfg_hash=stamp.cfg_hash,
     )
+    apply_stamp(row_entry.metadata, stamp)
+    if stamp.warning is not None and warnings is not None:
+        warnings.append(stamp.warning)
     return new_row_id
 
 
@@ -201,8 +295,14 @@ def push_update_row(
     branch_id: int | None,
     project_id: int | None,
     allow_plaintext_fallback: bool,
+    warnings: list[dict[str, Any]] | None = None,
 ) -> None:
-    """PUT an existing row; refresh its hashes in the parent's row list."""
+    """PUT an existing row; refresh its hashes in the parent's row list.
+
+    The baseline comes from the API's own view of the row (issue #686), so a
+    row disabled remotely whose local file carries no ``is_disabled`` key does
+    not leave a permanent phantom diff behind.
+    """
     local_data = service._read_config_file(row_dir)
     if local_data is None:
         raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
@@ -217,7 +317,7 @@ def push_update_row(
         allow_plaintext_fallback=allow_plaintext_fallback,
     )
 
-    client.update_config_row(
+    result = client.update_config_row(
         component_id=component_id,
         config_id=parent_config_id,
         row_id=row_id,
@@ -236,11 +336,20 @@ def push_update_row(
 
     row_file = row_dir / CONFIG_FILENAME
     new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
-    cfg_hash_value = config_hash(pristine_data)
+    stamp = row_baseline(
+        client,
+        component_id=component_id,
+        config_id=parent_config_id,
+        row_id=row_id,
+        branch_id=branch_id,
+        response=result,
+    )
+    if stamp.warning is not None and warnings is not None:
+        warnings.append(stamp.warning)
     for r in parent.rows:
         if r.id == row_id:
             r.metadata["pull_hash"] = new_file_hash
-            r.metadata["pull_config_hash"] = cfg_hash_value
+            apply_stamp(r.metadata, stamp)
             break
 
 
@@ -275,8 +384,13 @@ def push_create(
     branch_id: int | None,
     *,
     allow_plaintext_fallback: bool = False,
+    warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Create a new config from a local _config.yml file."""
+    """Create a new config from a local _config.yml file.
+
+    ``warnings`` accumulates the ``script[]`` normalization records of
+    :func:`guard_script_shape` for the push envelope.
+    """
     branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     config_dir = project_root / branch_path / config_path_str
     local_data = service._read_config_file(config_dir)
@@ -291,6 +405,11 @@ def push_create(
     merge_code_files(component_id, local_data, config_dir)
 
     name, description, configuration = local_config_to_api(local_data)
+
+    # Runtime-safety backstop on the assembled API body (issues #245/#274).
+    configuration = guard_script_shape(
+        component_id, configuration, warnings, config_path=config_path_str
+    )
 
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
@@ -331,8 +450,15 @@ def push_update(
     branch_id: int | None,
     *,
     allow_plaintext_fallback: bool = False,
-) -> None:
-    """Update an existing config from a local _config.yml file."""
+    warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Update an existing config from a local _config.yml file.
+
+    Returns the API response so the caller can stamp the manifest baseline
+    from the remote's own view of the config (issue #686). ``warnings``
+    accumulates the ``script[]`` normalization records of
+    :func:`guard_script_shape` for the push envelope.
+    """
     branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     config_dir = project_root / branch_path / config_path_str
     local_data = service._read_config_file(config_dir)
@@ -348,6 +474,11 @@ def push_update(
 
     name, description, configuration = local_config_to_api(local_data)
 
+    # Runtime-safety backstop on the assembled API body (issues #245/#274).
+    configuration = guard_script_shape(
+        component_id, configuration, warnings, config_id=config_id, config_path=config_path_str
+    )
+
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
     configuration = encrypt_secrets_in_config(
@@ -358,7 +489,7 @@ def push_update(
         allow_plaintext_fallback=allow_plaintext_fallback,
     )
 
-    client.update_config(
+    result = client.update_config(
         component_id=component_id,
         config_id=config_id,
         name=name,
@@ -375,3 +506,5 @@ def push_update(
     # Write back: update local file with encrypted secrets. Use pristine_data so
     # blocks/code stay only in their code files.
     writeback_after_push(service, pristine_data, config_dir, config_id, configuration)
+
+    return result if isinstance(result, dict) else {}

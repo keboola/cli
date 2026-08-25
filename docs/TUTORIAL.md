@@ -509,6 +509,10 @@ kbagent sync pull --project padak-2-0
 git add -A && git commit -m "initial sync"
 ```
 
+`manifest.json`'s `ignoredComponents` field (since vNEXT) lets you exclude
+project-specific components from every sync operation, on top of the
+always-ignored `keboola.sandboxes` and `keboola.mcp-server-tool`.
+
 What you end up with on disk:
 
 ```

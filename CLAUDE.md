@@ -694,6 +694,14 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # like cli:read, cli:write, cli:destructive). `tool:*` patterns are INERT since 0.85.0 (the MCP
 # passthrough is gone): they load but match nothing, so a mode=deny policy whose only allowance was
 # tool:read now denies everything. The agent guards rails against mistakes; not a sandbox.
+# `permissions set` (since vNEXT, issue #688) validates every --allow/--deny pattern BEFORE the
+#   interactive confirmation: each must be a cli:* category, an exact operation name (incl. a
+#   flag-escalated string like "auth.logout --remove-projects"), or a glob matching >=1 known
+#   operation -- an unknown pattern (typo, fabricated category) is rejected with VALIDATION_ERROR,
+#   exit 2, listing every offending pattern (--json: error.details.invalid_patterns), and nothing
+#   is persisted. `permissions show` / `kbagent doctor` also generalized: they now flag ANY
+#   persisted pattern matching zero known operations, not only the retired tool:* namespace.
+#   PermissionEngine itself stays lenient at evaluation time -- only `permissions set` is strict.
 kbagent permissions list [--category read|write|destructive|admin]
 kbagent permissions show
 kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
@@ -722,7 +730,30 @@ kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-com
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
-kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve]
+kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
+# workspace load (since vNEXT, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
+#   server's LoadTypeDecider -- zero-copy CLONE when eligible (same backend as the workspace,
+#   backend snowflake/bigquery, full load -- kbagent never sends filters here, no
+#   external-schema bucket, alias only when column-auto-sync is ON and unfiltered, and on
+#   BigQuery not an Analytics-Hub-linked bucket), otherwise plain COPY with a per-table
+#   `clone_ineligible_reason` in the JSON. Before this, kbagent always sent a bare COPY (the
+#   API's own default when loadType is omitted) -- a 282 GB table load burned warehouse credits
+#   for hours where CLONE is metadata-only and finishes in seconds.
+#   --load-type clone|copy|view FORCES the type for every table; an ineligible explicit choice
+#   fails loudly with the server's HTTP 400 message -- it never silently degrades to COPY.
+#   `view` is a zero-storage read-only view (BigQuery: any same-backend bucket; Snowflake: only
+#   external-schema buckets + the project feature `input-mapping-read-only-storage`).
+#   Size guard: a table resolved/forced to COPY whose dataSizeBytes exceeds 1 GiB requires
+#   interactive confirmation (TTY human mode) or --force (JSON/non-interactive) -- a huge copy
+#   never starts silently. --timeout SECONDS (default 300 here; other storage-job commands keep
+#   60): on timeout the error now says the job CONTINUES RUNNING server-side and keeps consuming
+#   resources, names the job id, and how to poll it (GET /v2/storage/jobs/{id});
+#   STORAGE_JOB_TIMEOUT now maps to exit code 4 (network/retryable) instead of 1. JSON result
+#   gains per-table `load_type` / `data_size_bytes` / `clone_ineligible_reason` plus a top-level
+#   `load_type_requested` (`auto` when the flag was omitted); existing keys are unchanged.
+#   Cheap alternative for analytics-only access: with the read-only input-mapping feature, a
+#   workspace can query production data directly via the `KBC_<STACK>_<PROJECT>` shared
+#   database (zero load, zero storage) -- `workspace query` works on it, no load needed.
 kbagent workspace query --project ALIAS --workspace-id ID --sql "SELECT ..." [--transactional] [--full] [--limit N]
 kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 # query: default reads results inline via Query Service `GET .../results` (fast, JSON columns+rows),
@@ -814,7 +845,20 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync push (since vNEXT, #686): the manifest baseline `pull_config_hash` is stamped from the API
+#   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
+#   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
+#   phantom `~ REMOTE MODIFIED` drift in `sync diff`. Unreadable-after-write leaves the baseline
+#   UNTOUCHED + a `warnings[]` entry (never a disk-derived fallback). One canonical script[] shape now
+#   (one element = one statement) and `transform.sql` gains `/* ===== STATEMENT ===== */` markers when
+#   semicolons cannot recover the boundaries -- which also closes a SILENT pre-vNEXT rewrite that
+#   collapsed such scripts to one statement (MULTI_STATEMENT_COUNT=1) while diff said "in sync".
+#   Migration: entries carry `metadata.config_hash_version`; unversioned ones match leniently (pre-vNEXT
+#   hash of the SAME remote counts as in sync, nothing else), and ONE `sync pull` per project migrates.
+#   A pre-markers tree whose only difference from the remote is the lost boundaries is REFUSED per-change
+#   with SYNC_LEGACY_BOUNDARY telling you to pull first; genuine edits push normally.
 # sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
+# Ignored components (since vNEXT, #689): keboola.mcp-server-tool joins keboola.sandboxes on ALWAYS_IGNORED_COMPONENTS (the MCP server's auto-created empty mcp-workspace-<hex> configs); the manifest field ignoredComponents (.keboola/manifest.json) is now LIVE and unions with the hardcoded set, honored by pull/diff/push. pull drops manifest entries + local dirs for a newly-ignored component, reported with action "ignored" (distinct from "removed" = deleted on remote); diff filters the local side too, so a stale dir for an ignored component can never classify as DELETED -- closes the delete-dir-then-push trap that used to destroy production keboola.mcp-server-tool configs.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
@@ -968,7 +1012,24 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail --project NAME --subscription-id ID
-# notification (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
+kbagent notification create --project ALIAS --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
+kbagent notification delete --project ALIAS --subscription-id ID [--yes]
+kbagent notification replace-recipient --project ALIAS --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
+# notification WRITE path (since vNEXT, #690): the group is no longer read-only.
+#   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
+#   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch writes NO branch.id
+#   filter, unlike the UI which always writes one; an absent filter does not constrain matching, so
+#   such a subscription fires for jobs on EVERY branch.
+#   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
+#   subscription FIRST, then deletes the old one, so a NEW subscription_id is ALWAYS minted (scripts
+#   must not cache the old one; the result carries old_subscription_id + new_subscription_id). A
+#   failed delete leaves a recoverable DUPLICATE, surfaced as `old_deleted: false` + a warning --
+#   never a lost subscription.
+#   Permission classes: notification.create = write, notification.replace-recipient = write,
+#   notification.delete = destructive. So --deny-writes blocks all three; --deny-destructive blocks
+#   only `delete`. `delete` / `replace-recipient` prompt for confirmation unless --yes (or --json).
+# notification READ path (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
 #   recipients behind the Flow Builder's Notifications tab (bell icon). They live in a SEPARATE
 #   platform service (notification.{stack}, plain Storage token, no elevated scope), NOT in the
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow

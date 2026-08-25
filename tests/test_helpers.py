@@ -4,7 +4,7 @@ import pytest
 import typer
 
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code, read_password_stdin
-from keboola_agent_cli.errors import KeboolaApiError, map_error_code_to_type
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError, map_error_code_to_type
 
 
 class TestReadPasswordStdin:
@@ -52,6 +52,21 @@ class TestMapErrorToExitCode:
             message="Request timed out",
             status_code=0,
             error_code="TIMEOUT",
+            retryable=True,
+        )
+        assert map_error_to_exit_code(exc) == 4
+
+    def test_map_error_to_exit_code_storage_job_timeout(self) -> None:
+        """STORAGE_JOB_TIMEOUT maps to exit 4, like the queue-job equivalent.
+
+        The Storage API has no cancel, so a timeout means the job is still
+        running server-side -- scripts must be able to tell that apart from a
+        real failure, which the previous fall-through to exit 1 prevented.
+        """
+        exc = KeboolaApiError(
+            message="Storage job 1 did not complete within 300.0s",
+            status_code=504,
+            error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,
         )
         assert map_error_to_exit_code(exc) == 4

@@ -13,9 +13,11 @@ import pytest
 from helpers import setup_single_project, setup_two_projects
 from keboola_agent_cli import client as client_module
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.constants import WORKSPACE_LOAD_JOB_MAX_WAIT
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services import workspace_service as workspace_service_module
+from keboola_agent_cli.services._workspace_load_plan import plan_auto_load_type
 from keboola_agent_cli.services.workspace_service import WorkspaceService
 
 SAMPLE_TOKEN_VERIFY = TokenVerifyResponse(
@@ -825,17 +827,138 @@ class TestResetPassword:
         assert mock_client.close.call_count == 2
 
 
+def _table_detail(
+    backend: str = "snowflake",
+    size_bytes: int | None = 2048,
+    has_external_schema: bool = False,
+    is_linked: bool = False,
+    is_alias: bool = False,
+    alias_columns_auto_sync: bool = True,
+    alias_filter: dict | None = None,
+) -> dict:
+    """Build a Storage table-detail body with only the clone-relevant fields."""
+    return {
+        "id": "in.c-main.orders",
+        "dataSizeBytes": size_bytes,
+        "isAlias": is_alias,
+        "aliasColumnsAutoSync": alias_columns_auto_sync,
+        "aliasFilter": alias_filter,
+        "bucket": {
+            "backend": backend,
+            "hasExternalSchema": has_external_schema,
+            "isLinked": is_linked,
+        },
+    }
+
+
+def _make_load_client(
+    job_id: int = 777,
+    workspace_backend: str = "snowflake",
+    table_detail: dict | None = None,
+) -> MagicMock:
+    """Client mock wired for load_tables: branch, workspace backend, table detail."""
+    mock_client = MagicMock()
+    mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+    mock_client.get_workspace.return_value = {
+        "id": 42,
+        "connection": {"backend": workspace_backend},
+    }
+    mock_client.get_table_detail.return_value = (
+        _table_detail() if table_detail is None else table_detail
+    )
+    mock_client.load_workspace_tables.return_value = {"id": job_id, "status": "success"}
+    return mock_client
+
+
+class TestPlanAutoLoadType:
+    """Tests for the pure canClone mirror (services/_workspace_load_plan.py)."""
+
+    def test_same_backend_snowflake_clones(self) -> None:
+        plan = plan_auto_load_type("snowflake", "in.c-main.orders", _table_detail())
+        assert plan.load_type == "CLONE"
+        assert plan.clone_ineligible_reason is None
+        assert plan.data_size_bytes == 2048
+
+    def test_bigquery_same_backend_clones(self) -> None:
+        plan = plan_auto_load_type(
+            "bigquery", "in.c-main.orders", _table_detail(backend="bigquery")
+        )
+        assert plan.load_type == "CLONE"
+
+    @pytest.mark.parametrize(
+        ("workspace_backend", "detail", "expected_reason"),
+        [
+            (
+                "bigquery",
+                _table_detail(backend="snowflake"),
+                "backend mismatch: table snowflake vs workspace bigquery",
+            ),
+            (
+                "snowflake",
+                _table_detail(has_external_schema=True),
+                "external schema bucket",
+            ),
+            (
+                "bigquery",
+                _table_detail(backend="bigquery", is_linked=True),
+                "linked bucket on BigQuery",
+            ),
+            (
+                "snowflake",
+                _table_detail(is_alias=True, alias_columns_auto_sync=False),
+                "alias without column auto-sync",
+            ),
+            (
+                "snowflake",
+                _table_detail(is_alias=True, alias_filter={"column": "x", "values": ["1"]}),
+                "filtered alias",
+            ),
+            (
+                "redshift",
+                _table_detail(backend="redshift"),
+                "workspace backend redshift does not support clone",
+            ),
+        ],
+    )
+    def test_copy_fallback_reasons(
+        self, workspace_backend: str, detail: dict, expected_reason: str
+    ) -> None:
+        plan = plan_auto_load_type(workspace_backend, "in.c-main.orders", detail)
+        assert plan.load_type == "COPY"
+        assert plan.clone_ineligible_reason == expected_reason
+
+    def test_unfiltered_autosync_alias_still_clones(self) -> None:
+        """An alias is only ineligible when it filters or drifts from its source."""
+        plan = plan_auto_load_type(
+            "snowflake",
+            "in.c-main.alias",
+            _table_detail(is_alias=True, alias_columns_auto_sync=True, alias_filter=None),
+        )
+        assert plan.load_type == "CLONE"
+
+    def test_linked_bucket_clones_on_snowflake(self) -> None:
+        """isLinked only blocks the clone on BigQuery."""
+        plan = plan_auto_load_type("snowflake", "in.c-main.orders", _table_detail(is_linked=True))
+        assert plan.load_type == "CLONE"
+
+    @pytest.mark.parametrize("raw_size", ["4096", 4096])
+    def test_data_size_accepts_numeric_string(self, raw_size: object) -> None:
+        detail = {**_table_detail(), "dataSizeBytes": raw_size}
+        assert plan_auto_load_type("snowflake", "t", detail).data_size_bytes == 4096
+
+    @pytest.mark.parametrize("raw_size", [None, "not-a-number"])
+    def test_data_size_unknown_stays_none(self, raw_size: object) -> None:
+        """Unknown size must not become 0 -- that would disarm the guard."""
+        detail = {**_table_detail(), "dataSizeBytes": raw_size}
+        assert plan_auto_load_type("snowflake", "t", detail).data_size_bytes is None
+
+
 class TestLoadTables:
     """Tests for WorkspaceService.load_tables()."""
 
     def test_load_tables_success(self, tmp_config_dir: Path) -> None:
         """load_tables builds table defs and returns job result."""
-        mock_client = MagicMock()
-        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
-        mock_client.load_workspace_tables.return_value = {
-            "id": 777,
-            "status": "success",
-        }
+        mock_client = _make_load_client(job_id=777)
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(
@@ -859,20 +982,27 @@ class TestLoadTables:
         assert call_args[0][0] == 42  # workspace_id
         table_defs = call_args[0][1]
         assert len(table_defs) == 2
-        assert table_defs[0] == {"source": "in.c-main.orders", "destination": "orders"}
-        assert table_defs[1] == {"source": "in.c-main.customers", "destination": "customers"}
-        assert call_args[1] == {"branch_id": 123, "preserve": False}
+        assert table_defs[0] == {
+            "source": "in.c-main.orders",
+            "destination": "orders",
+            "loadType": "CLONE",
+        }
+        assert table_defs[1] == {
+            "source": "in.c-main.customers",
+            "destination": "customers",
+            "loadType": "CLONE",
+        }
+        assert call_args[1] == {
+            "branch_id": 123,
+            "preserve": False,
+            "max_wait": WORKSPACE_LOAD_JOB_MAX_WAIT,
+        }
         # close() called twice: once in _resolve_branch_id, once in load_tables
         assert mock_client.close.call_count == 2
 
     def test_load_tables_preserve_false(self, tmp_config_dir: Path) -> None:
         """load_tables passes preserve=False to client by default."""
-        mock_client = MagicMock()
-        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
-        mock_client.load_workspace_tables.return_value = {
-            "id": 778,
-            "status": "success",
-        }
+        mock_client = _make_load_client(job_id=778)
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(
@@ -887,12 +1017,7 @@ class TestLoadTables:
 
     def test_load_tables_preserve_true(self, tmp_config_dir: Path) -> None:
         """load_tables passes preserve=True to client when requested."""
-        mock_client = MagicMock()
-        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
-        mock_client.load_workspace_tables.return_value = {
-            "id": 779,
-            "status": "success",
-        }
+        mock_client = _make_load_client(job_id=779)
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(
@@ -907,6 +1032,267 @@ class TestLoadTables:
         call_kwargs = mock_client.load_workspace_tables.call_args[1]
         assert call_kwargs["preserve"] is True
         assert result["job_id"] == 779
+
+    def test_load_tables_auto_clone_result_shape(self, tmp_config_dir: Path) -> None:
+        """The auto decision is reported per table in the result dict."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"])
+
+        assert result["load_type_requested"] == "auto"
+        assert result["tables"] == [
+            {
+                "table_id": "in.c-main.orders",
+                "load_type": "clone",
+                "data_size_bytes": 2048,
+                "clone_ineligible_reason": None,
+            }
+        ]
+        assert "1 clone" in result["message"]
+
+    def test_load_tables_auto_falls_back_to_copy(self, tmp_config_dir: Path) -> None:
+        """A table the backend cannot clone degrades to COPY, with a reason."""
+        mock_client = _make_load_client(
+            table_detail=_table_detail(backend="snowflake", has_external_schema=True)
+        )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-ext.events"])
+
+        assert result["tables"][0]["load_type"] == "copy"
+        assert result["tables"][0]["clone_ineligible_reason"] == "external schema bucket"
+        table_defs = mock_client.load_workspace_tables.call_args[0][1]
+        assert table_defs[0]["loadType"] == "COPY"
+
+    def test_load_tables_explicit_view_skips_table_detail(self, tmp_config_dir: Path) -> None:
+        """An explicit clone/view is sent as asked -- no eligibility lookups."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], load_type="VIEW"
+        )
+
+        mock_client.get_table_detail.assert_not_called()
+        mock_client.get_workspace.assert_not_called()
+        assert result["load_type_requested"] == "view"
+        assert mock_client.load_workspace_tables.call_args[0][1][0]["loadType"] == "VIEW"
+
+    def test_load_tables_explicit_clone_skips_table_detail(self, tmp_config_dir: Path) -> None:
+        """Explicit clone needs neither eligibility nor size -- nothing is guarded."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], load_type="clone"
+        )
+
+        mock_client.get_table_detail.assert_not_called()
+        assert mock_client.load_workspace_tables.call_args[0][1][0]["loadType"] == "CLONE"
+
+    def test_load_tables_explicit_copy_fetches_size(self, tmp_config_dir: Path) -> None:
+        """Explicit COPY still fetches the detail -- the size guard needs it."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(
+            alias="prod", workspace_id=42, tables=["in.c-main.orders"], load_type="copy"
+        )
+
+        mock_client.get_table_detail.assert_called_once_with("in.c-main.orders", branch_id=123)
+        # Backend eligibility is irrelevant for an explicit request.
+        mock_client.get_workspace.assert_not_called()
+        assert result["tables"][0]["data_size_bytes"] == 2048
+        assert result["tables"][0]["clone_ineligible_reason"] is None
+
+    def test_load_tables_invalid_load_type(self, tmp_config_dir: Path) -> None:
+        """An unknown load type is rejected before any project is resolved."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(
+                alias="prod", workspace_id=42, tables=["in.c-main.orders"], load_type="teleport"
+            )
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_size_guard_refuses_without_force(self, tmp_config_dir: Path) -> None:
+        """A big COPY with nobody to ask is refused, not started."""
+        mock_client = _make_load_client(
+            table_detail=_table_detail(backend="bigquery", size_bytes=5 * 1024**3)
+        )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.huge"])
+
+        assert exc_info.value.error_code == ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE
+        assert "in.c-main.huge" in exc_info.value.message
+        assert "5.0 GB" in exc_info.value.message
+        assert "--force" in exc_info.value.message
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_size_guard_force_proceeds(self, tmp_config_dir: Path) -> None:
+        """--force skips the guard entirely (callback never consulted)."""
+        mock_client = _make_load_client(
+            table_detail=_table_detail(backend="bigquery", size_bytes=5 * 1024**3)
+        )
+        callback = MagicMock(return_value=False)
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(
+            alias="prod",
+            workspace_id=42,
+            tables=["in.c-main.huge"],
+            force=True,
+            on_copy_guard=callback,
+        )
+
+        callback.assert_not_called()
+        assert result["job_status"] == "success"
+
+    def test_load_tables_size_guard_callback_approves(self, tmp_config_dir: Path) -> None:
+        """An approving callback lets the oversized COPY run."""
+        oversized = _table_detail(backend="bigquery", size_bytes=5 * 1024**3)
+        mock_client = _make_load_client(table_detail=oversized)
+        callback = MagicMock(return_value=True)
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(
+            alias="prod",
+            workspace_id=42,
+            tables=["in.c-main.huge"],
+            on_copy_guard=callback,
+        )
+
+        plans = callback.call_args[0][0]
+        assert [plan.table_id for plan in plans] == ["in.c-main.huge"]
+        assert plans[0].data_size_bytes == 5 * 1024**3
+        assert result["job_status"] == "success"
+
+    def test_load_tables_size_guard_callback_declines(self, tmp_config_dir: Path) -> None:
+        """A declining callback produces the same structured refusal."""
+        mock_client = _make_load_client(
+            table_detail=_table_detail(backend="bigquery", size_bytes=5 * 1024**3)
+        )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(
+                alias="prod",
+                workspace_id=42,
+                tables=["in.c-main.huge"],
+                on_copy_guard=lambda plans: False,
+            )
+
+        assert exc_info.value.error_code == ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_size_guard_ignores_clone(self, tmp_config_dir: Path) -> None:
+        """A huge table that CLONEs is never guarded -- clone moves no data."""
+        mock_client = _make_load_client(
+            table_detail=_table_detail(backend="snowflake", size_bytes=50 * 1024**3)
+        )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.huge"])
+
+        assert result["tables"][0]["load_type"] == "clone"
+        assert result["job_status"] == "success"
+
+    def test_load_tables_timeout_passthrough(self, tmp_config_dir: Path) -> None:
+        """An explicit timeout becomes the poller's budget."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=900.0)
+
+        assert mock_client.load_workspace_tables.call_args[1]["max_wait"] == 900.0
+
+    def test_load_tables_timeout_none_uses_default(self, tmp_config_dir: Path) -> None:
+        """Omitting timeout (None) still resolves to WORKSPACE_LOAD_JOB_MAX_WAIT."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=None)
+
+        assert (
+            mock_client.load_workspace_tables.call_args[1]["max_wait"]
+            == WORKSPACE_LOAD_JOB_MAX_WAIT
+        )
+
+    def test_load_tables_timeout_zero_rejected(self, tmp_config_dir: Path) -> None:
+        """timeout=0.0 must NOT silently fall back to the 300s default.
+
+        A direct service/SDK caller bypasses both the CLI's and the
+        ``kbagent serve`` router's non-positive-timeout guards, so the
+        service layer must reject it itself -- before any client call.
+        """
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=0.0)
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_timeout_negative_rejected(self, tmp_config_dir: Path) -> None:
+        """A negative timeout is rejected the same way as zero."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(
+                alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=-5.0
+            )
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_timeout_explicit_positive_passthrough(self, tmp_config_dir: Path) -> None:
+        """An explicit positive timeout still reaches the client verbatim."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=42.0)
+
+        assert mock_client.load_workspace_tables.call_args[1]["max_wait"] == 42.0
 
     def test_load_tables_api_error(self, tmp_config_dir: Path) -> None:
         """load_tables propagates KeboolaApiError when job fails."""

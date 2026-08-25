@@ -256,8 +256,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "**Execution.** "
             "Flow Notifications-tab recipients (Notification Service "
-            "subscriptions) -- read-only audit across projects. "
-            "Mirrors `kbagent notification list|detail`."
+            "subscriptions) -- audit + write across projects. "
+            "Mirrors `kbagent notification list|detail|create|delete|replace-recipient`."
         ),
     },
     {
@@ -504,6 +504,19 @@ def _format_error(
 # server cannot renew such a session itself -- a browser login only completes
 # where a human sits.
 _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
+
+# Refusals raised by kbagent itself BEFORE anything is sent upstream. The
+# default 502 would tell the caller to retry a gateway that was never even
+# reached; these are the caller's request to fix (re-send with `force`, a
+# corrected argument, ...), so they answer 400. ``INVALID_ARGUMENT`` covers
+# every service-layer pre-flight validation (bad enum value, malformed
+# input, a locally-detected refusal like an SSRF/path-traversal guard on
+# data about to be acted on) -- audited across every raise site in
+# ``services/`` (issue #687 review): all of them fire before -- or instead
+# of -- a call reaching an upstream API, so none of them is a gateway fault.
+_CALLER_REFUSAL_CODES = frozenset(
+    {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
+)
 
 _SESSION_REMEDY_ON_HOST = (
     "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "
@@ -753,6 +766,8 @@ def create_app(
         msg = getattr(exc, "message", str(exc)) or str(exc)
         if code in _SESSION_CREDENTIAL_CODES:
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
+        if code in _CALLER_REFUSAL_CODES:
+            return _format_error(msg, code, http_status=400)
         if code == ErrorCode.NOT_FOUND:
             # An upstream 404 is a statement about the requested resource, not
             # about the gateway: reporting it as 502 made callers retry (and

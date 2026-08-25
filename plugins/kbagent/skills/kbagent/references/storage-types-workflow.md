@@ -246,6 +246,9 @@ kbagent branch use --project prod --branch <ID>
 
 # 2. In a workspace, build a typed CTAS into a sibling table
 kbagent workspace create --project prod
+# Default auto-picks clone (fast, any size) when eligible, else copy --
+# on a large table that falls back to copy, --json refuses without --force.
+# See workspace-workflow.md "Load types" for the full clone/copy/view rules.
 kbagent workspace load --workspace-id W --tables in.c-foo.data
 kbagent workspace query --workspace-id W --sql "
   CREATE TABLE \"in.c-foo.data_change_log\" AS

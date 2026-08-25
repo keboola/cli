@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**231 operations** across **202 paths** and **30 routers**.
+**234 operations** across **204 paths** and **30 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -279,14 +279,17 @@ Cron-style schedules attached to flows / configurations. Mirrors `kbagent schedu
 | `GET` | `/schedules/{project}/{schedule_id}` | Get schedule detail |
 | `GET` | `/schedules/find/query` | Search schedules by criteria |
 
-### `notifications` (2 operations)
+### `notifications` (5 operations)
 
-Flow Notifications-tab recipients (Notification Service subscriptions) -- read-only audit across projects. Mirrors `kbagent notification list|detail`.
+Flow Notifications-tab recipients (Notification Service subscriptions) -- audit + write across projects. Mirrors `kbagent notification list|detail|create|delete|replace-recipient`.
 
 | Method | Path | Summary |
 |---|---|---|
 | `GET` | `/notifications` | List notification subscriptions |
 | `GET` | `/notifications/{project}/{subscription_id}` | Get subscription detail |
+| `DELETE` | `/notifications/{project}/{subscription_id}` | Delete a notification subscription |
+| `POST` | `/notifications/{project}` | Create a notification subscription |
+| `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 
 ### `data-apps` (18 operations)
 

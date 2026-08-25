@@ -161,6 +161,22 @@ STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
+# --- Workspace Table Loading ---
+# A workspace load is NOT fire-and-forget: when the local poller gives up, the
+# server-side job keeps running (and keeps consuming warehouse resources). The
+# 60s STORAGE_JOB_MAX_WAIT default was far too short for a real COPY, so a
+# perfectly healthy load routinely surfaced as a timeout. A zero-copy CLONE
+# finishes in seconds; a COPY of a multi-GB table can take minutes.
+WORKSPACE_LOAD_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace-load jobs
+# Above this on-disk size, a COPY (physical data movement, billed warehouse
+# time) needs an explicit confirmation or --force. CLONE is zero-copy and is
+# never guarded.
+WORKSPACE_LOAD_COPY_GUARD_BYTES: int = 1024**3  # 1 GiB
+# Load types accepted by `workspace load --load-type` (lowercase on the CLI,
+# uppercased on the wire -- the Storage API validator matches the uppercase
+# enum). Omitting the flag means "auto": CLONE where eligible, else COPY.
+WORKSPACE_LOAD_TYPES: tuple[str, ...] = ("clone", "copy", "view")
+
 # --- Queue Job Polling ---
 # Piecewise curve matching FIIA's existing Queue API polling contract
 # (same cadence as the official keboola-as-code Go CLI): fast initial polls
@@ -629,6 +645,13 @@ DEFAULT_NAMING_DATA_APP: str = "app/{component_id}/{config_name}"
 # Manifest v3 introduces ManifestConfigRow.metadata (row-level pull hashes) but does
 # not change the on-disk YAML shape, so CONFIG_YML_VERSION stays at 2.
 CONFIG_YML_VERSION: int = 2
+# Shape version of the manifest's ``pull_config_hash``, stored per entry under
+# ``metadata.config_hash_version`` (issue #686). Version 2 = SQL transformation
+# ``script[]`` normalized to one element per statement. An entry WITHOUT the key
+# predates the fix: its stored hash may be the legacy collapsed shape, which
+# `sync diff` / `sync pull` accept leniently until the next pull re-stamps it.
+CONFIG_HASH_VERSION: int = 2
+CONFIG_HASH_VERSION_KEY: str = "config_hash_version"
 SANITIZE_NAME_MAX_LENGTH: int = 100
 # How many `orphaned` rows `sync diff` / `sync push` print in human mode before
 # collapsing the rest into a count. A manifest re-targeted by
@@ -649,9 +672,15 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # --- Ignored Components ---
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
+# A project may extend this set per working tree via the manifest's
+# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile
+        # MCP server workspace record: an empty configuration created
+        # automatically once per project by the Keboola MCP server. Carries no
+        # user-authored state, so syncing it is pure noise in every tree.
+        "keboola.mcp-server-tool",
     }
 )
 

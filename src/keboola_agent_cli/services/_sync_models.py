@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..sync.manifest import ManifestConfiguration
 
@@ -61,9 +62,11 @@ class VariableBindingResult:
     local ``_configuration_extra`` were rebound to ULIDs (drives the
     manifest-dirty flag). ``errors`` accumulates unresolved links so the push
     envelope surfaces them instead of leaving a broken link silently.
+    ``warnings`` carries non-fatal baseline-stamping notices (issue #686).
     """
 
     errors: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0
 
 
@@ -74,10 +77,12 @@ class FlowBindingResult:
     ``configs_rewritten`` counts flows whose task ``configId``s were remapped to
     ULIDs (drives the manifest-dirty flag); ``tasks_remapped`` is the total task
     references rewritten; ``errors`` accumulates PUT failures so the push
-    envelope surfaces them.
+    envelope surfaces them. ``warnings`` carries non-fatal baseline-stamping
+    notices (issue #686).
     """
 
     errors: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0
     tasks_remapped: int = 0
 

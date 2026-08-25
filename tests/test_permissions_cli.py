@@ -229,6 +229,28 @@ class TestPermissionsShow:
         assert "tool:read" in result.output
         assert "docs/mcp-migration.md" in result.output
 
+    def test_show_warns_for_a_typo_pattern_not_just_tool_namespace(self, tmp_path: Path) -> None:
+        """Generalized detection (issue #688): a plain typo is flagged too.
+
+        The policy is written directly via the ConfigStore fixture, simulating
+        a pattern persisted before `permissions set` started validating writes.
+        """
+        policy = PermissionPolicy(mode="allow", deny=["stroage.upload-table"])
+        store = _make_store(tmp_path, policy)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = store
+            result = runner.invoke(app, ["permissions", "show"])
+            json_result = runner.invoke(app, ["--json", "permissions", "show"])
+        assert result.exit_code == 0
+        assert "stroage.upload-table" in result.output
+        assert "match no known operation" in result.output
+        # No tool:/MCP-migration hint for a plain typo -- the generic hint instead.
+        assert "docs/mcp-migration.md" not in result.output
+        assert "kbagent permissions list" in result.output
+
+        data = json.loads(json_result.output)["data"]
+        assert data["inert_patterns"] == ["stroage.upload-table"]
+
 
 class TestPermissionsSet:
     """Tests for `kbagent permissions set`."""
@@ -314,6 +336,128 @@ class TestPermissionsSet:
             MockStore.return_value = store
             result = runner.invoke(app, ["--json", "permissions", "set", "--mode", "invalid"])
         assert result.exit_code == 2
+
+    def test_set_rejects_unknown_allow_pattern(self, tmp_path: Path) -> None:
+        """A pattern matching no known operation is rejected up front (issue #688).
+
+        Exit 2 + VALIDATION_ERROR, the offending pattern named in the message,
+        and the interactive confirmation must never fire -- the rejection is
+        pre-confirmation so a bad call is never even offered the prompt.
+        """
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+            ) as mock_confirm,
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                ["--json", "permissions", "set", "--mode", "deny", "--allow", "tool.admin"],
+            )
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "VALIDATION_ERROR"
+        assert "tool.admin" in data["error"]["message"]
+        mock_confirm.assert_not_called()
+        # Nothing persisted.
+        config = store.load()
+        assert config.permissions is None
+
+    def test_set_rejects_unknown_deny_pattern(self, tmp_path: Path) -> None:
+        """The same rejection applies to --deny patterns, not just --allow."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+            ) as mock_confirm,
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "permissions",
+                    "set",
+                    "--mode",
+                    "allow",
+                    "--deny",
+                    "stroage.upload-table",
+                ],
+            )
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "stroage.upload-table" in data["error"]["message"]
+        mock_confirm.assert_not_called()
+
+    def test_set_lists_every_bad_pattern_across_allow_and_deny(self, tmp_path: Path) -> None:
+        """Multiple bad patterns are all listed in one message -- one round trip to fix."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+            ) as mock_confirm,
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "permissions",
+                    "set",
+                    "--mode",
+                    "allow",
+                    "--allow",
+                    "tool.admin",
+                    "--deny",
+                    "cli:reed",
+                    "--deny",
+                    "tool.admin",
+                ],
+            )
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        message = data["error"]["message"]
+        assert "tool.admin" in message
+        assert "cli:reed" in message
+        # The duplicate ("tool.admin" in both --allow and --deny) is listed once.
+        assert data["error"]["details"]["invalid_patterns"] == ["tool.admin", "cli:reed"]
+        mock_confirm.assert_not_called()
+
+    def test_set_accepts_valid_categories_and_globs(self, tmp_path: Path) -> None:
+        """A call using only valid cli:* categories / exact ops / globs still persists."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "permissions",
+                    "set",
+                    "--mode",
+                    "deny",
+                    "--allow",
+                    "cli:read",
+                    "--deny",
+                    "storage.delete-*",
+                ],
+            )
+        assert result.exit_code == 0
+        config = store.load()
+        assert config.permissions is not None
+        assert config.permissions.allow == ["cli:read"]
+        assert config.permissions.deny == ["storage.delete-*"]
 
 
 class TestPermissionsReset:

@@ -458,6 +458,91 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries (since vNEXT, #686)
+
+`pull_config_hash` in `.keboola/manifest.json` is the 3-way diff's base, and it
+means "the hash of this config **as the API returns it**". `sync pull` and the
+remote side of `sync diff` always computed it that way. `sync push` computed it
+from the **files on disk** instead -- and the two producers disagreed about
+`parameters.blocks[].codes[].script`, so every multi-statement SQL
+transformation deployed through `sync push` was reported
+`~ REMOTE MODIFIED ... codes changed` by every later `sync diff`, forever, with
+the working tree byte-identical to the remote. Only a real `sync pull` cleared
+it, and the next deploy re-created it (field report: 18 phantom configs hiding
+2 real UI changes across 21 projects).
+
+- **What changed.** Push now stamps the baseline from the API's own view of
+  what it just wrote -- at all six sites (config create/update, row
+  create/update, and the Phase C/D link backfills). `pull_hash` and
+  `pull_extra_hashes` stay disk-derived; they describe local files.
+- **The same fix closes the `is_disabled` phantom.** A config (or row) disabled
+  in the UI whose local YAML has no `is_disabled` key drifted permanently after
+  every push for the same reason. No workaround needed any more.
+- **If the config cannot be read back after the write** (a partial mutation
+  response AND a failed re-read), `pull_config_hash` is left EXACTLY as it was
+  and the push envelope carries a `warnings[]` entry telling you to run
+  `sync pull`. Visibly stale beats confidently wrong -- push never falls back
+  to a disk-derived baseline.
+- **One `script[]` shape now, everywhere: one element = one executable
+  statement.** That is what the Keboola runtime means by the array
+  (#119/#120/#274), and `sync push` has produced it since 0.30.x. The API side
+  used to collapse each code into ONE joined string, which no multi-statement
+  SQL config could ever match. Non-SQL components (Python, R, custom apps) are
+  unchanged -- there both sides always agreed on the single joined string.
+- **`transform.sql` can now contain `/* ===== STATEMENT ===== */` marker
+  lines.** They are written only when semicolons alone cannot recover the
+  statement array -- i.e. when the API's elements carry no trailing `;`. A
+  `;`-terminated file is byte-identical to what earlier versions wrote, so
+  existing trees produce no spurious diff. This closes a SILENT failure: before
+  vNEXT, a script like `["SELECT 1", "SELECT 2"]` lost its boundary on pull and
+  push rewrote production as ONE statement (the `MULTI_STATEMENT_COUNT=1` crash
+  shape) while `sync diff` reported "in sync".
+  - Markers are guaranteed boundaries, but `;` splitting still runs INSIDE each
+    marked segment -- typing `; SELECT ...` in a marked segment splits
+    correctly.
+  - Do not hand-write a line identical to the marker inside a statement: when
+    extraction sees one it suppresses markers for that code entirely (logging a
+    warning) rather than writing an ambiguous file.
+
+**Migration -- one `sync pull` per project, then the noise is gone:**
+
+- Each manifest entry now carries `metadata.config_hash_version` (currently
+  `2`) next to a hash the current producer computed.
+- An entry WITHOUT that key predates the fix, so it is compared **leniently**:
+  a stored hash equal to the pre-fix hash of the SAME remote config counts as
+  in sync. Every other field is pinned by that same hash, so the leniency
+  cannot hide real drift -- a renamed or edited remote still reports
+  `REMOTE MODIFIED`.
+- `sync pull` re-runs extraction (writing the markers where needed) and stamps
+  the version, which ends the leniency for that entry. `sync diff` stays
+  read-only and migrates nothing.
+- A migration pull will NOT overwrite an edited `transform.sql` /
+  `_description.md`: unlike the ordinary overwrite-guard (which only ever
+  checked `_config.yml`), the migration path checks the companion files too,
+  and preserves the entry unstamped when any of them changed.
+- **`sync push` refuses ONE specific legacy change** with
+  `SYNC_LEGACY_BOUNDARY` (per-change error, exit 1, the rest of the push
+  proceeds): a tree pulled before markers existed whose only difference from
+  the remote is the lost statement boundaries. Pushing it would merge separate
+  statements into one. Run `sync pull` for that project, then push again.
+  Genuine SQL edits are never blocked by this guard.
+
+## `sync push` runs the same script-shape guard as `config update` (since vNEXT)
+
+`sync push` now runs `normalize_blocks_codes_script` -- the runtime-safety guard
+`config update` and `transformation edit/create` have always run -- on every
+config body it sends (create, update, and the Phase C variables backfill). After
+the #686 fix above it is a no-op on the GitOps path by construction; it still
+catches a hand-authored `_config.yml` that carries `parameters.blocks` inline
+with NO companion `transform.sql`, which code merging passes through verbatim
+(a `script` string, or one element packing several `;`-separated statements,
+passes the Storage API and fails the JOB).
+
+Each fix is surfaced -- never silent -- as a push-envelope `warnings[]` entry with
+`change_type: "script_normalization"` carrying `path` / `action` / `after_length`
+(printed in human mode like any other push warning, structured under `warnings`
+in `--json`). `config update` keeps its own dedicated `normalizations` key.
+
 ## `sync push` fresh-CREATE writeback now updates placeholders in place (since v0.47.0)
 
 Before v0.47.0, `kbagent sync push` always **appended** new `ManifestConfiguration`
@@ -1337,8 +1422,48 @@ events and emits a final `done` SSE frame mirroring the same record.
   components sharing a config ID, a deleted parent config, or a failed lookup
   all yield `""` rather than a guess. A blank name never means the
   subscription is inactive.
-- Read-only in this release: creating and deleting subscriptions is not
-  exposed by the CLI.
+## Notification subscriptions can now be written, and the write path has sharp edges
+
+*(since vNEXT)*
+
+- **`notification replace-recipient` always mints a NEW `subscription_id`.**
+  The Notification Service has **no update primitive** -- there is no PATCH or
+  PUT for a subscription -- so kbagent implements the swap as
+  delete+recreate. The consequence is not cosmetic: any script, runbook or
+  config file holding the old id is stale the moment the replace succeeds.
+  Read `old_subscription_id` and `new_subscription_id` off the result
+  (both are always present) instead of assuming the id survived the edit.
+- **The new subscription is created FIRST, then the old one deleted.** That
+  ordering is deliberate: the failure mode of create-then-delete is a
+  *duplicate* (two subscriptions paging the same event), which is visible in
+  `notification list` and fixable with one `notification delete`. The
+  reverse ordering would fail into a *silently missing* subscription --
+  nobody paged, and no row left to notice. A failed delete is therefore never
+  swallowed: the result carries `old_deleted: false` plus a warning naming
+  the old id, exit stays 0, and the new subscription is already live.
+- **`notification create` without `--branch` writes NO `branch.id` filter --
+  the UI always writes one.** A subscription created in the Flow Builder
+  always carries a `branch.id` filter (for production, the default branch's
+  numeric id -- see the entry above). One created by `kbagent notification
+  create` without `--branch` carries none at all, and **an absent filter does
+  not constrain matching**: it fires for jobs on every branch, production and
+  dev alike. That is usually what an operator auditing "page me when this
+  flow fails" wants, but it is NOT what a UI-created subscription does, so
+  the two are not interchangeable when comparing rows. Pass `--branch ID` to
+  reproduce the UI's behavior.
+- **`--address` is channel-discriminated, but the CLI takes one flag.**
+  `--channel email` sends `{"channel": "email", "address": ...}`,
+  `--channel webhook` sends `{"channel": "webhook", "url": ...}` -- the same
+  split the read path collapses into its single `address` column. An invalid
+  `--channel` fails fast with a structured `INVALID_ARGUMENT` (exit 2)
+  before any API call.
+- **Permission classes split write from destructive.**
+  `notification.create` and `notification.replace-recipient` are `write`;
+  `notification.delete` is `destructive`. So `--deny-writes` blocks all three
+  (write spans destructive), while `--deny-destructive` blocks only `delete`
+  -- a replace still runs under it, deleting the old subscription as part of
+  the swap. `delete` and `replace-recipient` also confirm interactively
+  unless `--yes` is passed (or `--json`, which never prompts).
 
 ## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.84.2)
 
@@ -4520,9 +4645,9 @@ shapes.
   today a deny policy gates only `/auth/*`, not the ~30 other routers a
   session token can otherwise reach.
 
-## `serve` honors the root-level `--config-dir` (since vNEXT)
+## `serve` honors the root-level `--config-dir`
 
-`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+*(since vNEXT)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
 flag has two possible positions. The precedence is **most specific wins**,
 matching what `kbagent repl` does with the root flags:
 
@@ -4544,3 +4669,141 @@ resolution is left to the server, which lands on the same directory anyway.
   `curl -s -H "Authorization: Bearer $KBAGENT_SERVE_TOKEN" localhost:PORT/projects`
   -- if the aliases are not the ones in the directory you named, the flag was
   in the position your version ignores.
+
+## `workspace load` now auto-CLONEs eligible tables instead of always COPYing
+
+*(since vNEXT, closes #687)* Before this, `workspace load` always sent a plain `copy` (the API's own
+default when `loadType` is omitted) -- a 282 GB table load burned warehouse
+credits for hours where `clone` is metadata-only and finishes in seconds.
+kbagent now mirrors the server's `LoadTypeDecider` per table.
+
+**Default behavior (no `--load-type`):** for each requested table, kbagent
+decides `clone` or `copy` independently:
+
+- **Clone-eligible** requires ALL of: same backend as the workspace
+  (`snowflake` or `bigquery`), a full load (kbagent never sends filters on
+  `workspace load`, so this is never the blocker in practice), no
+  external-schema source bucket, and -- on BigQuery only -- the source
+  bucket is not Analytics-Hub-linked. An alias-based clone additionally
+  needs column-auto-sync ON and an unfiltered load.
+- **Otherwise:** falls back to `copy`. The JSON result names the reason per
+  table in `tables[].clone_ineligible_reason` -- read it before assuming a
+  slow load was a bug; it may be an honest ineligibility (e.g. an
+  external-schema bucket).
+- `load_type_requested` is `"auto"` at the top level when `--load-type` was
+  omitted, vs. the literal value when it was forced.
+
+**`--load-type clone|copy|view` forces one type for every requested table.**
+An explicit choice that is ineligible for some table **fails with the
+server's HTTP 400 message** -- it never silently degrades to a different
+type the way the auto-default does. `view` is a zero-storage read-only
+view: on BigQuery any same-backend bucket qualifies; on Snowflake only an
+external-schema bucket AND the project feature
+`input-mapping-read-only-storage` qualify.
+
+**Size guard on `copy`:** a table resolved (auto) or forced (`--load-type
+copy`) to `copy` whose `dataSizeBytes` exceeds 1 GiB requires confirmation
+-- an interactive TTY prompt in human mode, or `--force` in JSON /
+non-interactive mode. Without one of those, the load is refused before it
+starts; a huge copy never begins silently.
+
+**`--timeout SECONDS` (default 300 for `workspace load`; every other
+storage-job command keeps 60).** On a timeout, the error message changed:
+it now says the storage job **continues running server-side and keeps
+consuming warehouse resources**, includes the job id, and tells you how to
+poll it (`GET /v2/storage/jobs/{id}`). `STORAGE_JOB_TIMEOUT` now maps to
+**exit code 4** (network/retryable) instead of exit 1 -- a caller retrying
+only on exit 4 now correctly retries this case.
+
+**JSON result additions** (existing keys unchanged): `tables[]` gains
+`table_id`, `load_type` (`clone` | `copy` | `view`), `data_size_bytes`, and
+`clone_ineligible_reason`; the top level gains `load_type_requested`.
+
+**Cheaper alternative for analytics-only access:** if all you need is to
+query production data (no writes, no need for a workspace-local copy), a
+project with the read-only input-mapping feature exposes production
+directly to a workspace via the `KBC_<STACK>_<PROJECT>` shared database --
+`workspace query` runs against it with zero load and zero extra storage.
+Reach for `workspace load` only when the workflow actually needs the data
+materialized inside the workspace.
+
+## `permissions set` now rejects unknown patterns instead of silently persisting them
+
+*(since vNEXT)* Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
+accepted any string with zero validation. A typo like `tool.admin` or
+`stroage.upload-table` (missing the `-` in `storage`) was written straight to
+`config.json` as a dead rule that would never match anything -- the failure
+was silent, and the only way to notice was reading `permissions show` (or
+`kbagent doctor`) after the fact.
+
+- **Now validated up front, before the interactive confirmation.** Every
+  `--allow`/`--deny` pattern must be one of: a `cli:*` category
+  (`cli:read`/`cli:write`/`cli:destructive`/`cli:admin`), an exact operation
+  name (an `OPERATION_REGISTRY` key, or a flag-escalated string like
+  `"auth.logout --remove-projects"`), or a glob that matches at least one
+  known operation. Anything else fails fast with `VALIDATION_ERROR`, exit 2 --
+  `--json` lists every offending pattern (deduplicated) in
+  `error.details.invalid_patterns`. Nothing is persisted, and the random-code
+  confirmation prompt is never shown for a call that was going to fail
+  anyway.
+- **`permissions show` / `kbagent doctor` detection is generalized the same
+  way.** Both used to flag only the retired `tool:*` namespace (see the MCP
+  removal gotcha above); they now flag ANY persisted pattern matching zero
+  known operations, so a policy written before this gate existed (or one
+  edited directly in `config.json`) still surfaces its typos. The `tool:`
+  patterns keep their specific "MCP passthrough removed, see
+  docs/mcp-migration.md" hint; every other dead pattern gets a generic
+  "check for typos against `kbagent permissions list`" hint instead. A policy
+  mixing both kinds shows both hints.
+- **`PermissionEngine` itself stays lenient at evaluation time** -- a dead
+  pattern already on disk is a silent no-op when the policy is enforced, not
+  a crash. Only `permissions set` is strict; this preserves backward
+  compatibility for a pre-existing policy that happens to carry a typo.
+- **Version skew is a real rejection case, not just a typo.** A pattern
+  naming an operation that only exists on a newer kbagent version (a command
+  added after the running build was installed) is rejected the same as a
+  typo -- it would be inert on this build anyway -- so upgrade first, then
+  persist the pattern.
+- **`doctor --json`'s `inert_permission_patterns` check carries
+  `details.inert_since` only when at least one offending pattern is
+  `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
+  `stroage.upload-table`) omits the key entirely, so JSON consumers must not
+  assume `inert_since` is always present on `status: "warn"`.
+
+## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
+
+*(since vNEXT)* `ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
+alongside `keboola.sandboxes`. The Keboola MCP server auto-creates one empty
+workspace-record config per project it touches (`configuration: {}`, name like
+`mcp-workspace-<hex>`); those configs carry no configuration and are managed
+through separate APIs, so `sync pull` no longer materializes them and
+`sync diff` / `sync push` no longer see them.
+
+The manifest field `ignoredComponents` (`.keboola/manifest.json`) was declared
+but dead before this change -- it is now **live**: components listed there are
+unioned with `ALWAYS_IGNORED_COMPONENTS` and excluded from `sync pull`,
+`sync diff`, and `sync push` (push builds on diff), letting a repo exclude
+volatile components without waiting for an upstream kbagent release.
+
+```json
+{
+  "ignoredComponents": ["keboola.some-noisy-component"]
+}
+```
+
+- **`pull` cleans up stale entries for a newly-ignored component**: the next
+  `sync pull` drops the manifest entry and removes the local directory,
+  reported with pull action `"ignored"` -- a distinct action from `"removed"`
+  (which means the config was genuinely deleted on remote). Do not conflate
+  the two when reading pull output.
+- **The delete-dir-then-push trap is closed for ignored components.** Because
+  `sync diff` also filters the LOCAL side by the ignored set, a stale manifest
+  entry for an ignored component can never classify as `DELETED` -- so
+  hand-deleting the directory of e.g. a `keboola.mcp-server-tool` config and
+  running `sync push` is now a no-op for that config instead of an accidental
+  production delete.
+- **On kbagent <= 0.90.1 the trap is still armed.** `keboola.mcp-server-tool`
+  configs were tracked like any other config, so deleting the local directory
+  and pushing DELETED the config in production. If you are stuck on an older
+  version, do not delete-dir-then-push a `keboola.mcp-server-tool` (or any
+  MCP-workspace) directory -- upgrade instead.

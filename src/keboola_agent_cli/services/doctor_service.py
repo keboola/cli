@@ -23,7 +23,13 @@ from ..config_store import ConfigStore
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
 from ..models import AppConfig
-from ..permissions import INERT_PATTERN_HINT, INERT_SINCE_VERSION, find_inert_patterns
+from ..permissions import (
+    INERT_PATTERN_HINT,
+    INERT_PATTERN_PREFIX,
+    INERT_SINCE_VERSION,
+    UNMATCHED_PATTERN_HINT,
+    find_inert_patterns,
+)
 from .base import ClientFactory, make_client_factory
 
 # Cap on how many offending items a single check names inline; the rest are
@@ -279,13 +285,17 @@ class DoctorService:
     def _check_inert_permission_patterns(config: AppConfig | None) -> dict[str, Any]:
         """Check 9: flag persisted permission patterns that can never match.
 
-        The ``tool:`` operation namespace went away with the MCP passthrough in
-        v0.85.0. A policy written before that still LOADS, but every ``tool:*``
-        pattern in it now matches nothing: harmless in a ``mode="allow"`` deny
-        list, but in ``mode="deny"`` an allowance like ``tool:read`` silently
-        stops allowing anything. WARN rather than FAIL -- the policy is still
-        enforced, it is just narrower than its author intended. Read-only:
-        config.json only, no API call.
+        Generalized (issue #688): any pattern matching zero known operations is
+        flagged, not only the retired ``tool:`` namespace -- ``permissions set``
+        now rejects such patterns at write time, but a policy persisted before
+        that gate existed can still carry dead rules of either kind. WARN rather
+        than FAIL -- the policy is still enforced, it is just narrower than its
+        author intended. Read-only: config.json only, no API call.
+
+        ``details["inert_since"]`` is included ONLY when at least one offending
+        pattern starts with ``tool:`` -- that key names the version the MCP
+        passthrough (and with it the ``tool:`` namespace) was removed, which is
+        meaningless context for an unrelated typo like ``stroage.upload-table``.
         """
         policy = config.permissions if config is not None else None
         if policy is None:
@@ -305,20 +315,37 @@ class DoctorService:
                 "message": "No inert patterns in the persisted permission policy.",
             }
 
+        has_tool_prefix = any(p.startswith(INERT_PATTERN_PREFIX) for p in inert)
+        has_other = any(not p.startswith(INERT_PATTERN_PREFIX) for p in inert)
+
+        since_clause = (
+            f" have been inert since v{INERT_SINCE_VERSION} (the 'tool:' namespace was "
+            "removed with the MCP passthrough) and"
+            if has_tool_prefix
+            else ""
+        )
+        hints = [
+            hint
+            for hint, present in (
+                (INERT_PATTERN_HINT, has_tool_prefix),
+                (UNMATCHED_PATTERN_HINT, has_other),
+            )
+            if present
+        ]
+
+        details: dict[str, Any] = {"mode": policy.mode, "patterns": inert}
+        if has_tool_prefix:
+            details["inert_since"] = INERT_SINCE_VERSION
+
         return {
             "check": "inert_permission_patterns",
             "name": "Inert permission patterns",
             "status": "warn",
             "message": (
-                f"{len(inert)} pattern(s) in the persisted permission policy have been inert "
-                f"since v{INERT_SINCE_VERSION} (the 'tool:' namespace was removed with the "
-                f"MCP passthrough) and match nothing: {', '.join(inert)}. {INERT_PATTERN_HINT}"
+                f"{len(inert)} pattern(s) in the persisted permission policy{since_clause} "
+                f"match no known operation: {', '.join(inert)}. {' '.join(hints)}"
             ),
-            "details": {
-                "inert_since": INERT_SINCE_VERSION,
-                "mode": policy.mode,
-                "patterns": inert,
-            },
+            "details": details,
         }
 
     def _check_config_source(self) -> dict[str, Any]:

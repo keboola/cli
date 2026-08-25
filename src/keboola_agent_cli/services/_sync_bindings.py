@@ -26,6 +26,7 @@ from ..errors import ErrorCode, KeboolaApiError
 from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import local_config_to_api
 from ..sync.manifest import Manifest
+from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
@@ -33,6 +34,7 @@ from ._sync_models import (
     FlowBindingResult,
     VariableBindingResult,
 )
+from ._sync_push_ops import guard_script_shape
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -128,6 +130,7 @@ def resolve_variable_bindings(
                 row_ulid=row_ulid,
                 manifest=manifest,
                 branch_id=branch_id,
+                warnings=result.warnings,
             )
         except KeboolaApiError as exc:
             result.errors.append(
@@ -255,6 +258,7 @@ def _apply_variable_binding(
     row_ulid: str | None,
     manifest: Manifest,
     branch_id: int | None,
+    warnings: list[dict[str, Any]],
 ) -> None:
     """PUT the resolved variables link, rewrite local, refresh manifest hashes.
 
@@ -266,11 +270,17 @@ def _apply_variable_binding(
     merged = copy.deepcopy(local_data)
     merge_code_files(created.component_id, merged, created.config_dir)
     _name, _description, configuration = local_config_to_api(merged)
+    # This backfill PUTs the WHOLE configuration again, so it is the LAST write
+    # a freshly-created transformation receives -- an unguarded body here would
+    # undo the normalization ``push_create`` just applied.
+    configuration = guard_script_shape(
+        created.component_id, configuration, warnings, config_id=created.config_id
+    )
     configuration["variables_id"] = parent_ulid
     if row_ulid:
         configuration["variables_values_id"] = row_ulid
 
-    client.update_config(
+    response = client.update_config(
         component_id=created.component_id,
         config_id=created.config_id,
         configuration=configuration,
@@ -295,7 +305,44 @@ def _apply_variable_binding(
 
     # config_hash includes _configuration_extra, so refresh the stored
     # hashes from the post-rewrite disk state or sync diff sees a conflict.
+    _refresh_binding_hashes(
+        service,
+        client,
+        created=created,
+        manifest=manifest,
+        branch_id=branch_id,
+        response=response,
+        warnings=warnings,
+    )
+
+
+def _refresh_binding_hashes(
+    service: SyncService,
+    client: Any,
+    *,
+    created: CreatedConfig,
+    manifest: Manifest,
+    branch_id: int | None,
+    response: Any,
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Re-stamp a rebound config's manifest bookkeeping after the backfill PUT.
+
+    ``config_hash`` includes ``_configuration_extra``, which both backfills
+    rewrite, so the stored hashes must be refreshed or ``sync diff`` reports a
+    conflict. The config hash comes from the API's view of the config it just
+    wrote (issue #686); the file hashes describe the local files.
+    """
     hashes = service._compute_config_hashes(created.config_dir, created.component_id)
+    stamp = config_baseline(
+        client,
+        component_id=created.component_id,
+        config_id=created.config_id,
+        branch_id=branch_id,
+        response=response,
+    )
+    if stamp.warning is not None:
+        warnings.append(stamp.warning)
     target_branch = branch_id or 0
     for cfg in manifest.configurations:
         if (
@@ -304,8 +351,8 @@ def _apply_variable_binding(
             and cfg.id == created.config_id
         ):
             cfg.metadata["pull_hash"] = hashes.file_hash
-            cfg.metadata["pull_config_hash"] = hashes.cfg_hash
             cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+            apply_stamp(cfg.metadata, stamp)
             break
 
 
@@ -365,6 +412,7 @@ def resolve_flow_task_bindings(
                 local_data=local_data,
                 manifest=manifest,
                 branch_id=branch_id,
+                warnings=result.warnings,
             )
         except KeboolaApiError as exc:
             result.errors.append(
@@ -416,6 +464,7 @@ def _apply_flow_task_binding(
     local_data: dict[str, Any],
     manifest: Manifest,
     branch_id: int | None,
+    warnings: list[dict[str, Any]],
 ) -> None:
     """PUT a remapped flow, rewrite local ``_config.yml``, refresh hashes.
 
@@ -428,7 +477,7 @@ def _apply_flow_task_binding(
     merge_code_files(created.component_id, merged, created.config_dir)
     _name, _description, configuration = local_config_to_api(merged)
 
-    client.update_config(
+    response = client.update_config(
         component_id=created.component_id,
         config_id=created.config_id,
         configuration=configuration,
@@ -442,15 +491,12 @@ def _apply_flow_task_binding(
     )
 
     service._write_config_file(created.config_dir, local_data)
-    hashes = service._compute_config_hashes(created.config_dir, created.component_id)
-    target_branch = branch_id or 0
-    for cfg in manifest.configurations:
-        if (
-            cfg.branch_id == target_branch
-            and cfg.component_id == created.component_id
-            and cfg.id == created.config_id
-        ):
-            cfg.metadata["pull_hash"] = hashes.file_hash
-            cfg.metadata["pull_config_hash"] = hashes.cfg_hash
-            cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-            break
+    _refresh_binding_hashes(
+        service,
+        client,
+        created=created,
+        manifest=manifest,
+        branch_id=branch_id,
+        response=response,
+        warnings=warnings,
+    )

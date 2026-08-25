@@ -416,12 +416,58 @@ Stored in `.keboola/branch-mapping.json`:
 - **Pull protects local edits**: locally-modified files are skipped by default
 - **`--force` is conflict-aware (since 0.53.0)**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
+- **Push records the API's own view of what it wrote (since vNEXT, #686)**: the
+  manifest baseline (`pull_config_hash`) comes from the API response (or a
+  read-back), never from the files on disk. Before vNEXT the two producers
+  disagreed and every pushed multi-statement SQL transformation showed
+  permanent phantom `REMOTE MODIFIED` drift
+- **Push runs the same runtime-safety script normalization as `config update`
+  (since vNEXT)**: `parameters.blocks[].codes[].script` is normalized to the
+  runtime's shape (one element = one executable statement) before every write.
+  A no-op for a normally pulled tree; it catches a hand-authored `_config.yml`
+  with inline `parameters.blocks` and no `transform.sql`. Any fix is reported
+  in the push envelope's `warnings[]` as `change_type: "script_normalization"`
+  (human mode prints it; `--json` carries `path` / `action` / `after_length`)
 - **Encrypted values**: nonce differences are ignored in diff (no false positives)
 - **New configs**: push auto-assigns IDs from the API, updates manifest
 - **Storage metadata is read-only**: not tracked in manifest, excluded from diff/push
 - **Jobs are per-config**: `_jobs.jsonl` shows recent N jobs (default 5) with status + timing
 - **Data samples auto-trim**: tables with >30 columns export only first 30 (API sync limit)
 - **Encrypted columns masked**: columns starting with `#` show `***ENCRYPTED***` in samples
+
+## Ignored components
+
+*(since vNEXT)* Some components are excluded from every sync operation (`pull`, `diff`,
+`push`) because they are managed through separate APIs and have volatile
+internal state:
+
+- **Always ignored** -- `keboola.sandboxes` (Workspaces API) and
+  `keboola.mcp-server-tool` (the Keboola MCP server auto-creates one empty
+  workspace-record config per project it touches, `configuration: {}`, name
+  like `mcp-workspace-<hex>`). This is a hardcoded floor; no flag disables it.
+- **Project-configurable** -- the manifest field `ignoredComponents` in
+  `.keboola/manifest.json` adds project-specific exclusions on top of the
+  hardcoded list, without waiting for an upstream kbagent release:
+
+  ```json
+  {
+    "ignoredComponents": ["keboola.some-noisy-component"]
+  }
+  ```
+
+  The two sets are **unioned**: a component is ignored if it is hardcoded OR
+  listed in `ignoredComponents`.
+
+- **Pull cleanup.** When a component becomes ignored (either newly hardcoded
+  by a kbagent upgrade, or newly added to `ignoredComponents`), the next
+  `sync pull` drops its manifest entries and removes their local directories.
+  Those removals are reported with pull action `"ignored"` -- distinct from
+  `"removed"`, which means the config was genuinely deleted on the remote.
+- **Diff/push never see ignored configs**, on either side of the comparison:
+  a stale local directory for an ignored component is filtered out too, so it
+  can never be classified as `DELETED` and pushed as a remote deletion.
+- **Un-ignoring** a component: remove it from `ignoredComponents` and run
+  `sync pull` again -- it re-materializes like any newly-tracked config.
 
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 
@@ -442,6 +488,39 @@ the 3-way diff state per config (and per row):
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > delete the file (or the config directory) and pull.
+
+## Migrating a tree pulled before vNEXT (#686)
+
+`sync push` used to stamp the manifest baseline from the files on disk while
+`sync pull` / `sync diff` computed it from the API. Any config the two
+producers disagreed about -- in practice every SQL transformation with two or
+more statements, plus anything disabled in the UI whose local YAML has no
+`is_disabled` key -- came back as `~ REMOTE MODIFIED` after every deploy, with
+the tree byte-identical to the remote.
+
+**What to do once per project: `kbagent sync pull --project <alias>`.**
+
+That single pull re-extracts the code files (writing
+`/* ===== STATEMENT ===== */` boundary markers where semicolons cannot recover
+the statement array) and stamps `metadata.config_hash_version` on each manifest
+entry. Commit the resulting `manifest.json` (plus any `transform.sql` that
+gained markers) and the phantom entries are gone for good -- no more
+content-free "refresh the baseline" PR after each deploy.
+
+Until that pull happens, kbagent is lenient with unversioned entries: a stored
+hash that matches the pre-vNEXT hash of the same remote config is treated as in
+sync. The leniency covers ONLY that difference -- a genuinely changed remote
+still reports `REMOTE MODIFIED`.
+
+One case is refused rather than pushed: if a pre-markers tree's only difference
+from the remote is the lost statement boundaries, `sync push` aborts THAT change
+with `SYNC_LEGACY_BOUNDARY` (other changes in the same push still go through)
+because pushing it would merge separate SQL statements into one -- the
+`MULTI_STATEMENT_COUNT=1` runtime failure. Pull the project, then push.
+
+If a config cannot be read back after a successful write, push leaves its
+baseline untouched and reports it under `warnings[]` in the result envelope;
+run `sync pull` to refresh it.
 
 ## Cloning a reference project (`sync clone`, since v0.63.0)
 
