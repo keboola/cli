@@ -256,8 +256,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "**Execution.** "
             "Flow Notifications-tab recipients (Notification Service "
-            "subscriptions) -- read-only audit across projects. "
-            "Mirrors `kbagent notification list|detail`."
+            "subscriptions) -- audit + write across projects. "
+            "Mirrors `kbagent notification list|detail|create|delete|replace-recipient`."
         ),
     },
     {

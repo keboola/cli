@@ -978,7 +978,7 @@ kbagent notification replace-recipient --project ALIAS --subscription-id ID --ad
 #   Permission classes: notification.create = write, notification.replace-recipient = write,
 #   notification.delete = destructive. So --deny-writes blocks all three; --deny-destructive blocks
 #   only `delete`. `delete` / `replace-recipient` prompt for confirmation unless --yes (or --json).
-# notification (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
+# notification READ path (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
 #   recipients behind the Flow Builder's Notifications tab (bell icon). They live in a SEPARATE
 #   platform service (notification.{stack}, plain Storage token, no elevated scope), NOT in the
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow

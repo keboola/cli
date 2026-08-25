@@ -629,6 +629,30 @@ class TestNotificationReplaceRecipientCli:
         assert "Aborted" in result.output
         service.replace_subscription_recipient.assert_not_called()
 
+    def test_invalid_channel_exits_2_and_service_not_called(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "notification",
+                "replace-recipient",
+                "--project",
+                "prod",
+                "--subscription-id",
+                "1234",
+                "--address",
+                "new@example.com",
+                "--channel",
+                "slack",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 2
+        service.replace_subscription_recipient.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # permissions

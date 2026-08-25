@@ -281,7 +281,7 @@ Cron-style schedules attached to flows / configurations. Mirrors `kbagent schedu
 
 ### `notifications` (5 operations)
 
-Flow Notifications-tab recipients (Notification Service subscriptions) -- read-only audit across projects. Mirrors `kbagent notification list|detail`.
+Flow Notifications-tab recipients (Notification Service subscriptions) -- audit + write across projects. Mirrors `kbagent notification list|detail|create|delete|replace-recipient`.
 
 | Method | Path | Summary |
 |---|---|---|

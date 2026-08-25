@@ -6003,6 +6003,29 @@ class TestE2ENotificationSubscriptions:
         still live gets deleted so a failed assertion never leaks a real
         subscription in the E2E project.
         """
+        # Pre-flight best-effort sweep: a killed process (CI timeout,
+        # Ctrl-C) from a PRIOR run of this test leaks a project-wide
+        # job-failed subscription that then fires for EVERY job in the
+        # E2E project until removed by hand. RUN_ID is timestamp-based
+        # and changes every run, so a leaked address never matches this
+        # run's own `address`/`replaced_address` below -- match on the
+        # stable "-690" marker suffix instead, mirroring the best-effort
+        # `finally` cleanup further down.
+        stale = self._payload("notification", "list", "--project", self.alias)
+        for row in stale["subscriptions"]:
+            row_address = row.get("address") or ""
+            if "-690@example.com" in row_address or "-690-replaced@example.com" in row_address:
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        row["subscription_id"],
+                        "--yes",
+                    )
+
         _step(9, "notification create -- project-wide job-failed/email")
         address = f"{RUN_ID}-690@example.com"
         replaced_address = f"{RUN_ID}-690-replaced@example.com"
