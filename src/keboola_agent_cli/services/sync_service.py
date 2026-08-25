@@ -1608,9 +1608,11 @@ class SyncService(BaseService):
         updated = 0
         deleted = 0
         errors: list[dict[str, str]] = []
-        # Non-fatal push warnings: today only unstampable manifest baselines
-        # (issue #686), i.e. the API state could not be read back after a write.
-        warnings: list[dict[str, str]] = []
+        # Non-fatal push warnings: unstampable manifest baselines (issue #686,
+        # the API state could not be read back after a write) and ``script[]``
+        # runtime-safety normalizations (``change_type`` ``script_normalization``,
+        # whose records carry non-string values such as ``after_length``).
+        warnings: list[dict[str, Any]] = []
         pushed_details: list[dict[str, str]] = []
         manifest_dirty = False
 
@@ -1650,6 +1652,7 @@ class SyncService(BaseService):
                             manifest,
                             branch_id,
                             allow_plaintext_fallback=allow_plaintext_fallback,
+                            warnings=warnings,
                         )
                         if result:
                             new_id = str(result.get("id", ""))
@@ -1718,6 +1721,7 @@ class SyncService(BaseService):
                             manifest,
                             branch_id,
                             allow_plaintext_fallback=allow_plaintext_fallback,
+                            warnings=warnings,
                         )
                         # Update hashes so pull knows local == remote
                         if (config_dir / CONFIG_FILENAME).exists():

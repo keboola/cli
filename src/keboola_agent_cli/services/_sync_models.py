@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..sync.manifest import ManifestConfiguration
 
@@ -65,7 +66,7 @@ class VariableBindingResult:
     """
 
     errors: list[dict[str, str]] = field(default_factory=list)
-    warnings: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0
 
 
@@ -81,7 +82,7 @@ class FlowBindingResult:
     """
 
     errors: list[dict[str, str]] = field(default_factory=list)
-    warnings: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0
     tasks_remapped: int = 0
 
