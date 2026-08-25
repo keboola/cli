@@ -859,8 +859,8 @@ class WorkspaceService(BaseService):
             load_type: One of ``clone`` / ``copy`` / ``view`` (case-insensitive),
                 or None for the auto decision.
             force: Skip the large-COPY size guard.
-            timeout: Seconds to wait for the load job. Defaults to
-                WORKSPACE_LOAD_JOB_MAX_WAIT.
+            timeout: Seconds to wait for the load job. ``None`` defaults to
+                WORKSPACE_LOAD_JOB_MAX_WAIT; any other value must be > 0.
             on_copy_guard: Called with the oversized COPY plans; return True to
                 proceed, False to refuse. None means "refuse without asking".
 
@@ -868,11 +868,12 @@ class WorkspaceService(BaseService):
             Dict with load job results, including a per-table ``tables`` list.
 
         Raises:
-            KeboolaApiError: INVALID_ARGUMENT for an unknown load_type;
-                WORKSPACE_LOAD_COPY_TOO_LARGE when the size guard trips and is
-                neither forced nor approved.
+            KeboolaApiError: INVALID_ARGUMENT for an unknown load_type or a
+                non-positive timeout; WORKSPACE_LOAD_COPY_TOO_LARGE when the
+                size guard trips and is neither forced nor approved.
         """
         requested = self._normalize_load_type(load_type)
+        max_wait = self._normalize_timeout(timeout)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -903,7 +904,7 @@ class WorkspaceService(BaseService):
                 table_defs,
                 branch_id=branch_id,
                 preserve=preserve,
-                max_wait=timeout or WORKSPACE_LOAD_JOB_MAX_WAIT,
+                max_wait=max_wait,
             )
         finally:
             client.close()
@@ -950,6 +951,28 @@ class WorkspaceService(BaseService):
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
         return normalized
+
+    @staticmethod
+    def _normalize_timeout(timeout: float | None) -> float:
+        """Resolve the load-job wait budget, rejecting a non-positive override.
+
+        ``None`` is the documented "use the default" sentinel and branches
+        explicitly to ``WORKSPACE_LOAD_JOB_MAX_WAIT`` -- deliberately NOT
+        ``timeout or WORKSPACE_LOAD_JOB_MAX_WAIT``, which would silently
+        promote a falsy-but-real ``0.0`` to the 300s default instead of
+        rejecting it. The CLI and the ``kbagent serve`` router both already
+        guard a non-positive timeout before calling in, but a direct
+        service/SDK caller would not go through either guard.
+        """
+        if timeout is None:
+            return WORKSPACE_LOAD_JOB_MAX_WAIT
+        if timeout <= 0:
+            raise KeboolaApiError(
+                message=f"Invalid timeout {timeout}. Must be greater than 0.",
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        return timeout
 
     def _plan_table_loads(
         self,

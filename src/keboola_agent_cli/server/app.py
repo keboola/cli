@@ -507,9 +507,16 @@ _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESS
 
 # Refusals raised by kbagent itself BEFORE anything is sent upstream. The
 # default 502 would tell the caller to retry a gateway that was never even
-# reached; these are the caller's request to fix (re-send with `force`), so
-# they answer 400.
-_CALLER_REFUSAL_CODES = frozenset({ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE})
+# reached; these are the caller's request to fix (re-send with `force`, a
+# corrected argument, ...), so they answer 400. ``INVALID_ARGUMENT`` covers
+# every service-layer pre-flight validation (bad enum value, malformed
+# input, a locally-detected refusal like an SSRF/path-traversal guard on
+# data about to be acted on) -- audited across every raise site in
+# ``services/`` (issue #687 review): all of them fire before -- or instead
+# of -- a call reaching an upstream API, so none of them is a gateway fault.
+_CALLER_REFUSAL_CODES = frozenset(
+    {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
+)
 
 _SESSION_REMEDY_ON_HOST = (
     "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "

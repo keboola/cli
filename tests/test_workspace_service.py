@@ -1236,6 +1236,64 @@ class TestLoadTables:
 
         assert mock_client.load_workspace_tables.call_args[1]["max_wait"] == 900.0
 
+    def test_load_tables_timeout_none_uses_default(self, tmp_config_dir: Path) -> None:
+        """Omitting timeout (None) still resolves to WORKSPACE_LOAD_JOB_MAX_WAIT."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=None)
+
+        assert (
+            mock_client.load_workspace_tables.call_args[1]["max_wait"]
+            == WORKSPACE_LOAD_JOB_MAX_WAIT
+        )
+
+    def test_load_tables_timeout_zero_rejected(self, tmp_config_dir: Path) -> None:
+        """timeout=0.0 must NOT silently fall back to the 300s default.
+
+        A direct service/SDK caller bypasses both the CLI's and the
+        ``kbagent serve`` router's non-positive-timeout guards, so the
+        service layer must reject it itself -- before any client call.
+        """
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=0.0)
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_timeout_negative_rejected(self, tmp_config_dir: Path) -> None:
+        """A negative timeout is rejected the same way as zero."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.load_tables(
+                alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=-5.0
+            )
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.load_workspace_tables.assert_not_called()
+
+    def test_load_tables_timeout_explicit_positive_passthrough(self, tmp_config_dir: Path) -> None:
+        """An explicit positive timeout still reaches the client verbatim."""
+        mock_client = _make_load_client()
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=42.0)
+
+        assert mock_client.load_workspace_tables.call_args[1]["max_wait"] == 42.0
+
     def test_load_tables_api_error(self, tmp_config_dir: Path) -> None:
         """load_tables propagates KeboolaApiError when job fails."""
         mock_client = MagicMock()

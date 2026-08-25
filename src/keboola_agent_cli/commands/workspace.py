@@ -62,7 +62,7 @@ def _print_load_result(console: Console, data: dict[str, Any]) -> None:
     console.print(f"[bold green]Success:[/bold green] {data['message']}")
     for entry in data.get("tables", []):
         size_bytes = entry.get("data_size_bytes")
-        size_note = f", {size_bytes / 1024**3:.2f} GB" if size_bytes else ""
+        size_note = f", {size_bytes / 1024**3:.2f} GB" if size_bytes is not None else ""
         reason = entry.get("clone_ineligible_reason")
         reason_note = f" -- no clone: {reason}" if reason else ""
         console.print(

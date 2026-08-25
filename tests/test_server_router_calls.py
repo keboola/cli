@@ -2514,3 +2514,29 @@ def test_workspace_load_copy_guard_answers_400(tmp_path: Path) -> None:
 
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "WORKSPACE_LOAD_COPY_TOO_LARGE"
+
+
+def test_workspace_load_invalid_load_type_answers_400(tmp_path: Path) -> None:
+    """An unknown load_type is a caller-fixable 400, not the default 502.
+
+    ``WorkspaceService._normalize_load_type`` raises INVALID_ARGUMENT before
+    anything is sent upstream -- the same "nothing was sent upstream" logic
+    as the COPY-too-large guard above, so it gets the same 400 treatment via
+    ``_CALLER_REFUSAL_CODES`` (issue #687 review).
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.side_effect = KeboolaApiError(
+        message="Invalid load_type 'banana'. Expected one of: ['clone', 'copy', 'view'].",
+        error_code=ErrorCode.INVALID_ARGUMENT,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID], "load_type": "banana"},
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"

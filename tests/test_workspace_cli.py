@@ -1042,6 +1042,48 @@ class TestWorkspaceLoad:
         assert "clone" in result.output
         assert "external schema bucket" in result.output
 
+    def test_workspace_load_human_renders_zero_byte_size(self, tmp_path: Path) -> None:
+        """A legitimately empty table (0 bytes) still shows its size, not 'unknown'.
+
+        ``data_size_bytes == 0`` is falsy but real -- distinct from ``None``
+        (size not fetched, e.g. an explicit clone/view). The human formatter
+        must branch on ``is not None``, not truthiness.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.return_value = {
+            **_LOAD_RESULT,
+            "tables": [
+                {
+                    "table_id": "in.c-main.empty",
+                    "load_type": "copy",
+                    "data_size_bytes": 0,
+                    "clone_ineligible_reason": None,
+                },
+            ],
+        }
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.empty",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "0.00 GB" in result.output
+
 
 class TestWorkspaceQuery:
     """Tests for `kbagent workspace query` command."""
