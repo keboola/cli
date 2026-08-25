@@ -1098,6 +1098,8 @@ def sync_push(
                 f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
                 f"{err['message']}"
             )
+        for warn in result.get("warnings", []):
+            formatter.warning(f"  {warn['message']}")
 
 
 @sync_app.command("clone")

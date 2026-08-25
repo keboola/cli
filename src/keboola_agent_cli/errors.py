@@ -93,6 +93,7 @@ class ErrorCode(StrEnum):
     PARENT_CONFIG_NOT_TRACKED = "PARENT_CONFIG_NOT_TRACKED"
     VARIABLE_LINK_UNRESOLVED = "VARIABLE_LINK_UNRESOLVED"
     SYNC_CONFLICT = "SYNC_CONFLICT"
+    SYNC_LEGACY_BOUNDARY = "SYNC_LEGACY_BOUNDARY"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
@@ -304,6 +305,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.CONFIG_ERROR: "configuration",
     ErrorCode.VALIDATION_ERROR: "validation",
     ErrorCode.SYNC_CONFLICT: "conflict",
+    ErrorCode.SYNC_LEGACY_BOUNDARY: "conflict",
     ErrorCode.PERMISSION_DENIED: "authorization",
     ErrorCode.DP_LOGIN_FAILED: "authentication",
     ErrorCode.DP_MFA_REQUIRED: "authentication",

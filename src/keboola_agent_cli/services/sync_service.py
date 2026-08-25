@@ -18,6 +18,8 @@ from ..constants import (
     ALWAYS_IGNORED_COMPONENTS,
     BRANCH_MAPPING_FILENAME,
     CONFIG_FILENAME,
+    CONFIG_HASH_VERSION,
+    CONFIG_HASH_VERSION_KEY,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
@@ -68,6 +70,12 @@ from ._encryption import (
     encrypt_secrets_in_config,
     find_plaintext_secret_keys,
 )
+from ._sync_baseline import (
+    effective_stored_hash,
+    extras_modified,
+    needs_shape_migration,
+    raise_on_legacy_boundary,
+)
 from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
 from ._sync_branch import (
     branch_link as _branch_link,
@@ -98,7 +106,8 @@ from ._sync_storage import (
 )
 from ._sync_writeback import (
     propagate_kbc_metadata,
-    writeback_create_config_in_manifest,
+    stamp_created_config,
+    stamp_updated_config,
 )
 from .base import BaseService
 
@@ -657,6 +666,11 @@ class SyncService(BaseService):
             f"{c.component_id}/{c.id}": c.path for c in manifest.configurations
         }
         existing_keys: set[str] = set(existing_paths.keys())
+        # Full metadata per entry -- the shape-migration checks need the
+        # ``config_hash_version`` marker alongside the hashes (issue #686).
+        existing_metadata: dict[str, dict[str, Any]] = {
+            f"{c.component_id}/{c.id}": c.metadata for c in manifest.configurations
+        }
         existing_config_hashes: dict[str, str] = {
             f"{c.component_id}/{c.id}": c.metadata.get("pull_config_hash", "")
             for c in manifest.configurations
@@ -809,6 +823,22 @@ class SyncService(BaseService):
                         if config_file.exists():
                             current_file_hash = self._file_hash(config_file)
                             locally_modified = current_file_hash != old_file_hash
+                    # Shape migration (issue #686): the remote is unchanged, only
+                    # the recorded hash shape is old, so this pull re-extracts
+                    # (writing the boundary markers) and re-stamps. Because the
+                    # rewrite is not driven by a remote change, an edited
+                    # companion file must be preserved too -- the ordinary
+                    # overwrite-guard above only ever looks at ``_config.yml``.
+                    if not locally_modified and needs_shape_migration(
+                        existing_metadata.get(lookup_key, {}),
+                        component_id=component_id,
+                        config_id=config_id,
+                        raw_remote=cfg,
+                        api_cfg_hash=api_cfg_hash,
+                    ):
+                        locally_modified = extras_modified(
+                            self, config_dir, existing_extra_hashes.get(lookup_key, {})
+                        )
 
                 remote_unchanged = False  # set in else branch; default for locally_modified path
                 if locally_modified and not dry_run:
@@ -1008,6 +1038,12 @@ class SyncService(BaseService):
                         "pull_hash": old_pull_hash,
                         "pull_config_hash": old_cfg_hash,
                     }
+                    # The preserved hash was NOT produced by the current
+                    # producer, so its version marker is carried over verbatim
+                    # (absent stays absent) -- never stamped onto a legacy hash.
+                    old_version = existing_metadata.get(lookup_key, {}).get(CONFIG_HASH_VERSION_KEY)
+                    if old_version:
+                        cfg_metadata[CONFIG_HASH_VERSION_KEY] = old_version
                 else:
                     # Compute hashes for all extracted files
                     extra_hashes: dict[str, str] = {}
@@ -1026,6 +1062,9 @@ class SyncService(BaseService):
                         "pull_hash": file_hash,
                         "pull_config_hash": pull_cfg_hash,
                         "pull_extra_hashes": extra_hashes,
+                        # Freshly computed with the current producer, so the
+                        # shape version is stamped alongside it (issue #686).
+                        CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
                     }
                 new_configurations.append(
                     ManifestConfiguration(
@@ -1241,6 +1280,10 @@ class SyncService(BaseService):
         #   remote_rows:    "{component_id}/{parent_config_id}/rows/{row_id}" -> row data
         remote_configs: dict[str, dict[str, Any]] = {}
         remote_rows: dict[str, dict[str, Any]] = {}
+        # Raw (unconverted) API configs, kept so a manifest entry without
+        # ``config_hash_version`` can be checked against the pre-#686 hash of
+        # this very config -- the migration leniency in ``effective_stored_hash``.
+        remote_raw: dict[str, dict[str, Any]] = {}
         for component in components:
             component_id = component.get("id", "")
             if component_id in ALWAYS_IGNORED_COMPONENTS:
@@ -1249,6 +1292,7 @@ class SyncService(BaseService):
                 config_id = str(cfg.get("id", ""))
                 key = f"{component_id}/{config_id}"
                 remote_configs[key] = api_config_to_local(component_id, cfg, config_id)
+                remote_raw[key] = cfg
                 for row in cfg.get("rows", []):
                     row_id = str(row.get("id", ""))
                     row_key = f"{component_id}/{config_id}/rows/{row_id}"
@@ -1279,6 +1323,7 @@ class SyncService(BaseService):
         local_configs: list[dict[str, Any]] = []
         file_unchanged: dict[str, bool] = {}
         local_override_hashes: dict[str, str] = {}
+        stored_hashes: dict[str, str] = {}
         for cfg in scope.in_tree:
             config_dir = project_root / source_branch_path / cfg.path
             local_data = self._read_config_file(config_dir)
@@ -1309,11 +1354,20 @@ class SyncService(BaseService):
             is_unchanged = config_unchanged and extras_unchanged
             file_unchanged[key] = is_unchanged
 
-            if is_unchanged:
+            # Baseline hash, leniently upgraded for entries written before the
+            # script-shape change (issue #686). Strict for versioned entries.
+            stored_cfg_hash = effective_stored_hash(
+                cfg.metadata,
+                component_id=cfg.component_id,
+                config_id=cfg.id,
+                raw_remote=remote_raw.get(key),
+                remote_local=remote_configs.get(key),
+            )
+            stored_hashes[key] = stored_cfg_hash
+
+            if is_unchanged and stored_cfg_hash:
                 # All files match pull state -- use stored API hash
-                stored_cfg_hash = cfg.metadata.get("pull_config_hash", "")
-                if stored_cfg_hash:
-                    local_override_hashes[key] = stored_cfg_hash
+                local_override_hashes[key] = stored_cfg_hash
             # Always merge for local_data (needed for deep_diff details)
             merge_code_files(cfg.component_id, local_data, config_dir)
 
@@ -1384,7 +1438,7 @@ class SyncService(BaseService):
         base_hashes: dict[str, str] = {}
         for cfg in scope.in_tree:
             key = f"{cfg.component_id}/{cfg.id}"
-            pch = cfg.metadata.get("pull_config_hash")
+            pch = stored_hashes.get(key)
             if pch:
                 base_hashes[key] = pch
             elif file_unchanged.get(key):
@@ -1606,6 +1660,9 @@ class SyncService(BaseService):
         updated = 0
         deleted = 0
         errors: list[dict[str, str]] = []
+        # Non-fatal push warnings: today only unstampable manifest baselines
+        # (issue #686), i.e. the API state could not be read back after a write.
+        warnings: list[dict[str, str]] = []
         pushed_details: list[dict[str, str]] = []
         manifest_dirty = False
 
@@ -1649,15 +1706,16 @@ class SyncService(BaseService):
                         if result:
                             new_id = str(result.get("id", ""))
                             config_dir = project_root / branch_path / config_path_str
-                            hashes = self._compute_config_hashes(config_dir, component_id)
-                            writeback = writeback_create_config_in_manifest(
+                            writeback = stamp_created_config(
+                                client,
                                 manifest=manifest,
                                 component_id=component_id,
                                 branch_id=branch_id,
                                 config_path_str=config_path_str,
                                 new_id=new_id,
-                                file_hash=hashes.file_hash,
-                                cfg_hash=hashes.cfg_hash,
+                                hashes=self._compute_config_hashes(config_dir, component_id),
+                                response=result,
+                                warnings=warnings,
                             )
                             # Record placeholder -> ULID so child rows and
                             # transformation variable links can be remapped.
@@ -1692,7 +1750,17 @@ class SyncService(BaseService):
                             pushed_details.append(change)
 
                     elif change_type == "modified":
-                        push_update(
+                        config_dir = project_root / branch_path / config_path_str
+                        raise_on_legacy_boundary(
+                            self,
+                            client,
+                            component_id=component_id,
+                            config_id=config_id,
+                            config_dir=config_dir,
+                            manifest=manifest,
+                            branch_id=branch_id,
+                        )
+                        response = push_update(
                             self,
                             client,
                             component_id,
@@ -1704,34 +1772,18 @@ class SyncService(BaseService):
                             allow_plaintext_fallback=allow_plaintext_fallback,
                         )
                         # Update hashes so pull knows local == remote
-                        config_dir = project_root / branch_path / config_path_str
-                        config_file = config_dir / CONFIG_FILENAME
-                        if config_file.exists():
-                            hashes = self._compute_config_hashes(config_dir, component_id)
-                            entry_found = False
-                            for cfg in manifest.configurations:
-                                if cfg.component_id == component_id and cfg.id == config_id:
-                                    cfg.metadata["pull_hash"] = hashes.file_hash
-                                    cfg.metadata["pull_config_hash"] = hashes.cfg_hash
-                                    cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-                                    entry_found = True
-                                    break
-                            if not entry_found:
-                                # Adopted-by-id config (issue #497): the update
-                                # targeted an existing remote config that had no
-                                # manifest entry (untracked local file whose
-                                # _keboola.config_id resolved on the branch).
-                                # Register it now so subsequent diffs read a
-                                # stable entry and a local deletion is detected.
-                                writeback_create_config_in_manifest(
-                                    manifest=manifest,
-                                    component_id=component_id,
-                                    branch_id=branch_id,
-                                    config_path_str=config_path_str,
-                                    new_id=config_id,
-                                    file_hash=hashes.file_hash,
-                                    cfg_hash=hashes.cfg_hash,
-                                )
+                        if (config_dir / CONFIG_FILENAME).exists():
+                            stamp_updated_config(
+                                client,
+                                manifest=manifest,
+                                component_id=component_id,
+                                config_id=config_id,
+                                branch_id=branch_id,
+                                config_path_str=config_path_str,
+                                hashes=self._compute_config_hashes(config_dir, component_id),
+                                response=response,
+                                warnings=warnings,
+                            )
                             manifest_dirty = True
                         updated += 1
                         pushed_details.append(change)
@@ -1796,6 +1848,7 @@ class SyncService(BaseService):
                         manifest=manifest,
                         branch_id=branch_id,
                         allow_plaintext_fallback=allow_plaintext_fallback,
+                        warnings=warnings,
                     )
                     manifest_dirty = True
                     if change_type == "added":
@@ -1832,6 +1885,7 @@ class SyncService(BaseService):
                 branch_id=branch_id,
             )
             errors.extend(binding.errors)
+            warnings.extend(binding.warnings)
             if binding.configs_rewritten:
                 manifest_dirty = True
 
@@ -1848,6 +1902,7 @@ class SyncService(BaseService):
                 branch_id=branch_id,
             )
             errors.extend(flow_binding.errors)
+            warnings.extend(flow_binding.warnings)
             if flow_binding.configs_rewritten:
                 manifest_dirty = True
 
@@ -1863,6 +1918,8 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
         }
+        if warnings:
+            result_data["warnings"] = warnings
         if flow_binding.tasks_remapped:
             result_data["flow_task_remaps"] = flow_binding.tasks_remapped
         if name_drift_warnings and not no_name_drift_warnings:
@@ -1949,14 +2006,15 @@ class SyncService(BaseService):
             config_id,
             exc,
         )
-        errors.append(
-            {
-                "change_type": change_type,
-                "component_id": component_id,
-                "config_id": config_id,
-                "message": str(exc),
-            }
-        )
+        record: dict[str, str] = {
+            "change_type": change_type,
+            "component_id": component_id,
+            "config_id": config_id,
+            "message": str(exc),
+        }
+        if isinstance(exc, KeboolaApiError) and exc.error_code:
+            record["error_code"] = str(exc.error_code)
+        errors.append(record)
 
     # ------------------------------------------------------------------
     # bulk operations (all projects)

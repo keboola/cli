@@ -388,6 +388,17 @@ def _render_sql_script_lines(scripts: list[Any], *, with_markers: bool) -> list[
     return lines
 
 
+def marker_less_roundtrip(script: list[Any]) -> list[str]:
+    """What a ``transform.sql`` written WITHOUT markers merges back into.
+
+    The pre-#686 rendering, kept as a predicate: a working tree pulled before
+    boundary markers existed holds exactly this array, so comparing against it
+    identifies a config whose only difference from the remote is the lost
+    statement boundaries (see ``_sync_baseline.raise_on_legacy_boundary``).
+    """
+    return _lines_to_script(_render_sql_script_lines(script, with_markers=False), is_sql=True)
+
+
 def _render_sql_code(scripts: list[Any], code_name: str) -> list[str]:
     """Render one code block, adding statement markers only when needed.
 
