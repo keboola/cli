@@ -2184,6 +2184,134 @@ def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -
     )
 
 
+def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "alerts@example.com",
+                "component_id": "keboola.flow",
+                "config_id": CONFIG_ID,
+                "branch_id": 456,
+                "expires_at": "2027-01-01T00:00:00Z",
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.create_subscription.assert_called_once_with(
+        alias=PROJECT,
+        event="job-failed",
+        channel="email",
+        address="alerts@example.com",
+        component_id="keboola.flow",
+        config_id=CONFIG_ID,
+        branch_id=456,
+        expires_at="2027-01-01T00:00:00Z",
+    )
+
+
+def test_notifications_create_defaults_optional_fields(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "alerts@example.com",
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.create_subscription.assert_called_once_with(
+        alias=PROJECT,
+        event="job-failed",
+        channel="email",
+        address="alerts@example.com",
+        component_id=None,
+        config_id=None,
+        branch_id=None,
+        expires_at=None,
+    )
+
+
+def test_notifications_delete_passes_alias_and_subscription_id(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.delete_subscription.return_value = {
+        "project_alias": PROJECT,
+        "subscription_id": "1234",
+        "deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(f"/notifications/{PROJECT}/1234", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    notification_svc.delete_subscription.assert_called_once_with(
+        alias=PROJECT, subscription_id="1234"
+    )
+
+
+def test_notifications_replace_recipient_passes_address_and_channel(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.replace_subscription_recipient.return_value = {
+        "new_subscription_id": "5678",
+        "old_deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/1234/replace-recipient",
+            headers=AUTH,
+            json={"address": "new@example.com", "channel": "webhook"},
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.replace_subscription_recipient.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="1234",
+        new_address="new@example.com",
+        new_channel="webhook",
+    )
+
+
+def test_notifications_replace_recipient_defaults_channel_to_none(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.replace_subscription_recipient.return_value = {
+        "new_subscription_id": "5678",
+        "old_deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/1234/replace-recipient",
+            headers=AUTH,
+            json={"address": "new@example.com"},
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.replace_subscription_recipient.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="1234",
+        new_address="new@example.com",
+        new_channel=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # token.py  GET /{p}/list?with_last_used=
 # Service: token.list_tokens(alias=..., with_last_used=...)
