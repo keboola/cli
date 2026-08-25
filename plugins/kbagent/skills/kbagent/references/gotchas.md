@@ -4639,3 +4639,46 @@ directly to a workspace via the `KBC_<STACK>_<PROJECT>` shared database --
 `workspace query` runs against it with zero load and zero extra storage.
 Reach for `workspace load` only when the workflow actually needs the data
 materialized inside the workspace.
+
+## `permissions set` now rejects unknown patterns instead of silently persisting them (since vNEXT)
+
+Before this fix (issue #688), `kbagent permissions set --allow/--deny PATTERN`
+accepted any string with zero validation. A typo like `tool.admin` or
+`stroage.upload-table` (missing the `-` in `storage`) was written straight to
+`config.json` as a dead rule that would never match anything -- the failure
+was silent, and the only way to notice was reading `permissions show` (or
+`kbagent doctor`) after the fact.
+
+- **Now validated up front, before the interactive confirmation.** Every
+  `--allow`/`--deny` pattern must be one of: a `cli:*` category
+  (`cli:read`/`cli:write`/`cli:destructive`/`cli:admin`), an exact operation
+  name (an `OPERATION_REGISTRY` key, or a flag-escalated string like
+  `"auth.logout --remove-projects"`), or a glob that matches at least one
+  known operation. Anything else fails fast with `VALIDATION_ERROR`, exit 2 --
+  `--json` lists every offending pattern (deduplicated) in
+  `error.details.invalid_patterns`. Nothing is persisted, and the random-code
+  confirmation prompt is never shown for a call that was going to fail
+  anyway.
+- **`permissions show` / `kbagent doctor` detection is generalized the same
+  way.** Both used to flag only the retired `tool:*` namespace (see the MCP
+  removal gotcha above); they now flag ANY persisted pattern matching zero
+  known operations, so a policy written before this gate existed (or one
+  edited directly in `config.json`) still surfaces its typos. The `tool:`
+  patterns keep their specific "MCP passthrough removed, see
+  docs/mcp-migration.md" hint; every other dead pattern gets a generic
+  "check for typos against `kbagent permissions list`" hint instead. A policy
+  mixing both kinds shows both hints.
+- **`PermissionEngine` itself stays lenient at evaluation time** -- a dead
+  pattern already on disk is a silent no-op when the policy is enforced, not
+  a crash. Only `permissions set` is strict; this preserves backward
+  compatibility for a pre-existing policy that happens to carry a typo.
+- **Version skew is a real rejection case, not just a typo.** A pattern
+  naming an operation that only exists on a newer kbagent version (a command
+  added after the running build was installed) is rejected the same as a
+  typo -- it would be inert on this build anyway -- so upgrade first, then
+  persist the pattern.
+- **`doctor --json`'s `inert_permission_patterns` check carries
+  `details.inert_since` only when at least one offending pattern is
+  `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
+  `stroage.upload-table`) omits the key entirely, so JSON consumers must not
+  assume `inert_since` is always present on `status: "warn"`.

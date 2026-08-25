@@ -687,6 +687,14 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # like cli:read, cli:write, cli:destructive). `tool:*` patterns are INERT since 0.85.0 (the MCP
 # passthrough is gone): they load but match nothing, so a mode=deny policy whose only allowance was
 # tool:read now denies everything. The agent guards rails against mistakes; not a sandbox.
+# `permissions set` (since vNEXT, issue #688) validates every --allow/--deny pattern BEFORE the
+#   interactive confirmation: each must be a cli:* category, an exact operation name (incl. a
+#   flag-escalated string like "auth.logout --remove-projects"), or a glob matching >=1 known
+#   operation -- an unknown pattern (typo, fabricated category) is rejected with VALIDATION_ERROR,
+#   exit 2, listing every offending pattern (--json: error.details.invalid_patterns), and nothing
+#   is persisted. `permissions show` / `kbagent doctor` also generalized: they now flag ANY
+#   persisted pattern matching zero known operations, not only the retired tool:* namespace.
+#   PermissionEngine itself stays lenient at evaluation time -- only `permissions set` is strict.
 kbagent permissions list [--category read|write|destructive|admin]
 kbagent permissions show
 kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]

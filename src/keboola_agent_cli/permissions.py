@@ -416,6 +416,22 @@ INERT_SINCE_VERSION = "0.85.0"
 # show` and `kbagent doctor` cannot drift apart.
 INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
 
+# Generic hint for a pattern that matches nothing for a reason other than the
+# retired `tool:` namespace (most commonly a typo). Kept distinct from
+# INERT_PATTERN_HINT so `permissions show` / `doctor` can point at the right
+# fix instead of always mentioning the MCP migration.
+UNMATCHED_PATTERN_HINT = (
+    "Check for typos against `kbagent permissions list`, or use a cli:* category "
+    "(cli:read, cli:write, cli:destructive, cli:admin)."
+)
+
+# The four risk-category patterns `_matches_pattern` special-cases. Exported
+# so `pattern_matches_known_operation` cannot drift from the engine's own
+# notion of "valid category pattern".
+CLI_CATEGORY_PATTERNS: frozenset[str] = frozenset(
+    {"cli:read", "cli:write", "cli:destructive", "cli:admin"}
+)
+
 
 def apply_firewall_flags(
     persisted: PermissionPolicy | None,
@@ -473,13 +489,36 @@ def apply_firewall_flags(
     )
 
 
+def pattern_matches_known_operation(pattern: str) -> bool:
+    """True if the pattern is a cli:* category or matches >=1 known operation.
+
+    Known operations are ``OPERATION_REGISTRY`` keys plus ``FLAG_ESCALATIONS``
+    keys (flag-escalated strings like ``auth.logout --remove-projects`` are
+    real operation strings passed to ``PermissionEngine.is_allowed()``, see
+    ``commands/auth.py``). A glob pattern counts as valid when it matches at
+    least one of those operation strings via ``fnmatch.filter``.
+
+    Used both to reject unknown patterns at write time (``permissions set``)
+    and to flag ones already on disk (``find_inert_patterns``) -- kept as a
+    single source of truth so the two checks cannot drift apart.
+    """
+    if pattern in CLI_CATEGORY_PATTERNS:
+        return True
+    return bool(fnmatch.filter([*OPERATION_REGISTRY, *FLAG_ESCALATIONS], pattern))
+
+
 def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
     """Patterns in a persisted policy that can no longer match any operation.
 
-    The MCP passthrough was removed in 0.85.0 and with it the ``tool:``
-    operation namespace; patterns targeting it fall through to fnmatch and
-    match nothing. Surfaced by ``permissions show`` and ``kbagent doctor``
-    so a pre-0.85 policy does not silently carry dead rules.
+    Generalized (issue #688): flags ANY pattern that matches zero known
+    operations, not only the retired ``tool:`` namespace. That namespace --
+    gone since the MCP passthrough was removed in 0.85.0 -- is simply the
+    most common historical cause; a typo'd operation name or a stale glob is
+    just as inert and just as worth surfacing. Surfaced by ``permissions
+    show`` and ``kbagent doctor`` so a policy does not silently carry dead
+    rules. ``permissions set`` (issue #688) additionally REJECTS such
+    patterns at write time -- this function stays for what is already
+    persisted (pre-fix policies, or the engine's own leniency).
 
     Returns the offending patterns in policy order (allow first, then deny),
     de-duplicated -- the same dead pattern listed twice is one problem.
@@ -489,7 +528,7 @@ def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
 
     inert: list[str] = []
     for pattern in [*policy.allow, *policy.deny]:
-        if pattern.startswith(INERT_PATTERN_PREFIX) and pattern not in inert:
+        if not pattern_matches_known_operation(pattern) and pattern not in inert:
             inert.append(pattern)
     return inert
 
@@ -510,7 +549,7 @@ def _matches_pattern(operation: str, pattern: str) -> bool:
     match nothing, and stay inert instead of raising.
     """
     # Category patterns: cli:read, cli:write, cli:destructive, cli:admin
-    if pattern in ("cli:read", "cli:write", "cli:destructive", "cli:admin"):
+    if pattern in CLI_CATEGORY_PATTERNS:
         target_category = pattern.split(":")[1]
         # Fail-closed: unknown CLI ops default to 'write' so they are
         # blocked by cli:write policies. This prevents new commands from

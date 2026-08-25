@@ -373,6 +373,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
   skill).
 
+**`permissions set --allow/--deny` validates patterns (since vNEXT)**
+- A typo'd or fabricated pattern (`tool.admin`, `stroage.*`) fails fast with
+  `VALIDATION_ERROR`, exit 2, instead of persisting silently -- valid inputs
+  are `cli:*` categories, exact operation names, or globs matching >=1
+  operation (check with `kbagent permissions list`).
+
 ---
 
 ## 4. WORKFLOWS (reference playbooks)
