@@ -22,6 +22,8 @@ _spec.loader.exec_module(check_version_gates)
 
 collect = check_version_gates.collect_gates
 residue = check_version_gates.find_vnext_residue
+headings = check_version_gates.find_heading_placeholders
+resolve_vnext = check_version_gates.resolve_vnext
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -362,3 +364,200 @@ class TestDoubleBacktickSpans:
         """The GATE_RE asymmetry survives: code spans are never stripped for versions."""
         f = _write(tmp_path, "mod.py", '"""Device-enrollment primitives (``0.66.0+``)."""\n')
         assert list(collect([f])) == ["0.66.0"]
+
+
+class TestHeadingPlaceholders:
+    """A ``vNEXT`` inside a markdown heading is fatal on EVERY PR, not just a release.
+
+    Resolving the placeholder rewrites the heading text, which rewrites the
+    generated anchor slug, which breaks every inbound ``#...`` link. The rule
+    predates this check as prose in CONTRIBUTING.md plus a hand-run
+    ``grep -rn '^##.*vNEXT' plugins/`` at release time -- and that grep lost a
+    merge race in 0.91.0: PR #697 ran it two minutes before #694 and #696
+    landed their own headings, so all three shipped and had to be cleaned up
+    after the fact. Checking at authoring time is what makes the race
+    impossible.
+    """
+
+    def test_atx_heading_with_placeholder_is_flagged(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "intro\n\n## Ignored components (since vNEXT, #689)\n")
+        found = headings([f])
+        assert len(found) == 1
+        assert found[0].line == 3
+
+    def test_emphasised_tag_in_heading_is_flagged(self, tmp_path: Path) -> None:
+        """``### Foo *(since vNEXT)*`` is the exact shape #697 had to clean up."""
+        f = _write(tmp_path, "g.md", "### What's-new popup *(since vNEXT)*\n")
+        assert len(headings([f])) == 1
+
+    def test_placeholder_on_a_body_line_is_not_a_heading(self, tmp_path: Path) -> None:
+        """The prescribed fix -- tag on the first body line -- must stay legal."""
+        f = _write(tmp_path, "g.md", "## Ignored components\n\n*(since vNEXT, #689)*\n")
+        assert headings([f]) == []
+
+    def test_python_comment_is_not_a_heading(self, tmp_path: Path) -> None:
+        """``src/**/*.py`` is scanned for gates, but ``#`` there is a comment.
+
+        A Python comment has no anchor slug, so flagging it would be a pure
+        false positive -- and CLAUDE.md's command block is full of them.
+        """
+        f = _write(tmp_path, "mod.py", "# workspace load (since vNEXT): auto-decides\n")
+        assert headings([f]) == []
+
+    def test_heading_quoting_the_token_is_prose(self, tmp_path: Path) -> None:
+        """Same inline-code rule as the residue scan: backticks mean quotation."""
+        f = _write(tmp_path, "g.md", "## How the `vNEXT` placeholder works\n")
+        assert headings([f]) == []
+
+    def test_hash_without_a_space_is_not_a_heading(self, tmp_path: Path) -> None:
+        """``#tag`` is not ATX -- CommonMark requires a space after the hashes."""
+        f = _write(tmp_path, "g.md", "#vNEXT (since vNEXT)\n")
+        assert headings([f]) == []
+
+    def test_live_repository_has_no_placeholder_headings(self) -> None:
+        """The real tree must stay clean -- this is the check's whole point."""
+        assert headings(check_version_gates.resolve_paths()) == []
+
+
+class TestHeadingCheckIsFatalOutsideRelease:
+    """The heading rule must fail a FEATURE PR -- that is what closes the race.
+
+    ``find_vnext_residue`` is deliberately advisory outside ``--release``,
+    because a feature PR is supposed to carry placeholders. A placeholder in a
+    *heading* is different: it is never correct, at any point in the cycle, so
+    it has to fail the PR that writes it.
+    """
+
+    def _run(self, monkeypatch, tmp_path: Path, body: str, argv: list[str]) -> int:
+        f = _write(tmp_path, "g.md", body)
+        monkeypatch.setattr(check_version_gates, "resolve_paths", lambda: [f])
+        monkeypatch.setattr(sys, "argv", ["check_version_gates.py", *argv])
+        return check_version_gates.main()
+
+    def test_heading_placeholder_fails_a_plain_run(self, monkeypatch, tmp_path: Path) -> None:
+        rc = self._run(monkeypatch, tmp_path, "## Ignored components (since vNEXT)\n", [])
+        assert rc == 1
+
+    def test_body_line_placeholder_still_passes_a_plain_run(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The advisory-residue behaviour a feature PR relies on is untouched."""
+        rc = self._run(monkeypatch, tmp_path, "## Ignored components\n\n*(since vNEXT)*\n", [])
+        assert rc == 0
+
+
+class TestResolveVnext:
+    """``make vnext-resolve VERSION=X`` rewrites live gates and nothing else.
+
+    Before this existed, the release PR resolved 54 placeholders by hand off
+    the checker's own output. That is a machine's job: the scanner already
+    separates a live gate from prose with perfect precision, so a human doing
+    the edit can only introduce error -- and a blanket ``sed`` provably does,
+    because the process docs legitimately quote the token.
+    """
+
+    def test_live_gate_is_rewritten(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "- `--flag` (since vNEXT) does a thing\n")
+        changed = resolve_vnext([f], "0.91.0")
+        assert len(changed) == 1
+        assert f.read_text(encoding="utf-8") == "- `--flag` (since 0.91.0) does a thing\n"
+
+    def test_prose_inside_backticks_is_left_alone(self, tmp_path: Path) -> None:
+        """CLAUDE.md documents the placeholder; a blanket sed corrupts that."""
+        body = "tag it with the literal placeholder **`vNEXT`** -- `(since vNEXT)`.\n"
+        f = _write(tmp_path, "g.md", body)
+        assert resolve_vnext([f], "0.91.0") == []
+        assert f.read_text(encoding="utf-8") == body
+
+    def test_mixed_line_rewrites_only_the_live_token(self, tmp_path: Path) -> None:
+        """The case a line-level rewrite gets wrong -- one quoted, one live."""
+        f = _write(tmp_path, "g.md", "`vNEXT` is the placeholder; (since vNEXT) is live\n")
+        changed = resolve_vnext([f], "0.91.0")
+        assert len(changed) == 1
+        expected = "`vNEXT` is the placeholder; (since 0.91.0) is live\n"
+        assert f.read_text(encoding="utf-8") == expected
+
+    def test_vnext_plus_form_is_rewritten(self, tmp_path: Path) -> None:
+        """``vNEXT+`` is the other documented placeholder shape."""
+        f = _write(tmp_path, "g.md", "- **vNEXT+**: resolves to the first project\n")
+        resolve_vnext([f], "0.91.0")
+        assert "0.91.0+" in f.read_text(encoding="utf-8")
+
+    def test_python_docstring_gate_is_rewritten(self, tmp_path: Path) -> None:
+        """``src/**/*.py`` carries agent-facing gates too, so it must resolve."""
+        f = _write(tmp_path, "mod.py", '"""Does a thing (since vNEXT)."""\n')
+        assert len(resolve_vnext([f], "0.91.0")) == 1
+        assert "(since 0.91.0)" in f.read_text(encoding="utf-8")
+
+    def test_is_idempotent(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "- `--flag` (since vNEXT)\n")
+        resolve_vnext([f], "0.91.0")
+        assert resolve_vnext([f], "0.91.0") == []
+
+    def test_reports_every_rewritten_location(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "## H\n\n(since vNEXT) one\nplain\n(since vNEXT) two\n")
+        changed = resolve_vnext([f], "0.91.0")
+        assert [c.line for c in changed] == [3, 5]
+
+    def test_file_without_a_placeholder_is_not_touched(self, tmp_path: Path) -> None:
+        """No rewrite means no mtime churn on 900+ scanned files."""
+        f = _write(tmp_path, "g.md", "nothing to see\n")
+        before = f.stat().st_mtime_ns
+        assert resolve_vnext([f], "0.91.0") == []
+        assert f.stat().st_mtime_ns == before
+
+    def test_rejects_a_malformed_version(self, tmp_path: Path) -> None:
+        """A garbled VERSION= must not be written into every gate in the tree.
+
+        Note ``packaging`` is lenient about shapes that merely LOOK wrong --
+        ``v0.91`` and ``0.91`` both parse. Format validation therefore cannot
+        catch a typo'd-but-parseable version; that is what the pyproject
+        cross-check in ``main()`` is for (see
+        :class:`TestResolveModeGuardsTheVersion`).
+        """
+        f = _write(tmp_path, "g.md", "(since vNEXT)\n")
+        try:
+            resolve_vnext([f], "0.91.0.banana")
+        except ValueError:
+            pass
+        else:  # pragma: no cover - the assert below reports the miss
+            raise AssertionError("expected ValueError for a malformed version")
+        assert "vNEXT" in f.read_text(encoding="utf-8")
+
+
+class TestResolveModeGuardsTheVersion:
+    """``--resolve X`` must refuse any X that is not what pyproject ships.
+
+    Format validation cannot catch this: ``v0.91`` and ``0.91`` are both valid
+    PEP 440. But resolving gates to a version the release is not actually
+    shipping recreates the exact bug the gate exists to prevent -- an agent
+    refusing a command the user has -- across the whole tree at once, and the
+    ``version-gate-check`` that would notice runs against CHANGELOG keys, not
+    against pyproject.
+    """
+
+    def _run(self, monkeypatch, tmp_path: Path, version: str) -> tuple[int, Path]:
+        f = _write(tmp_path, "g.md", "- `--flag` (since vNEXT)\n")
+        monkeypatch.setattr(check_version_gates, "resolve_paths", lambda: [f])
+        monkeypatch.setattr(sys, "argv", ["check_version_gates.py", "--resolve", version])
+        return check_version_gates.main(), f
+
+    def test_version_matching_pyproject_is_applied(self, monkeypatch, tmp_path: Path) -> None:
+        shipped = check_version_gates._pyproject_version()
+        rc, f = self._run(monkeypatch, tmp_path, shipped)
+        assert rc == 0
+        assert f"(since {shipped})" in f.read_text(encoding="utf-8")
+
+    def test_version_disagreeing_with_pyproject_is_refused(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, f = self._run(monkeypatch, tmp_path, "9.9.9")
+        assert rc == 1
+        assert "vNEXT" in f.read_text(encoding="utf-8"), "nothing may be rewritten on refusal"
+
+    def test_malformed_version_is_refused_without_touching_files(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, f = self._run(monkeypatch, tmp_path, "0.91.0.banana")
+        assert rc == 1
+        assert "vNEXT" in f.read_text(encoding="utf-8")
