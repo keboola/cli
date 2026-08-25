@@ -1121,7 +1121,38 @@ remain branch-aware because modifying a dev branch is the expected intent.
     One subscription with every filter printed verbatim, including threshold
     filters like durationOvertimePercentage that have no dedicated column.
 
-  Read-only in this release; creating/deleting subscriptions is not exposed.
+  kbagent notification create --project ALIAS --event NAME
+                             --channel email|webhook --address ADDR
+                             [--component-id ID] [--config-id ID]
+                             [--branch ID] [--expires-at TS]
+    Create a subscription (since vNEXT). --address carries the email address
+    (--channel email) or the webhook URL (--channel webhook) -- the wire shape
+    is channel-discriminated, the CLI takes one flag either way. An invalid
+    --channel is a structured INVALID_ARGUMENT, exit 2.
+    WITHOUT --branch no branch.id filter is written, unlike the UI which
+    always writes one. An absent filter does not constrain matching, so such
+    a subscription fires for jobs on EVERY branch.
+
+  kbagent notification delete --project ALIAS --subscription-id ID [--yes]
+    Delete a subscription (since vNEXT). Confirms unless --yes or --json.
+
+  kbagent notification replace-recipient --project ALIAS
+                                        --subscription-id ID
+                                        --address NEW_ADDR
+                                        [--channel email|webhook] [--yes]
+    Swap a subscription's recipient (since vNEXT), keeping the event, filters
+    and expiry. This is delete+recreate -- the API has NO update primitive.
+    The NEW subscription is created FIRST, then the old one deleted, so a NEW
+    subscription_id is ALWAYS minted: never cache the old id, read
+    old_subscription_id / new_subscription_id off the result. If the delete
+    fails, the old subscription survives beside the new one -- a recoverable
+    duplicate, reported as old_deleted=false plus a warning, never a lost
+    subscription. --channel defaults to the old subscription's channel.
+    Confirms unless --yes or --json.
+
+  Permission classes: notification.create and notification.replace-recipient
+  are `write`, notification.delete is `destructive`. --deny-writes blocks all
+  three; --deny-destructive blocks only delete. list/detail stay `read`.
 
 ### Development Branches
 

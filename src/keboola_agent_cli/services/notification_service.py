@@ -109,8 +109,10 @@ def _build_recipient(channel: str, address: str) -> dict[str, str]:
 
     Raises:
         ConfigError: ``channel`` is outside :data:`VALID_CHANNELS`. The CLI
-            layer validates this too (a Typer ``Choice``); this check is
-            defense in depth for any other caller (SDK, tests) that skips it.
+            layer validates this too (an explicit membership check against
+            ``VALID_CHANNELS`` in the command, which exits 2 with
+            ``INVALID_ARGUMENT``); this check is defense in depth for any
+            other caller (SDK, tests) that skips it.
     """
     if channel == CHANNEL_EMAIL:
         return {"channel": CHANNEL_EMAIL, "address": address}

@@ -961,6 +961,23 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail --project NAME --subscription-id ID
+kbagent notification create --project ALIAS --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
+kbagent notification delete --project ALIAS --subscription-id ID [--yes]
+kbagent notification replace-recipient --project ALIAS --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
+# notification WRITE path (since vNEXT, #690): the group is no longer read-only.
+#   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
+#   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch writes NO branch.id
+#   filter, unlike the UI which always writes one; an absent filter does not constrain matching, so
+#   such a subscription fires for jobs on EVERY branch.
+#   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
+#   subscription FIRST, then deletes the old one, so a NEW subscription_id is ALWAYS minted (scripts
+#   must not cache the old one; the result carries old_subscription_id + new_subscription_id). A
+#   failed delete leaves a recoverable DUPLICATE, surfaced as `old_deleted: false` + a warning --
+#   never a lost subscription.
+#   Permission classes: notification.create = write, notification.replace-recipient = write,
+#   notification.delete = destructive. So --deny-writes blocks all three; --deny-destructive blocks
+#   only `delete`. `delete` / `replace-recipient` prompt for confirmation unless --yes (or --json).
 # notification (0.86.0+, #600): read-only audit of Notification Service subscriptions -- the
 #   recipients behind the Flow Builder's Notifications tab (bell icon). They live in a SEPARATE
 #   platform service (notification.{stack}, plain Storage token, no elevated scope), NOT in the
