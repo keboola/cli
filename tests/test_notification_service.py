@@ -579,3 +579,283 @@ class TestGetSubscriptionDetail:
     def test_unknown_alias_raises_config_error(self) -> None:
         with pytest.raises(ConfigError):
             _make_service(MagicMock()).get_subscription_detail("nope", "1")
+
+
+# ---------------------------------------------------------------------------
+# create_subscription / delete_subscription / replace_subscription_recipient
+# (issue #690)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSubscription:
+    def test_builds_email_recipient(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9001",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod", event="job-failed", channel="email", address="ops@example.com"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed", {"channel": "email", "address": "ops@example.com"}, None, None
+        )
+
+    def test_builds_webhook_recipient(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9002",
+            "event": "job-failed",
+            "recipient": {"channel": "webhook", "url": "https://hooks.example.com/x"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="webhook",
+            address="https://hooks.example.com/x",
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "webhook", "url": "https://hooks.example.com/x"},
+            None,
+            None,
+        )
+
+    def test_builds_filters_in_component_config_branch_order_stringified(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9003",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            component_id="keboola.flow",
+            config_id=98765,
+            branch_id=4242,
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "ops@example.com"},
+            [
+                {"field": "job.component.id", "value": "keboola.flow"},
+                {"field": "job.configuration.id", "value": "98765"},
+                {"field": "branch.id", "value": "4242"},
+            ],
+            None,
+        )
+
+    def test_omits_filters_when_no_scope_args(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9004",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod", event="job-failed", channel="email", address="ops@example.com"
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] is None
+
+    def test_passes_expires_at(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9005",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            expires_at="2027-01-01T00:00:00+01:00",
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "ops@example.com"},
+            None,
+            "2027-01-01T00:00:00+01:00",
+        )
+
+    def test_returns_audit_row_with_project_alias_and_config_name(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9006",
+            "event": "job-failed",
+            "filters": [
+                {"field": "job.component.id", "value": "keboola.flow"},
+                {"field": "job.configuration.id", "value": "98765"},
+            ],
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            component_id="keboola.flow",
+            config_id="98765",
+        )
+
+        assert result["subscription_id"] == "9006"
+        assert result["project_alias"] == "prod"
+        assert result["config_name"] == "Daily ETL"
+
+    def test_invalid_channel_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).create_subscription(
+                "prod", event="job-failed", channel="carrier-pigeon", address="x"
+            )
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).create_subscription(
+                "nope", event="job-failed", channel="email", address="ops@example.com"
+            )
+
+
+class TestDeleteSubscription:
+    def test_calls_delete_and_returns_envelope(self) -> None:
+        client = MagicMock()
+
+        result = _make_service(client).delete_subscription("prod", "123")
+
+        client.delete_project_subscription.assert_called_once_with("123")
+        assert result == {"project_alias": "prod", "subscription_id": "123", "deleted": True}
+
+    def test_api_404_propagates(self) -> None:
+        client = MagicMock()
+        client.delete_project_subscription.side_effect = KeboolaApiError(
+            message="Not found", error_code="NOT_FOUND", status_code=404
+        )
+
+        with pytest.raises(KeboolaApiError):
+            _make_service(client).delete_subscription("prod", "999")
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).delete_subscription("nope", "1")
+
+
+class TestReplaceSubscriptionRecipient:
+    def test_creates_new_before_deleting_old_and_keeps_old_channel(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9100",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "new@example.com"},
+            FLOW_SUBSCRIPTION["filters"],
+            None,
+        )
+        client.delete_project_subscription.assert_called_once_with("1234")
+
+        call_names = [
+            call[0]
+            for call in client.mock_calls
+            if call[0] in ("create_project_subscription", "delete_project_subscription")
+        ]
+        assert call_names.index("create_project_subscription") < call_names.index(
+            "delete_project_subscription"
+        )
+
+        assert result["old_subscription_id"] == "1234"
+        assert result["new_subscription_id"] == "9100"
+        assert result["old_address"] == "ops@example.com"
+        assert result["old_deleted"] is True
+        assert result["warnings"] == []
+        assert result["subscription_id"] == "9100"
+        assert result["config_name"] == "Daily ETL"
+
+    def test_delete_failure_sets_old_deleted_false_with_warning_and_does_not_raise(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9101",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        client.delete_project_subscription.side_effect = KeboolaApiError(
+            message="boom", error_code="API_ERROR", status_code=500
+        )
+        _wire_configs(client, [])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        assert result["old_deleted"] is False
+        assert any("1234" in w for w in result["warnings"])
+        assert result["new_subscription_id"] == "9101"
+
+    def test_new_channel_webhook_switches_recipient_key(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9102",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "webhook", "url": "https://hooks.example.com/y"},
+        }
+        _wire_configs(client, [])
+
+        _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "https://hooks.example.com/y", new_channel="webhook"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "webhook", "url": "https://hooks.example.com/y"},
+            FLOW_SUBSCRIPTION["filters"],
+            None,
+        )
+
+    def test_blank_old_channel_without_new_channel_raises_config_error(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = {
+            "id": "1234",
+            "event": "job-failed",
+            "recipient": {},
+        }
+
+        with pytest.raises(ConfigError):
+            _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_not_called()
+        client.delete_project_subscription.assert_not_called()
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).replace_subscription_recipient(
+                "nope", "1", "new@example.com"
+            )

@@ -1,9 +1,11 @@
-"""Notification subscription discovery and audit service (issue #600).
+"""Notification subscription discovery, audit, and write service (issue #600, #690).
 
-Fleet-wide read-only queries over the Notification Service's
-``/project-subscriptions``, joined in memory against the project's component
-configurations so callers can answer "which flow does this alert belong to,
-and who does it page?" across every registered project at once.
+Fleet-wide queries over the Notification Service's ``/project-subscriptions``,
+joined in memory against the project's component configurations so callers can
+answer "which flow does this alert belong to, and who does it page?" across
+every registered project at once. Since issue #690 it also owns the write
+path -- create, delete, and replace-recipient -- so scripts can fix a stale
+recipient without a trip through the web UI.
 
 These subscriptions back the Flow Builder's *Notifications* tab (bell icon).
 They are NOT stored in a flow's ``configuration`` JSON, so ``flow detail`` /
@@ -32,7 +34,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..errors import KeboolaApiError
+from ..errors import ConfigError, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -43,6 +45,13 @@ FILTER_FIELD_COMPONENT_ID = "job.component.id"
 FILTER_FIELD_CONFIG_ID = "job.configuration.id"
 FILTER_FIELD_BRANCH_ID = "branch.id"
 FILTER_FIELD_PHASE_ID = "phase.id"
+
+# ``recipient.channel`` values the write path accepts. The CLI layer
+# validates against the same tuple (defense in depth, not the primary guard --
+# see ``_build_recipient``).
+CHANNEL_EMAIL = "email"
+CHANNEL_WEBHOOK = "webhook"
+VALID_CHANNELS = (CHANNEL_EMAIL, CHANNEL_WEBHOOK)
 
 # ``EventName`` is an open string in the schema, not an enum -- this tuple is
 # for help text and hints only. Never reject an event name against it: the
@@ -84,6 +93,55 @@ def _recipient_address(recipient: dict[str, Any]) -> str:
     row is still worth showing for its event and filters.
     """
     return str(recipient.get("address") or recipient.get("url") or "")
+
+
+def _build_recipient(channel: str, address: str) -> dict[str, str]:
+    """Build a ``recipient`` body for the given channel.
+
+    Args:
+        channel: One of :data:`VALID_CHANNELS`.
+        address: Email address (``email``) or callback URL (``webhook``).
+
+    Returns:
+        ``{"channel": ..., "address": ...}`` for email, ``{"channel": ...,
+        "url": ...}`` for webhook -- mirroring the discriminated shape
+        :func:`_recipient_address` reads back.
+
+    Raises:
+        ConfigError: ``channel`` is outside :data:`VALID_CHANNELS`. The CLI
+            layer validates this too (a Typer ``Choice``); this check is
+            defense in depth for any other caller (SDK, tests) that skips it.
+    """
+    if channel == CHANNEL_EMAIL:
+        return {"channel": CHANNEL_EMAIL, "address": address}
+    if channel == CHANNEL_WEBHOOK:
+        return {"channel": CHANNEL_WEBHOOK, "url": address}
+    raise ConfigError(
+        f"Unknown notification channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}."
+    )
+
+
+def _build_filters(
+    component_id: str | None,
+    config_id: str | None,
+    branch_id: int | None,
+) -> list[dict[str, Any]]:
+    """Build ``filters[]`` in a stable component/config/branch order.
+
+    Each scope argument is included only when provided, and every value is
+    stringified -- filter values are declared as ``string | integer |
+    boolean`` on the wire, and a numeric config/branch ID must not reach the
+    API as a raw int (mirrors the read-side stringification in
+    :func:`_filter_value`).
+    """
+    filters: list[dict[str, Any]] = []
+    if component_id:
+        filters.append({"field": FILTER_FIELD_COMPONENT_ID, "value": str(component_id)})
+    if config_id:
+        filters.append({"field": FILTER_FIELD_CONFIG_ID, "value": str(config_id)})
+    if branch_id is not None:
+        filters.append({"field": FILTER_FIELD_BRANCH_ID, "value": str(branch_id)})
+    return filters
 
 
 def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
@@ -198,7 +256,12 @@ def _could_also_fire(
 
 
 class NotificationService(BaseService):
-    """Read-only audit queries over Notification Service subscriptions."""
+    """Audit and write queries over Notification Service subscriptions.
+
+    ``list_subscriptions`` / ``get_subscription_detail`` are read-only. Since
+    issue #690, ``create_subscription`` / ``delete_subscription`` /
+    ``replace_subscription_recipient`` add a write path.
+    """
 
     # ------------------------------------------------------------------
     # list
@@ -297,6 +360,195 @@ class NotificationService(BaseService):
             row["project_alias"] = alias
             self._stamp_config_names(client, [row], effective_branch)
             return row
+        finally:
+            client.close()
+
+    # ------------------------------------------------------------------
+    # write path (issue #690)
+    # ------------------------------------------------------------------
+
+    def create_subscription(
+        self,
+        alias: str,
+        event: str,
+        channel: str,
+        address: str,
+        component_id: str | None = None,
+        config_id: str | None = None,
+        branch_id: int | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a notification subscription and return its audit row.
+
+        Args:
+            alias: Registered project alias.
+            event: Kebab-case event name (see ``KNOWN_EVENTS`` for hints --
+                the service treats ``EventName`` as an open string, so this
+                is never validated against a fixed set).
+            channel: ``"email"`` or ``"webhook"`` -- see :data:`VALID_CHANNELS`.
+            address: Email address (``email``) or callback URL (``webhook``).
+            component_id: Optional ``job.component.id`` filter.
+            config_id: Optional ``job.configuration.id`` filter.
+            branch_id: Optional ``branch.id`` filter.
+            expires_at: Optional ISO-8601 expiry, sent on the wire as
+                ``expiresAt``.
+
+        Returns:
+            The same shape as :meth:`get_subscription_detail`: the created
+            subscription projected through ``_extract_subscription_fields``,
+            with ``project_alias`` and a best-effort ``config_name`` stamped.
+
+        Raises:
+            ConfigError: ``alias`` not registered, or ``channel`` invalid.
+            KeboolaApiError: the API rejected the subscription.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = branch_id or project.active_branch_id
+
+        recipient = _build_recipient(channel, address)
+        filters = _build_filters(component_id, config_id, branch_id)
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            created = client.create_project_subscription(
+                event, recipient, filters or None, expires_at
+            )
+            row = _extract_subscription_fields(created)
+            row["project_alias"] = alias
+            self._stamp_config_names(client, [row], effective_branch)
+            return row
+        finally:
+            client.close()
+
+    def delete_subscription(self, alias: str, subscription_id: str) -> dict[str, Any]:
+        """Delete a notification subscription.
+
+        Args:
+            alias: Registered project alias.
+            subscription_id: Numeric-string subscription ID.
+
+        Returns:
+            ``{"project_alias": alias, "subscription_id": str(subscription_id),
+            "deleted": True}``.
+
+        Raises:
+            ConfigError: ``alias`` not registered.
+            KeboolaApiError: the subscription was not found (404), or the API
+                rejected the delete -- propagated verbatim, never swallowed.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            client.delete_project_subscription(subscription_id)
+            return {
+                "project_alias": alias,
+                "subscription_id": str(subscription_id),
+                "deleted": True,
+            }
+        finally:
+            client.close()
+
+    def replace_subscription_recipient(
+        self,
+        alias: str,
+        subscription_id: str,
+        new_address: str,
+        new_channel: str | None = None,
+    ) -> dict[str, Any]:
+        """Swap a subscription's recipient by creating a new one, then deleting the old.
+
+        CREATE-then-DELETE, deliberately the reverse of the delete-then-recreate
+        sketch in the originating issue. The Notification Service has no
+        in-place recipient PATCH -- creating always mints a fresh ID -- so the
+        two steps can never be one atomic operation, and the ordering decides
+        which failure mode you get. Creating first means a failed second step
+        (the delete) leaves the OLD subscription lingering alongside the new
+        one: a duplicate alert, recoverable with a follow-up
+        :meth:`delete_subscription` call. Deleting first would instead risk
+        losing the alert entirely if the create then failed -- unrecoverable,
+        and silently so. A failed delete therefore does NOT raise: it is
+        reported via ``old_deleted: False`` plus a warning naming the old
+        subscription id, leaving the caller to decide whether to retry.
+
+        The old subscription's ``event``, raw ``filters``, and ``expiresAt``
+        are carried over VERBATIM (no rebuild) -- only the recipient changes.
+        ``new_channel=None`` keeps the old subscription's channel; if that
+        channel is empty or unknown and no explicit ``new_channel`` is given,
+        this raises rather than guess at a destination.
+
+        Args:
+            alias: Registered project alias.
+            subscription_id: The subscription whose recipient is being replaced.
+            new_address: New email address or webhook URL.
+            new_channel: Optional channel override. ``None`` keeps the old
+                subscription's channel.
+
+        Returns:
+            ``{"old_subscription_id", "new_subscription_id", "old_address",
+            "old_deleted": bool, "warnings": [str, ...], **new_audit_row}`` --
+            the new subscription's audit row (same shape as
+            :meth:`get_subscription_detail`) merged with the replace-specific
+            keys above. ``new_subscription_id`` is ALWAYS the fresh id the API
+            minted -- a caller must not keep using the old one.
+
+        Raises:
+            ConfigError: ``alias`` not registered, ``new_channel`` invalid, or
+                the old recipient's channel is empty/unknown with no
+                ``new_channel`` override.
+            KeboolaApiError: fetching the old subscription or creating the new
+                one failed. A failure to delete the old one is caught and
+                reported instead -- see above.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = project.active_branch_id
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            old = client.get_project_subscription(subscription_id)
+            old_recipient = old.get("recipient") or {}
+            old_address = _recipient_address(old_recipient)
+            channel = new_channel or str(old_recipient.get("channel", ""))
+            if not channel:
+                raise ConfigError(
+                    "The old subscription's recipient channel is empty or "
+                    "unknown; pass an explicit channel to replace it."
+                )
+
+            recipient = _build_recipient(channel, new_address)
+            created = client.create_project_subscription(
+                str(old.get("event", "")),
+                recipient,
+                old.get("filters") or None,
+                old.get("expiresAt"),
+            )
+
+            warnings: list[str] = []
+            try:
+                client.delete_project_subscription(subscription_id)
+                old_deleted = True
+            except KeboolaApiError as exc:
+                old_deleted = False
+                warnings.append(
+                    f"Old subscription {subscription_id} was not deleted "
+                    f"(a duplicate now exists alongside the new one): {exc.message}"
+                )
+
+            row = _extract_subscription_fields(created)
+            row["project_alias"] = alias
+            self._stamp_config_names(client, [row], effective_branch)
+
+            return {
+                "old_subscription_id": str(subscription_id),
+                "new_subscription_id": row["subscription_id"],
+                "old_address": old_address,
+                "old_deleted": old_deleted,
+                "warnings": warnings,
+                **row,
+            }
         finally:
             client.close()
 
@@ -438,6 +690,8 @@ class NotificationService(BaseService):
 
 
 __all__ = [
+    "CHANNEL_EMAIL",
+    "CHANNEL_WEBHOOK",
     "FILTER_FIELD_BRANCH_ID",
     "FILTER_FIELD_COMPONENT_ID",
     "FILTER_FIELD_CONFIG_ID",
@@ -445,5 +699,6 @@ __all__ = [
     "KNOWN_EVENTS",
     "SCOPE_CONFIG",
     "SCOPE_PROJECT_WIDE",
+    "VALID_CHANNELS",
     "NotificationService",
 ]
