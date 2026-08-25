@@ -5637,6 +5637,175 @@ class TestE2ESyncWorkflow:
                             f"  [cleanup] Failed to delete keboola.variables/{auto_vars_id}: {exc}"
                         )
 
+    def test_sync_ignored_components_round_trip(self) -> None:
+        """Issue #689 (ignored components), end-to-end.
+
+        The manifest's ``ignoredComponents`` field (unioned with the
+        hardcoded ``ALWAYS_IGNORED_COMPONENTS``) is now honored by
+        ``sync pull`` / ``sync diff`` / ``sync push``:
+
+        * Adding a component to ``ignoredComponents`` and pulling drops its
+          manifest entry AND removes its local dir, with the pull ``details``
+          reporting ``action: "ignored"`` (vs ``"removed"`` for an actual
+          remote deletion).
+        * The trap this closes: re-ignoring a component WITHOUT pulling
+          first, then deleting its now-stale local dir by hand (as one might
+          when tidying a tree), must NOT make ``sync diff`` report it as
+          ``deleted`` or ``sync push`` plan to delete/recreate it -- the
+          config must be left untouched on the remote.
+        * Un-ignoring the component and pulling again re-materializes it.
+
+        Creates + cleans up a dedicated config so the test is idempotent.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        cfg: dict = {}
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-ignoredcomp",
+                    description="E2E ignored-components round-trip fixture (#689)",
+                    configuration={"parameters": {"db": {"host": "orig.example.com"}}},
+                )
+            cfg_id = str(cfg["id"])
+            manifest_path = self.project_dir / ".keboola" / "manifest.json"
+
+            def _find_config_dir() -> Path:
+                matches = [
+                    p
+                    for p in self.project_dir.rglob(CONFIG_FILENAME)
+                    if "rows" not in p.relative_to(self.project_dir).parts
+                    and str(
+                        _yaml.safe_load(p.read_text(encoding="utf-8"))
+                        .get("_keboola", {})
+                        .get("config_id")
+                    )
+                    == cfg_id
+                ]
+                assert len(matches) == 1, f"config YAML not found after pull: {matches}"
+                return matches[0].parent
+
+            # --- (a) sync init + pull -> materialized + tracked in manifest ---
+            _step("9a", "sync init + pull (ignored-components fixture)")
+            self._run_ok(
+                "sync", "init", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            config_dir = _find_config_dir()
+            assert config_dir.exists()
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert any(
+                e["componentId"] == TEST_COMPONENT_ID and e["id"] == cfg_id
+                for e in manifest["configurations"]
+            ), "config must be tracked in the manifest right after pull"
+
+            # --- (b) ignoredComponents + pull -> local dir AND manifest entry
+            # gone; pull details report action "ignored" ---
+            _step("9b", "ignoredComponents + pull drops the dir/manifest entry")
+            manifest["ignoredComponents"] = [TEST_COMPONENT_ID]
+            manifest_path.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+            pull_data = self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )["data"]
+            assert not config_dir.exists(), "ignored component's local dir must be removed"
+            manifest_after = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert not any(
+                e["componentId"] == TEST_COMPONENT_ID and e["id"] == cfg_id
+                for e in manifest_after["configurations"]
+            ), "config must be dropped from the manifest once its component is ignored"
+            ignored_details = [
+                d
+                for d in pull_data["details"]
+                if d["component_id"] == TEST_COMPONENT_ID and d["action"] == "ignored"
+            ]
+            assert ignored_details, (
+                f"pull details must report action=ignored: {pull_data['details']}"
+            )
+
+            # --- (c) un-ignore + pull -> re-materializes, giving us a fresh
+            # baseline dir for the trap scenario below ---
+            _step("9c", "un-ignore + pull re-materializes the config")
+            manifest_after["ignoredComponents"] = []
+            manifest_path.write_text(json.dumps(manifest_after, indent=4), encoding="utf-8")
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            config_dir = _find_config_dir()
+            assert config_dir.exists(), "un-ignoring + pull must re-materialize the config"
+
+            # --- (d) THE TRAP: re-add the ignore WITHOUT pulling, then delete
+            # the (now stale) local dir by hand. diff/push must never mistake
+            # this for a real remote deletion. ---
+            _step("9d", "re-ignore without pulling + delete dir by hand -- the trap")
+            manifest_current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_current["ignoredComponents"] = [TEST_COMPONENT_ID]
+            manifest_path.write_text(json.dumps(manifest_current, indent=4), encoding="utf-8")
+            shutil.rmtree(config_dir)
+
+            diff_data = self._run_ok(
+                "sync", "diff", "--project", self.alias, "--directory", str(self.project_dir)
+            )["data"]
+            deleted_hits = [
+                c
+                for c in diff_data.get("changes", [])
+                if c.get("config_id") == cfg_id and c.get("change_type") == "deleted"
+            ]
+            assert not deleted_hits, (
+                f"an ignored component's stale manifest entry must never diff "
+                f"as deleted: {deleted_hits}"
+            )
+            orphaned_hits = [
+                o for o in diff_data.get("orphaned", []) if o.get("config_id") == cfg_id
+            ]
+            assert not orphaned_hits, (
+                f"an ignored component must not surface as orphaned either: {orphaned_hits}"
+            )
+
+            push_dry = self._run_ok(
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--dry-run",
+            )["data"]
+            planned_hits = [c for c in push_dry.get("changes", []) if c.get("config_id") == cfg_id]
+            assert not planned_hits, (
+                f"push --dry-run must plan neither a delete nor a re-create for it: {planned_hits}"
+            )
+
+            # The config must still exist untouched on the remote -- this is
+            # the delete-dir-then-push production-delete trap #689 closes.
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                remote_detail = api.get_config_detail(
+                    component_id=TEST_COMPONENT_ID, config_id=cfg_id
+                )
+            assert str(remote_detail["id"]) == cfg_id, "config must still exist remotely"
+
+            # --- (e) un-ignore + pull -> re-materializes again ---
+            _step("9e", "un-ignore + pull re-materializes the config again")
+            manifest_current["ignoredComponents"] = []
+            manifest_path.write_text(json.dumps(manifest_current, indent=4), encoding="utf-8")
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            assert _find_config_dir().exists(), "final un-ignore + pull must re-materialize"
+        finally:
+            cfg_id = cfg.get("id") if cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=TEST_COMPONENT_ID, config_id=str(cfg_id))
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Billing / PAYG credit balance (issue #594)

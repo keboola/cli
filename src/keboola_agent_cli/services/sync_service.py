@@ -1072,11 +1072,12 @@ class SyncService(BaseService):
         for old_cfg in manifest.configurations:
             old_key = f"{old_cfg.component_id}/{old_cfg.id}"
             if old_key not in new_keys:
+                stale_action = (
+                    "ignored" if old_cfg.component_id in ignored_components else "removed"
+                )
                 pull_details.append(
                     {
-                        "action": (
-                            "ignored" if old_cfg.component_id in ignored_components else "removed"
-                        ),
+                        "action": stale_action,
                         "component_id": old_cfg.component_id,
                         "config_name": "",
                         "path": old_cfg.path,
