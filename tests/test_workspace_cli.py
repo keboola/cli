@@ -6,6 +6,8 @@ from test_cli.py with patched services in ctx.obj.
 """
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,9 +15,13 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.constants import QUERY_RESULTS_DEFAULT_LIMIT
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.constants import (
+    QUERY_RESULTS_DEFAULT_LIMIT,
+    WORKSPACE_LOAD_JOB_MAX_WAIT,
+)
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._workspace_load_plan import LoadTablePlan
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.project_service import ProjectService
@@ -45,6 +51,71 @@ def _setup_config(config_dir: Path, projects: dict[str, dict] | None = None) -> 
 def _make_workspace_mock() -> MagicMock:
     """Create a fresh MagicMock for WorkspaceService."""
     return MagicMock()
+
+
+@contextmanager
+def _patched_services(store: ConfigStore, mock_ws: MagicMock) -> Iterator[None]:
+    """Patch the services the CLI callback builds, injecting the workspace mock."""
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+        patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+        patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+    ):
+        MockStore.return_value = store
+        MockProjService.return_value = ProjectService(config_store=store)
+        MockCfgService.return_value = ConfigService(config_store=store)
+        MockJobService.return_value = JobService(config_store=store)
+        MockWsService.return_value = mock_ws
+        yield
+
+
+# Minimal successful `load_tables` payload for the flag-plumbing tests.
+_LOAD_RESULT: dict = {
+    "project_alias": "prod",
+    "workspace_id": 42,
+    "tables_loaded": 1,
+    "table_ids": ["in.c-main.orders"],
+    "job_id": 802,
+    "job_status": "success",
+    "load_type_requested": "auto",
+    "tables": [
+        {
+            "table_id": "in.c-main.orders",
+            "load_type": "clone",
+            "data_size_bytes": 1024,
+            "clone_ineligible_reason": None,
+        }
+    ],
+    "message": "Loaded 1 table(s) into workspace 42 (1 clone).",
+}
+
+
+def _guard_tripping_load(approved_result: dict):
+    """Fake `load_tables` that trips the large-COPY guard.
+
+    Mirrors the real service contract: consult ``on_copy_guard`` when one is
+    supplied, and raise WORKSPACE_LOAD_COPY_TOO_LARGE when it is absent or
+    says no.
+    """
+
+    def _load(**kwargs) -> dict:
+        plan = LoadTablePlan(
+            table_id="in.c-main.big",
+            load_type="COPY",
+            data_size_bytes=5 * 1024**3,
+            clone_ineligible_reason="external schema bucket",
+        )
+        callback = kwargs.get("on_copy_guard")
+        if callback is not None and callback([plan]):
+            return approved_result
+        raise KeboolaApiError(
+            message="Refusing to COPY 1 table(s) larger than 1 GB; pass --force to proceed.",
+            error_code=ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE,
+        )
+
+    return _load
 
 
 class TestWorkspaceCreate:
@@ -670,7 +741,14 @@ class TestWorkspaceLoad:
 
         # Verify preserve=True was passed to the service
         mock_ws.load_tables.assert_called_once_with(
-            alias="prod", workspace_id=42, tables=["in.c-main.orders"], preserve=True
+            alias="prod",
+            workspace_id=42,
+            tables=["in.c-main.orders"],
+            preserve=True,
+            load_type=None,
+            force=False,
+            timeout=WORKSPACE_LOAD_JOB_MAX_WAIT,
+            on_copy_guard=None,
         )
 
     def test_workspace_load_without_preserve_flag(self, tmp_path: Path) -> None:
@@ -723,8 +801,246 @@ class TestWorkspaceLoad:
 
         # Verify preserve=False was passed to the service (default)
         mock_ws.load_tables.assert_called_once_with(
-            alias="prod", workspace_id=42, tables=["in.c-main.orders"], preserve=False
+            alias="prod",
+            workspace_id=42,
+            tables=["in.c-main.orders"],
+            preserve=False,
+            load_type=None,
+            force=False,
+            timeout=WORKSPACE_LOAD_JOB_MAX_WAIT,
+            on_copy_guard=None,
         )
+
+    def test_workspace_load_forwards_new_flags(self, tmp_path: Path) -> None:
+        """--load-type / --force / --timeout reach the service verbatim."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.return_value = _LOAD_RESULT
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                    "--load-type",
+                    "clone",
+                    "--force",
+                    "--timeout",
+                    "42.5",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        call_kwargs = mock_ws.load_tables.call_args[1]
+        assert call_kwargs["load_type"] == "clone"
+        assert call_kwargs["force"] is True
+        assert call_kwargs["timeout"] == 42.5
+        # --json means no operator to prompt: the guard must refuse, not ask.
+        assert call_kwargs["on_copy_guard"] is None
+
+    def test_workspace_load_invalid_load_type_exits_2(self, tmp_path: Path) -> None:
+        """An unknown --load-type is a usage error, caught before any API call."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                    "--load-type",
+                    "teleport",
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "INVALID_ARGUMENT"
+        mock_ws.load_tables.assert_not_called()
+
+    def test_workspace_load_rejects_non_positive_timeout(self, tmp_path: Path) -> None:
+        """--timeout 0 is rejected, not silently swapped for the default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                    "--timeout",
+                    "0",
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+        mock_ws.load_tables.assert_not_called()
+
+    def test_workspace_load_guard_confirmed_proceeds(self, tmp_path: Path) -> None:
+        """Human mode: answering the large-COPY prompt with 'y' runs the load."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.side_effect = _guard_tripping_load(_LOAD_RESULT)
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.big",
+                ],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Large COPY" in result.output
+        assert "Success" in result.output
+
+    def test_workspace_load_guard_declined_aborts_cleanly(self, tmp_path: Path) -> None:
+        """Answering 'n' is a completed interaction: 'Aborted.' and exit 0."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.side_effect = _guard_tripping_load(_LOAD_RESULT)
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.big",
+                ],
+                input="n\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Aborted." in result.output
+
+    def test_workspace_load_guard_json_reports_error(self, tmp_path: Path) -> None:
+        """--json gets the structured refusal (no prompt, non-zero exit)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.side_effect = _guard_tripping_load(_LOAD_RESULT)
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.big",
+                ],
+            )
+
+        assert result.exit_code == 1, result.output
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "WORKSPACE_LOAD_COPY_TOO_LARGE"
+
+    def test_workspace_load_human_lists_per_table_load_types(self, tmp_path: Path) -> None:
+        """Human output names each table's resolved load type (and the reason)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.return_value = {
+            **_LOAD_RESULT,
+            "tables": [
+                {
+                    "table_id": "in.c-main.orders",
+                    "load_type": "clone",
+                    "data_size_bytes": 1024,
+                    "clone_ineligible_reason": None,
+                },
+                {
+                    "table_id": "in.c-ext.events",
+                    "load_type": "copy",
+                    "data_size_bytes": None,
+                    "clone_ineligible_reason": "external schema bucket",
+                },
+            ],
+        }
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.orders",
+                    "--tables",
+                    "in.c-ext.events",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "clone" in result.output
+        assert "external schema bucket" in result.output
 
 
 class TestWorkspaceQuery:

@@ -250,7 +250,7 @@ class _CoreClient(BaseHttpClient):
     def _wait_for_storage_job(
         self,
         job: dict[str, Any],
-        max_wait: float = STORAGE_JOB_MAX_WAIT,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Poll a Storage API job until it reaches a terminal state.
 
@@ -278,7 +278,10 @@ class _CoreClient(BaseHttpClient):
                 with PUT). May already be terminal (the Storage API can fail
                 fast, never returning ``waiting``), in which case no request
                 is made at all.
-            max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
+            max_wait: Maximum seconds to wait. ``None`` (the default) means
+                ``STORAGE_JOB_MAX_WAIT``. Callers whose jobs are legitimately
+                slower pass their own budget -- e.g. a workspace load moving
+                gigabytes (``WORKSPACE_LOAD_JOB_MAX_WAIT``).
 
         Returns:
             Completed job dict (with results on success).
@@ -286,8 +289,9 @@ class _CoreClient(BaseHttpClient):
         Raises:
             KeboolaApiError: If the job fails or times out.
         """
+        budget = STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait
         job_id = job.get("id")
-        deadline = time.monotonic() + max_wait
+        deadline = time.monotonic() + budget
         while True:
             status = job.get("status")
             if status == "success":
@@ -307,7 +311,16 @@ class _CoreClient(BaseHttpClient):
             job = self._request("GET", f"/v2/storage/jobs/{job_id}").json()
 
         raise KeboolaApiError(
-            message=f"Storage job {job_id} did not complete within {max_wait}s",
+            # Naming the consequence matters: giving up locally does NOT stop
+            # the job. It keeps running (and keeps consuming backend
+            # resources) server-side, so "it timed out" must not be read as
+            # "nothing happened" -- point the caller at where to check.
+            message=(
+                f"Storage job {job_id} did not complete within {budget}s. "
+                "The job continues running server-side and keeps consuming backend "
+                f"resources; check its status with GET /v2/storage/jobs/{job_id} "
+                "or in the Keboola UI."
+            ),
             status_code=504,
             error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,

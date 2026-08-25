@@ -161,6 +161,22 @@ STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
+# --- Workspace Table Loading ---
+# A workspace load is NOT fire-and-forget: when the local poller gives up, the
+# server-side job keeps running (and keeps consuming warehouse resources). The
+# 60s STORAGE_JOB_MAX_WAIT default was far too short for a real COPY, so a
+# perfectly healthy load routinely surfaced as a timeout. A zero-copy CLONE
+# finishes in seconds; a COPY of a multi-GB table can take minutes.
+WORKSPACE_LOAD_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace-load jobs
+# Above this on-disk size, a COPY (physical data movement, billed warehouse
+# time) needs an explicit confirmation or --force. CLONE is zero-copy and is
+# never guarded.
+WORKSPACE_LOAD_COPY_GUARD_BYTES: int = 1024**3  # 1 GiB
+# Load types accepted by `workspace load --load-type` (lowercase on the CLI,
+# uppercased on the wire -- the Storage API validator matches the uppercase
+# enum). Omitting the flag means "auto": CLONE where eligible, else COPY.
+WORKSPACE_LOAD_TYPES: tuple[str, ...] = ("clone", "copy", "view")
+
 # --- Queue Job Polling ---
 # Piecewise curve matching FIIA's existing Queue API polling contract
 # (same cadence as the official keboola-as-code Go CLI): fast initial polls

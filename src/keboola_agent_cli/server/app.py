@@ -505,6 +505,12 @@ def _format_error(
 # where a human sits.
 _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
 
+# Refusals raised by kbagent itself BEFORE anything is sent upstream. The
+# default 502 would tell the caller to retry a gateway that was never even
+# reached; these are the caller's request to fix (re-send with `force`), so
+# they answer 400.
+_CALLER_REFUSAL_CODES = frozenset({ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE})
+
 _SESSION_REMEDY_ON_HOST = (
     "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "
     "cannot open a browser login for a remote caller."
@@ -753,6 +759,8 @@ def create_app(
         msg = getattr(exc, "message", str(exc)) or str(exc)
         if code in _SESSION_CREDENTIAL_CODES:
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
+        if code in _CALLER_REFUSAL_CODES:
+            return _format_error(msg, code, http_status=400)
         if code == ErrorCode.NOT_FOUND:
             # An upstream 404 is a statement about the requested resource, not
             # about the gateway: reporting it as 502 made callers retry (and

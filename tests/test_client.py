@@ -11,12 +11,30 @@ import httpx
 import pytest
 
 from keboola_agent_cli.client import KeboolaClient
-from keboola_agent_cli.constants import MAX_RETRIES, STORAGE_JOB_POLL_INTERVAL
+from keboola_agent_cli.constants import (
+    MAX_RETRIES,
+    STORAGE_JOB_MAX_WAIT,
+    STORAGE_JOB_POLL_INTERVAL,
+)
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 
 def _noop_sleep(seconds: SupportsIndex | float, /) -> None:
     """No-op replacement for time.sleep used in retry tests."""
+
+
+def _monotonic_jumping_past(budget: float):
+    """Fake time.monotonic whose second reading is already past ``budget``.
+
+    Lets a deadline test assert the DEFAULT budget without waiting it out:
+    the first call sets the deadline, every later call is beyond it.
+    """
+    readings = iter([0.0])
+
+    def _monotonic() -> float:
+        return next(readings, budget + 1.0)
+
+    return _monotonic
 
 
 VERIFY_TOKEN_RESPONSE = {
@@ -3414,6 +3432,39 @@ class TestWaitForStorageJob:
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
         assert sleeps == []
         assert httpx_mock.get_requests() == []
+
+    def test_timeout_message_says_the_job_keeps_running(self, monkeypatch) -> None:
+        """The timeout must not read as 'nothing happened'.
+
+        Giving up locally does not cancel the Storage job -- it keeps running
+        and keeps consuming backend resources -- so the message names that and
+        points at where to check.
+        """
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", _noop_sleep)
+
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 77, "status": "waiting"}, max_wait=0)
+
+        message = exc_info.value.message
+        assert "did not complete within 0s" in message
+        assert "continues running server-side" in message
+        assert "/v2/storage/jobs/77" in message
+
+    def test_max_wait_none_falls_back_to_the_shared_default(self, monkeypatch) -> None:
+        """max_wait=None means STORAGE_JOB_MAX_WAIT, not an unbounded wait."""
+        monkeypatch.setattr("keboola_agent_cli.client.time.sleep", _noop_sleep)
+        # A monotonic clock that has already blown past any sane budget makes
+        # the first deadline check fail without waiting for real time.
+        monkeypatch.setattr(
+            "keboola_agent_cli.client.time.monotonic",
+            _monotonic_jumping_past(STORAGE_JOB_MAX_WAIT),
+        )
+
+        with _mk_client() as client, pytest.raises(KeboolaApiError) as exc_info:
+            client._wait_for_storage_job({"id": 5, "status": "waiting"}, max_wait=None)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert f"within {STORAGE_JOB_MAX_WAIT}s" in exc_info.value.message
 
     def test_budget_below_one_interval_still_polls_once(self, httpx_mock, monkeypatch) -> None:
         """A budget shorter than the poll interval buys exactly one poll.

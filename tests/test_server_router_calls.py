@@ -33,6 +33,7 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 
 from fastapi.testclient import TestClient
 
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
 from keboola_agent_cli.services.flow_service import FlowSchemaFetch
@@ -2420,3 +2421,96 @@ def test_config_trash_list_route(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT
+
+
+def test_workspace_load_route_defaults(tmp_path: Path) -> None:
+    """POST .../load forwards the auto defaults and never passes a guard prompt.
+
+    An HTTP caller cannot answer a confirmation, so ``on_copy_guard`` must be
+    None -- the oversized-COPY refusal has to surface as an error, not be
+    silently approved on the caller's behalf.
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.return_value = {"job_status": "success"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID]},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = ws_svc.load_tables.call_args.kwargs
+    assert kwargs["tables"] == [TABLE_ID]
+    assert kwargs["preserve"] is False
+    assert kwargs["load_type"] is None
+    assert kwargs["force"] is False
+    assert kwargs["timeout"] is None
+    assert kwargs["on_copy_guard"] is None
+
+
+def test_workspace_load_route_passes_load_type_force_timeout(tmp_path: Path) -> None:
+    """load_type / force / timeout reach the service verbatim."""
+    ws_svc = MagicMock()
+    ws_svc.load_tables.return_value = {"job_status": "success"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={
+                "tables": [TABLE_ID],
+                "load_type": "copy",
+                "force": True,
+                "timeout": 900,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = ws_svc.load_tables.call_args.kwargs
+    assert kwargs["load_type"] == "copy"
+    assert kwargs["force"] is True
+    assert kwargs["timeout"] == 900
+
+
+def test_workspace_load_route_rejects_non_positive_timeout(tmp_path: Path) -> None:
+    """A zero/negative budget would make every load 'time out' instantly."""
+    ws_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID], "timeout": 0},
+        )
+
+    assert res.status_code == 422, res.text
+    ws_svc.load_tables.assert_not_called()
+
+
+def test_workspace_load_copy_guard_answers_400(tmp_path: Path) -> None:
+    """The size-guard refusal is a caller-fixable 400, not the default 502.
+
+    Nothing was sent upstream, so a Bad Gateway would tell the caller to retry
+    a gateway that was never reached; the fix is `force` in the next request.
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.side_effect = KeboolaApiError(
+        message="Refusing to COPY 1 table(s) larger than 1 GB",
+        error_code=ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID]},
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "WORKSPACE_LOAD_COPY_TOO_LARGE"

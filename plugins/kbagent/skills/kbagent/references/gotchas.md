@@ -4544,3 +4544,60 @@ resolution is left to the server, which lands on the same directory anyway.
   `curl -s -H "Authorization: Bearer $KBAGENT_SERVE_TOKEN" localhost:PORT/projects`
   -- if the aliases are not the ones in the directory you named, the flag was
   in the position your version ignores.
+
+## `workspace load` now auto-CLONEs eligible tables instead of always COPYing (since vNEXT, closes #687)
+
+Before this, `workspace load` always sent a plain `copy` (the API's own
+default when `loadType` is omitted) -- a 282 GB table load burned warehouse
+credits for hours where `clone` is metadata-only and finishes in seconds.
+kbagent now mirrors the server's `LoadTypeDecider` per table.
+
+**Default behavior (no `--load-type`):** for each requested table, kbagent
+decides `clone` or `copy` independently:
+
+- **Clone-eligible** requires ALL of: same backend as the workspace
+  (`snowflake` or `bigquery`), a full load (kbagent never sends filters on
+  `workspace load`, so this is never the blocker in practice), no
+  external-schema source bucket, and -- on BigQuery only -- the source
+  bucket is not Analytics-Hub-linked. An alias-based clone additionally
+  needs column-auto-sync ON and an unfiltered load.
+- **Otherwise:** falls back to `copy`. The JSON result names the reason per
+  table in `tables[].clone_ineligible_reason` -- read it before assuming a
+  slow load was a bug; it may be an honest ineligibility (e.g. an
+  external-schema bucket).
+- `load_type_requested` is `"auto"` at the top level when `--load-type` was
+  omitted, vs. the literal value when it was forced.
+
+**`--load-type clone|copy|view` forces one type for every requested table.**
+An explicit choice that is ineligible for some table **fails with the
+server's HTTP 400 message** -- it never silently degrades to a different
+type the way the auto-default does. `view` is a zero-storage read-only
+view: on BigQuery any same-backend bucket qualifies; on Snowflake only an
+external-schema bucket AND the project feature
+`input-mapping-read-only-storage` qualify.
+
+**Size guard on `copy`:** a table resolved (auto) or forced (`--load-type
+copy`) to `copy` whose `dataSizeBytes` exceeds 1 GiB requires confirmation
+-- an interactive TTY prompt in human mode, or `--force` in JSON /
+non-interactive mode. Without one of those, the load is refused before it
+starts; a huge copy never begins silently.
+
+**`--timeout SECONDS` (default 300 for `workspace load`; every other
+storage-job command keeps 60).** On a timeout, the error message changed:
+it now says the storage job **continues running server-side and keeps
+consuming warehouse resources**, includes the job id, and tells you how to
+poll it (`GET /v2/storage/jobs/{id}`). `STORAGE_JOB_TIMEOUT` now maps to
+**exit code 4** (network/retryable) instead of exit 1 -- a caller retrying
+only on exit 4 now correctly retries this case.
+
+**JSON result additions** (existing keys unchanged): `tables[]` gains
+`table_id`, `load_type` (`clone` | `copy` | `view`), `data_size_bytes`, and
+`clone_ineligible_reason`; the top level gains `load_type_requested`.
+
+**Cheaper alternative for analytics-only access:** if all you need is to
+query production data (no writes, no need for a workspace-local copy), a
+project with the read-only input-mapping feature exposes production
+directly to a workspace via the `KBC_<STACK>_<PROJECT>` shared database --
+`workspace query` runs against it with zero load and zero extra storage.
+Reach for `workspace load` only when the workflow actually needs the data
+materialized inside the workspace.

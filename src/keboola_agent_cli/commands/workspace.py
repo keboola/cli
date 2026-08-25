@@ -5,14 +5,21 @@ No business logic belongs here.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
+from rich.console import Console
 from rich.markup import escape
 
 from ..config_store import ConfigStore
-from ..constants import QUERY_RESULTS_DEFAULT_LIMIT
+from ..constants import (
+    QUERY_RESULTS_DEFAULT_LIMIT,
+    WORKSPACE_LOAD_JOB_MAX_WAIT,
+    WORKSPACE_LOAD_TYPES,
+)
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import format_query_results, format_workspaces_table
+from ..output import OutputFormatter, format_query_results, format_workspaces_table
+from ..services._workspace_load_plan import LoadTablePlan
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -23,6 +30,44 @@ from ._helpers import (
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
+
+
+class _CopyGuardPrompt:
+    """Interactive approval for `workspace load`'s large-COPY size guard.
+
+    Stateful on purpose. The service raises the same
+    ``WORKSPACE_LOAD_COPY_TOO_LARGE`` whether nobody could be asked or the
+    human said no, and only the command can tell those apart: a declined
+    prompt is a completed interaction (exit 0, "Aborted."), an unattended
+    refusal is an error the caller has to act on.
+    """
+
+    def __init__(self, formatter: OutputFormatter) -> None:
+        self.formatter = formatter
+        self.declined = False
+
+    def __call__(self, plans: list[LoadTablePlan]) -> bool:
+        for plan in plans:
+            size_gb = (plan.data_size_bytes or 0) / 1024**3
+            self.formatter.console.print(
+                f"[bold yellow]Large COPY:[/bold yellow] {escape(plan.table_id)} ({size_gb:.1f} GB)"
+            )
+        approved = typer.confirm("Start COPY anyway?")
+        self.declined = not approved
+        return approved
+
+
+def _print_load_result(console: Console, data: dict[str, Any]) -> None:
+    """Human-mode output for `workspace load`: summary plus per-table detail."""
+    console.print(f"[bold green]Success:[/bold green] {data['message']}")
+    for entry in data.get("tables", []):
+        size_bytes = entry.get("data_size_bytes")
+        size_note = f", {size_bytes / 1024**3:.2f} GB" if size_bytes else ""
+        reason = entry.get("clone_ineligible_reason")
+        reason_note = f" -- no clone: {reason}" if reason else ""
+        console.print(
+            f"  {escape(entry['table_id'])}: {entry['load_type']}{size_note}{reason_note}"
+        )
 
 
 @workspace_app.callback(invoke_without_command=True)
@@ -356,6 +401,29 @@ def workspace_load(
         "--preserve",
         help="Keep existing tables in the workspace (default: clear before loading)",
     ),
+    load_type: str | None = typer.Option(
+        None,
+        "--load-type",
+        help=(
+            "clone|copy|view. Default (omitted) is auto: a zero-copy CLONE for every "
+            "table the workspace backend can clone, COPY for the rest. An explicit "
+            "value is sent as-is; an ineligible combination is rejected by the API "
+            "with the exact reason."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip the size guard that asks before COPYing a table larger than 1 GB.",
+    ),
+    timeout: float = typer.Option(
+        WORKSPACE_LOAD_JOB_MAX_WAIT,
+        "--timeout",
+        help=(
+            "Seconds to wait for the load job. On timeout the job KEEPS RUNNING "
+            "server-side -- kbagent stops watching, it does not cancel."
+        ),
+    ),
 ) -> None:
     """Load tables into a workspace.
 
@@ -364,15 +432,51 @@ def workspace_load(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
+    if load_type is not None and load_type.strip().lower() not in WORKSPACE_LOAD_TYPES:
+        formatter.error(
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            message=(
+                f"Invalid --load-type '{load_type}'. "
+                f"Valid values: {', '.join(WORKSPACE_LOAD_TYPES)}"
+            ),
+        )
+        raise typer.Exit(code=2)
+
+    if timeout <= 0:
+        # Falling back to the default here would silently ignore what the
+        # caller asked for; a zero budget cannot mean "wait forever" either.
+        formatter.error(
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            message=f"Invalid --timeout {timeout}. Must be greater than 0.",
+        )
+        raise typer.Exit(code=2)
+
+    # No prompt in --json mode: there is nobody to answer it, and a machine
+    # caller must get the structured refusal instead of a silent large COPY.
+    guard_prompt = None if formatter.json_mode else _CopyGuardPrompt(formatter)
+
     try:
         result = service.load_tables(
-            alias=project, workspace_id=workspace_id, tables=tables, preserve=preserve
+            alias=project,
+            workspace_id=workspace_id,
+            tables=tables,
+            preserve=preserve,
+            load_type=load_type,
+            force=force,
+            timeout=timeout,
+            on_copy_guard=guard_prompt,
         )
-        formatter.output(
-            result,
-            lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
-        )
+        formatter.output(result, _print_load_result)
     except KeboolaApiError as exc:
+        if (
+            guard_prompt is not None
+            and guard_prompt.declined
+            and exc.error_code == ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE
+        ):
+            # The user was asked and said no -- that is a completed
+            # interaction, not a failure.
+            formatter.console.print("Aborted.")
+            raise typer.Exit(code=0) from None
         exit_code = map_error_to_exit_code(exc)
         formatter.error(
             message=exc.message,

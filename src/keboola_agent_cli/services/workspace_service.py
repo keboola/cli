@@ -9,6 +9,8 @@ import csv
 import io
 import json
 import logging
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,12 +24,29 @@ from ..constants import (
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY,
     SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
+    WORKSPACE_LOAD_COPY_GUARD_BYTES,
+    WORKSPACE_LOAD_JOB_MAX_WAIT,
+    WORKSPACE_LOAD_TYPES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from ._workspace_load_plan import (
+    LOAD_TYPE_CLONE,
+    LOAD_TYPE_COPY,
+    LOAD_TYPE_VIEW,
+    LoadTablePlan,
+    coerce_data_size_bytes,
+    plan_auto_load_type,
+)
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_load_types(plans: list[LoadTablePlan]) -> str:
+    """Render "2 clone, 1 copy" for the human success message."""
+    counts = Counter(plan.load_type.lower() for plan in plans)
+    return ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
 
 
 @dataclass(frozen=True)
@@ -803,42 +822,88 @@ class WorkspaceService(BaseService):
         workspace_id: int,
         tables: list[str],
         preserve: bool = False,
+        load_type: str | None = None,
+        force: bool = False,
+        timeout: float | None = None,
+        on_copy_guard: Callable[[list[LoadTablePlan]], bool] | None = None,
     ) -> dict[str, Any]:
         """Load tables into a workspace.
 
         Builds table mapping from table IDs, using the last segment as the
         destination name. Waits for the async storage job to complete.
 
+        Load type resolution (issue #687):
+
+        * ``load_type=None`` (default) is AUTO: the workspace backend and each
+          table's detail are fetched, and every table that can be cloned is
+          cloned -- a zero-copy registration that finishes in seconds instead
+          of physically re-materializing the data. Tables that cannot fall
+          back to COPY individually, each carrying the reason.
+        * An explicit ``clone`` / ``copy`` / ``view`` is sent as asked for
+          every table. Clone/view eligibility is NOT pre-validated: the server
+          rejects an impossible combination with a precise 400, which beats a
+          client-side rule that can drift.
+
+        A COPY larger than ``WORKSPACE_LOAD_COPY_GUARD_BYTES`` is guarded --
+        it is the case that costs real warehouse time, and the one users did
+        not realise they were asking for. ``force=True`` skips the guard;
+        otherwise ``on_copy_guard`` (interactive callers only) may approve it.
+        With no callback -- ``--json``, ``kbagent serve``, any non-TTY -- the
+        load is refused rather than started behind the caller's back.
+
         Args:
             alias: Project alias.
             workspace_id: Workspace ID.
             tables: List of table IDs (e.g. "in.c-bucket.table-name").
             preserve: If True, keep existing tables in the workspace.
+            load_type: One of ``clone`` / ``copy`` / ``view`` (case-insensitive),
+                or None for the auto decision.
+            force: Skip the large-COPY size guard.
+            timeout: Seconds to wait for the load job. Defaults to
+                WORKSPACE_LOAD_JOB_MAX_WAIT.
+            on_copy_guard: Called with the oversized COPY plans; return True to
+                proceed, False to refuse. None means "refuse without asking".
 
         Returns:
-            Dict with load job results.
+            Dict with load job results, including a per-table ``tables`` list.
+
+        Raises:
+            KeboolaApiError: INVALID_ARGUMENT for an unknown load_type;
+                WORKSPACE_LOAD_COPY_TOO_LARGE when the size guard trips and is
+                neither forced nor approved.
         """
+        requested = self._normalize_load_type(load_type)
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
         branch_id = self._resolve_branch_id(alias, project)
 
-        # Build table load definitions
-        table_defs: list[dict[str, Any]] = []
-        for table_id in tables:
-            # Use last part of table ID as destination name
-            parts = table_id.split(".")
-            destination = parts[-1] if parts else table_id
-            table_defs.append(
-                {
-                    "source": table_id,
-                    "destination": destination,
-                }
-            )
-
         client = self._client_factory(project.stack_url, project.token)
         try:
+            plans = self._plan_table_loads(
+                client,
+                requested=requested,
+                tables=tables,
+                workspace_id=workspace_id,
+                branch_id=branch_id,
+            )
+            self._enforce_copy_size_guard(plans, force=force, on_copy_guard=on_copy_guard)
+
+            table_defs = [
+                {
+                    "source": plan.table_id,
+                    # Last segment of the table ID is the workspace-side name.
+                    "destination": plan.table_id.split(".")[-1],
+                    "loadType": plan.load_type,
+                }
+                for plan in plans
+            ]
             job_result = client.load_workspace_tables(
-                workspace_id, table_defs, branch_id=branch_id, preserve=preserve
+                workspace_id,
+                table_defs,
+                branch_id=branch_id,
+                preserve=preserve,
+                max_wait=timeout or WORKSPACE_LOAD_JOB_MAX_WAIT,
             )
         finally:
             client.close()
@@ -850,8 +915,134 @@ class WorkspaceService(BaseService):
             "table_ids": tables,
             "job_id": job_result.get("id"),
             "job_status": job_result.get("status", ""),
-            "message": f"Loaded {len(tables)} table(s) into workspace {workspace_id}.",
+            "load_type_requested": requested or "auto",
+            "tables": [
+                {
+                    "table_id": plan.table_id,
+                    "load_type": plan.load_type.lower(),
+                    "data_size_bytes": plan.data_size_bytes,
+                    "clone_ineligible_reason": plan.clone_ineligible_reason,
+                }
+                for plan in plans
+            ],
+            "message": (
+                f"Loaded {len(tables)} table(s) into workspace {workspace_id} "
+                f"({_summarize_load_types(plans)})."
+            ),
         }
+
+    @staticmethod
+    def _normalize_load_type(load_type: str | None) -> str | None:
+        """Lowercase and validate an explicit ``--load-type``.
+
+        Returns None for the auto decision.
+        """
+        if load_type is None:
+            return None
+        normalized = load_type.strip().lower()
+        if normalized not in WORKSPACE_LOAD_TYPES:
+            raise KeboolaApiError(
+                message=(
+                    f"Invalid load_type {load_type!r}. "
+                    f"Expected one of: {sorted(WORKSPACE_LOAD_TYPES)}."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        return normalized
+
+    def _plan_table_loads(
+        self,
+        client: Any,
+        requested: str | None,
+        tables: list[str],
+        workspace_id: int,
+        branch_id: int | None,
+    ) -> list[LoadTablePlan]:
+        """Resolve the per-table load type before anything is sent.
+
+        Table details are fetched serially and BEFORE the load is enqueued, so
+        a typo'd table ID fails the whole run cleanly instead of half-loading
+        the workspace. They are fetched only when they can change the outcome:
+        for the auto decision (eligibility + size) and for an explicit COPY
+        (size guard). An explicit clone/view needs neither.
+        """
+        if requested in (LOAD_TYPE_CLONE.lower(), LOAD_TYPE_VIEW.lower()):
+            wire_type = LOAD_TYPE_CLONE if requested == "clone" else LOAD_TYPE_VIEW
+            return [
+                LoadTablePlan(
+                    table_id=table_id,
+                    load_type=wire_type,
+                    data_size_bytes=None,
+                    clone_ineligible_reason=None,
+                )
+                for table_id in tables
+            ]
+
+        if requested == "copy":
+            return [
+                LoadTablePlan(
+                    table_id=table_id,
+                    load_type=LOAD_TYPE_COPY,
+                    data_size_bytes=coerce_data_size_bytes(
+                        client.get_table_detail(table_id, branch_id=branch_id)
+                    ),
+                    clone_ineligible_reason=None,
+                )
+                for table_id in tables
+            ]
+
+        workspace = client.get_workspace(workspace_id, branch_id)
+        backend = str((workspace.get("connection") or {}).get("backend") or "")
+        return [
+            plan_auto_load_type(
+                backend,
+                table_id,
+                client.get_table_detail(table_id, branch_id=branch_id),
+            )
+            for table_id in tables
+        ]
+
+    @staticmethod
+    def _enforce_copy_size_guard(
+        plans: list[LoadTablePlan],
+        force: bool,
+        on_copy_guard: Callable[[list[LoadTablePlan]], bool] | None,
+    ) -> None:
+        """Refuse (or ask about) a COPY of a table over the size guard.
+
+        Unknown sizes do not trip the guard: the guard exists to stop a
+        surprise, and refusing on "the API did not tell us" would block loads
+        that are perfectly small.
+        """
+        if force:
+            return
+        oversized = [
+            plan
+            for plan in plans
+            if plan.load_type == LOAD_TYPE_COPY
+            and (plan.data_size_bytes or 0) > WORKSPACE_LOAD_COPY_GUARD_BYTES
+        ]
+        if not oversized:
+            return
+        if on_copy_guard is not None and on_copy_guard(oversized):
+            return
+
+        listed = ", ".join(
+            f"{plan.table_id} ({(plan.data_size_bytes or 0) / 1024**3:.1f} GB)"
+            for plan in oversized
+        )
+        raise KeboolaApiError(
+            message=(
+                f"Refusing to COPY {len(oversized)} table(s) larger than "
+                f"{WORKSPACE_LOAD_COPY_GUARD_BYTES / 1024**3:.0f} GB into the workspace: "
+                f"{listed}. A COPY physically re-materializes the data (billed warehouse "
+                "time); pass --force to proceed, or --load-type clone where the backend "
+                "supports it."
+            ),
+            status_code=0,
+            error_code=ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE,
+        )
 
     def execute_query(
         self,

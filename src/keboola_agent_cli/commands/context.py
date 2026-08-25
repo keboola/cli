@@ -1179,7 +1179,13 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Reset and return new workspace password.
 
   kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]
+    [--load-type clone|copy|view] [--force] [--timeout SECONDS]
     Load storage tables into workspace. --preserve keeps existing tables.
+    Default auto-picks zero-copy CLONE per table when eligible, else COPY (JSON reports
+    clone_ineligible_reason). --load-type forces clone/copy/view for every table -- an
+    ineligible explicit choice fails loudly, it never silently degrades. A COPY over 1 GiB
+    needs interactive confirmation or --force. --timeout defaults to 300s; on timeout the
+    job keeps running server-side (exit 4, not 1). (since vNEXT)
 
   kbagent workspace query --project ALIAS --workspace-id ID --sql "SQL" [--file F] [--transactional] [--full] [--limit N]
     Execute SQL via Query Service. No Snowflake credentials needed.
