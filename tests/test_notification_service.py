@@ -633,6 +633,15 @@ class TestCreateSubscription:
         )
 
     def test_builds_filters_in_component_config_branch_order_stringified(self) -> None:
+        """Filter values must be stringified regardless of the caller's type.
+
+        ``config_id`` is declared ``str | None`` (the CLI and ``serve`` both
+        only ever pass a string), so this test passes it as ``str`` to stay
+        within the public signature. ``branch_id`` IS declared ``int | None``
+        -- it is passed as a real ``int`` here on purpose, so the assertion
+        below still exercises ``_build_filters``'s ``str(branch_id)``
+        stringification rather than a no-op string-to-string passthrough.
+        """
         client = MagicMock()
         client.create_project_subscription.return_value = {
             "id": "9003",
@@ -646,7 +655,7 @@ class TestCreateSubscription:
             channel="email",
             address="ops@example.com",
             component_id="keboola.flow",
-            config_id=98765,
+            config_id="98765",
             branch_id=4242,
         )
 
