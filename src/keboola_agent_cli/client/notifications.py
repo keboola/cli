@@ -24,6 +24,10 @@ are easy to guess wrong:
 
 Shaping those into audit rows is the service layer's job -- this mixin returns
 the parsed JSON verbatim.
+
+Write path (issue #690): ``create_project_subscription`` / ``delete_project_subscription``
+mirror the list/get shape above -- no shaping, no validation beyond what the
+service itself rejects.
 """
 
 from typing import Any
@@ -33,7 +37,7 @@ from ._core import _CoreClient
 
 
 class _NotificationsMixin(_CoreClient):
-    """Notification Service: read access to project notification subscriptions."""
+    """Notification Service: read/write access to project notification subscriptions."""
 
     def list_project_subscriptions(self, event: str | None = None) -> list[dict[str, Any]]:
         """List every notification subscription for the token's project.
@@ -70,3 +74,44 @@ class _NotificationsMixin(_CoreClient):
         """
         path = f"/project-subscriptions/{quote(str(subscription_id), safe='')}"
         return self._notification_request("GET", path).json()
+
+    def create_project_subscription(
+        self,
+        event: str,
+        recipient: dict[str, Any],
+        filters: list[dict[str, Any]] | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a notification subscription for the token's project.
+
+        Args:
+            event: Kebab-case event name (e.g. ``job-failed``); the service
+                treats ``EventName`` as an open string, so nothing here
+                validates it against a fixed set.
+            recipient: Discriminated on ``channel`` -- an email recipient
+                carries ``address``, a webhook recipient carries ``url``.
+            filters: Optional list of ``{"field": ..., "value": ...}`` (or
+                ``operator``-bearing) dicts; omitted from the body entirely
+                when falsy rather than sent as an empty list.
+            expires_at: Optional ISO-8601 expiry. Sent on the wire as
+                ``expiresAt`` (camelCase) -- the swagger's field name, not
+                this method's snake_case parameter.
+
+        Returns:
+            The created subscription dict verbatim from the API.
+        """
+        body: dict[str, Any] = {"event": event, "recipient": recipient}
+        if filters:
+            body["filters"] = filters
+        if expires_at:
+            body["expiresAt"] = expires_at
+        return self._notification_request("POST", "/project-subscriptions", json=body).json()
+
+    def delete_project_subscription(self, subscription_id: str) -> None:
+        """Delete one subscription by ID.
+
+        Args:
+            subscription_id: Numeric-string subscription ID.
+        """
+        path = f"/project-subscriptions/{quote(str(subscription_id), safe='')}"
+        self._notification_request("DELETE", path)

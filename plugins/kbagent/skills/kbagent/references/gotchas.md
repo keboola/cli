@@ -1337,8 +1337,46 @@ events and emits a final `done` SSE frame mirroring the same record.
   components sharing a config ID, a deleted parent config, or a failed lookup
   all yield `""` rather than a guess. A blank name never means the
   subscription is inactive.
-- Read-only in this release: creating and deleting subscriptions is not
-  exposed by the CLI.
+## Notification subscriptions can now be written, and the write path has sharp edges (since vNEXT)
+
+- **`notification replace-recipient` always mints a NEW `subscription_id`.**
+  The Notification Service has **no update primitive** -- there is no PATCH or
+  PUT for a subscription -- so kbagent implements the swap as
+  delete+recreate. The consequence is not cosmetic: any script, runbook or
+  config file holding the old id is stale the moment the replace succeeds.
+  Read `old_subscription_id` and `new_subscription_id` off the result
+  (both are always present) instead of assuming the id survived the edit.
+- **The new subscription is created FIRST, then the old one deleted.** That
+  ordering is deliberate: the failure mode of create-then-delete is a
+  *duplicate* (two subscriptions paging the same event), which is visible in
+  `notification list` and fixable with one `notification delete`. The
+  reverse ordering would fail into a *silently missing* subscription --
+  nobody paged, and no row left to notice. A failed delete is therefore never
+  swallowed: the result carries `old_deleted: false` plus a warning naming
+  the old id, exit stays 0, and the new subscription is already live.
+- **`notification create` without `--branch` writes NO `branch.id` filter --
+  the UI always writes one.** A subscription created in the Flow Builder
+  always carries a `branch.id` filter (for production, the default branch's
+  numeric id -- see the entry above). One created by `kbagent notification
+  create` without `--branch` carries none at all, and **an absent filter does
+  not constrain matching**: it fires for jobs on every branch, production and
+  dev alike. That is usually what an operator auditing "page me when this
+  flow fails" wants, but it is NOT what a UI-created subscription does, so
+  the two are not interchangeable when comparing rows. Pass `--branch ID` to
+  reproduce the UI's behavior.
+- **`--address` is channel-discriminated, but the CLI takes one flag.**
+  `--channel email` sends `{"channel": "email", "address": ...}`,
+  `--channel webhook` sends `{"channel": "webhook", "url": ...}` -- the same
+  split the read path collapses into its single `address` column. An invalid
+  `--channel` fails fast with a structured `INVALID_ARGUMENT` (exit 2)
+  before any API call.
+- **Permission classes split write from destructive.**
+  `notification.create` and `notification.replace-recipient` are `write`;
+  `notification.delete` is `destructive`. So `--deny-writes` blocks all three
+  (write spans destructive), while `--deny-destructive` blocks only `delete`
+  -- a replace still runs under it, deleting the old subscription as part of
+  the swap. `delete` and `replace-recipient` also confirm interactively
+  unless `--yes` is passed (or `--json`, which never prompts).
 
 ## `config clone` duplicates a config whole; cross-project cannot carry secrets (since v0.84.2)
 

@@ -5743,18 +5743,22 @@ class TestE2EBillingCredits:
 @skip_without_credentials
 @pytest.mark.e2e
 class TestE2ENotificationSubscriptions:
-    """End-to-end test for `kbagent notification list` / `detail` (issue #600).
+    """End-to-end test for `kbagent notification list` / `detail` / the write path (issue #600, #690).
 
-    The CLI has no write path for subscriptions, so this test cannot create
-    its own fixture: whether the E2E project has any Notifications-tab
-    subscription at all is out of its control. The honest contract to assert
-    is therefore the envelope and the live auth path -- that a plain project
-    Storage token reaches the notification sibling host and gets a well-formed
+    Most of the read-path tests below still cannot create their own fixture
+    for the *pre-existing* subscriptions they inspect: whether the E2E
+    project already has any Notifications-tab subscription (and how many
+    distinct events it spans) is out of their control -- creating a
+    subscription now costs a real write against the notification sibling
+    host, which most of these read-only assertions have no reason to pay for.
+    The honest contract for those is therefore the envelope and the live
+    auth path -- that a plain project Storage token reaches the notification
+    sibling host and gets a well-formed
     ``{"subscriptions": [...], "errors": [...], "project_wide_excluded": N}``
     back with exit 0, and that per-row shape and ``detail`` hold *when* rows
-    exist. That makes the test meaningful on an empty project (it still proves
-    the host derivation, auth, and envelope) and start covering the row path
-    the day a subscription is added, without needing a rewrite.
+    exist. That makes those tests meaningful on an empty project (they still
+    prove the host derivation, auth, and envelope) and start covering the
+    row path the day a subscription is added, without needing a rewrite.
 
     That vacuity is not free, and it already cost us once: the service turned
     out to IGNORE its documented ``?event=`` filter, and the assertion that
@@ -5764,6 +5768,11 @@ class TestE2ENotificationSubscriptions:
     visible gap; a green vacuous one is not. Populate the E2E project with a
     couple of Notifications-tab subscriptions on different events to turn
     them on.
+
+    Since #690 the CLI *does* have a write path (`create` / `delete` /
+    `replace-recipient`), and ``test_create_replace_recipient_delete_round_trip``
+    below uses it to create, mutate, and tear down its own subscription --
+    no pre-existing project data required, and no vacuity to skip around.
     """
 
     @pytest.fixture(autouse=True)
@@ -5988,6 +5997,147 @@ class TestE2ENotificationSubscriptions:
 
         assert result.exit_code != 0
         assert "error" in result.output.lower()
+
+    def test_create_replace_recipient_delete_round_trip(self) -> None:
+        """Full write-path round trip (issue #690): create -> detail -> replace-recipient -> delete.
+
+        Exercises every write command this class previously had no coverage
+        for: ``create`` mints a project-wide ``job-failed`` email subscription
+        (asserted against its own audit row), ``detail`` round-trips it,
+        ``replace-recipient`` swaps the address to a second one (asserting the
+        new id differs from the old and the old subscription was actually
+        deleted), and ``delete --yes`` removes the replacement. A final
+        ``list`` proves neither the original nor the replacement id lingers.
+
+        Cleanup is best-effort in ``finally``: whichever of the two ids is
+        still live gets deleted so a failed assertion never leaks a real
+        subscription in the E2E project.
+        """
+        # Pre-flight best-effort sweep: a killed process (CI timeout,
+        # Ctrl-C) from a PRIOR run of this test leaks a project-wide
+        # job-failed subscription that then fires for EVERY job in the
+        # E2E project until removed by hand. RUN_ID is timestamp-based
+        # and changes every run, so a leaked address never matches this
+        # run's own `address`/`replaced_address` below -- match on the
+        # stable "-690" marker suffix instead, mirroring the best-effort
+        # `finally` cleanup further down.
+        stale = self._payload("notification", "list", "--project", self.alias)
+        for row in stale["subscriptions"]:
+            row_address = row.get("address") or ""
+            if "-690@example.com" in row_address or "-690-replaced@example.com" in row_address:
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        row["subscription_id"],
+                        "--yes",
+                    )
+
+        _step(9, "notification create -- project-wide job-failed/email")
+        address = f"{RUN_ID}-690@example.com"
+        replaced_address = f"{RUN_ID}-690-replaced@example.com"
+        old_id: str | None = None
+        new_id: str | None = None
+
+        try:
+            created = self._payload(
+                "notification",
+                "create",
+                "--project",
+                self.alias,
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                address,
+            )
+            old_id = created["subscription_id"]
+            assert old_id, f"create returned no subscription_id: {created}"
+            assert created["event"] == "job-failed"
+            assert created["channel"] == "email"
+            assert created["address"] == address
+            assert created["scope"] == "project-wide"
+            assert created["project_alias"] == self.alias
+
+            _step(10, "notification detail -- round-trip the new subscription")
+            detail = self._payload(
+                "notification",
+                "detail",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                old_id,
+            )
+            assert detail["subscription_id"] == old_id
+            assert detail["event"] == "job-failed"
+            assert detail["address"] == address
+
+            _step(11, "notification replace-recipient -- swap to a second address")
+            replaced = self._payload(
+                "notification",
+                "replace-recipient",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                old_id,
+                "--address",
+                replaced_address,
+                "--yes",
+            )
+            assert replaced["old_subscription_id"] == old_id
+            new_id = replaced["new_subscription_id"]
+            assert new_id, f"replace-recipient returned no new_subscription_id: {replaced}"
+            assert new_id != old_id
+            assert replaced["old_address"] == address
+            assert replaced["old_deleted"] is True
+            assert replaced["address"] == replaced_address
+            assert replaced["event"] == "job-failed"
+            # The old subscription is gone -- only the replacement remains live.
+            old_id = None
+
+            _step(12, "notification delete --yes -- remove the replacement")
+            deleted = self._payload(
+                "notification",
+                "delete",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                new_id,
+                "--yes",
+            )
+            assert deleted == {
+                "project_alias": self.alias,
+                "subscription_id": new_id,
+                "deleted": True,
+            }
+            new_id = None
+
+            _step(13, "notification list -- neither id lingers")
+            final = self._payload("notification", "list", "--project", self.alias)
+            ids = {row["subscription_id"] for row in final["subscriptions"]}
+            assert replaced["old_subscription_id"] not in ids
+            assert replaced["new_subscription_id"] not in ids
+        finally:
+            # Best-effort cleanup: whichever id is still non-None was not
+            # confirmed deleted by the assertions above, so delete it now
+            # rather than leaking a live subscription in the E2E project.
+            for leftover_id in (old_id, new_id):
+                if leftover_id is None:
+                    continue
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        leftover_id,
+                        "--yes",
+                    )
 
 
 # ---------------------------------------------------------------------------
