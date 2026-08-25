@@ -414,7 +414,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
 #   exactly as on the CLI. The other ~30 routers do not check the engine yet.
 #   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then -- since
-#   vNEXT, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
+#   0.91.0, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
 #   local/global chain) plus the session flags of the invocation. On 0.90.1 the root-level
 #   `--config-dir` was IGNORED here, so a policy stored beside the projects the caller named was
 #   silently not the one enforced; on that version pass --config-dir to `serve` itself.
@@ -687,7 +687,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # like cli:read, cli:write, cli:destructive). `tool:*` patterns are INERT since 0.85.0 (the MCP
 # passthrough is gone): they load but match nothing, so a mode=deny policy whose only allowance was
 # tool:read now denies everything. The agent guards rails against mistakes; not a sandbox.
-# `permissions set` (since vNEXT, issue #688) validates every --allow/--deny pattern BEFORE the
+# `permissions set` (since 0.91.0, issue #688) validates every --allow/--deny pattern BEFORE the
 #   interactive confirmation: each must be a cli:* category, an exact operation name (incl. a
 #   flag-escalated string like "auth.logout --remove-projects"), or a glob matching >=1 known
 #   operation -- an unknown pattern (typo, fabricated category) is rejected with VALIDATION_ERROR,
@@ -724,7 +724,7 @@ kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
-# workspace load (since vNEXT, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
+# workspace load (since 0.91.0, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
 #   server's LoadTypeDecider -- zero-copy CLONE when eligible (same backend as the workspace,
 #   backend snowflake/bigquery, full load -- kbagent never sends filters here, no
 #   external-schema bucket, alias only when column-auto-sync is ON and unfiltered, and on
@@ -838,20 +838,20 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
-# sync push (since vNEXT, #686): the manifest baseline `pull_config_hash` is stamped from the API
+# sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
 #   phantom `~ REMOTE MODIFIED` drift in `sync diff`. Unreadable-after-write leaves the baseline
 #   UNTOUCHED + a `warnings[]` entry (never a disk-derived fallback). One canonical script[] shape now
 #   (one element = one statement) and `transform.sql` gains `/* ===== STATEMENT ===== */` markers when
-#   semicolons cannot recover the boundaries -- which also closes a SILENT pre-vNEXT rewrite that
+#   semicolons cannot recover the boundaries -- which also closes a SILENT pre-0.91.0 rewrite that
 #   collapsed such scripts to one statement (MULTI_STATEMENT_COUNT=1) while diff said "in sync".
-#   Migration: entries carry `metadata.config_hash_version`; unversioned ones match leniently (pre-vNEXT
+#   Migration: entries carry `metadata.config_hash_version`; unversioned ones match leniently (pre-0.91.0
 #   hash of the SAME remote counts as in sync, nothing else), and ONE `sync pull` per project migrates.
 #   A pre-markers tree whose only difference from the remote is the lost boundaries is REFUSED per-change
 #   with SYNC_LEGACY_BOUNDARY telling you to pull first; genuine edits push normally.
 # sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
-# Ignored components (since vNEXT, #689): keboola.mcp-server-tool joins keboola.sandboxes on ALWAYS_IGNORED_COMPONENTS (the MCP server's auto-created empty mcp-workspace-<hex> configs); the manifest field ignoredComponents (.keboola/manifest.json) is now LIVE and unions with the hardcoded set, honored by pull/diff/push. pull drops manifest entries + local dirs for a newly-ignored component, reported with action "ignored" (distinct from "removed" = deleted on remote); diff filters the local side too, so a stale dir for an ignored component can never classify as DELETED -- closes the delete-dir-then-push trap that used to destroy production keboola.mcp-server-tool configs.
+# Ignored components (since 0.91.0, #689): keboola.mcp-server-tool joins keboola.sandboxes on ALWAYS_IGNORED_COMPONENTS (the MCP server's auto-created empty mcp-workspace-<hex> configs); the manifest field ignoredComponents (.keboola/manifest.json) is now LIVE and unions with the hardcoded set, honored by pull/diff/push. pull drops manifest entries + local dirs for a newly-ignored component, reported with action "ignored" (distinct from "removed" = deleted on remote); diff filters the local side too, so a stale dir for an ignored component can never classify as DELETED -- closes the delete-dir-then-push trap that used to destroy production keboola.mcp-server-tool configs.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
@@ -1008,7 +1008,7 @@ kbagent notification detail --project NAME --subscription-id ID
 kbagent notification create --project ALIAS --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
 kbagent notification delete --project ALIAS --subscription-id ID [--yes]
 kbagent notification replace-recipient --project ALIAS --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
-# notification WRITE path (since vNEXT, #690): the group is no longer read-only.
+# notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
 #   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch writes NO branch.id
@@ -1076,7 +1076,7 @@ kbagent update [--beta]
 kbagent changelog [--limit N] [--full]
 # Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
-# `--config-dir` on serve (since vNEXT, #679): `serve` is the only subcommand with a --config-dir of
+# `--config-dir` on serve (since 0.91.0, #679): `serve` is the only subcommand with a --config-dir of
 #   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
 #   which in turn beats KBAGENT_CONFIG_DIR / the .kbagent walk-up / global. Passing both is NOT an
 #   error. Up to 0.90.1 the ROOT flag was ignored by serve entirely, silently: `kbagent --config-dir A

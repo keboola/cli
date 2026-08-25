@@ -104,7 +104,7 @@ kbagent --json workspace query \
 
 ## Load types: clone / copy / view
 
-*(since vNEXT, #687)* **Cheapest first**: skip the load entirely if you can
+*(since 0.91.0, #687)* **Cheapest first**: skip the load entirely if you can
 (see "Don't load at all" below) > `clone` (zero-copy, seconds, any table
 size) > `view` (zero-storage, narrower eligibility) > `copy` (real data
 movement, size-guarded). `workspace load` supports all three as
