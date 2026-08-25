@@ -91,9 +91,9 @@ kbagent --json workspace query \
   --sql "SELECT * FROM \"table1\" LIMIT 10"
 ```
 
-## Load types: clone / copy / view (since vNEXT, #687)
+## Load types: clone / copy / view
 
-`workspace load` supports three load types. **Default (no `--load-type`)**:
+*(since vNEXT, #687)* `workspace load` supports three load types. **Default (no `--load-type`)**:
 kbagent decides per table, mirroring the server's own eligibility rules --
 zero-copy `clone` when the table is on the same backend as the workspace
 with a full (unfiltered) load and no external-schema/Analytics-Hub source

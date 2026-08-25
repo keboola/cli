@@ -1337,7 +1337,9 @@ events and emits a final `done` SSE frame mirroring the same record.
   components sharing a config ID, a deleted parent config, or a failed lookup
   all yield `""` rather than a guess. A blank name never means the
   subscription is inactive.
-## Notification subscriptions can now be written, and the write path has sharp edges (since vNEXT)
+## Notification subscriptions can now be written, and the write path has sharp edges
+
+*(since vNEXT)*
 
 - **`notification replace-recipient` always mints a NEW `subscription_id`.**
   The Notification Service has **no update primitive** -- there is no PATCH or
@@ -4558,9 +4560,9 @@ shapes.
   today a deny policy gates only `/auth/*`, not the ~30 other routers a
   session token can otherwise reach.
 
-## `serve` honors the root-level `--config-dir` (since vNEXT)
+## `serve` honors the root-level `--config-dir`
 
-`serve` is the only subcommand carrying a `--config-dir` of its own, so the
+*(since vNEXT)* `serve` is the only subcommand carrying a `--config-dir` of its own, so the
 flag has two possible positions. The precedence is **most specific wins**,
 matching what `kbagent repl` does with the root flags:
 
@@ -4583,9 +4585,9 @@ resolution is left to the server, which lands on the same directory anyway.
   -- if the aliases are not the ones in the directory you named, the flag was
   in the position your version ignores.
 
-## `workspace load` now auto-CLONEs eligible tables instead of always COPYing (since vNEXT, closes #687)
+## `workspace load` now auto-CLONEs eligible tables instead of always COPYing
 
-Before this, `workspace load` always sent a plain `copy` (the API's own
+*(since vNEXT, closes #687)* Before this, `workspace load` always sent a plain `copy` (the API's own
 default when `loadType` is omitted) -- a 282 GB table load burned warehouse
 credits for hours where `clone` is metadata-only and finishes in seconds.
 kbagent now mirrors the server's `LoadTypeDecider` per table.
