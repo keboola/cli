@@ -733,6 +733,7 @@ class TestCreateSubscription:
         assert result["subscription_id"] == "9006"
         assert result["project_alias"] == "prod"
         assert result["config_name"] == "Daily ETL"
+        client.close.assert_called_once()
 
     def test_invalid_channel_raises_config_error(self) -> None:
         with pytest.raises(ConfigError):
@@ -755,8 +756,16 @@ class TestDeleteSubscription:
 
         client.delete_project_subscription.assert_called_once_with("123")
         assert result == {"project_alias": "prod", "subscription_id": "123", "deleted": True}
+        client.close.assert_called_once()
 
     def test_api_404_propagates(self) -> None:
+        """The client must still be closed even though the exception propagates.
+
+        The client is opened before the ``try``/``finally`` and the delete
+        call is what fails, so the `finally` runs on the way out -- a
+        regression that dropped it would leak the underlying connection on
+        every failed delete.
+        """
         client = MagicMock()
         client.delete_project_subscription.side_effect = KeboolaApiError(
             message="Not found", error_code="NOT_FOUND", status_code=404
@@ -764,6 +773,8 @@ class TestDeleteSubscription:
 
         with pytest.raises(KeboolaApiError):
             _make_service(client).delete_subscription("prod", "999")
+
+        client.close.assert_called_once()
 
     def test_unknown_alias_raises_config_error(self) -> None:
         with pytest.raises(ConfigError):
@@ -810,6 +821,7 @@ class TestReplaceSubscriptionRecipient:
         assert result["warnings"] == []
         assert result["subscription_id"] == "9100"
         assert result["config_name"] == "Daily ETL"
+        client.close.assert_called_once()
 
     def test_delete_failure_sets_old_deleted_false_with_warning_and_does_not_raise(self) -> None:
         client = MagicMock()
@@ -832,6 +844,9 @@ class TestReplaceSubscriptionRecipient:
         assert result["old_deleted"] is False
         assert any("1234" in w for w in result["warnings"])
         assert result["new_subscription_id"] == "9101"
+        # The client stays open across the caught delete failure -- it must
+        # still be closed once the method returns, same as the happy path.
+        client.close.assert_called_once()
 
     def test_non_api_delete_failure_also_sets_old_deleted_false_without_raising(self) -> None:
         """A raw transport failure on the delete must be swallowed too.
@@ -863,6 +878,7 @@ class TestReplaceSubscriptionRecipient:
         assert result["old_deleted"] is False
         assert any("1234" in w for w in result["warnings"])
         assert result["new_subscription_id"] == "9103"
+        client.close.assert_called_once()
 
     def test_expires_at_is_forwarded_verbatim(self) -> None:
         """The old subscription's ``expiresAt`` must ride along untouched.
@@ -916,6 +932,13 @@ class TestReplaceSubscriptionRecipient:
         )
 
     def test_blank_old_channel_without_new_channel_raises_config_error(self) -> None:
+        """ConfigError raised before the replacement is created.
+
+        The client is opened before this check runs (``get_project_subscription``
+        already happened), so ``finally`` still closes it on the way out --
+        without the ``finally``, this path would leak the connection on
+        every malformed-recipient replace attempt.
+        """
         client = MagicMock()
         client.get_project_subscription.return_value = {
             "id": "1234",
@@ -928,6 +951,7 @@ class TestReplaceSubscriptionRecipient:
 
         client.create_project_subscription.assert_not_called()
         client.delete_project_subscription.assert_not_called()
+        client.close.assert_called_once()
 
     def test_non_dict_old_recipient_raises_config_error_not_attribute_error(self) -> None:
         """A malformed ``recipient`` (not a dict) must degrade to ConfigError.
@@ -935,7 +959,8 @@ class TestReplaceSubscriptionRecipient:
         Mirrors the same guard on the read path (``_extract_subscription_fields``)
         -- without it, ``old_recipient.get(...)`` on a non-dict value would
         raise a raw ``AttributeError`` instead of the intended "channel is
-        unknown, pass one explicitly" error.
+        unknown, pass one explicitly" error. Also confirms the client is
+        still closed on this path, same as the blank-channel one above.
         """
         client = MagicMock()
         client.get_project_subscription.return_value = {
@@ -949,6 +974,7 @@ class TestReplaceSubscriptionRecipient:
 
         client.create_project_subscription.assert_not_called()
         client.delete_project_subscription.assert_not_called()
+        client.close.assert_called_once()
 
     def test_unknown_alias_raises_config_error(self) -> None:
         with pytest.raises(ConfigError):
