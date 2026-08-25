@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -123,6 +123,13 @@ version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unrelea
 
 vnext-check: ## Reject an unresolved version-gate placeholder -- run in the RELEASE PR
 	uv run python scripts/check_version_gates.py --release
+
+vnext-resolve: ## Rewrite every live vNEXT gate to pyproject's version (RELEASE PR step 4)
+	@test -n "$(VERSION)" || { echo "usage: make vnext-resolve VERSION=X.Y.Z"; exit 2; }
+	uv run python scripts/check_version_gates.py --resolve $(VERSION)
+
+release-scope-check: ## Prove the changelog entry covers every PR the tag will contain
+	uv run python scripts/check_release_scope.py $(SCOPE_ARGS)
 
 check-sentinel-guards: ## Reject an unguarded kbc-session:// sentinel path (silent-drift gate)
 	uv run python scripts/check_sentinel_guards.py

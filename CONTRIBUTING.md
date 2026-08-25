@@ -625,10 +625,18 @@ silent-drift risks summarized in the
    entry and the release notes must cover each of them, and nothing else.
 2. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it. This is the release PR's defining change -- if you are doing this in a feature PR, stop and read the section intro above.
 3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob. The first sentence is also **capped at 160 characters**, enforced by `tests/test_changelog_render.py::TestLiveChangelogHeadlines::test_newest_release_notes_are_not_truncated` (so `make check` in step 12 catches it) -- past the cap the default view and the release page show it cut mid-clause. Write a short self-contained first sentence and put the detail in the sentences after it; 2 of 0.90.0's 13 bullets needed exactly this rewrite.
-4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released, then verify none survive:
+4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released. Do it mechanically -- never by hand, and never with a repo-wide `sed`:
    ```bash
+   make vnext-resolve VERSION=X.Y.Z
    make vnext-check
    ```
+   `vnext-resolve` reuses the same scanner `vnext-check` does, so it rewrites
+   exactly the live gates and leaves every backticked mention of the token
+   alone -- including a line that carries both at once, which a line-level
+   `sed` corrupts. It refuses any `VERSION` that disagrees with
+   `pyproject.toml` (bump that first, in step 2): `packaging` happily parses
+   `v0.91` and `0.91`, so a typo can look valid and then be stamped into every
+   gate in the tree at once.
    A leftover `(since vNEXT)` ships agents a gate no installed version can
    ever satisfy -- strictly worse than no gate, because they then refuse a
    command the user has. The release PR is the only place it can be fixed.
@@ -651,12 +659,24 @@ silent-drift risks summarized in the
    > numeric gates -- `docs/sdk.md` writes 14 genuine ones as `` `0.66.0+` ``,
    > where backticks are ordinary typography rather than quotation.
 
-   While resolving, keep version tags **out of markdown headings**: a
-   `### Foo *(since vNEXT)*` heading changes its generated anchor slug at
-   every release, breaking each inbound `#foo-...` link (this bit 0.90.0 --
+   Version tags must stay **out of markdown headings**: a
+   `### Foo *(since vNEXT)*` heading changes its generated anchor slug when the
+   placeholder resolves, breaking each inbound `#foo-...` link (this bit 0.90.0 --
    the What's-new section's link broke the moment the placeholder resolved).
    Put the tag on the section's first body line instead; the gate checks scan
    whole files, not just headings, so nothing is lost.
+
+   **This is CI-enforced on EVERY PR**, not just at release time -- a `vNEXT`
+   inside an ATX heading in a `.md` file fails `make version-gate-check`
+   (already part of `make check`). It is deliberately armed everywhere rather
+   than only under `--release`, because the rule used to be a hand-run
+   `grep -rn '^##.*vNEXT' plugins/` at release time and that grep **lost a
+   merge race in 0.91.0**: PR #697 ran it two minutes before #694 and #696
+   landed headings of their own, so all three shipped and had to be cleaned up
+   after the tag. Any rule of the form "run this grep when releasing" loses
+   that race eventually, because a release is exactly when parallel branches
+   converge. Already-numeric headings are *not* flagged -- a resolved tag never
+   changes again, so its slug is stable.
 5. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
 6. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
 7. **Add a curated What's-new entry** to `web/frontend/src/whatsnew.ts` when the release ships anything UI-visible -- a `WhatsNewRelease` element keyed by the **exact** new version, newest first. This is the reel the web UI shows once per version; it is deliberately *not* derived from `changelog.py` (see `docs/web-server.md` > "What's-new popup"). Skipping it does not error anywhere: `whatsNewFor` falls back to the previous release's reel, which returning users have already dismissed -- so the release's UI work ships **dark**. A release with no UI-visible changes correctly adds nothing. Only the release PR can write this entry (a feature PR cannot know the version), which is why it lives in this checklist and not the per-command one.
@@ -670,17 +690,33 @@ silent-drift risks summarized in the
 12. **Run `make check`** -- lint + format + skill freshness + version sync + changelog completeness + error-code enum + full test suite.
 13. **Run `make test-e2e`** if any command changed since the last release -- requires `E2E_API_TOKEN` and `E2E_URL`.
 14. **Open the release PR** -- link the merged PRs it covers (step 1) and list every plugin file you touched in the description so reviewers can spot what was missed. Plugin files do not auto-show up in CI failures the way Python files do; reviewers are the second line of defence.
-15. **Merge via `gh pr merge`, then tag -- the tag push IS the release.** Never push directly to `main` (protected). The only manual action after the merge is:
+15. **Re-verify the scope against the commit you are about to tag:**
+    ```bash
+    make release-scope-check                       # in the release PR, before merging
+    make release-scope-check SCOPE_ARGS="--head origin/main --ignore-pr <release-PR>"
+    ```
+    Step 1 collected the scope when the release PR was *opened*; this proves
+    the changelog entry covers every PR the **tag will actually contain**. The
+    two differ whenever a feature PR merges while the release PR is open --
+    which is a structural window, not bad luck, since a release PR stays open
+    for as long as its CI runs. It shipped in v0.91.0: #625 merged nine minutes
+    before the release PR did, landing inside the tag's tree with no release
+    note, and was caught only because the tag happened to be deferred.
+    `make changelog-check` cannot see this: it proves every *released version*
+    has an entry, never that an entry covers every *commit* under the tag.
+    Run before merging and nothing needs ignoring -- the release PR's own
+    number is not in the log until its merge commit exists.
+16. **Merge via `gh pr merge`, then tag -- the tag push IS the release.** Never push directly to `main` (protected). The only manual action after the merge is:
     ```bash
     git fetch origin && git tag v<X.Y.Z> <merge-commit-sha> && git push origin v<X.Y.Z>
     ```
     The tag must point at the release PR's merge commit on `main` -- the pipeline's `gate` job fails the whole release if the tag's `pyproject.toml` disagrees with the tag name. Pushing it triggers `.github/workflows/release-kbagent.yml`, which does **everything else**: re-runs the gates, renders the release notes from `changelog.py` (`scripts/gen_release_notes.py` -- never write them by hand), publishes to PyPI, freezes the native binaries for all platforms, packages deb/rpm, creates the GitHub Release with every asset attached and fills its body, and updates Homebrew/Chocolatey/WinGet. Do **not** pre-create the GitHub Release by hand: the pipeline keeps a hand-written body untouched, which silently discards the changelog-rendered notes.
-16. **Verify the publish** -- the pipeline guards against half-releases, but both guards exist because each failure shipped once (v0.66.1 went out with an empty body, v0.64.0 without a wheel), so look anyway:
+17. **Verify the publish** -- the pipeline guards against half-releases, but both guards exist because each failure shipped once (v0.66.1 went out with an empty body, v0.64.0 without a wheel), so look anyway:
     ```bash
     gh run watch $(gh run list --workflow release-kbagent.yml --limit 1 --json databaseId --jq '.[0].databaseId')
     ```
     then confirm `gh release view v<X.Y.Z>` shows a non-empty body rendered from the changelog and both wheels (`keboola_cli-*` + legacy `keboola_agent_cli-*`) among the assets. A `skipped` winget job is normal; any red job is a real signal.
-17. **After the tag: merge the ai-kit publish PR.** The `ai-kit-marketplace` job opens
+18. **After the tag: merge the ai-kit publish PR.** The `ai-kit-marketplace` job opens
     `chore(kbagent): publish vX.Y.Z` against `keboola/ai-kit`, bumping the `kbagent`
     entry in the `keboola-claude-kit` marketplace to this tag. Until that PR merges,
     `/plugin install kbagent@keboola-claude-kit` still serves the PREVIOUS version --
