@@ -5,7 +5,7 @@ description: >
   Covers: exploring and searching configurations, job history, data
   lineage, dev branches, workspace SQL debugging, GitOps config sync
   (pull/push/diff/clone), bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots (backup/restore), data apps
+  Storage tables, files, and snapshots, data apps
   (deploy/logs/secrets), flows and schedules, members and invitations,
   feature flags, OTLP data streams, scoped Storage tokens, the semantic
   layer (models, metrics), the Developer Portal, browser login.
@@ -16,8 +16,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, undelete config, zero-copy clone, workspace load type,
-  table too big to load, load table into workspace cheaply.
+  restore config, undelete config, zero-copy clone, workspace load type.
 ---
 
 # kbagent -- Keboola Agent CLI
