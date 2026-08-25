@@ -82,12 +82,21 @@ re-running this after a partial setup only fills the gaps.
    `src/keboola_agent_cli/services/_auth_registration.py`. Read the key off
    the result and relay it verbatim; never hand-list it from memory.
 
-   Drop to 3b when *either* the user needs one of the surfaces named in
-   `session_unsupported_features`, or there is no browser at all (headless
-   host, container, CI, SSH without port forwarding).
+   **If 3a is not the answer, route on *why*** -- the two reasons are not
+   interchangeable, and treating them as one strands the user:
+   - **No browser at all** (headless host, container, CI, SSH without port
+     forwarding) -> try **3b**, then 3c.
+   - **The user needs one of the surfaces named in
+     `session_unsupported_features`** -> go **straight to 3c, skipping 3b**.
+     `login-password` mints the *same kind of session* as 3a -- both return
+     through `_finalize_login`, so both carry the identical
+     `SESSION_UNSUPPORTED_FEATURES` list -- so 3b would report success and
+     stop the ladder while leaving the user exactly as unable to do the
+     thing they came for. Only a static token serves those surfaces.
 
-   **3b. Account login from the environment** (kbagent 0.84.0+) -- try this
-   *before* reaching for a static token, whenever `KBC_LOGIN_EMAIL` and
+   **3b. Account login from the environment** (kbagent 0.84.0+) -- the
+   no-browser rung, and the only route into it. Try this *before* reaching
+   for a static token, whenever `KBC_LOGIN_EMAIL` and
    `KBC_LOGIN_PASSWORD` are both already exported (plus
    `KBC_LOGIN_TOTP_SECRET` if the account has TOTP-based MFA):
    ```bash
@@ -100,9 +109,9 @@ re-running this after a partial setup only fills the gaps.
    - **Version gate.** `login-password` does not exist before 0.84.0.
      Compare `kbagent.version` from step 1; if it is older, skip to 3c.
    - **`AUTH_MFA_INVALID`.** The account's MFA is WebAuthn/passkey-only,
-     which this grant cannot resolve without a browser -- and both routes
-     into 3b are routes where browser login is unavailable or insufficient.
-     Go to 3c; do not retry `login-password` and do not loop back to 3a.
+     which this grant cannot resolve without a browser -- and the only way
+     to reach 3b is that no browser is available. Go to 3c; do not retry
+     `login-password`, and do not loop back to 3a.
 
    If those variables are absent, skip 3b silently. Never ask the user to
    export a password or a TOTP seed to satisfy this step -- a static token is
