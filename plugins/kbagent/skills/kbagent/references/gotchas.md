@@ -4682,3 +4682,41 @@ was silent, and the only way to notice was reading `permissions show` (or
   `tool:`-prefixed** (since vNEXT) -- a purely typo'd policy (e.g.
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
+
+## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live (since vNEXT)
+
+`ALWAYS_IGNORED_COMPONENTS` (`constants.py`) now includes `keboola.mcp-server-tool`
+alongside `keboola.sandboxes`. The Keboola MCP server auto-creates one empty
+workspace-record config per project it touches (`configuration: {}`, name like
+`mcp-workspace-<hex>`); those configs carry no configuration and are managed
+through separate APIs, so `sync pull` no longer materializes them and
+`sync diff` / `sync push` no longer see them.
+
+The manifest field `ignoredComponents` (`.keboola/manifest.json`) was declared
+but dead before this change -- it is now **live**: components listed there are
+unioned with `ALWAYS_IGNORED_COMPONENTS` and excluded from `sync pull`,
+`sync diff`, and `sync push` (push builds on diff), letting a repo exclude
+volatile components without waiting for an upstream kbagent release.
+
+```json
+{
+  "ignoredComponents": ["keboola.some-noisy-component"]
+}
+```
+
+- **`pull` cleans up stale entries for a newly-ignored component**: the next
+  `sync pull` drops the manifest entry and removes the local directory,
+  reported with pull action `"ignored"` -- a distinct action from `"removed"`
+  (which means the config was genuinely deleted on remote). Do not conflate
+  the two when reading pull output.
+- **The delete-dir-then-push trap is closed for ignored components.** Because
+  `sync diff` also filters the LOCAL side by the ignored set, a stale manifest
+  entry for an ignored component can never classify as `DELETED` -- so
+  hand-deleting the directory of e.g. a `keboola.mcp-server-tool` config and
+  running `sync push` is now a no-op for that config instead of an accidental
+  production delete.
+- **On kbagent <= 0.90.1 the trap is still armed.** `keboola.mcp-server-tool`
+  configs were tracked like any other config, so deleting the local directory
+  and pushing DELETED the config in production. If you are stuck on an older
+  version, do not delete-dir-then-push a `keboola.mcp-server-tool` (or any
+  MCP-workspace) directory -- upgrade instead.

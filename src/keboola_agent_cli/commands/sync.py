@@ -168,8 +168,9 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
     removed_cfgs = [d for d in details if d["action"] == "removed"]
     renamed_cfgs = [d for d in details if d["action"] == "renamed"]
     skipped_cfgs = [d for d in details if d["action"] == "skipped"]
+    ignored_cfgs = [d for d in details if d["action"] == "ignored"]
 
-    has_changes = bool(new_cfgs or updated_cfgs or removed_cfgs or renamed_cfgs)
+    has_changes = bool(new_cfgs or updated_cfgs or removed_cfgs or renamed_cfgs or ignored_cfgs)
 
     storage = result.get("storage", {})
     jobs_written = result.get("jobs_written", 0)
@@ -225,6 +226,15 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
         formatter.console.print(f"  [red]Removed from remote ({len(removed_cfgs)}):[/red]")
         for d in removed_cfgs:
             formatter.console.print(f"    - {d['path']}")
+    # Distinct from "removed": the config still exists on the remote, it is its
+    # component that is now ignored -- do not send the user hunting for a
+    # deletion that never happened (issue #689).
+    if ignored_cfgs:
+        formatter.console.print(
+            f"  [dim]Dropped ({len(ignored_cfgs)}) -- component now ignored:[/dim]"
+        )
+        for d in ignored_cfgs:
+            formatter.console.print(f"    - {d['component_id']} [dim]{d['path']}[/dim]")
     if skipped_cfgs:
         formatter.console.print(
             f"  [cyan]Skipped ({len(skipped_cfgs)}) -- locally modified:[/cyan]"
@@ -382,7 +392,8 @@ def _pull_one_liner(result: dict) -> str:
     rem_n = sum(1 for d in details if d["action"] == "removed")
     ren_n = sum(1 for d in details if d["action"] == "renamed")
     skip_n = sum(1 for d in details if d["action"] == "skipped")
-    if not new_n and not upd_n and not rem_n and not ren_n and not skip_n:
+    ign_n = sum(1 for d in details if d["action"] == "ignored")
+    if not new_n and not upd_n and not rem_n and not ren_n and not skip_n and not ign_n:
         return "[green]up to date[/green]"
     parts = []
     if ren_n:
@@ -395,6 +406,8 @@ def _pull_one_liner(result: dict) -> str:
         parts.append(f"[red]-{rem_n} removed[/red]")
     if skip_n:
         parts.append(f"[cyan]!{skip_n} skipped[/cyan]")
+    if ign_n:
+        parts.append(f"[dim]-{ign_n} ignored[/dim]")
     return ", ".join(parts)
 
 
