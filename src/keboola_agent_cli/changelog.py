@@ -89,6 +89,15 @@ CHANGELOG: dict[str, list[str]] = {
         "which beats `KBAGENT_CONFIG_DIR` / the `.kbagent` walk-up / global. Only an "
         "explicit root flag propagates; an env-var or walk-up resolution is left to the "
         "server, which reaches the identical directory on its own.",
+        "New (#625): the plugin gained `/kbagent:setup`, one command that runs first-time "
+        "setup end to end. The documented flow is now `/plugin marketplace add keboola/ai-kit` "
+        "then `/plugin install kbagent@keboola-claude-kit` then `/kbagent:setup`, replacing "
+        "five manual steps spread across a browser, a terminal and Claude Code. It installs "
+        "the CLI when missing (respecting a standalone `install_channel` rather than layering "
+        "a second kbagent over it), connects a project, and verifies with `kbagent doctor`. "
+        "Every step is conditional on a check, so it is idempotent and safe to re-run on a "
+        "half-finished setup, and it never overwrites an existing project or alias. No new "
+        "CLI surface -- it orchestrates existing verbs.",
         "Change (#627): the kbagent Claude Code plugin is now published through the "
         "`keboola-claude-kit` marketplace in `keboola/ai-kit`. Keboola had two competing "
         "marketplaces and no way for a user to tell which was real; this leaves one. Install "

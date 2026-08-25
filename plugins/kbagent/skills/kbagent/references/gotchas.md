@@ -458,7 +458,9 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
-## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries (since 0.91.0, #686)
+## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
+
+*(since 0.91.0, #686)*
 
 `pull_config_hash` in `.keboola/manifest.json` is the 3-way diff's base, and it
 means "the hash of this config **as the API returns it**". `sync pull` and the
@@ -527,7 +529,9 @@ it, and the next deploy re-created it (field report: 18 phantom configs hiding
   statements into one. Run `sync pull` for that project, then push again.
   Genuine SQL edits are never blocked by this guard.
 
-## `sync push` runs the same script-shape guard as `config update` (since 0.91.0)
+## `sync push` runs the same script-shape guard as `config update`
+
+*(since 0.91.0)*
 
 `sync push` now runs `normalize_blocks_codes_script` -- the runtime-safety guard
 `config update` and `transformation edit/create` have always run -- on every
