@@ -103,7 +103,7 @@ This CLI is built AI-first. Every command outputs structured JSON (`--json`), er
 /kbagent:setup
 ```
 
-`/kbagent:setup` is the whole rest of the setup in one command: it installs the `kbagent` CLI if you don't have it, connects a Keboola project (browser login, no token to paste; static-token fallback for headless hosts), and verifies the result with `kbagent doctor`. Every step is conditional, so re-running it after a partial setup just fills the gaps.
+`/kbagent:setup` is the whole rest of the setup in one command: it installs the `kbagent` CLI if you don't have it, connects a Keboola project (browser login, so there is no token to paste; on a headless host it falls back to an account login from the environment, then to a static token), and verifies the result with `kbagent doctor`. Every step is conditional, so re-running it after a partial setup just fills the gaps.
 
 Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over raw REST, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
 

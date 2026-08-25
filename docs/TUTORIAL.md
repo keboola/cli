@@ -318,8 +318,10 @@ Claude Code clones the marketplace and drops the plugin into
 `/kbagent:setup` then does everything else in one command: installs the
 `kbagent` CLI if it is missing (handling the installer's PATH caveat),
 connects a project via `kbagent auth login --register-projects` (browser
-login -- nothing to paste; a `kbagent project add` static-token path
-covers headless hosts and the surfaces a browser session does not serve),
+login -- nothing to paste; for a headless host, or a surface a browser
+session does not serve, it drops to `kbagent auth login-password` when
+`KBC_LOGIN_EMAIL`/`KBC_LOGIN_PASSWORD` are already in the environment and
+only then to a `kbagent project add` static token),
 and finishes with `kbagent doctor`, interpreting the result for you. Each
 step runs only if its check fails, so it is safe to re-run at any point
 -- including if you already followed §1-§4 by hand.

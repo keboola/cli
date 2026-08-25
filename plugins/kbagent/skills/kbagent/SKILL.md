@@ -427,7 +427,8 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 
 **In Claude Code with this plugin installed, run `/kbagent:setup`.** It is
 the one-command path: it installs the CLI if missing, connects a project
-(browser login via `auth login --register-projects`, static-token fallback),
+(browser login via `auth login --register-projects`, then
+`auth login-password` from the environment, then a static token),
 and verifies with `kbagent doctor`. Every step is conditional, so it is safe
 to re-run on a half-finished setup. See
 `plugins/kbagent/commands/setup.md`.

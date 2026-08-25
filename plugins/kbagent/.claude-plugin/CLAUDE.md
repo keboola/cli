@@ -131,7 +131,8 @@ When the subagent returns:
 
 - **Start here: run `/kbagent:setup`.** One command -- it installs the
   kbagent CLI if it is missing, connects a Keboola project (browser
-  login, with a static-token fallback), and verifies the result with
+  login, falling back to `auth login-password` from the environment and
+  then a static token, per the order above), and verifies the result with
   `kbagent doctor`. Idempotent, so re-running it after a partial setup
   only fills the gaps.
 - Initialize a project workspace: `kbagent init --from-global`

@@ -2055,8 +2055,9 @@ If you are using Claude Code, install the kbagent plugin for richer guidance:
   /kbagent:setup
 
 `/kbagent:setup` is the one-command first-run path: it installs this CLI if
-it is missing, connects a project (`auth login --register-projects`, with a
-`project add` static-token fallback), and verifies with `kbagent doctor`.
+it is missing, connects a project (`auth login --register-projects`, falling
+back to `auth login-password` from the environment and then a `project add`
+static token), and verifies with `kbagent doctor`.
 Every step is conditional, so it is safe to re-run.
 
 The plugin provides a skill with detailed workflow references including:
