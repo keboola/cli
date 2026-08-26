@@ -188,7 +188,7 @@ from unittest.mock import MagicMock  # noqa: E402
 
 import pytest  # noqa: E402
 
-from keboola_agent_cli.config_store import ConfigStore  # noqa: E402
+from keboola_agent_cli.config_store import ConfigError, ConfigStore  # noqa: E402
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError  # noqa: E402
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse  # noqa: E402
 from keboola_agent_cli.services.merge_request_service import (  # noqa: E402
@@ -365,3 +365,95 @@ class TestGetMergeRequest:
         mock.merge_requests.conflicts.return_value = []
         detail = _svc(store, factory).get_merge_request(ALIAS, 7)
         assert detail["viewer"] == {"is_creator": None, "has_approved": None}
+
+
+DEFAULT_BRANCH = {"id": 1, "name": "Main", "isDefault": True}
+DEV_BRANCH = {"id": 123, "name": "feature", "isDefault": False}
+
+
+class TestCreateMergeRequest:
+    def test_targets_the_default_branch_automatically(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_dev_branches.return_value = [DEFAULT_BRANCH, DEV_BRANCH]
+        mock.merge_requests.create.return_value = _wire_mr(9, "development", branch_from=123)
+        result = _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        kwargs = mock.merge_requests.create.call_args.kwargs
+        assert kwargs["branch_from_id"] == 123
+        assert kwargs["branch_into_id"] == 1
+        assert result["branch_from_id"] == 123
+        assert result["derived_state"] == "in_development"
+
+    def test_refuses_the_default_branch_as_source(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_dev_branches.return_value = [DEFAULT_BRANCH, DEV_BRANCH]
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).create_merge_request(ALIAS, 1, "My MR")
+        assert "default" in str(exc_info.value)
+        mock.merge_requests.create.assert_not_called()
+
+    def test_preflight_blocks_without_the_feature(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.has_feature.return_value = False
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        assert "branches-merge-requests" in str(exc_info.value)
+        mock.merge_requests.create.assert_not_called()
+
+    def test_optional_fields_pass_through(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_dev_branches.return_value = [DEFAULT_BRANCH]
+        mock.merge_requests.create.return_value = _wire_mr(9)
+        _svc(store, factory).create_merge_request(
+            ALIAS,
+            123,
+            "My MR",
+            description="d",
+            reviewer_ids=[5, 6],
+            external_id="TICKET-1",
+        )
+        kwargs = mock.merge_requests.create.call_args.kwargs
+        assert kwargs["reviewer_ids"] == [5, 6]
+        assert kwargs["external_id"] == "TICKET-1"
+
+
+class TestUpdateAndTransitions:
+    def test_update_passes_fields_and_enriches(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.update.return_value = _wire_mr(7, "in_review")
+        result = _svc(store, factory).update_merge_request(ALIAS, 7, title="New")
+        assert mock.merge_requests.update.call_args.kwargs["title"] == "New"
+        assert result["derived_state"] == "in_review"
+
+    def test_request_review(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.request_review.return_value = _wire_mr(7, "approved")
+        result = _svc(store, factory).request_review(ALIAS, 7)
+        # Non-SOX default of 0 required approvals: lands straight in approved.
+        assert result["derived_state"] == "approved"
+
+    def test_approve(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.approve.return_value = _wire_mr(7, "approved")
+        result = _svc(store, factory).approve(ALIAS, 7)
+        assert result["derived_state"] == "approved"
+
+    def test_request_changes_carries_reason(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.request_changes.return_value = _wire_mr(7, "development")
+        _svc(store, factory).request_changes(ALIAS, 7, reason="fix the mapping")
+        assert (
+            mock.merge_requests.request_changes.call_args.kwargs["reason"] == "fix the mapping"
+        )
+
+    def test_every_write_runs_the_preflight(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.has_feature.return_value = False
+        svc = _svc(store, factory)
+        for call in (
+            lambda: svc.update_merge_request(ALIAS, 7, title="x"),
+            lambda: svc.request_review(ALIAS, 7),
+            lambda: svc.approve(ALIAS, 7),
+            lambda: svc.request_changes(ALIAS, 7),
+        ):
+            with pytest.raises(ConfigError):
+                call()
