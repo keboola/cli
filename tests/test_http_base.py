@@ -1085,8 +1085,7 @@ class TestApiErrorCodeDetails:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("GET", "/test-path")
             assert (
-                exc_info.value.details["api_error_code"]
-                == "storage.mergeRequests.notReadyToMerge"
+                exc_info.value.details["api_error_code"] == "storage.mergeRequests.notReadyToMerge"
             )
         finally:
             client.close()

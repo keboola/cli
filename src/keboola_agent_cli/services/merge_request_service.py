@@ -26,6 +26,7 @@ from ..client import KeboolaClient
 from ..config_store import ConfigError
 from ..constants import BRANCHES_MERGE_REQUESTS_FEATURE
 from ..errors import ErrorCode, KeboolaApiError
+from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -610,3 +611,230 @@ class MergeRequestService(BaseService):
             retryable=False,
             details=exc.details,
         ) from exc
+
+    # -- Conflicts / diff / resolution --------------------------------------------
+
+    # Content-bearing keys of a diff side -- what a three-way comparison is
+    # about. Version/identifier fields differ by construction on a conflict
+    # and would only add noise to the per-path classification.
+    _DIFF_CONTENT_KEYS = ("name", "description", "configuration", "isDisabled", "rows")
+
+    def list_conflicts(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """List the configurations conflicting between the MR's branches.
+
+        Conflicts are computed live by the backend on every call (and on
+        every merge attempt), so rebasing each listed config is sufficient --
+        there is no MR-level re-validate step.
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            conflicts = client.merge_requests.conflicts(merge_request_id)
+        finally:
+            client.close()
+        return {
+            "alias": alias,
+            "merge_request_id": merge_request_id,
+            "count": len(conflicts),
+            "conflicts": conflicts,
+        }
+
+    def get_config_diff(
+        self, alias: str, component_id: str, config_id: str, branch_id: int
+    ) -> dict[str, Any]:
+        """Three-way diff of one config, flattened to a per-path classification.
+
+        No three panes: each touched path is tagged ``changed_by`` --
+        ``ours`` (only the dev branch changed it), ``theirs`` (only
+        production), or ``both`` (the actual conflict hotspots). ``rows``
+        compares wholesale (row-level three-way diffing is not attempted).
+        ``onto_version`` is the default-branch version a rebase re-anchors
+        onto -- the ``theirs.version`` trap spelled out once, here.
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            diff = client.get_config_diff(component_id, config_id, branch_id)
+        finally:
+            client.close()
+        theirs = diff.get("theirs") or {}
+        return {
+            "alias": alias,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": branch_id,
+            "onto_version": theirs.get("version"),
+            "changes": self._classify_three_way(diff),
+            "diff": diff,
+        }
+
+    def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
+        """Intersect the two pairwise diffs (base->ours, base->theirs) per path."""
+
+        def content(side: dict[str, Any] | None) -> dict[str, Any]:
+            side = side or {}
+            return {key: side[key] for key in self._DIFF_CONTENT_KEYS if key in side}
+
+        base = content(diff.get("base"))
+        ours_entries = {e.path: e for e in compute_diff_entries(base, content(diff.get("ours")))}
+        theirs_entries = {
+            e.path: e for e in compute_diff_entries(base, content(diff.get("theirs")))
+        }
+
+        changes: list[dict[str, Any]] = []
+        for path in sorted(set(ours_entries) | set(theirs_entries)):
+            ours_entry = ours_entries.get(path)
+            theirs_entry = theirs_entries.get(path)
+            reference = ours_entry or theirs_entry
+            assert reference is not None  # path came from one of the two maps
+            changed_by = (
+                "both" if ours_entry and theirs_entry else ("ours" if ours_entry else "theirs")
+            )
+            base_value = reference.old if reference.old_present else None
+
+            def side_value(entry: DiffEntry | None, base_val: Any) -> Any:
+                # A side that changed the path shows its own value (None when
+                # it REMOVED the key -- never the base value); a side with no
+                # entry did not touch the path and still holds the base.
+                if entry is not None:
+                    return entry.new if entry.new_present else None
+                return base_val
+
+            changes.append(
+                {
+                    "path": path,
+                    "changed_by": changed_by,
+                    "base": base_value,
+                    "ours": side_value(ours_entry, base_value),
+                    "theirs": side_value(theirs_entry, base_value),
+                }
+            )
+        return changes
+
+    def resolve_conflict(
+        self,
+        alias: str,
+        merge_request_id: int,
+        component_id: str,
+        config_id: str,
+        branch_id: int,
+        take: str | None = None,
+        resolved: dict[str, Any] | None = None,
+        change_description: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one conflicting config by rebasing it (uniformly -- every
+        mode goes through the rebase endpoint, per the RFC decision; the UI's
+        reset-to-default alternative for take=theirs is DMD-1987).
+
+        Modes (exactly one of ``take`` / ``resolved``):
+
+        - ``take="ours"``: keep the dev-branch content, re-anchored onto the
+          production version. An ours side that is deleted turns this into
+          the delete resolution.
+        - ``take="theirs"``: adopt the production content (the config stays
+          in the MR's changeset; the merge then writes a content-no-op).
+        - ``take="delete"``: the ``{"version": N, "diff": {}}`` tombstone.
+        - ``resolved={...}``: a caller-authored three-way merge -- must carry
+          ``name``, ``rows`` and ``configuration`` explicitly (rebase
+          REPLACES; a missing key would silently wipe data, so it is refused
+          instead of defaulted).
+
+        The config must be in the MR's live conflict set; ``version`` is
+        taken from the diff's ``theirs.version`` (the default-branch version
+        being re-anchored onto). Rebasing every conflicting config makes the
+        MR mergeable -- no re-validate step exists or is needed.
+        """
+        if (take is None) == (resolved is None):
+            raise ConfigError("Pass exactly one of take=ours|theirs|delete or a resolved body.")
+        if take is not None and take not in ("ours", "theirs", "delete"):
+            raise ConfigError(f"Unknown take mode {take!r}: use ours, theirs or delete.")
+
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            self._require_in_conflict_set(client, merge_request_id, component_id, config_id)
+            diff = client.get_config_diff(component_id, config_id, branch_id)
+            theirs = diff.get("theirs") or {}
+            onto_version = theirs.get("version")
+            if onto_version is None:
+                raise KeboolaApiError(
+                    message=(
+                        f"The diff of {component_id}/{config_id} has no theirs side -- "
+                        "cannot determine the default-branch version to rebase onto."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    retryable=False,
+                )
+
+            side = resolved
+            resolution = "custom"
+            if take == "delete":
+                side, resolution = None, "delete"
+            elif take == "ours":
+                ours = diff.get("ours")
+                if ours is None or ours.get("isDeleted"):
+                    # Taking a deleted ours side IS the delete resolution.
+                    side, resolution = None, "delete"
+                else:
+                    side, resolution = ours, "ours"
+            elif take == "theirs":
+                side, resolution = theirs, "theirs"
+
+            if side is None:
+                configuration = client.rebase_config_delete(
+                    component_id, config_id, branch_id, version=onto_version
+                )
+            else:
+                missing = [key for key in ("name", "rows", "configuration") if key not in side]
+                if missing:
+                    raise ConfigError(
+                        "A resolved body must spell out the full replaced content "
+                        f"(rebase REPLACES): missing {', '.join(missing)}."
+                    )
+                configuration = client.rebase_config(
+                    component_id,
+                    config_id,
+                    branch_id,
+                    version=onto_version,
+                    name=side["name"],
+                    rows=side["rows"],
+                    configuration=side["configuration"],
+                    is_disabled=bool(side.get("isDisabled", False)),
+                    description=side.get("description"),
+                    change_description=change_description,
+                )
+        finally:
+            client.close()
+
+        return {
+            "alias": alias,
+            "merge_request_id": merge_request_id,
+            "component_id": component_id,
+            "config_id": config_id,
+            "branch_id": branch_id,
+            "resolution": resolution,
+            "onto_version": onto_version,
+            "configuration": configuration,
+        }
+
+    def _require_in_conflict_set(
+        self, client: KeboolaClient, merge_request_id: int, component_id: str, config_id: str
+    ) -> None:
+        """Refuse to rebase a config the MR does not list as conflicting."""
+        for conflict in client.merge_requests.conflicts(merge_request_id):
+            if conflict.get("componentId") == component_id and str(
+                conflict.get("configurationId")
+            ) == str(config_id):
+                return
+        raise KeboolaApiError(
+            message=(
+                f"{component_id}/{config_id} is not in merge request "
+                f"{merge_request_id}'s conflict set -- nothing to resolve. "
+                "See `kbagent merge-request conflicts` for the current set."
+            ),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
