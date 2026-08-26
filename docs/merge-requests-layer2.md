@@ -93,7 +93,7 @@ MCP/agent response needs to phrase the next step: blocker `approvals` + `has_app
 
 `GET /merge-request` list/detail/conflicts are ungated; a write without the feature is a 403
 byte-for-byte identical to a role denial. So the service calls
-`has_feature(FEATURE_BRANCHES_MERGE_REQUESTS)` (`client/tokens.py:200`, cache populated on
+`has_feature(BRANCHES_MERGE_REQUESTS_FEATURE)` (`client/tokens.py:302`, cache populated on
 every `verify_token`) before writes and words the "not enabled" error itself.
 
 Caveats to carry into the implementation:

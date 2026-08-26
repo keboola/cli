@@ -7,7 +7,8 @@ record distilled from the original RFC and the review cycle; behavioral backend 
 [`merge-requests-notes.md`](merge-requests-notes.md).
 
 Code: `client/merge_requests.py` (namespace + Protocol + adapter + mixin),
-`client/configs.py` (diff/rebase), `constants.py` (`FEATURE_BRANCHES_MERGE_REQUESTS`,
+`client/configs.py` (diff/rebase), `constants.py` (`BRANCHES_MERGE_REQUESTS_FEATURE` --
+renamed from `FEATURE_BRANCHES_MERGE_REQUESTS` when Layer 2 wired the pre-flight,
 `MERGE_JOB_MAX_WAIT`), `tests/test_merge_request_client.py`.
 
 ## Backend contract (what shapes the client)
@@ -118,7 +119,7 @@ change_description=None)`, `rebase_config_delete(…, version)`.
   `str | None`).
 - **No feature-flag plumbing at Layer 3.** A missing feature is a 403 identical to a role
   denial — only a Layer 2 pre-flight can word the error. Part 1 contributed only the constant
-  `FEATURE_BRANCHES_MERGE_REQUESTS`.
+  `BRANCHES_MERGE_REQUESTS_FEATURE`.
 - Tried and reverted: keyword-only `rebase_config` (bare `*`). The "ids are positional
   house-wide" premise was false (Layer 2 call sites are mixed), so no placement had a
   consistency case; signature stays shaped like its `configs.py` siblings. If keyword-only is
@@ -142,7 +143,9 @@ change_description=None)`, `rebase_config_delete(…, version)`.
 
 ## Deferred / follow-ups recorded during review
 
-- `FEATURE_BRANCHES_MERGE_REQUESTS` naming is off the file's dominant convention (suffix:
+- ~~`FEATURE_BRANCHES_MERGE_REQUESTS` naming~~ -- resolved by Layer 2 (PR #703): renamed to
+  `BRANCHES_MERGE_REQUESTS_FEATURE` when the pre-flight was wired. Original note: off the
+  file's dominant convention (suffix:
   `STORAGE_BRANCHES_FEATURE`, `GLOBAL_SEARCH_FEATURE`, `PAYG_FEATURE`) and the constant is
   unused until Layer 2 calls it — decide rename vs. keep when wiring the pre-flight.
 - SOX-fence caveat on the constant's comment: the fence holds only if a SOX project never also

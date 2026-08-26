@@ -199,6 +199,7 @@ final Layer 3 review:
 | Source branch deleted as a second job, no handle returned | `createAndEnqueueJobFromJob(..., DevBranchDelete::OPERATION_NAME, ...)` after commit in `MergeDevBranchJob` |
 | diff/rebase 400 on default branch | `ConfigurationRebaseNotAvailableOnDefaultBranchException` / diff OA doc → `createBadRequestException` |
 | Diff shape `base`/`ours`/`theirs`, each nullable | `ConfigurationDiffResponse` |
+| Each diff side = `{version, isDeleted, diff: {name, description, changeDescription, isDisabled, configuration, rows}}` -- content NESTED under `diff`, version/deletion as side metadata; all six `diff` keys `required` | `ConfigurationVersionResponse` + `ConfigurationDiffData` OA schemas (re-verified 2026-08-27; a flat-side assumption breaks every take/classify consumer) |
 | Rebase replaces; missing `configuration` → `{}`, `isDisabled` → `false`, `description` → null | `RebaseRequest::mapValidatedData` (`?? new stdClass()`, `?? false`, `isset` → null); "complete 3-way diff result … fully replaces" verbatim in `ConfigurationRebaseService` docblock |
 | `rows` required for keep; `[]` deletes all rows; order = sort order | `validateDiffRows` + OA schema |
 | Empty `diff` `{}` = delete resolution (tombstone) | `validateDiff` empty-stdClass branch → `isDelete: true` |

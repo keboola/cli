@@ -46,6 +46,11 @@ class ErrorCode(StrEnum):
     CONFIG_ERROR = "CONFIG_ERROR"
     NOT_INITIALIZED = "NOT_INITIALIZED"
     INIT_ERROR = "INIT_ERROR"
+    # A client-side pre-flight found the project lacks a required feature
+    # flag (raised via FeatureNotEnabledError). The value matches the string
+    # SearchService already emits in its per-project error envelopes, so the
+    # two surfaces agree.
+    FEATURE_NOT_ENABLED = "FEATURE_NOT_ENABLED"
 
     # Jobs
     QUEUE_JOB_FAILED = "QUEUE_JOB_FAILED"
@@ -210,6 +215,23 @@ class ConfigError(Exception):
         self.message = message
 
 
+class FeatureNotEnabledError(ConfigError):
+    """Raised by a client-side pre-flight when the project lacks a feature flag.
+
+    A missing feature often surfaces server-side as an opaque 403 (or 404)
+    indistinguishable from a role denial -- only a pre-flight can word the
+    real error. Carries ``error_code`` so a ``--json`` consumer can tell
+    "feature not enabled" from every other :class:`ConfigError` shape
+    (precedent: ``PAYG_NOT_AVAILABLE`` -- a missing project feature is a
+    configuration problem, and ``SessionAuthUnsupportedError`` for the
+    ConfigError-with-a-code pattern).
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.error_code = ErrorCode.FEATURE_NOT_ENABLED
+
+
 class SyncConflictError(Exception):
     """Raised when ``sync pull --force`` would overwrite locally-modified
     configs whose remote **also** changed since the last pull -- a true 3-way
@@ -339,6 +361,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     # it inherits the right category instead of silently taking the "api"
     # default -- a missing project feature is a configuration problem.
     ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
+    ErrorCode.FEATURE_NOT_ENABLED: "configuration",
     # A refused-by-us safety guard, not an upstream fault: nothing was sent to
     # the API, and the caller fixes it by re-issuing the request with --force.
     ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
