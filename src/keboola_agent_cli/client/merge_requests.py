@@ -129,7 +129,7 @@ class MergeRequests:
     branch-prefixed; all bodies are JSON (module docstring). Returns are raw
     parsed JSON, as everywhere in ``client/``.
 
-    The pre-flight feature check (``has_feature(FEATURE_BRANCHES_MERGE_REQUESTS)``)
+    The pre-flight feature check (``has_feature(BRANCHES_MERGE_REQUESTS_FEATURE)``)
     is deliberately NOT done here -- a missing feature surfaces as a 403
     byte-for-byte identical to a role denial, so only a Layer 2 pre-flight
     can word the error.

@@ -1240,3 +1240,69 @@ class TestUnauthorizedErrorMapping:
             assert exc_info.value.error_code == ErrorCode.INVALID_TOKEN
         finally:
             client.close()
+
+
+class TestApiErrorCodeDetails:
+    """The body's machine string `code` must survive into KeboolaApiError.details."""
+
+    def _client(self) -> BaseHttpClient:
+        return BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"X-StorageApi-Token": TOKEN},
+        )
+
+    def test_body_code_lands_in_details(self, httpx_mock) -> None:
+        # The merge 409's "not ready" shape -- the message carries only the
+        # human `error` text, so `code` in details is the ONLY machine handle
+        # (MergeRequestService.merge() branches on it, DMD-1899).
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={
+                "error": "Cannot merge, another merge request is processing.",
+                "code": "storage.mergeRequests.notReadyToMerge",
+            },
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert (
+                exc_info.value.details["api_error_code"]
+                == "storage.mergeRequests.notReadyToMerge"
+            )
+        finally:
+            client.close()
+
+    def test_no_code_means_no_details_key(self, httpx_mock) -> None:
+        # The merge 409's conflict shape carries no string code -- details
+        # must not invent one.
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={"error": "Configuration was changed in the default branch."},
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert "api_error_code" not in exc_info.value.details
+        finally:
+            client.close()
+
+    def test_non_string_code_ignored(self, httpx_mock) -> None:
+        # Keboola Metastore puts an int HTTP status into `error`; guard the
+        # same way against a non-string `code`.
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=404,
+            json={"error": "not found", "code": 404},
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert "api_error_code" not in exc_info.value.details
+        finally:
+            client.close()

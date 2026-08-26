@@ -516,12 +516,18 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3
 # (client/merge_requests.py) does no feature check itself -- a missing
-# feature is a 403 identical to a role denial -- so the Part 2 service layer
-# must call has_feature() with this constant before writes and word the error. It
-# also doubles as the SOX fence: server-side, `protected-default-branch`
-# passes the same gate, so checking for this flag specifically keeps SOX
-# projects out of a flow whose approvals semantics kbagent does not cover.
-FEATURE_BRANCHES_MERGE_REQUESTS: str = "branches-merge-requests"
+# feature is a 403 identical to a role denial -- so the service layer calls
+# has_feature() with this constant before writes and words the error. It
+# also doubles as the SOX fence: server-side, the six MR writes accept
+# `protected-default-branch` OR `branches-merge-requests` (only /rebase
+# requires this flag specifically), so checking for this flag keeps SOX
+# projects out of a flow whose approvals semantics kbagent does not cover --
+# but the fence holds ONLY as long as a SOX project never also carries
+# `branches-merge-requests`. The pre-flight is thus deliberately stricter
+# than the server for a project with only `protected-default-branch`.
+# (Renamed from FEATURE_BRANCHES_MERGE_REQUESTS to match this file's
+# dominant `..._FEATURE` suffix convention; decided in DMD-1899.)
+BRANCHES_MERGE_REQUESTS_FEATURE: str = "branches-merge-requests"
 
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``

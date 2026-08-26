@@ -186,3 +186,10 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Code | Description |
 |---|---|
 | `PAYG_NOT_AVAILABLE` | The project does not have the `pay-as-you-go` feature, so it has no credit balance; the billing host may not even resolve on this stack |
+
+### Merge requests
+
+| Code | Description |
+|---|---|
+| `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
+| `MR_MERGE_CONFLICT` | Merge answered 409 without a machine code: configurations changed on both branches. Not retryable -- resolve the conflicts (`kbagent merge-request conflicts`) and merge again |
