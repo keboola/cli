@@ -339,3 +339,147 @@ class MergeRequestService(BaseService):
             detail["conflicts"] = conflicts
             detail["conflicts_count"] = len(conflicts)
         return detail
+
+    # -- Writes: create / update / review transitions --------------------------
+
+    def create_merge_request(
+        self,
+        alias: str,
+        branch_from_id: int,
+        title: str,
+        description: str | None = None,
+        reviewer_ids: list[int] | None = None,
+        auto_merge_strategy: str | None = None,
+        auto_merge_at: str | None = None,
+        external_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a merge request from ``branch_from_id`` into the default branch.
+
+        The target is always the default branch (the backend rejects any
+        other), so the service resolves its id itself. The source branch is
+        an explicit parameter -- Layer 1 resolves it via the house
+        ``resolve_branch()`` idiom (``--branch`` -> ``active_branch_id`` ->
+        readable error) and the output must state which branch the MR was
+        created from. A source branch can have at most one MR, ever; a
+        second create answers 404 server-side.
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            default_branch_id = self._default_branch_id(client, alias)
+            if branch_from_id == default_branch_id:
+                raise ConfigError(
+                    f"Branch {branch_from_id} is the default (production) branch of "
+                    f"project '{alias}'. A merge request merges a development branch "
+                    "into it -- create one with `kbagent branch create`, or pass "
+                    "--branch with a dev branch id."
+                )
+            mr = client.merge_requests.create(
+                branch_from_id=branch_from_id,
+                branch_into_id=default_branch_id,
+                title=title,
+                description=description,
+                reviewer_ids=reviewer_ids,
+                auto_merge_strategy=auto_merge_strategy,
+                auto_merge_at=auto_merge_at,
+                external_id=external_id,
+            )
+        finally:
+            client.close()
+        return {
+            "alias": alias,
+            "branch_from_id": branch_from_id,
+            "branch_into_id": default_branch_id,
+            **_enrich_row(mr),
+        }
+
+    def update_merge_request(
+        self,
+        alias: str,
+        merge_request_id: int,
+        title: str | None = None,
+        description: str | None = None,
+        reviewer_ids: list[int] | None = None,
+        auto_merge_strategy: str | None = None,
+        auto_merge_at: str | None = None,
+        external_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an MR's metadata. ``None`` = leave unchanged (the API cannot
+        clear a field to null; an empty string clears description/externalId
+        server-side)."""
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            mr = client.merge_requests.update(
+                merge_request_id,
+                title=title,
+                description=description,
+                reviewer_ids=reviewer_ids,
+                auto_merge_strategy=auto_merge_strategy,
+                auto_merge_at=auto_merge_at,
+                external_id=external_id,
+            )
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
+    def request_review(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """Move the MR from ``development`` to review.
+
+        With the non-SOX default of 0 required approvals the MR lands
+        straight in ``approved`` (the backend auto-applies finish_review) --
+        and a merge from ``development`` skips this step entirely, so the
+        happy path never needs it.
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            mr = client.merge_requests.request_review(merge_request_id)
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
+    def approve(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """Add the caller's approval."""
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            mr = client.merge_requests.approve(merge_request_id)
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
+    def request_changes(
+        self, alias: str, merge_request_id: int, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Send the MR back to ``development`` (approvals are deleted).
+
+        Also the closest thing to closing an MR: the backend has no cancel
+        endpoint, and the UI's "cancel" is exactly this call made by the
+        creator on their own MR (rendered as Closed; derived_state mirrors
+        that). ``reason`` is capped at 1000 characters server-side.
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            mr = client.merge_requests.request_changes(merge_request_id, reason=reason)
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
+    def _default_branch_id(self, client: KeboolaClient, alias: str) -> int:
+        """Resolve the project's default branch id (the only legal MR target)."""
+        for branch in client.list_dev_branches():
+            if branch.get("isDefault"):
+                return int(branch["id"])
+        raise KeboolaApiError(
+            message=f"Project '{alias}' reports no default branch -- cannot target a merge request.",
+            status_code=0,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
