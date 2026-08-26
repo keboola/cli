@@ -1,7 +1,7 @@
 # Python Library Workflow (`from keboola_agent_cli import Client`)
 
 Besides the CLI and the `kbagent serve` daemon, kbagent ships a **stateless,
-importable Python library** (since 0.61.0). It lets an in-process consumer -- a
+importable Python library**. It lets an in-process consumer -- a
 Keboola Data App, a transformation, a hosted service -- run Query Service SQL and
 read/write Storage Files with **no CLI subprocess, no daemon, and no config-dir**.
 

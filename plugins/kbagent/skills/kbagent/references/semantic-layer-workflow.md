@@ -230,7 +230,7 @@ success/failure in the response envelope's `rollback` field. If the
 rollback itself fails, the model is left in a partial state -- run
 `semantic-layer validate` immediately.
 
-**Partial cascade state (since v0.41.10)**: the cascade has per-item
+**Partial cascade state**: the cascade has per-item
 rollback only -- each constraint DELETE+POST rolls back individually.
 If the metric rename succeeds but M of N dependent constraints fail
 to repoint, the envelope sets `partial_state: true` at the top level
@@ -390,7 +390,7 @@ inference, paired range constraints), the `sl-build` skill in
 `04_AI_Kit/ai-kit/` is the right tool. The two are interoperable via
 the same metastore contract; bridge between them as needed.
 
-**Rollback on push failure (since v0.41.10)**: if a child POST fails
+**Rollback on push failure**: if a child POST fails
 mid-push, the service walks the list of successfully-POSTed children
 in REVERSE PUSH_ORDER and DELETEs each one, then DELETEs the model
 itself if we created it during this call. The wrapped error carries
@@ -495,7 +495,7 @@ Quick reminders:
 - **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
   `"Object with this name already exists in this project"`, or **500** with
   `"Failed to create meta object"` on legacy stacks. kbagent normalizes both
-  into `ErrorCode.ALREADY_EXISTS` (since v0.43.5). 409 is non-retryable so
+  into `ErrorCode.ALREADY_EXISTS`. 409 is non-retryable so
   the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
   still pays.
 - **DELETE -> 204** empty body.

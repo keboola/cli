@@ -303,7 +303,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     KBAGENT_PROJECT override that may name an alias absent from the config),
     and the other two are write confirmations.
 
-### Project Members & Invitations (since v0.29.0)
+### Project Members & Invitations
 
   Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
 
@@ -352,7 +352,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     NOT_FOUND is still raised when both sources miss.
 
   kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
-    (since 0.73.0) Run a synchronous component action (testConnection, getTables,
+    Run a synchronous component action (testConnection, getTables,
     ...) on the dedicated sync-actions service. ACTION_NAME is freeform --
     valid names are component-defined (see component detail synchronous_actions).
     --row-id shallow-merges the row over the root config at TOP level only
@@ -470,7 +470,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 
   kbagent config examples --component-id ID [--project NAME] [--row]
-    (since 0.73.0) Sample root/row configurations for a component, straight from
+    Sample root/row configurations for a component, straight from
     the AI-service component detail (same data the UI shows). --row limits to
     row examples. --json emits {{component_id, root_examples, row_examples}} --
     structured dicts, ideal as a starting point before config new / row-create.
@@ -574,7 +574,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     --mode run (default) writes to mapped output tables. --mode debug runs the component but
     redirects the output to a Storage File tagged `debug-<jobId>` instead of into destination
     buckets -- safe for dry-runs and for reproducing a failing run on a production configuration
-    without touching production data. Invalid values exit 2 via Click choice gate (since v0.43.6).
+    without touching production data. Invalid values exit 2 via Click choice gate.
     --json response shapes by exit code:
       - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
@@ -653,7 +653,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
     Create a typed table. --column repeatable.
-    - --if-not-exists (since 0.47.0): opt-in idempotency. On a duplicate-display-name failure,
+    - --if-not-exists: opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
       table with the same display name still surfaces the original error. Safe for parallel workers.
@@ -978,7 +978,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     /pay-as-you-go/billing/*, which does not accept a Storage token
     (issue #594, still open). Do not imply invoices are retrievable.
 
-### Feature Flags (since v0.48.0)
+### Feature Flags
 
   Requires a SUPER-ADMIN Manage API token (same kind as `org setup`). Same
   default-deny token policy: interactive hidden prompt by default; pass
@@ -1016,7 +1016,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     since 0.73.0 -- previously an error).
 
   kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
-    (since 0.73.0) Bundled example flow configurations (vendored from
+    Bundled example flow configurations (vendored from
     keboola-mcp-server), fully offline. Default keboola.flow (conditional);
     keboola.orchestrator serves legacy examples with an informational-only
     warning (kbagent cannot create or edit orchestrator flows). --json emits
@@ -1417,12 +1417,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     The supported way to reconcile a drifted tree with production (no manifest surgery).
     Since 0.72.0 plain pull also re-materializes a tracked config whose local dir is missing
     (manifest<->disk invariant), so delete-dir-then-pull refetches. Applies to rows too.
-    Config-level isDisabled round-trips (since 0.72.0) as sparse `is_disabled: true` in
+    Config-level isDisabled round-trips as sparse `is_disabled: true` in
     _config.yml -- absent key means enabled; pull writes it, diff surfaces drift, push sends it.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
-    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
+    --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded, unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
@@ -1441,7 +1441,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
-    --branch (since 0.47.0): per-invocation dev-branch override. Wins over
+    --branch: per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
     Branch-scoped (since v0.89.0, #649): the local side is read from exactly ONE tree --
@@ -1463,27 +1463,27 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
-    Fresh-CREATE behavior (since 0.47.0): if the manifest contains a placeholder entry at
+    Fresh-CREATE behavior: if the manifest contains a placeholder entry at
     (component_id, path), the create path updates it in place (no manifest duplication)
     and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
     against the now-real config id are naturally idempotent.
-    Fresh-CREATE variable binding (since 0.47.2): when a keboola.variables config + its
+    Fresh-CREATE variable binding: when a keboola.variables config + its
     values row are created alongside a transformation in the same push, the transformation's
     variables_id / variables_values_id are rebound to the assigned ULIDs (not placeholder
     dirnames), the row's values are hoisted even when the scaffold row file has no _keboola
     block, and the row's placeholder parent is remapped before POST. job run then succeeds
     without a post-push config variables-set step.
-    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync diff.
-    When no <branch_name>/ subtree exists on disk (since 0.47.2), the local default tree
+    --branch: per-invocation dev-branch override. Same semantics as sync diff.
+    When no <branch_name>/ subtree exists on disk, the local default tree
     (main/) is read as the source and promoted to the target branch; API writes still target
     the branch id.
-    --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
+    --no-name-drift-warnings: suppress the cosmetic name_drift_warnings
     array from the result envelope.
-    Never-fetched guard (since 0.72.0): a manifest entry with an empty pull_hash and no
+    Never-fetched guard: a manifest entry with an empty pull_hash and no
     local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
     diff/push exclude it and report it under never_fetched with a warning -- run sync pull
     to materialize it. Local deletion of a properly-pulled config still deletes on push.
-    Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
+    Adopted-by-id writeback: pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
     Branch-scoped (since v0.89.0, #649): push consumes the diff's changeset, so configs
@@ -1521,7 +1521,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
-### Semantic Layer (Metastore) (since v0.41.0)
+### Semantic Layer (Metastore)
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
@@ -1542,12 +1542,12 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Without --type prints a per-type count summary.
 
   kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
-    (since 0.73.0) Live JSON Schema per semantic object type, fetched from the
+    Live JSON Schema per semantic object type, fetched from the
     deployed metastore (never bundled -- cannot drift). Exactly one of
     --type/--all. --json emits {{project, schemas: [{{type, schema}}]}}.
 
   kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
-    (since 0.47.0) Project-wide glob search across semantic-layer entity names.
+    Project-wide glob search across semantic-layer entity names.
     Mirrors the upstream keboola-mcp-server search_semantic_context tool so a
     downstream caller can verify the model is populated without an MCP dependency.
     Patterns are case-sensitive fnmatch, repeatable (union). Default pattern is "*".
@@ -1555,7 +1555,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Returns {{project, contexts: [{{id, type, name, description, attributes}}], total_count}}.
 
   kbagent semantic-layer get-context --project P --context-id ID
-    (since 0.47.0) Single-entry fetch by id, irrespective of type. Probes model first,
+    Single-entry fetch by id, irrespective of type. Probes model first,
     then datasets/metrics/relationships/constraints/glossary in order; raises NOT_FOUND
     if no type matches (exit 1).
 
@@ -1573,7 +1573,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Three-way diff: project<->project, project<->file, file<->file. Output
     groups changes per entity type: added, removed, changed (with diff_keys).
 
-  kbagent semantic-layer reference-data list|get|set|delete ... (since 0.55.0)
+  kbagent semantic-layer reference-data list|get|set|delete ...
     Dimension-member records (semantic-reference-data): one record per
     dimension holding the full member list in a members[] array (e.g. a
     Chart of Accounts). Deliberately OUTSIDE build/export/diff/cascade.
@@ -1605,7 +1605,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
-    Partial-state envelope (since v0.41.10): when metric rename succeeds but
+    Partial-state envelope: when metric rename succeeds but
     one or more dependent constraints fail to repoint, the response sets
     `partial_state: true` at the top level + `recovery_hint: "<text>"`
     pointing at `semantic-layer validate` + manual `edit constraint
@@ -1640,7 +1640,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     dependency order (fixes the long-standing sl-build skill bug where
     semantic-constraint was silently dropped). On push failure rolls back
     every successfully-POSTed child in reverse order + deletes the model
-    if we created it (since v0.41.10); pass --keep-on-failure to preserve
+    if we created it; pass --keep-on-failure to preserve
     the partial state for forensic inspection (mirrors data-app create).
 
   kbagent semantic-layer token --encrypt --project P --component-id C
@@ -1695,7 +1695,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --from-file for the full {{"type":..., "params":...}} JSON envelope
     when prompts/args grow large. --extra-arg on an ai_agent task is
     honored only when the kbagent process (serve, or this `agent` run)
-    has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env (since 0.60.2);
+    has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env;
     otherwise the args are dropped with a warning.
 
   kbagent agent update TASK_ID [--name N] [--description D] [--cron C]
@@ -1739,7 +1739,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     the chosen AI CLI with a meta-prompt; the final `done` event's
     `data.prompt` carries the cleaned body ready to paste into
     `agent create --prompt ...`. --extra-arg follows the same
-    KBAGENT_ALLOW_AI_EXTRA_ARGS opt-in as `agent create` (since 0.60.2).
+    KBAGENT_ALLOW_AI_EXTRA_ARGS opt-in as `agent create`.
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
@@ -1789,7 +1789,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
 
-### SQL Transformations (since v0.73.0)
+### SQL Transformations
 
   kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
     Create a SQL transformation. Component id derived from the project
@@ -1814,7 +1814,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     mapping you want to keep. --dry-run previews the resulting tree + op
     summary without writing.
 
-### Documentation Q&A (since v0.73.0)
+### Documentation Q&A
 
   kbagent docs query "QUESTION" [--project NAME]
     Answer a natural-language question from the Keboola documentation via the
@@ -1823,7 +1823,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     `kai ask` this does NOT see project data -- it is documentation-only,
     works with any token, and is the right tool for "how do I ..." questions.
 
-### Developer Portal (since v0.49.0)
+### Developer Portal
 
   The `dev-portal` command group talks to `apps-api.keboola.com` (the Keboola
   Developer Portal) and lets component developers register and update components
@@ -1844,7 +1844,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
       --username admin@keboola.com --role-hint admin --password-stdin
     kbagent dev-portal identity use vendor-keboola
 
-  **`role_hint` is load-bearing (since v0.51.1)**: `vendor` (default) routes
+  **`role_hint` is load-bearing**: `vendor` (default) routes
   `dev-portal patch` to `PATCH /vendors/{{vendor}}/apps/{{app}}` (restricted
   schema); `admin` routes it to `PATCH /admin/apps/{{app}}` (permissive
   schema). The admin endpoint is the **only** way to set the 9 fields
@@ -1856,7 +1856,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   "must be one of: easy, medium, hard"; that message is a known apps-api
   bug -- the field is actually `forbidden()`, not enum-validated).
 
-  **`--password-stdin` (since v0.51.1)** works on TTY (hidden line-based
+  **`--password-stdin`** works on TTY (hidden line-based
   prompt, Enter to confirm) AND on a pipe (`echo $PASS | … --password-stdin`,
   reads to EOF). Pre-0.51.1 the flag hung interactively because it always
   waited for EOF.
@@ -1931,7 +1931,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent doctor
     Health checks (no --fix since 0.85.0 -- it only installed the MCP server).
-    Inside a sync working tree, the sync_secrets check (since 0.55.0) warns about
+    Inside a sync working tree, the sync_secrets check warns about
     in-sync configs that still hold plaintext #-secrets (#378); skipped outside a
     sync tree. The mcp_tool_tasks check FAILs on agent tasks still using the
     removed `--type mcp_tool`; recreate them as `--type cli_command`.
@@ -1941,7 +1941,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     the latest available; flags any staleness. Since 0.85.0 it reports kbagent
     only -- keboola-mcp-server is a separate distribution kbagent no longer
     tracks, so there is no `dependencies` key in --json.
-    --beta (since 0.42.0) reports the latest pre-release (beta / rc) instead
+    --beta reports the latest pre-release (beta / rc) instead
     of the latest stable. Same env override: KBAGENT_INCLUDE_PRERELEASE=1.
 
   kbagent update [--beta]
@@ -1958,7 +1958,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     one. `version --json` then carries kbagent.install_channel and
     kbagent.upgrade_hint; upgrade_command is empty for a hand-unpacked
     archive.
-    --beta (since 0.42.0) opts into pre-release versions (PEP 440 betas/rc,
+    --beta opts into pre-release versions (PEP 440 betas/rc,
     e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
     /releases/latest endpoint, which excludes prereleases server-side --
     stable users never silently land on a beta. Set
@@ -2036,7 +2036,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      KBAGENT_CONFIG_DIR       Override config directory
      KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
      KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
-                              reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL (since 0.50.0).
+                              reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL.
                               Headless / token-only mode: no `project add`, no config.json on disk. Use
                               `--project __env__` (or rely on it as the sole/default project). The token
                               lives in memory only -- it is NEVER persisted, even if a write op runs.

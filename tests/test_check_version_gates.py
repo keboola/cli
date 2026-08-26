@@ -561,3 +561,36 @@ class TestResolveModeGuardsTheVersion:
         rc, f = self._run(monkeypatch, tmp_path, "0.91.0.banana")
         assert rc == 1
         assert "vNEXT" in f.read_text(encoding="utf-8")
+
+
+class TestGatesBelowFloor:
+    """``--list-below`` is the worklist generator for retiring stale gates.
+
+    A gate only earns its place while some live install predates it. kbagent
+    self-updates on startup, so the population a very old gate protects rounds
+    to zero -- while the gate itself keeps making the agent refuse a command
+    the user actually has, which the gate's own docs call strictly worse than
+    no gate. Periodically raising a floor and de-tagging below it needs a
+    worklist, and hand-grepping one is how the heading rule got missed.
+    """
+
+    def test_returns_only_gates_below_the_floor(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "a (since 0.23.0)\nb (since 0.85.0)\n")
+        found = check_version_gates.gates_below(collect([f]), "0.80.0")
+        assert list(found) == ["0.23.0"]
+
+    def test_floor_itself_is_not_below_the_floor(self, tmp_path: Path) -> None:
+        """The floor is the oldest version we still gate for -- inclusive."""
+        f = _write(tmp_path, "g.md", "a (since 0.80.0)\n")
+        assert check_version_gates.gates_below(collect([f]), "0.80.0") == {}
+
+    def test_carries_the_locations_through(self, tmp_path: Path) -> None:
+        f = _write(tmp_path, "g.md", "x\na (since 0.23.0)\n")
+        found = check_version_gates.gates_below(collect([f]), "0.80.0")
+        assert found["0.23.0"][0][1] == 2
+
+    def test_orders_versions_oldest_first(self, tmp_path: Path) -> None:
+        """Oldest first: the safest de-tagging starts at the far end."""
+        f = _write(tmp_path, "g.md", "a (since 0.30.0)\nb (since 0.9.0)\nc (since 0.23.0)\n")
+        found = check_version_gates.gates_below(collect([f]), "0.80.0")
+        assert list(found) == ["0.9.0", "0.23.0", "0.30.0"]

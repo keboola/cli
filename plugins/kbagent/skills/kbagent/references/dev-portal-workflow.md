@@ -25,7 +25,7 @@ Google Authenticator).
 `--password-stdin` works in both pipe mode (`echo $PASS | … --password-stdin`,
 reads to EOF) and TTY mode (hidden line-based prompt, Enter to confirm).
 
-### `role_hint` is load-bearing (since v0.51.1)
+### `role_hint` is load-bearing
 
 `--role-hint` is **not** a free-text label. It picks which apps-api
 endpoint kbagent uses for `dev-portal patch`:

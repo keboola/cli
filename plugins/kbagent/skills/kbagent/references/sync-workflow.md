@@ -2,7 +2,7 @@
 
 Sync lets you manage Keboola configurations as local files with full git integration.
 
-## Variable values deployment (since v0.21.0)
+## Variable values deployment
 
 `sync push` now deploys **config rows**, not just parent configs. This unlocks the
 most common GitOps use case: deploying `keboola.variables` values through git.
@@ -99,7 +99,7 @@ Related semantics (all since v0.72.0):
 - `sync status` is a LOCAL-only check (says so explicitly) -- use `sync diff`
   for a local-vs-production audit.
 
-## Per-invocation dev-branch override (since v0.47.0)
+## Per-invocation dev-branch override
 
 `sync push`, `sync pull`, and `sync diff` accept `--branch <id>` to target a
 dev branch for a single invocation. The override beats every other branch
@@ -129,7 +129,7 @@ The override is per-invocation only — it does not write into the manifest
 or the config store, so a subsequent command without `--branch` falls back
 to the normal priority chain.
 
-**Promote the default tree to a target branch (since v0.47.2).** When the
+**Promote the default tree to a target branch.** When the
 target branch has no materialized `<branch_name>/` subtree on disk, `sync push
 --branch <id>` reads the **default tree** (`main/`) as the source and promotes
 it to the target branch, instead of failing with `Config file not found`.
@@ -181,7 +181,7 @@ Before this landed, that production diff classified the whole orphaned `main/`
 tree as `added` with an empty `config_id`, and `sync push` would have created a
 duplicate of every production config (issue #649).
 
-## Fresh-CREATE writeback (since v0.47.0)
+## Fresh-CREATE writeback
 
 If you (or a tool like FIIA) seed `.keboola/manifest.json` with placeholder
 entries before the first `sync push`, the writeback updates each placeholder
@@ -197,7 +197,7 @@ metadata API immediately after the create call. This was the previous
 "set folderName via `config set-folder` after push" workaround for
 fresh-create flows; from v0.47.0 a single push handles it.
 
-**Variable links are resolved on fresh CREATE (since v0.47.2).** When the
+**Variable links are resolved on fresh CREATE.** When the
 placeholder tree includes a `keboola.variables` config + default-values row and
 a transformation that cross-references them, one `sync push` now produces a
 *runnable* transformation:
@@ -218,14 +218,14 @@ placeholder can't be matched and the binding is ambiguous (zero or >1
 `variable_link` entry appears in the push `errors` array — never a silently
 broken link. A clean re-push reports `no_changes`.
 
-`sync push --no-name-drift-warnings` (since v0.47.0) suppresses the
+`sync push --no-name-drift-warnings` suppresses the
 cosmetic `name_drift_warnings` array on the result envelope. The
 detection still runs; only the report is dropped. Useful for downstream
 tools that already audit drift their own way (e.g. FIIA's
 `var-07-fi-daily-date-refresh` pattern legitimately differs from the
 canonical kbagent naming and the warnings are noise).
 
-## Adopting an existing kbc Go CLI checkout (since v0.22.0)
+## Adopting an existing kbc Go CLI checkout
 
 If you already have a `.keboola/manifest.json` produced by the official
 `kbc` Go CLI (keboola-as-code), `kbagent` can adopt it in place instead of
@@ -414,7 +414,7 @@ Stored in `.keboola/branch-mapping.json`:
 
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
 - **Pull protects local edits**: locally-modified files are skipped by default
-- **`--force` is conflict-aware (since 0.53.0)**: see below -- it no longer blindly overwrites
+- **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
