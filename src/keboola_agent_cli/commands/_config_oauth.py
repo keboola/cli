@@ -106,17 +106,18 @@ def register(app: typer.Typer) -> None:
                 f"[bold]OAuth URL for[/bold] [cyan]{escape(component_id)}[/cyan]/"
                 f"[cyan]{escape(config_id)}[/cyan]:\n"
             )
-            # soft_wrap keeps the URL on one logical line (Rich otherwise inserts real
-            # newlines into it), highlight=False keeps it a single OSC-8 anchor instead of
-            # one anchor per highlighted URL part, and link=<url> is the click target.
-            formatter.console.print(
-                f"[link={url}]{escape(url)}[/link]", soft_wrap=True, highlight=False
-            )
+            # The URL is ~200 chars, so it never fits one terminal row. The click target
+            # is therefore a short label that cannot wrap -- terminals that scope link
+            # detection to a single visual row would otherwise follow only the first row
+            # of a wrapped URL and hand the browser a truncated config id. The URL itself
+            # is printed plain with soft_wrap so Rich inserts no newlines into it and a
+            # copy (or a line-based parser) always gets it whole.
+            formatter.console.print(f"[link={url}]Authorize in browser[/link] [dim](click)[/dim]")
+            formatter.console.print(url, soft_wrap=True, highlight=False, markup=False)
             if opened:
                 formatter.console.print("\n[dim]Opened in your default browser.[/dim]")
             else:
                 formatter.console.print(
-                    "\n[dim]Open this URL in a browser and grant access."
-                    " Terminals that wrap the link may only follow the first line --"
-                    " re-run with [/dim][cyan]--open[/cyan][dim] to launch it directly.[/dim]"
+                    "\n[dim]Open the link in a browser and grant access, or re-run with"
+                    " [/dim][cyan]--open[/cyan][dim] to launch it directly.[/dim]"
                 )

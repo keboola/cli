@@ -673,6 +673,7 @@ class TestConfigOauthUrlCli:
 
         assert result.exit_code == 0, result.output
         assert OAUTH_RESULT["url"] in result.output
+        assert "Authorize in browser" in result.output
 
     def test_open_flag_launches_browser(self, tmp_config_dir: Path) -> None:
         """--open hands the complete URL to the browser opener."""
