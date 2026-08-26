@@ -3181,6 +3181,28 @@ requires a **master (admin) token** — `canManageTokens` alone is not enough
   working credential here. `token create` carries the same guard since
   v0.89.0 (`token refresh` does not — that endpoint has no such defect).
 
+## A pasted OAuth wizard URL is only as long as one terminal row (SUPPORT-17391)
+
+The `config oauth-url` URL is ~200 chars (`token` + encoded `sapiUrl` + the
+`#/component/config` fragment). It fits no terminal row, and two independent
+layers then truncate it:
+
+- **Rich layout.** `console.print(url)` inserts REAL newlines at the console
+  width, so a copy of one visual row silently loses the tail. Fixed in the
+  command by `soft_wrap=True`; anything else printing a URL through Rich
+  (chat/answer renderers included) needs the same flag.
+- **Per-row link detection.** Terminals and chat renderers that autodetect URLs
+  scope detection to one visual row, so a wrapped URL becomes a link to its
+  first row only. `token` and `sapiUrl` survive (they come first), the
+  `config_id` in the fragment does not — the wizard authenticates and then
+  answers `Failed to load config data. Please contact us on support@keboola.com`,
+  which reads like a broken OAuth flow but is a truncated URL.
+
+The clickable target must therefore be a SHORT label carrying the URL as an
+OSC-8 target (`[link=<url>]Authorize in browser[/link]`), never the URL text.
+For agents: run `config oauth-url --open` (opens the default browser via
+`auth.environment.open_browser`) instead of pasting the link into a transcript.
+
 ## `data-app logs` is the only unconstrained log surface (since v0.43.8)
 
 - The upstream `keboola-mcp-server` `get_data_apps` MCP tool hardcodes a

@@ -97,7 +97,9 @@ def kai_ask(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     def _human(console, data):
-        console.print(data["response"])
+        # soft_wrap: Rich would otherwise insert real newlines into long lines, which
+        # breaks any URL the answer carries (a copied fragment stops being a valid link).
+        console.print(data["response"], soft_wrap=True)
 
     formatter.output(result, _human)
 
@@ -141,7 +143,7 @@ def kai_chat(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     def _human(console, data):
-        console.print(data["response"])
+        console.print(data["response"], soft_wrap=True)
         console.print(f"\n[dim]Chat ID: {data['chat_id']}[/dim]")
 
     formatter.output(result, _human)
@@ -243,7 +245,7 @@ def kai_chat_detail(
             role = msg["role"]
             style = "cyan" if role == "user" else "green"
             console.print(f"\n[bold {style}]{role}:[/bold {style}]")
-            console.print(msg["content"])
+            console.print(msg["content"], soft_wrap=True)
 
     formatter.output(result, _human)
 

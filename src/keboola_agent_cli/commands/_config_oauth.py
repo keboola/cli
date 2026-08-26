@@ -28,7 +28,9 @@ def register(app: typer.Typer) -> None:
         "oauth-url",
         rich_help_panel="OAuth",
         help=(
-            "Requires master token. Generate an OAuth authorization URL for a component configuration."
+            "Requires master token. Generate an OAuth authorization URL for a component "
+            "configuration; --open launches it (the URL is too long to survive being "
+            "pasted into a wrapping chat transcript)."
         ),
     )
     def config_oauth_url(
