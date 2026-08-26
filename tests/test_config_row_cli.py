@@ -674,6 +674,68 @@ class TestConfigOauthUrlCli:
         assert result.exit_code == 0, result.output
         assert OAUTH_RESULT["url"] in result.output
 
+    def test_open_flag_launches_browser(self, tmp_config_dir: Path) -> None:
+        """--open hands the complete URL to the browser opener."""
+        service = self._make_oauth_service(tmp_config_dir)
+        opened: list[str] = []
+
+        def _record(url: str) -> bool:
+            opened.append(url)
+            return True
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands._config_oauth.get_service",
+                lambda ctx, name: service,
+            )
+            mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _record)
+            result = _invoke(
+                tmp_config_dir,
+                "oauth-url",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                    "--open",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert opened == [OAUTH_RESULT["url"]]
+        assert json.loads(result.output)["data"]["opened_in_browser"] is True
+
+    def test_no_open_flag_does_not_launch_browser(self, tmp_config_dir: Path) -> None:
+        """Without --open the browser is never touched and JSON stays unchanged."""
+        service = self._make_oauth_service(tmp_config_dir)
+
+        def _fail(url: str) -> bool:
+            raise AssertionError("browser must not be opened without --open")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands._config_oauth.get_service",
+                lambda ctx, name: service,
+            )
+            mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _fail)
+            result = _invoke(
+                tmp_config_dir,
+                "oauth-url",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "opened_in_browser" not in json.loads(result.output)["data"]
+
 
 # ---------------------------------------------------------------------------
 # is_disabled / is_enabled CLI tests

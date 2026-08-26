@@ -16,6 +16,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
+from ..auth.environment import open_browser
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
@@ -52,6 +53,11 @@ def register(app: typer.Typer) -> None:
             "--redirect-url",
             help="Optional URL to return to after the OAuth flow completes (sets returnUrl query param)",
         ),
+        open_url: bool = typer.Option(
+            False,
+            "--open",
+            help="Open the authorization URL in the default browser instead of only printing it",
+        ),
     ) -> None:
         """Generate an OAuth authorization URL for a component configuration.
 
@@ -61,6 +67,9 @@ def register(app: typer.Typer) -> None:
         \b
         Examples:
           kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID
+
+          # Open the link straight in the default browser (no copy/paste)
+          kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID --open
 
           # Redirect back to a custom URL after the OAuth flow completes
           kbagent config oauth-url --project P --component-id keboola.ex-google-drive --config-id ID \\
@@ -87,15 +96,27 @@ def register(app: typer.Typer) -> None:
             )
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+        url = result["url"]
+        opened = open_browser(url) if open_url else False
+
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output({**result, "opened_in_browser": opened} if open_url else result)
         else:
             formatter.console.print(
                 f"[bold]OAuth URL for[/bold] [cyan]{escape(component_id)}[/cyan]/"
                 f"[cyan]{escape(config_id)}[/cyan]:\n"
             )
-            url = result["url"]
-            # soft_wrap keeps the URL a single line (no newlines inserted into it),
-            # link=<url> makes the whole URL the click target in OSC-8 terminals.
-            formatter.console.print(f"[link={url}]{escape(url)}[/link]", soft_wrap=True)
-            formatter.console.print("\n[dim]Open this URL in a browser and grant access.[/dim]")
+            # soft_wrap keeps the URL on one logical line (Rich otherwise inserts real
+            # newlines into it), highlight=False keeps it a single OSC-8 anchor instead of
+            # one anchor per highlighted URL part, and link=<url> is the click target.
+            formatter.console.print(
+                f"[link={url}]{escape(url)}[/link]", soft_wrap=True, highlight=False
+            )
+            if opened:
+                formatter.console.print("\n[dim]Opened in your default browser.[/dim]")
+            else:
+                formatter.console.print(
+                    "\n[dim]Open this URL in a browser and grant access."
+                    " Terminals that wrap the link may only follow the first line --"
+                    " re-run with [/dim][cyan]--open[/cyan][dim] to launch it directly.[/dim]"
+                )
