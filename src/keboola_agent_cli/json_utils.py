@@ -8,7 +8,12 @@ losing sibling keys -- the exact problem that MCP server's
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from typing import Any
+
+# Sentinel marking "the key does not exist on this side" in a DiffEntry --
+# distinct from an explicit ``None`` value, which is a legal JSON value.
+_ABSENT: Any = object()
 
 
 def deep_merge(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
@@ -95,19 +100,46 @@ def set_nested_value(obj: dict[str, Any], path: str, value: Any) -> dict[str, An
     return result
 
 
-def compute_diff(
+@dataclass(frozen=True)
+class DiffEntry:
+    """One changed dot-separated path between two nested dicts.
+
+    ``old`` / ``new`` hold the value on each side, or the module-private
+    ``_ABSENT`` sentinel when the key does not exist there -- distinct from an
+    explicit ``None``, which is a legal JSON value. Callers read the
+    ``old_present`` / ``new_present`` properties instead of comparing against
+    the sentinel.
+    """
+
+    path: str
+    old: Any
+    new: Any
+
+    @property
+    def old_present(self) -> bool:
+        return self.old is not _ABSENT
+
+    @property
+    def new_present(self) -> bool:
+        return self.new is not _ABSENT
+
+
+def compute_diff_entries(
     old: dict[str, Any],
     new: dict[str, Any],
     path: str = "",
-) -> list[str]:
-    """Produce a human-readable list of changes between two dicts.
+) -> list[DiffEntry]:
+    """Compute changed paths between two dicts as structured entries.
 
-    Each entry looks like:
-        ``"parameters.tables.count: 5 -> 10"``
-        ``"parameters.newKey: (absent) -> 'hello'"``
-        ``"parameters.removed: 42 -> (absent)"``
+    The recursive walk behind :func:`compute_diff` (which formats these
+    entries for humans), exposed as data so callers can post-process paths --
+    e.g. intersect two pairwise diffs into a three-way ``ours``/``theirs``/
+    ``both`` classification (merge-request conflict presentation, DMD-1899).
+
+    Nested dicts recurse; any other type mismatch or value change yields one
+    entry for the whole path. Keys are visited in sorted order.
     """
-    changes: list[str] = []
+    entries: list[DiffEntry] = []
     all_keys = sorted(set(list(old.keys()) + list(new.keys())))
 
     for key in all_keys:
@@ -119,14 +151,34 @@ def compute_diff(
             old_val = old[key]
             new_val = new[key]
             if isinstance(old_val, dict) and isinstance(new_val, dict):
-                changes.extend(compute_diff(old_val, new_val, full_path))
+                entries.extend(compute_diff_entries(old_val, new_val, full_path))
             elif old_val != new_val:
-                changes.append(f"{full_path}: {_fmt(old_val)} -> {_fmt(new_val)}")
+                entries.append(DiffEntry(path=full_path, old=old_val, new=new_val))
         elif in_old and not in_new:
-            changes.append(f"{full_path}: {_fmt(old[key])} -> (absent)")
+            entries.append(DiffEntry(path=full_path, old=old[key], new=_ABSENT))
         else:
-            changes.append(f"{full_path}: (absent) -> {_fmt(new[key])}")
+            entries.append(DiffEntry(path=full_path, old=_ABSENT, new=new[key]))
 
+    return entries
+
+
+def compute_diff(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    path: str = "",
+) -> list[str]:
+    """Produce a human-readable list of changes between two dicts.
+
+    A formatter over :func:`compute_diff_entries`. Each entry looks like:
+        ``"parameters.tables.count: 5 -> 10"``
+        ``"parameters.newKey: (absent) -> 'hello'"``
+        ``"parameters.removed: 42 -> (absent)"``
+    """
+    changes: list[str] = []
+    for entry in compute_diff_entries(old, new, path):
+        old_s = _fmt(entry.old) if entry.old_present else "(absent)"
+        new_s = _fmt(entry.new) if entry.new_present else "(absent)"
+        changes.append(f"{entry.path}: {old_s} -> {new_s}")
     return changes
 
 
