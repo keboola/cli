@@ -179,3 +179,189 @@ class TestDeriveViewer:
     def test_server_field_wins(self) -> None:
         mr = _mr(viewer={"isCreator": False, "hasApproved": True})
         assert derive_viewer(mr, admin_id=42) == {"is_creator": False, "has_approved": True}
+
+
+# -- Service-level tests ------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+import pytest  # noqa: E402
+
+from keboola_agent_cli.config_store import ConfigStore  # noqa: E402
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError  # noqa: E402
+from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse  # noqa: E402
+from keboola_agent_cli.services.merge_request_service import (  # noqa: E402
+    MergeRequestService,
+)
+
+STACK_URL = "https://connection.keboola.com"
+TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+ALIAS = "prod"
+
+
+def _verify_response(admin_id: int | None = 42) -> TokenVerifyResponse:
+    return TokenVerifyResponse(
+        token_id="901",
+        token_description="test",
+        project_id=10,
+        project_name="Prod",
+        owner_name="Prod",
+        admin_id=admin_id,
+    )
+
+
+@pytest.fixture
+def store(tmp_config_dir: Path) -> ConfigStore:
+    s = ConfigStore(config_dir=tmp_config_dir)
+    s.add_project(
+        ALIAS,
+        ProjectConfig(stack_url=STACK_URL, token=TOKEN, project_name="Prod", project_id=10),
+    )
+    return s
+
+
+@pytest.fixture
+def client_factory() -> tuple[MagicMock, MagicMock]:
+    mock = MagicMock()
+    mock.verify_token.return_value = _verify_response()
+    mock.has_feature.return_value = True
+    factory = MagicMock(return_value=mock)
+    return factory, mock
+
+
+def _svc(store: ConfigStore, factory: MagicMock) -> MergeRequestService:
+    return MergeRequestService(store, client_factory=factory)
+
+
+def _wire_mr(
+    mr_id: int = 7,
+    state: str = "development",
+    branch_from: int | None = 123,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "id": mr_id,
+        "state": state,
+        "title": "My MR",
+        "creator": CREATOR,
+        "reviewers": [],
+        "approvals": [],
+        "branches": {"branchFromId": branch_from, "branchIntoId": 1},
+        **extra,
+    }
+
+
+class TestListMergeRequests:
+    def test_rows_carry_derived_state(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [
+            _wire_mr(1, "published"),
+            _wire_mr(2, "development"),
+        ]
+        result = _svc(store, factory).list_merge_requests(ALIAS)
+        assert result["count"] == 2
+        assert [mr["derived_state"] for mr in result["merge_requests"]] == [
+            "merged",
+            "in_development",
+        ]
+        mock.close.assert_called_once()
+
+    def test_state_filter_matches_derived_vocabulary(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [
+            _wire_mr(1, "published"),
+            _wire_mr(2, "development"),
+        ]
+        result = _svc(store, factory).list_merge_requests(ALIAS, state="merged")
+        assert result["count"] == 1
+        assert result["merge_requests"][0]["id"] == 1
+        assert result["state_filter"] == "merged"
+
+    def test_state_filter_matches_raw_state_too(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [_wire_mr(1, "published")]
+        result = _svc(store, factory).list_merge_requests(ALIAS, state="published")
+        assert result["count"] == 1
+
+    def test_rejected_filter_uses_reviewer_derivation(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        rejected = _wire_mr(1, "development", reviewers=[{"id": 99, "status": "rejected"}])
+        mock.merge_requests.list.return_value = [rejected, _wire_mr(2, "development")]
+        result = _svc(store, factory).list_merge_requests(ALIAS, state="rejected")
+        assert [mr["id"] for mr in result["merge_requests"]] == [1]
+
+
+class TestFindMergeRequestForBranch:
+    def test_finds_by_branch_from_id(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [
+            _wire_mr(1, branch_from=111),
+            _wire_mr(2, branch_from=222),
+        ]
+        result = _svc(store, factory).find_merge_request_for_branch(ALIAS, 222)
+        assert result["id"] == 2
+        assert result["alias"] == ALIAS
+        assert result["derived_state"] == "in_development"
+
+    def test_branch_without_mr_raises_not_found_with_next_step(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [_wire_mr(1, branch_from=111)]
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).find_merge_request_for_branch(ALIAS, 999)
+        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
+        assert "merge-request create" in exc_info.value.message
+
+
+class TestGetMergeRequest:
+    def test_open_mr_fetches_conflicts_and_derives_everything(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "in_review")
+        mock.merge_requests.conflicts.return_value = [{"componentId": "c", "configurationId": "1"}]
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["derived_state"] == "in_review"
+        assert detail["merge_blockers"] == ["conflicts", "approvals"]
+        assert detail["mergeable"] is False
+        assert detail["allowed_actions"] == [
+            "approve",
+            "request_changes",
+            "update",
+            "resolve_conflicts",
+        ]
+        assert detail["viewer"] == {"is_creator": True, "has_approved": False}
+        assert detail["conflicts_count"] == 1
+        mock.merge_requests.conflicts.assert_called_once_with(7)
+
+    def test_mergeable_open_mr(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == []
+        assert detail["mergeable"] is True
+        assert detail["conflicts"] == []
+
+    def test_closed_mr_skips_conflicts_and_is_not_mergeable(self, store, client_factory) -> None:
+        # The source branch of a published/canceled MR is deleted; the
+        # conflicts endpoint is moot there and must not be called.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        mock.merge_requests.conflicts.assert_not_called()
+        assert detail["merge_blockers"] == ["state"]
+        assert detail["mergeable"] is False
+        assert "conflicts" not in detail
+
+    def test_activity_log_flag_passes_through(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        _svc(store, factory).get_merge_request(ALIAS, 7, include_activity_log=True)
+        mock.merge_requests.get.assert_called_once_with(7, include_activity_log=True)
+
+    def test_scoped_token_yields_unknown_viewer(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.verify_token.return_value = _verify_response(admin_id=None)
+        mock.merge_requests.get.return_value = _wire_mr(7, "development")
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["viewer"] == {"is_creator": None, "has_approved": None}
