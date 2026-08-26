@@ -168,7 +168,7 @@ kbagent --json workspace query \
   --file query.sql
 ```
 
-## Fast inline results vs `--full` -- mind the result-set volume (since v0.59.0)
+## Fast inline results vs `--full` -- mind the result-set volume
 
 `workspace query` has two ways to retrieve results. **Pick based on how many rows
 you actually need**, not by habit.
@@ -254,7 +254,7 @@ kbagent --json storage bucket-detail --project ALIAS --bucket-id in.c-shared-dat
 ```
 
 Prefer `sql_path` in agent code -- it is correctly quoted for the bucket's
-backend without you having to branch on dialect yourself. (since v0.25.3)
+backend without you having to branch on dialect yourself.
 
 **BigQuery FQN caveat**: on Keboola-managed BQ projects the Storage API
 returns `databaseName: ""`, so `bigquery_path` ends up dataset-qualified only
@@ -274,11 +274,11 @@ workspace.
 - **Quoting** (dialect-specific):
     - **Snowflake**: converts unquoted identifiers to UPPERCASE. Always double-quote database, schema, and table names -- Keboola names are typically lowercase (e.g. `"sapi_901"."in.c-main"."users"`).
     - **BigQuery**: requires backticks (`` ` ``), not double quotes; the dataset name is normalized to underscores (e.g. `` `in_c_main`.`users` ``).
-    - Easiest path: read `tables[].sql_path` from `bucket-detail` -- it is already correctly quoted for the bucket's backend (since v0.25.3).
+    - Easiest path: read `tables[].sql_path` from `bucket-detail` -- it is already correctly quoted for the bucket's backend.
 - **Query Service**: uses Storage API token for auth -- no warehouse credentials needed in the query command. Backend-agnostic: runs SELECTs against **both Snowflake and BigQuery** workspaces (BigQuery since v0.58.0; the path was always identical, the gap was classification). BigQuery workspaces carry `login_type: "default"` and are `qs_compatible: true` from v0.58.0 -- earlier versions mislabeled them `false`.
 - **Transactional mode**: add `--transactional` to wrap SQL in a transaction
 
-## Orphan detection + garbage collection (since v0.22.0)
+## Orphan detection + garbage collection
 
 Workspaces are backed by `keboola.sandboxes` configs. When a config is deleted
 out-of-band (UI cleanup, another CLI, force-delete script), the workspace

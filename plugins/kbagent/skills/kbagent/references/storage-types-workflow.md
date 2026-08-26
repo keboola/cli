@@ -86,7 +86,7 @@ against an unmaterialized bucket returns `Bucket not found`.
 The response surfaces this via `auto_created_bucket: true`. Production
 writes (no `--branch`) never materialize anything.
 
-### Branched-storage metadata stamp (since 0.25.1)
+### Branched-storage metadata stamp
 
 On projects with the **branched storage** feature flag enabled, the
 transformation runner's `output-mapping` library
@@ -114,7 +114,7 @@ client-side workaround.
 
 Closes #224.
 
-### Fake-branch vs `storage-branches`: when `--branch X` is a no-op for the runner (since 0.25.2)
+### Fake-branch vs `storage-branches`: when `--branch X` is a no-op for the runner
 
 Keboola Storage has **two parallel branch-isolation models**:
 
@@ -227,7 +227,7 @@ kbagent --json storage create-table \
   the field in JSON mode; in human mode it is shown as a yellow note under
   the created-table banner.
 
-## Promoting a typed rebuild back into the original name (since v0.28.0)
+## Promoting a typed rebuild back into the original name
 
 Common pattern: an existing typeless table needs proper column types. AI
 agent profiles the data in a workspace, builds a typed copy via CTAS, and
@@ -306,7 +306,7 @@ Rules:
 - The swap is symmetric; there is no rollback besides swapping again
   (or aborting the dev branch).
 
-## BigQuery repartition via `create-table --source-table-id` (since 0.66.0)
+## BigQuery repartition via `create-table --source-table-id`
 
 On **BigQuery** you can produce the repartitioned/re-clustered copy in a
 single call instead of hand-writing a CTAS transformation: `create-table`

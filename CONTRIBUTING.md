@@ -677,6 +677,43 @@ silent-drift risks summarized in the
    that race eventually, because a release is exactly when parallel branches
    converge. Already-numeric headings are *not* flagged -- a resolved tag never
    changes again, so its slug is stable.
+4b. **Retire gates below the floor** (periodic, not every release):
+   ```bash
+   make gate-floor-report                     # what is below the current floor
+   ```
+   A version gate earns its place only while some live install predates it.
+   kbagent self-updates on startup, so that population shrinks to roughly
+   nothing: pip/uv installs upgrade themselves, and only a standalone binary
+   (brew/choco/apt/dnf, which self-update is disabled for), an explicit
+   `KBAGENT_AUTO_UPDATE=false`, a dev tree, or a pip install stranded below
+   0.62.0 by the #424 rename can sit on an old version. Meanwhile the stale
+   gate keeps making the agent refuse a command the user actually has -- which
+   this file already calls strictly worse than no gate.
+
+   The two failure modes are asymmetric, and that is the whole argument for
+   pruning: a **kept-too-long** gate fails silently and permanently (the user
+   never learns the command exists), while a **removed-too-early** gate fails
+   loudly and self-correctingly (`No such command 'x'`, and `kbagent context` /
+   `--help` on the user's own install are authoritative anyway).
+
+   **The floor is 0.80.0** as of the 0.91.0 cleanup. Retiring a gate means
+   deleting the *tag*, never the content -- the guidance under it is almost
+   always still true, and 0.91.0's pass kept every word while removing 223 tags.
+
+   Four things are deliberately out of scope:
+
+   - `changelog.py` -- the historical record; the version IS the content.
+   - `src/**/*.py` except `commands/context.py` -- developer comments
+     (`# DEPRECATED (since 0.43.4)`) are provenance, and no agent reads them.
+   - `X+` written inside a sentence -- often load-bearing prose
+     (`created by < 0.66.1 stay dormant until re-run on 0.66.1+`).
+   - **Safety gates, at any age.** Keep the tag wherever not knowing the
+     version causes silent data loss or a false assurance rather than an error
+     message -- e.g. `sync pull --force` (pre-0.53.0 it silently stranded local
+     edits), the `sync status` / `doctor` plaintext-secret audit (a false
+     all-clear on a leaked credential), the manage-token default-deny, and the
+     `--deny-writes` firewall.
+
 5. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
 6. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
 7. **Add a curated What's-new entry** to `web/frontend/src/whatsnew.ts` when the release ships anything UI-visible -- a `WhatsNewRelease` element keyed by the **exact** new version, newest first. This is the reel the web UI shows once per version; it is deliberately *not* derived from `changelog.py` (see `docs/web-server.md` > "What's-new popup"). Skipping it does not error anywhere: `whatsNewFor` falls back to the previous release's reel, which returning users have already dismissed -- so the release's UI work ships **dark**. A release with no UI-visible changes correctly adds nothing. Only the release PR can write this entry (a feature PR cannot know the version), which is why it lives in this checklist and not the per-command one.

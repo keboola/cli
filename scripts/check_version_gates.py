@@ -288,6 +288,25 @@ def resolve_vnext(paths: list[Path], version: str) -> list[VnextResidue]:
     return changed
 
 
+def gates_below(
+    gates: dict[str, list[tuple[str, int]]], floor: str
+) -> dict[str, list[tuple[str, int]]]:
+    """Return the gates naming a version older than *floor*, oldest version first.
+
+    A gate only earns its place while some live install predates it. kbagent
+    self-updates on startup, so for a sufficiently old version that population
+    rounds to zero -- while the gate keeps making the agent refuse a command
+    the user actually has. Raising a floor and de-tagging below it is periodic
+    maintenance; this produces the worklist.
+
+    The floor itself is NOT below the floor: it is the oldest version still
+    worth gating for.
+    """
+    limit = Version(floor)
+    below = {v: locs for v, locs in gates.items() if Version(v) < limit}
+    return {v: below[v] for v in sorted(below, key=Version)}
+
+
 def resolve_paths() -> list[Path]:
     """Expand SCANNED_GLOBS into an ordered, de-duplicated file list."""
     seen: dict[Path, None] = {}
@@ -376,6 +395,21 @@ def main() -> int:
         still = find_heading_placeholders(resolve_paths())
         if still:  # pragma: no cover - defensive; headings are fatal earlier
             print(f"\nWARNING: {len(still)} placeholder(s) remain in headings.")
+        return 0
+
+    if "--list-below" in sys.argv:
+        index = sys.argv.index("--list-below") + 1
+        if index >= len(sys.argv):
+            print("ERROR: --list-below needs a version argument (e.g. --list-below 0.80.0)")
+            return 1
+        floor = sys.argv[index].strip().lstrip("v")
+        stale = gates_below(gates, floor)
+        total = sum(len(locs) for locs in stale.values())
+        print(f"{total} gate(s) across {len(stale)} version(s) below the {floor} floor:\n")
+        for version in stale:
+            print(f"  {version}")
+            for rel, lineno in stale[version]:
+                print(f"    {rel}:{lineno}")
         return 0
 
     if "--list" in sys.argv:

@@ -1,4 +1,4 @@
-# SQL Transformation Workflow (since v0.73.0)
+# SQL Transformation Workflow
 
 Native authoring/editing of SQL transformations -- the CLI port of the
 upstream `create_sql_transformation` / `update_sql_transformation` tools

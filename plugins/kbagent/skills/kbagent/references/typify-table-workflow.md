@@ -490,6 +490,6 @@ The rehearsal branch is already gone (Phase 7); there is no merge step.
   + `workspace query` patterns. The `from-transformation` mode is the
   alternative to ad-hoc workspaces when you want to debug an existing
   config that is failing.
-- `gotchas.md` -- "swap-tables aliases stay put (since v0.28.0)";
-  "config update auto-normalizes script[] (since v0.28.0)" if the
+- `gotchas.md` -- "swap-tables aliases stay put";
+  "config update auto-normalizes script[]" if the
   Phase 3 Option B SQL transformation route is taken.
