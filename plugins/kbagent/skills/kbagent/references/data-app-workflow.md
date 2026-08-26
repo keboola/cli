@@ -215,7 +215,7 @@ kbagent data-app deploy --project prod --app-id 12345678 \
 (rollback). Subsequent deploys without the flag will jump back to the
 latest.
 
-### Pre-flight repo validation (since v0.29.0)
+### Pre-flight repo validation
 
 ```bash
 kbagent data-app validate-repo \
@@ -238,7 +238,7 @@ repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
 GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo size, so the
 60/hour unauth limit rarely fires; pass a PAT for CI loops.
 
-### Inspect the deployed-from git repo (since v0.63.3)
+### Inspect the deployed-from git repo
 
 ```bash
 # Clone URLs + whether the repo is managed by Keboola:
@@ -256,7 +256,7 @@ block is synced from the Storage config into the Data Science app record at
 deploy time, so a fresh `--no-deploy` app returns 409 "no Git repository
 configured". Run `data-app deploy` first.
 
-### Manage git credentials for a managed repo (since v0.63.3)
+### Manage git credentials for a managed repo
 
 ```bash
 # List credentials of a MANAGED git repo (the secret is never returned):
@@ -281,7 +281,7 @@ returns 409 "no managed Git repository" for them. Both credential commands also
 need an **admin** storage token (`CanManageAppRepoCredentials`), unlike `git-repo`
 above which needs only the ordinary project storage token.
 
-### Create an app on a Keboola-MANAGED git repo (since v0.65.0)
+### Create an app on a Keboola-MANAGED git repo
 
 ```bash
 # 1. Provision the app + an EMPTY Keboola-hosted repo (no external URL).
@@ -319,7 +319,7 @@ contract), so `data-app deploy` on a pure managed repo deploys straight from
 `app.managedGitRepoId`. If a deploy ever reverts to stopped, diagnose it with
 `data-app runs` (`failure_reason` + `startup_logs`).
 
-### Manage app-runtime secrets (since v0.29.0)
+### Manage app-runtime secrets
 
 ```bash
 # Set two secrets at once. Plaintext values; the CLI encrypts under
@@ -341,7 +341,7 @@ kbagent data-app secrets-list --project prod --app-id 12345678
 # -> #my-database-url   -> env MY_DATABASE_URL
 # -> ADMIN_EMAILS       -> env ADMIN_EMAILS   (plain, unencrypted)
 
-# Read one key. Leading '#' is OPTIONAL (since v0.43.9). Encrypted secret
+# Read one key. Leading '#' is OPTIONAL. Encrypted secret
 # -> metadata only (NEVER decrypts). Plain value -> the literal value:
 kbagent data-app secrets-get --project prod --app-id 12345678 --key '#ANTHROPIC_API_KEY'  # metadata only
 kbagent data-app secrets-get --project prod --app-id 12345678 --key ADMIN_EMAILS          # shows value

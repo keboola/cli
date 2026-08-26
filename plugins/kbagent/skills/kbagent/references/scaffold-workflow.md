@@ -1,6 +1,6 @@
 # Creating New Configurations (Scaffold Workflow)
 
-> **Two modes, one command (since v0.33.0):**
+> **Two modes, one command:**
 > - `kbagent config new --output-dir DIR` (this workflow) -- generate
 >   scaffold files to disk, edit them, then push later with
 >   `kbagent sync push`. The "GitOps for configs" path.
@@ -47,7 +47,7 @@ kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Co
 # To disk (auto-detects kbc project structure, writes under main/ if applicable)
 kbagent config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" --output-dir .
 
-# One-shot remote create (since 0.33.0) -- no filesystem, just POST + return ID
+# One-shot remote create -- no filesystem, just POST + return ID
 kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Config Name" \
   --push --no-files
 

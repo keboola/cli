@@ -197,7 +197,7 @@ The one exception is a **beta/pre-release** (below): there the bump deliberately
 rides the feature branch, because the pre-release tag and GitHub Release are cut
 from that branch -- the branch temporarily *is* the release PR.
 
-### Beta / pre-release versions (since 0.43.3)
+### Beta / pre-release versions
 
 Beta and release-candidate versions follow **PEP 440**: `0.44.0b1`, `0.44.0rc1`, ... -- **not** the SemVer `-beta.1` form (hatchling + uv require PEP 440 syntax in `pyproject.toml`). Three independent gates keep stable users safe from accidentally landing on a beta:
 

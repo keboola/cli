@@ -139,7 +139,7 @@ Flags worth knowing:
 The command is **idempotent**: running it again skips projects that
 are already registered. Safe to re-run after adding new project IDs.
 
-**Security note (since v0.29.0)**: `KBC_MANAGE_API_TOKEN` is **ignored
+**Security note**: `KBC_MANAGE_API_TOKEN` is **ignored
 by default** -- the env var is read only when the top-level
 `--allow-env-manage-token` flag is passed. Without the flag, kbagent
 prompts on stdin (hidden input). kbagent never accepts the token as a
@@ -810,7 +810,7 @@ footguns the platform does not surface as errors:
    platform transitions `created -> stopped -> starting -> running`, so a
    naive poll that exits on `stopped` reports a phantom failure.
 
-`kbagent data-app` (since 0.27.0) encodes all four in the service layer,
+`kbagent data-app` encodes all four in the service layer,
 so the `--json` output you see at the CLI is what would have happened if
 you had done everything right at the raw HTTP level. The eight
 subcommands -- `list`, `detail`, `create`, `deploy`, `start`, `stop`,
@@ -923,7 +923,7 @@ kbagent --json data-app create \
 deploy. To retrieve it:
 
 ```bash
-# Manage API token: interactive prompt by default (since v0.29.0). For CI,
+# Manage API token: interactive prompt by default. For CI,
 # add `--allow-env-manage-token` and set KBC_MANAGE_API_TOKEN in env.
 kbagent --json data-app password \
   --project prod --app-id 12345678 \
