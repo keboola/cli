@@ -142,6 +142,14 @@ class ErrorCode(StrEnum):
     # Billing / Pay-As-You-Go (since #594)
     PAYG_NOT_AVAILABLE = "PAYG_NOT_AVAILABLE"
 
+    # Merge requests (DMD-1899). The merge 409 has four causes in two wire
+    # shapes; these split exactly where the backend does (see
+    # docs/merge-requests-notes.md). Mapped in MergeRequestService.merge() --
+    # only the service knows the 409 came from the merge endpoint, and the
+    # conflict shape carries no machine string code for http_base to key on.
+    MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
+    MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -334,6 +342,8 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     # A refused-by-us safety guard, not an upstream fault: nothing was sent to
     # the API, and the caller fixes it by re-issuing the request with --force.
     ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
+    ErrorCode.MR_NOT_READY_TO_MERGE: "conflict",
+    ErrorCode.MR_MERGE_CONFLICT: "conflict",
 }
 
 

@@ -409,6 +409,7 @@ class BaseHttpClient:
         url_label = base_url or self._base_url
 
         exception_id = ""
+        details: dict = {}
         try:
             body = response.json()
             # Keboola answers a 5xx with a generic `error` ("Application
@@ -417,6 +418,14 @@ class BaseHttpClient:
             # left the operator with nothing to escalate (issue #599).
             if isinstance(body, dict):
                 exception_id = self._safe_exception_id(body.get("exceptionId"))
+                # Keboola user errors also carry a machine-readable string
+                # `code` (e.g. `storage.mergeRequests.notReadyToMerge`).
+                # Surface it in details so a service can branch on it -- the
+                # message alone holds only the human `error` text (DMD-1899;
+                # the merge 409's two shapes differ exactly by this field).
+                api_error_code = body.get("code")
+                if isinstance(api_error_code, str) and api_error_code:
+                    details["api_error_code"] = api_error_code
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
@@ -454,6 +463,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.INVALID_TOKEN,
                 retryable=False,
+                details=details,
             )
 
         if status == 403:
@@ -462,6 +472,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.ACCESS_DENIED,
                 retryable=False,
+                details=details,
             )
 
         if status == 404:
@@ -470,6 +481,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
+                details=details,
             )
 
         # Appended AFTER the truncation above so they always survive into the
@@ -489,4 +501,5 @@ class BaseHttpClient:
             status_code=status,
             error_code=ErrorCode.API_ERROR,
             retryable=status in RETRYABLE_STATUS_CODES if retryable is None else retryable,
+            details=details,
         )
