@@ -8,9 +8,19 @@ tests keep passing and the fallback tests get deleted with the fallbacks.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
+import pytest
+
+from keboola_agent_cli.client import KeboolaClient
+from keboola_agent_cli.client.merge_requests import MergeRequests
+from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
+from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.merge_request_service import (
+    MergeRequestService,
     derive_allowed_actions,
     derive_merge_blockers,
     derive_state,
@@ -183,18 +193,6 @@ class TestDeriveViewer:
 
 # -- Service-level tests ------------------------------------------------------
 
-from pathlib import Path  # noqa: E402
-from unittest.mock import MagicMock  # noqa: E402
-
-import pytest  # noqa: E402
-
-from keboola_agent_cli.config_store import ConfigError, ConfigStore  # noqa: E402
-from keboola_agent_cli.errors import ErrorCode, KeboolaApiError  # noqa: E402
-from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse  # noqa: E402
-from keboola_agent_cli.services.merge_request_service import (  # noqa: E402
-    MergeRequestService,
-)
-
 STACK_URL = "https://connection.keboola.com"
 TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 ALIAS = "prod"
@@ -223,7 +221,11 @@ def store(tmp_config_dir: Path) -> ConfigStore:
 
 @pytest.fixture
 def client_factory() -> tuple[MagicMock, MagicMock]:
-    mock = MagicMock()
+    # spec'd at the L3 seam this PR builds on (#556): a renamed or removed
+    # client/namespace method fails these tests instead of silently keeping
+    # them green against an interface that no longer exists.
+    mock = MagicMock(spec=KeboolaClient)
+    mock.merge_requests = MagicMock(spec=MergeRequests)
     mock.verify_token.return_value = _verify_response()
     mock.has_feature.return_value = True
     factory = MagicMock(return_value=mock)
@@ -600,15 +602,27 @@ def _diff(
     return {"base": base, "ours": ours, "theirs": theirs}
 
 
-def _side(configuration: dict[str, Any], version: int = 5, **extra: Any) -> dict[str, Any]:
+def _side(
+    configuration: dict[str, Any],
+    version: int = 5,
+    is_deleted: bool = False,
+    rows: list[dict[str, Any]] | None = None,
+    **diff_extra: Any,
+) -> dict[str, Any]:
+    """One diff side in the verified wire shape (ConfigurationVersionResponse):
+    version/isDeleted as side metadata, content nested under ``diff``."""
     return {
         "version": version,
-        "name": "My config",
-        "description": None,
-        "isDisabled": False,
-        "configuration": configuration,
-        "rows": [],
-        **extra,
+        "isDeleted": is_deleted,
+        "diff": {
+            "name": "My config",
+            "description": None,
+            "changeDescription": "edited",
+            "isDisabled": False,
+            "configuration": configuration,
+            "rows": rows if rows is not None else [],
+            **diff_extra,
+        },
     }
 
 
@@ -625,10 +639,10 @@ class TestGetConfigDiff:
         )
         result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
         by_path = {c["path"]: c for c in result["changes"]}
-        assert by_path["configuration.limit"]["changed_by"] == "both"
         assert by_path["configuration.limit"] == {
             "path": "configuration.limit",
             "changed_by": "both",
+            "agreed": False,
             "base": 100,
             "ours": 500,
             "theirs": 250,
@@ -637,7 +651,22 @@ class TestGetConfigDiff:
         # The side that did NOT touch the path still holds the base value.
         assert by_path["configuration.timeout"]["ours"] == 30
         assert by_path["configuration.flag"]["changed_by"] == "ours"
+        assert "agreed" not in by_path["configuration.flag"]  # only on `both` rows
         assert result["onto_version"] == 7
+        assert result["ours_deleted"] is False
+        assert result["theirs_deleted"] is False
+
+    def test_identical_change_on_both_sides_is_agreed(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 500}, version=7),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        (change,) = result["changes"]
+        assert change["changed_by"] == "both"
+        assert change["agreed"] is True
 
     def test_removed_key_shows_none_not_base(self, store, client_factory) -> None:
         factory, mock = client_factory
@@ -649,24 +678,49 @@ class TestGetConfigDiff:
         result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
         (change,) = result["changes"]
         assert change["changed_by"] == "both"
+        assert change["agreed"] is False
         assert change["ours"] is None  # removed, never the base value
         assert change["theirs"] == "new"
 
-    def test_null_base_means_added_on_both_sides(self, store, client_factory) -> None:
+    def test_deleted_side_is_flagged_not_a_path(self, store, client_factory) -> None:
+        # Deletion is side metadata (isDeleted, top-level on the wire), not a
+        # content path -- it must surface as a boolean, or the "Only you /
+        # Only production" rendering would hide the most consequential
+        # difference.
+        factory, mock = client_factory
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 100}, version=4),
+            theirs=_side({"limit": 100}, version=7, is_deleted=True),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        assert result["theirs_deleted"] is True
+        assert result["ours_deleted"] is False
+        assert result["changes"] == []  # identical content, no paths
+
+    def test_null_side_reports_none_deleted_flag(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.get_config_diff.return_value = _diff(
             base=None,
-            ours=_side({"a": 1}, version=4),
+            ours=None,  # never existed on this side
             theirs=_side({"a": 2}, version=7),
         )
         result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        assert result["ours_deleted"] is None
         by_path = {c["path"]: c for c in result["changes"]}
-        # A key absent from base diffs wholesale (compute_diff semantics):
-        # the whole `configuration` dict was added on both sides.
-        assert by_path["configuration"]["base"] is None
-        assert by_path["configuration"]["changed_by"] == "both"
-        assert by_path["configuration"]["ours"] == {"a": 1}
-        assert by_path["configuration"]["theirs"] == {"a": 2}
+        assert by_path["configuration"]["changed_by"] == "theirs"
+
+    def test_change_description_is_not_content(self, store, client_factory) -> None:
+        # changeDescription is a per-version commit message; two sides always
+        # differ there and it is not something a resolution decides.
+        factory, mock = client_factory
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"a": 1}, version=3, changeDescription="base msg"),
+            ours=_side({"a": 1}, version=4, changeDescription="ours msg"),
+            theirs=_side({"a": 1}, version=7, changeDescription="theirs msg"),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        assert result["changes"] == []
 
     def test_rows_compare_wholesale(self, store, client_factory) -> None:
         factory, mock = client_factory
@@ -682,32 +736,61 @@ class TestGetConfigDiff:
 
 
 class TestResolveConflict:
-    def _arm(self, mock: MagicMock, ours: dict[str, Any] | None = None) -> None:
+    def _arm(
+        self,
+        mock: MagicMock,
+        ours: dict[str, Any] | None = ...,
+        theirs: dict[str, Any] | None = ...,
+    ) -> None:  # type: ignore[assignment]
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
         mock.get_config_diff.return_value = _diff(
             base=_side({"limit": 100}, version=3),
-            ours=ours if ours is not None else _side({"limit": 500}, version=4),
-            theirs=_side({"limit": 250}, version=7),
+            ours=_side({"limit": 500}, version=4) if ours is ... else ours,
+            theirs=_side({"limit": 250}, version=7) if theirs is ... else theirs,
         )
         mock.rebase_config.return_value = {"id": "111", "version": 8}
         mock.rebase_config_delete.return_value = {"id": "111", "version": 8, "isDeleted": True}
+
+    def test_branch_is_derived_from_the_mr_never_supplied(self, store, client_factory) -> None:
+        # Finding #1 of the PR review: a caller-supplied branch could point
+        # the rebase at a branch the conflict-set guard never checked.
+        factory, mock = client_factory
+        self._arm(mock)
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", take="ours"
+        )
+        mock.get_config_diff.assert_called_once_with("keboola.ex-db", "111", 123)
+        args = mock.rebase_config.call_args.args
+        assert args == ("keboola.ex-db", "111", 123)
+        assert result["branch_id"] == 123
+
+    def test_closed_mr_cannot_be_resolved(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="ours")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        mock.rebase_config.assert_not_called()
 
     def test_take_ours_rebases_dev_content_onto_theirs_version(self, store, client_factory) -> None:
         factory, mock = client_factory
         self._arm(mock)
         result = _svc(store, factory).resolve_conflict(
-            ALIAS, 7, "keboola.ex-db", "111", 123, take="ours"
+            ALIAS, 7, "keboola.ex-db", "111", take="ours"
         )
         kwargs = mock.rebase_config.call_args.kwargs
         assert kwargs["version"] == 7  # theirs.version, never ours'
         assert kwargs["configuration"] == {"limit": 500}
+        assert kwargs["name"] == "My config"  # from the side's diff envelope
         assert result["resolution"] == "ours"
         assert result["onto_version"] == 7
 
     def test_take_theirs_rebases_production_content(self, store, client_factory) -> None:
         factory, mock = client_factory
         self._arm(mock)
-        _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", 123, take="theirs")
+        _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
         kwargs = mock.rebase_config.call_args.kwargs
         assert kwargs["configuration"] == {"limit": 250}
         assert kwargs["version"] == 7
@@ -716,26 +799,60 @@ class TestResolveConflict:
         factory, mock = client_factory
         self._arm(mock)
         result = _svc(store, factory).resolve_conflict(
-            ALIAS, 7, "keboola.ex-db", "111", 123, take="delete"
+            ALIAS, 7, "keboola.ex-db", "111", take="delete"
         )
         mock.rebase_config_delete.assert_called_once_with("keboola.ex-db", "111", 123, version=7)
         assert result["resolution"] == "delete"
 
     def test_take_ours_of_a_deleted_side_becomes_delete(self, store, client_factory) -> None:
         factory, mock = client_factory
-        self._arm(mock, ours=_side({}, version=4, isDeleted=True))
+        self._arm(mock, ours=_side({}, version=4, is_deleted=True))
         result = _svc(store, factory).resolve_conflict(
-            ALIAS, 7, "keboola.ex-db", "111", 123, take="ours"
+            ALIAS, 7, "keboola.ex-db", "111", take="ours"
         )
         assert result["resolution"] == "delete"
         mock.rebase_config.assert_not_called()
+
+    def test_take_theirs_of_a_deleted_side_becomes_delete(self, store, client_factory) -> None:
+        # "Production deleted it, dev changed it" is a live conflict shape --
+        # symmetric with the ours mirror (review finding #3).
+        factory, mock = client_factory
+        self._arm(mock, theirs=_side({}, version=7, is_deleted=True))
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", take="theirs"
+        )
+        assert result["resolution"] == "delete"
+        mock.rebase_config_delete.assert_called_once_with("keboola.ex-db", "111", 123, version=7)
+
+    def test_take_side_without_content_keys_blames_the_server_not_the_caller(
+        self, store, client_factory
+    ) -> None:
+        # The side's diff envelope is server-produced with all content keys
+        # required -- a hole is a backend contract violation and the message
+        # must point at the manual path, not lecture the caller about a body
+        # they never supplied (review finding #2).
+        factory, mock = client_factory
+        self._arm(mock, theirs={"version": 7, "isDeleted": False, "diff": {"name": "x"}})
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "theirs side carries no" in exc_info.value.message
+        assert "resolved body" in exc_info.value.message  # names the workaround
+
+    def test_missing_theirs_version_is_refused(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock, theirs=None)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="ours")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "theirs side" in exc_info.value.message
 
     def test_custom_body_must_spell_out_replaced_content(self, store, client_factory) -> None:
         factory, mock = client_factory
         self._arm(mock)
         with pytest.raises(ConfigError) as exc_info:
             _svc(store, factory).resolve_conflict(
-                ALIAS, 7, "keboola.ex-db", "111", 123, resolved={"name": "n"}
+                ALIAS, 7, "keboola.ex-db", "111", resolved={"name": "n"}
             )
         assert "rows" in str(exc_info.value) and "configuration" in str(exc_info.value)
         mock.rebase_config.assert_not_called()
@@ -745,7 +862,7 @@ class TestResolveConflict:
         self._arm(mock)
         body = {"name": "merged", "rows": [], "configuration": {"limit": 300}}
         result = _svc(store, factory).resolve_conflict(
-            ALIAS, 7, "keboola.ex-db", "111", 123, resolved=body, change_description="3-way"
+            ALIAS, 7, "keboola.ex-db", "111", resolved=body, change_description="3-way"
         )
         kwargs = mock.rebase_config.call_args.kwargs
         assert kwargs["configuration"] == {"limit": 300}
@@ -756,19 +873,17 @@ class TestResolveConflict:
         factory, _ = client_factory
         svc = _svc(store, factory)
         with pytest.raises(ConfigError):
-            svc.resolve_conflict(ALIAS, 7, "c", "1", 123)
+            svc.resolve_conflict(ALIAS, 7, "c", "1")
         with pytest.raises(ConfigError):
-            svc.resolve_conflict(ALIAS, 7, "c", "1", 123, take="ours", resolved={})
+            svc.resolve_conflict(ALIAS, 7, "c", "1", take="ours", resolved={})
         with pytest.raises(ConfigError):
-            svc.resolve_conflict(ALIAS, 7, "c", "1", 123, take="mine")
+            svc.resolve_conflict(ALIAS, 7, "c", "1", take="mine")
 
     def test_config_outside_conflict_set_is_refused(self, store, client_factory) -> None:
         factory, mock = client_factory
-        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        self._arm(mock)
         with pytest.raises(KeboolaApiError) as exc_info:
-            _svc(store, factory).resolve_conflict(
-                ALIAS, 7, "keboola.other", "999", 123, take="ours"
-            )
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.other", "999", take="ours")
         assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
         mock.rebase_config.assert_not_called()
 
@@ -780,3 +895,64 @@ class TestListConflicts:
         result = _svc(store, factory).list_conflicts(ALIAS, 7)
         assert result["count"] == 1
         assert result["conflicts"] == [CONFLICT_ENTRY]
+
+
+class TestReviewFollowUps:
+    """Regression tests for the PR #703 review findings."""
+
+    def test_string_wire_branch_id_still_matches_find(self, store, client_factory) -> None:
+        # Finding #6: MR payload ids mix int and str; a string-serialized
+        # branchFromId must not defeat the branch->MR resolver.
+        factory, mock = client_factory
+        mr = _wire_mr(1)
+        mr["branches"]["branchFromId"] = "123"
+        mock.merge_requests.list.return_value = [mr]
+        result = _svc(store, factory).find_merge_request_for_branch(ALIAS, 123)
+        assert result["id"] == 1
+
+    def test_string_wire_branch_id_still_resets_active_branch(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        factory, mock = client_factory
+        mr = _wire_mr(7, "approved")
+        mr["branches"]["branchFromId"] = "123"
+        mock.merge_requests.get.return_value = mr
+        mock.merge_requests.merge.return_value = {"id": 5, "status": "success", "results": {}}
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: None,
+        )
+        store.set_project_branch(ALIAS, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["was_active"] is True
+        assert result["branch_from_id"] == 123  # coerced to int
+        assert store.get_project(ALIAS).active_branch_id is None
+
+    def test_unknown_state_filter_is_refused_with_the_vocabulary(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).list_merge_requests(ALIAS, state="mereged")
+        assert "merged" in str(exc_info.value)  # names the accepted values
+        mock.merge_requests.list.assert_not_called()
+
+    def test_no_default_branch_is_a_readable_error(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.list_dev_branches.return_value = [DEV_BRANCH]  # no isDefault anywhere
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        assert "no default branch" in exc_info.value.message
+        mock.merge_requests.create.assert_not_called()
+
+    def test_server_viewer_skips_the_verify_token_call(self, store, client_factory) -> None:
+        # Once DMD-1988 serializes `viewer`, the polyfill's cost (one
+        # verify_token round-trip per detail) must disappear with it.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(
+            7, "development", viewer={"isCreator": True, "hasApproved": False}
+        )
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        mock.verify_token.assert_not_called()
+        assert detail["viewer"] == {"is_creator": True, "has_approved": False}

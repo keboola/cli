@@ -38,7 +38,7 @@ from ._workspace_load_plan import (
     coerce_data_size_bytes,
     plan_auto_load_type,
 )
-from .base import BaseService
+from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -232,10 +232,9 @@ class WorkspaceService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            branches = client.list_dev_branches()
-            for branch in branches:
-                if branch.get("isDefault", False):
-                    return int(branch["id"])
+            default_branch_id = find_default_branch_id(client.list_dev_branches())
+            if default_branch_id is not None:
+                return default_branch_id
             raise ConfigError(
                 f"No default branch found for project '{alias}'. "
                 "Set an active branch with 'kbagent branch use'."

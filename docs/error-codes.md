@@ -55,6 +55,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `CONFIG_ERROR` | kbagent config problem (e.g. unknown project alias) |
 | `NOT_INITIALIZED` | `.keboola/manifest.json` not found; run `sync init` first |
 | `INIT_ERROR` | Error during `sync init` auto-init path |
+| `FEATURE_NOT_ENABLED` | A client-side pre-flight found the project lacks a required feature flag (e.g. `branches-merge-requests` for `merge-request` writes); the server would answer an opaque 403/404 |
 
 ### Jobs
 

@@ -23,12 +23,11 @@ import logging
 from typing import Any
 
 from ..client import KeboolaClient
-from ..config_store import ConfigError
 from ..constants import BRANCHES_MERGE_REQUESTS_FEATURE
-from ..errors import ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
-from .base import BaseService
+from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +59,13 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     "published": (),
     "canceled": (),
 }
+
+
+# Everything `list_merge_requests`' --state filter accepts: the derived
+# vocabulary plus the raw lifecycle states (the two overlap on purpose).
+_STATE_FILTER_VOCABULARY: frozenset[str] = (
+    frozenset(_DERIVED_STATE_BY_RAW) | frozenset(_DERIVED_STATE_BY_RAW.values()) | {"rejected"}
+)
 
 
 def _same_id(a: Any, b: Any) -> bool:
@@ -226,7 +232,7 @@ class MergeRequestService(BaseService):
         """
         if client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE):
             return
-        raise ConfigError(
+        raise FeatureNotEnabledError(
             "Merge requests are not enabled on this project: the "
             f"'{BRANCHES_MERGE_REQUESTS_FEATURE}' feature is missing. Without this "
             "pre-flight the API would answer an unexplained 403 (identical to a role "
@@ -243,8 +249,16 @@ class MergeRequestService(BaseService):
         ``state`` filters client-side (the endpoint declares no query
         parameters): a value matching either the derived vocabulary
         (``rejected``, ``merged``, ``closed``, ...) or a raw lifecycle state
-        (``published``, ...) keeps the row; matching is case-insensitive.
+        (``published``, ...) keeps the row; matching is case-insensitive. An
+        unknown value is refused with the accepted list -- the vocabulary is
+        closed and known here, and a typo returning a silent ``count: 0``
+        would read as "no MRs".
         """
+        if state is not None and state.lower() not in _STATE_FILTER_VOCABULARY:
+            raise ConfigError(
+                f"Unknown --state value {state!r}. Accepted values: "
+                f"{', '.join(sorted(_STATE_FILTER_VOCABULARY))}."
+            )
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -281,7 +295,7 @@ class MergeRequestService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             for mr in client.merge_requests.list():
-                if (mr.get("branches") or {}).get("branchFromId") == branch_id:
+                if _same_id((mr.get("branches") or {}).get("branchFromId"), branch_id):
                     return {"alias": alias, **_enrich_row(mr)}
         finally:
             client.close()
@@ -319,10 +333,15 @@ class MergeRequestService(BaseService):
             conflicts: list[dict[str, Any]] | None = None
             if (mr.get("state") or "") in self._OPEN_STATES:
                 conflicts = client.merge_requests.conflicts(merge_request_id)
-            # verify_token is cheap (and refreshes the features cache); its
-            # admin block anchors the viewer-relative flags. A scoped token
-            # has no admin identity -> viewer flags are None, not False.
-            admin_id = client.verify_token().admin_id
+            # The verify_token call exists only to anchor the viewer
+            # polyfill (its admin block is the caller's identity); once the
+            # server serializes `viewer` (DMD-1988), derive_viewer never
+            # reads admin_id -- so skip the call and its cost with it. A
+            # scoped token has no admin identity -> flags are None, not
+            # False.
+            admin_id: int | None = None
+            if not isinstance(mr.get("viewer"), dict):
+                admin_id = client.verify_token().admin_id
         finally:
             client.close()
 
@@ -475,9 +494,9 @@ class MergeRequestService(BaseService):
 
     def _default_branch_id(self, client: KeboolaClient, alias: str) -> int:
         """Resolve the project's default branch id (the only legal MR target)."""
-        for branch in client.list_dev_branches():
-            if branch.get("isDefault"):
-                return int(branch["id"])
+        branch_id = find_default_branch_id(client.list_dev_branches())
+        if branch_id is not None:
+            return branch_id
         raise KeboolaApiError(
             message=f"Project '{alias}' reports no default branch -- cannot target a merge request.",
             status_code=0,
@@ -522,10 +541,14 @@ class MergeRequestService(BaseService):
         try:
             self._require_merge_requests_feature(client)
             # branchFromId is nullable once the MR is published -- capture it
-            # from the pre-merge payload, not the post-merge one.
-            branch_from_id = (
+            # from the pre-merge payload, not the post-merge one. Coerced to
+            # int so the was_active comparison and the mapping cleanup below
+            # cannot be defeated by a string-serialized wire id (the payload
+            # mixes int and str ids -- the reason _same_id exists).
+            raw_branch_from = (
                 client.merge_requests.get(merge_request_id).get("branches") or {}
             ).get("branchFromId")
+            branch_from_id = int(raw_branch_from) if raw_branch_from is not None else None
             try:
                 job = client.merge_requests.merge(merge_request_id)
             except KeboolaApiError as exc:
@@ -614,9 +637,14 @@ class MergeRequestService(BaseService):
 
     # -- Conflicts / diff / resolution --------------------------------------------
 
-    # Content-bearing keys of a diff side -- what a three-way comparison is
-    # about. Version/identifier fields differ by construction on a conflict
-    # and would only add noise to the per-path classification.
+    # Content-bearing keys of a diff side's ``diff`` envelope -- what a
+    # three-way comparison is about. Wire truth (ConfigurationDiffData,
+    # verified against connection): each side serializes as
+    # ``{version, isDeleted, diff: {name, description, changeDescription,
+    # isDisabled, configuration, rows}}`` -- content nested under ``diff``,
+    # version/deletion as side metadata. ``changeDescription`` is excluded:
+    # it is a per-version commit message, not content to resolve (the rebase
+    # takes its own ``change_description``).
     _DIFF_CONTENT_KEYS = ("name", "description", "configuration", "isDisabled", "rows")
 
     def list_conflicts(self, alias: str, merge_request_id: int) -> dict[str, Any]:
@@ -646,10 +674,17 @@ class MergeRequestService(BaseService):
 
         No three panes: each touched path is tagged ``changed_by`` --
         ``ours`` (only the dev branch changed it), ``theirs`` (only
-        production), or ``both`` (the actual conflict hotspots). ``rows``
-        compares wholesale (row-level three-way diffing is not attempted).
-        ``onto_version`` is the default-branch version a rebase re-anchors
-        onto -- the ``theirs.version`` trap spelled out once, here.
+        production), or ``both``. A ``both`` row where the two sides agree on
+        the identical value additionally carries ``agreed: true`` -- both
+        sides moved, but there is nothing to decide; the actual conflict
+        hotspots are the ``both`` rows without it. ``rows`` compares
+        wholesale (row-level three-way diffing is not attempted).
+
+        Deletions do not show up as paths: a soft-deleted side is flagged by
+        the top-level ``ours_deleted`` / ``theirs_deleted`` booleans instead
+        (``None`` = the side does not exist at all). ``onto_version`` is the
+        default-branch version a rebase re-anchors onto -- the
+        ``theirs.version`` trap spelled out once, here.
         """
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
@@ -658,12 +693,17 @@ class MergeRequestService(BaseService):
         finally:
             client.close()
         theirs = diff.get("theirs") or {}
+        ours = diff.get("ours")
         return {
             "alias": alias,
             "component_id": component_id,
             "config_id": config_id,
             "branch_id": branch_id,
             "onto_version": theirs.get("version"),
+            "ours_deleted": bool(ours.get("isDeleted")) if ours is not None else None,
+            "theirs_deleted": (
+                bool(theirs.get("isDeleted")) if diff.get("theirs") is not None else None
+            ),
             "changes": self._classify_three_way(diff),
             "diff": diff,
         }
@@ -672,8 +712,10 @@ class MergeRequestService(BaseService):
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path."""
 
         def content(side: dict[str, Any] | None) -> dict[str, Any]:
-            side = side or {}
-            return {key: side[key] for key in self._DIFF_CONTENT_KEYS if key in side}
+            # The side's content lives in its nested ``diff`` envelope (wire
+            # truth above); a null side contributes nothing.
+            envelope = (side or {}).get("diff") or {}
+            return {key: envelope[key] for key in self._DIFF_CONTENT_KEYS if key in envelope}
 
         base = content(diff.get("base"))
         ours_entries = {e.path: e for e in compute_diff_entries(base, content(diff.get("ours")))}
@@ -700,15 +742,22 @@ class MergeRequestService(BaseService):
                     return entry.new if entry.new_present else None
                 return base_val
 
-            changes.append(
-                {
-                    "path": path,
-                    "changed_by": changed_by,
-                    "base": base_value,
-                    "ours": side_value(ours_entry, base_value),
-                    "theirs": side_value(theirs_entry, base_value),
-                }
-            )
+            change: dict[str, Any] = {
+                "path": path,
+                "changed_by": changed_by,
+                "base": base_value,
+                "ours": side_value(ours_entry, base_value),
+                "theirs": side_value(theirs_entry, base_value),
+            }
+            if changed_by == "both":
+                # Identical independent changes are agreement, not a
+                # conflict hotspot -- flag them so renderers can demote them.
+                assert ours_entry is not None and theirs_entry is not None
+                change["agreed"] = (
+                    ours_entry.new_present == theirs_entry.new_present
+                    and side_value(ours_entry, base_value) == side_value(theirs_entry, base_value)
+                )
+            changes.append(change)
         return changes
 
     def resolve_conflict(
@@ -717,7 +766,6 @@ class MergeRequestService(BaseService):
         merge_request_id: int,
         component_id: str,
         config_id: str,
-        branch_id: int,
         take: str | None = None,
         resolved: dict[str, Any] | None = None,
         change_description: str | None = None,
@@ -726,18 +774,27 @@ class MergeRequestService(BaseService):
         mode goes through the rebase endpoint, per the RFC decision; the UI's
         reset-to-default alternative for take=theirs is DMD-1987).
 
+        The branch is NOT a parameter: it is derived from the merge request
+        itself (``branches.branchFromId``), so the conflict-set guard and the
+        branch being written to can never disagree -- a caller-supplied
+        branch id could point the rebase at an unrelated dev branch that the
+        guard never checked (rebase REPLACES; that would be silent data
+        loss).
+
         Modes (exactly one of ``take`` / ``resolved``):
 
         - ``take="ours"``: keep the dev-branch content, re-anchored onto the
-          production version. An ours side that is deleted turns this into
-          the delete resolution.
+          production version.
         - ``take="theirs"``: adopt the production content (the config stays
           in the MR's changeset; the merge then writes a content-no-op).
         - ``take="delete"``: the ``{"version": N, "diff": {}}`` tombstone.
-        - ``resolved={...}``: a caller-authored three-way merge -- must carry
-          ``name``, ``rows`` and ``configuration`` explicitly (rebase
-          REPLACES; a missing key would silently wipe data, so it is refused
-          instead of defaulted).
+          A take of a side whose ``isDeleted`` is true collapses to this
+          resolution too -- "production deleted it, dev changed it" and its
+          mirror are live conflict shapes.
+        - ``resolved={...}``: a caller-authored three-way merge -- a FLAT
+          body that must carry ``name``, ``rows`` and ``configuration``
+          explicitly (rebase REPLACES; a missing key would silently wipe
+          data, so it is refused instead of defaulted).
 
         The config must be in the MR's live conflict set; ``version`` is
         taken from the diff's ``theirs.version`` (the default-branch version
@@ -753,6 +810,7 @@ class MergeRequestService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             self._require_merge_requests_feature(client)
+            branch_id = self._branch_from_id_of(client, merge_request_id)
             self._require_in_conflict_set(client, merge_request_id, component_id, config_id)
             diff = client.get_config_diff(component_id, config_id, branch_id)
             theirs = diff.get("theirs") or {}
@@ -768,27 +826,45 @@ class MergeRequestService(BaseService):
                     retryable=False,
                 )
 
-            side = resolved
+            # Normalize the three sources of a replace body onto one flat
+            # shape: a take side contributes its nested ``diff`` envelope, a
+            # caller-authored body is already flat.
+            body: dict[str, Any] | None = resolved
             resolution = "custom"
             if take == "delete":
-                side, resolution = None, "delete"
-            elif take == "ours":
-                ours = diff.get("ours")
-                if ours is None or ours.get("isDeleted"):
-                    # Taking a deleted ours side IS the delete resolution.
-                    side, resolution = None, "delete"
+                body, resolution = None, "delete"
+            elif take is not None:
+                side = diff.get("ours") if take == "ours" else diff.get("theirs")
+                if side is None or side.get("isDeleted"):
+                    # Taking a deleted (or never-existing) side IS the delete
+                    # resolution -- symmetric for ours and theirs.
+                    body, resolution = None, "delete"
                 else:
-                    side, resolution = ours, "ours"
-            elif take == "theirs":
-                side, resolution = theirs, "theirs"
+                    body, resolution = side.get("diff") or {}, take
 
-            if side is None:
+            if body is None:
                 configuration = client.rebase_config_delete(
                     component_id, config_id, branch_id, version=onto_version
                 )
             else:
-                missing = [key for key in ("name", "rows", "configuration") if key not in side]
+                missing = [key for key in ("name", "rows", "configuration") if key not in body]
                 if missing:
+                    if take is not None:
+                        # The diff side's envelope is server-produced and its
+                        # schema marks all content keys required -- a hole
+                        # here is a backend contract violation, not caller
+                        # error. Point at the manual path as the workaround.
+                        raise KeboolaApiError(
+                            message=(
+                                f"The diff's {take} side carries no "
+                                f"{', '.join(missing)} -- cannot compose a replace "
+                                "body from it. Author the resolution manually and "
+                                "pass it as a resolved body instead."
+                            ),
+                            status_code=0,
+                            error_code=ErrorCode.VALIDATION_ERROR,
+                            retryable=False,
+                        )
                     raise ConfigError(
                         "A resolved body must spell out the full replaced content "
                         f"(rebase REPLACES): missing {', '.join(missing)}."
@@ -798,11 +874,11 @@ class MergeRequestService(BaseService):
                     config_id,
                     branch_id,
                     version=onto_version,
-                    name=side["name"],
-                    rows=side["rows"],
-                    configuration=side["configuration"],
-                    is_disabled=bool(side.get("isDisabled", False)),
-                    description=side.get("description"),
+                    name=body["name"],
+                    rows=body["rows"],
+                    configuration=body["configuration"],
+                    is_disabled=bool(body.get("isDisabled", False)),
+                    description=body.get("description"),
                     change_description=change_description,
                 )
         finally:
@@ -818,6 +894,23 @@ class MergeRequestService(BaseService):
             "onto_version": onto_version,
             "configuration": configuration,
         }
+
+    def _branch_from_id_of(self, client: KeboolaClient, merge_request_id: int) -> int:
+        """The MR's source branch id -- the only branch a resolution may write to."""
+        mr = client.merge_requests.get(merge_request_id)
+        branch_from_id = (mr.get("branches") or {}).get("branchFromId")
+        if branch_from_id is None:
+            raise KeboolaApiError(
+                message=(
+                    f"Merge request {merge_request_id} has no source branch (state: "
+                    f"{mr.get('state', 'unknown')}) -- a published or canceled MR "
+                    "cannot be resolved."
+                ),
+                status_code=0,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                retryable=False,
+            )
+        return int(branch_from_id)
 
     def _require_in_conflict_set(
         self, client: KeboolaClient, merge_request_id: int, component_id: str, config_id: str
