@@ -94,5 +94,8 @@ def register(app: typer.Typer) -> None:
                 f"[bold]OAuth URL for[/bold] [cyan]{escape(component_id)}[/cyan]/"
                 f"[cyan]{escape(config_id)}[/cyan]:\n"
             )
-            formatter.console.print(f"  [link]{result['url']}[/link]")
+            url = result["url"]
+            # soft_wrap keeps the URL a single line (no newlines inserted into it),
+            # link=<url> makes the whole URL the click target in OSC-8 terminals.
+            formatter.console.print(f"[link={url}]{escape(url)}[/link]", soft_wrap=True)
             formatter.console.print("\n[dim]Open this URL in a browser and grant access.[/dim]")

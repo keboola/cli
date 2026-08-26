@@ -644,6 +644,36 @@ class TestConfigOauthUrlCli:
         output = json.loads(result.output)
         assert output["data"]["redirect_url"] == "https://example.com/done"
 
+    @pytest.mark.parametrize("columns", ["40", "80", "120"])
+    def test_human_output_prints_url_unwrapped(self, tmp_config_dir: Path, columns: str) -> None:
+        """Human mode keeps the complete URL intact at any terminal width."""
+        service = self._make_oauth_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands._config_oauth.get_service",
+                lambda ctx, name: service,
+            )
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "config",
+                    "oauth-url",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                ],
+                env={"COLUMNS": columns, "TERM": "dumb"},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert OAUTH_RESULT["url"] in result.output
+
 
 # ---------------------------------------------------------------------------
 # is_disabled / is_enabled CLI tests
