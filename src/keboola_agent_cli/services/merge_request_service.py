@@ -483,3 +483,130 @@ class MergeRequestService(BaseService):
             error_code=ErrorCode.API_ERROR,
             retryable=False,
         )
+
+    # -- Merge ------------------------------------------------------------------
+
+    _NOT_READY_CODE = "storage.mergeRequests.notReadyToMerge"
+
+    def merge(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """Merge the MR into the default branch and clean local references.
+
+        Waits for the merge Storage job (Layer 3 awaits with
+        MERGE_JOB_MAX_WAIT; a failed merge raises STORAGE_JOB_FAILED and the
+        MR rolls back to ``approved``). Works straight from ``development``
+        when approvals are satisfied -- the backend auto-applies skip_review.
+
+        The merge 409 is remapped onto its two wire shapes (the RFC's
+        decision; docs/error-codes.md):
+
+        - ``storage.mergeRequests.notReadyToMerge`` (project merge lock /
+          wrong state / another MR processing) -> ``MR_NOT_READY_TO_MERGE``,
+          retryable -- all three causes are transient.
+        - a 409 without the string code is the conflict validation ->
+          ``MR_MERGE_CONFLICT``, not retryable, next step in the message.
+
+        A successful merge always also deletes the source branch -- as a
+        second async job with no handle, so the result says the branch "is
+        being deleted", never that it is gone. Local cleanup mirrors
+        ``BranchService.delete_branch``: reset ``active_branch_id`` only if
+        it pointed at the merged branch, and unlink any sync
+        ``branch-mapping.json`` entry. Cleanup is best-effort -- the merge
+        already happened, so a cleanup failure degrades to a warning in the
+        result instead of failing the command.
+        """
+        from ..sync.branch_mapping import cleanup_branch_id_from_mapping
+
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            self._require_merge_requests_feature(client)
+            # branchFromId is nullable once the MR is published -- capture it
+            # from the pre-merge payload, not the post-merge one.
+            branch_from_id = (
+                client.merge_requests.get(merge_request_id).get("branches") or {}
+            ).get("branchFromId")
+            try:
+                job = client.merge_requests.merge(merge_request_id)
+            except KeboolaApiError as exc:
+                self._remap_merge_conflict(exc)
+                raise
+        finally:
+            client.close()
+
+        was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
+        mapping_cleanup: dict[str, Any] | None = None
+        cleanup_warnings: list[str] = []
+        try:
+            if was_active:
+                self._config_store.set_project_branch(alias, None)
+            if branch_from_id is not None:
+                mapping_cleanup = cleanup_branch_id_from_mapping(branch_from_id)
+        except Exception as exc:
+            # a failed local cleanup must not turn it into a failed command.
+            logger.warning("Post-merge cleanup failed: %s", exc)
+            cleanup_warnings.append(f"Post-merge cleanup failed: {exc}")
+
+        results = job.get("results")
+        mr_after: dict[str, Any] = results if isinstance(results, dict) else {}
+
+        message_parts = [f"Merge request {merge_request_id} merged into production."]
+        if branch_from_id is not None:
+            message_parts.append(
+                f"Source branch {branch_from_id} is being deleted (a separate async "
+                "job -- it may still briefly exist)."
+            )
+        if was_active:
+            message_parts.append("Active branch reset to main.")
+        if mapping_cleanup:
+            unlinked = ", ".join(mapping_cleanup["git_branches_unlinked"])
+            message_parts.append(f"Unlinked git branch(es): {unlinked}.")
+
+        result: dict[str, Any] = {
+            "alias": alias,
+            "merge_request_id": merge_request_id,
+            "branch_from_id": branch_from_id,
+            "was_active": was_active,
+            "job": job,
+            "message": " ".join(message_parts),
+        }
+        if mr_after.get("state"):
+            result["state"] = mr_after["state"]
+            result["derived_state"] = derive_state(mr_after)
+        if mapping_cleanup:
+            result["mapping_cleanup"] = mapping_cleanup
+        if cleanup_warnings:
+            result["cleanup_warnings"] = cleanup_warnings
+        return result
+
+    def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
+        """Raise the RFC's dedicated error for a merge 409; return for others.
+
+        Only this call site knows the 409 came from the merge endpoint, and
+        the conflict shape carries no machine string code -- which is why the
+        mapping cannot live in http_base (see docs/merge-requests-layer2.md).
+        """
+        if exc.status_code != 409:
+            return
+        if exc.details.get("api_error_code") == self._NOT_READY_CODE:
+            raise KeboolaApiError(
+                message=(
+                    f"{exc.message} The merge lock, MR state or a concurrently "
+                    "processing merge request blocks the merge -- these are "
+                    "transient; retry once it clears."
+                ),
+                status_code=409,
+                error_code=ErrorCode.MR_NOT_READY_TO_MERGE,
+                retryable=True,
+                details=exc.details,
+            ) from exc
+        raise KeboolaApiError(
+            message=(
+                f"{exc.message} Configurations changed on both branches. Inspect them "
+                "with `kbagent merge-request conflicts`, resolve each one, then merge "
+                "again (conflicts are re-validated live on every attempt)."
+            ),
+            status_code=409,
+            error_code=ErrorCode.MR_MERGE_CONFLICT,
+            retryable=False,
+            details=exc.details,
+        ) from exc

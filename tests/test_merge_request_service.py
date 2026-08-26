@@ -441,9 +441,7 @@ class TestUpdateAndTransitions:
         factory, mock = client_factory
         mock.merge_requests.request_changes.return_value = _wire_mr(7, "development")
         _svc(store, factory).request_changes(ALIAS, 7, reason="fix the mapping")
-        assert (
-            mock.merge_requests.request_changes.call_args.kwargs["reason"] == "fix the mapping"
-        )
+        assert mock.merge_requests.request_changes.call_args.kwargs["reason"] == "fix the mapping"
 
     def test_every_write_runs_the_preflight(self, store, client_factory) -> None:
         factory, mock = client_factory
@@ -457,3 +455,138 @@ class TestUpdateAndTransitions:
         ):
             with pytest.raises(ConfigError):
                 call()
+
+
+class TestMerge:
+    def _arm_merge(self, mock: MagicMock, branch_from: int | None = 123) -> None:
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved", branch_from=branch_from)
+        mock.merge_requests.merge.return_value = {
+            "id": 555,
+            "status": "success",
+            "results": {**_wire_mr(7, "published", branch_from=None)},
+        }
+
+    def test_happy_path_says_being_deleted_never_deleted(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock)
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: None,
+        )
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert "is being deleted" in result["message"]
+        assert "is deleted" not in result["message"].replace("is being deleted", "")
+        assert result["branch_from_id"] == 123
+        assert result["state"] == "published"
+        assert result["derived_state"] == "merged"
+
+    def test_active_branch_reset_only_when_it_was_the_merged_one(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock)
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: None,
+        )
+        store.set_project_branch(ALIAS, 999)  # a DIFFERENT branch is active
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["was_active"] is False
+        assert store.get_project(ALIAS).active_branch_id == 999  # untouched
+
+        store.set_project_branch(ALIAS, 123)  # the merged branch is active
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["was_active"] is True
+        assert store.get_project(ALIAS).active_branch_id is None
+
+    def test_sync_mapping_cleanup_is_reported(self, store, client_factory, monkeypatch) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock)
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: {"project_root": "/x", "git_branches_unlinked": ["feat/a"]},
+        )
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["mapping_cleanup"]["git_branches_unlinked"] == ["feat/a"]
+        assert "feat/a" in result["message"]
+
+    def test_cleanup_failure_degrades_to_warning_not_error(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock)
+
+        def boom(branch_id: int) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping", boom
+        )
+        result = _svc(store, factory).merge(ALIAS, 7)  # must NOT raise
+        assert any("disk full" in w for w in result["cleanup_warnings"])
+
+    def test_409_with_code_maps_to_not_ready_retryable(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="API error 409: Cannot merge, another merge request is processing.",
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            details={"api_error_code": "storage.mergeRequests.notReadyToMerge"},
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+        assert exc_info.value.retryable is True
+
+    def test_409_without_code_maps_to_conflict_with_next_step(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="API error 409: Configuration was changed in the default branch.",
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.MR_MERGE_CONFLICT
+        assert exc_info.value.retryable is False
+        assert "merge-request conflicts" in exc_info.value.message
+
+    def test_non_409_errors_pass_through_unmapped(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="job failed",
+            status_code=0,
+            error_code=ErrorCode.STORAGE_JOB_FAILED,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+
+    def test_failed_merge_does_no_cleanup(self, store, client_factory, monkeypatch) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="conflict", status_code=409, error_code=ErrorCode.API_ERROR
+        )
+        called: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: called.append(branch_id),
+        )
+        store.set_project_branch(ALIAS, 123)
+        with pytest.raises(KeboolaApiError):
+            _svc(store, factory).merge(ALIAS, 7)
+        assert called == []
+        assert store.get_project(ALIAS).active_branch_id == 123
+
+    def test_preflight_blocks_without_the_feature(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.has_feature.return_value = False
+        with pytest.raises(ConfigError):
+            _svc(store, factory).merge(ALIAS, 7)
+        mock.merge_requests.merge.assert_not_called()
