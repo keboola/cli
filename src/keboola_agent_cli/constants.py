@@ -529,6 +529,13 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # dominant `..._FEATURE` suffix convention; decided in DMD-1899.)
 BRANCHES_MERGE_REQUESTS_FEATURE: str = "branches-merge-requests"
 
+# The SOX flavour of protected branches. kbagent does NOT support its
+# approvals flow; the constant exists so the merge-request pre-flight can
+# tell "this is a SOX project (unsupported)" from "merge requests are simply
+# not enabled" when wording its refusal -- the features cache is already
+# loaded at that point, so the distinction is free.
+PROTECTED_DEFAULT_BRANCH_FEATURE: str = "protected-default-branch"
+
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``
 # endpoint used by ``kbagent search`` (textual mode). Projects without this

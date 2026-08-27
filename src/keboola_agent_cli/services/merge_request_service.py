@@ -23,7 +23,7 @@ import logging
 from typing import Any
 
 from ..client import KeboolaClient
-from ..constants import BRANCHES_MERGE_REQUESTS_FEATURE
+from ..constants import BRANCHES_MERGE_REQUESTS_FEATURE, PROTECTED_DEFAULT_BRANCH_FEATURE
 from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
@@ -272,13 +272,22 @@ class MergeRequestService(BaseService):
         """
         if client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE):
             return
+        # The features cache is already loaded by the has_feature call above,
+        # so telling a SOX project apart from a plain "not enabled" is free --
+        # and the two need different advice: a SOX refusal is deliberate CLI
+        # policy, a missing feature is something to enable.
+        if client.has_feature(PROTECTED_DEFAULT_BRANCH_FEATURE):
+            raise FeatureNotEnabledError(
+                "This is a SOX project ('protected-default-branch'): kbagent "
+                "deliberately does not support its merge-request approvals flow, "
+                "although the server would accept some writes. Use the Keboola UI "
+                "for SOX merge requests."
+            )
         raise FeatureNotEnabledError(
             "Merge requests are not enabled on this project: the "
             f"'{BRANCHES_MERGE_REQUESTS_FEATURE}' feature is missing. Without this "
-            "pre-flight the API would answer an unexplained 403 (identical to a role "
-            "denial). Note: kbagent deliberately refuses SOX projects that carry only "
-            "'protected-default-branch', although the server would accept some writes -- "
-            "the SOX approvals flow is not supported by this CLI."
+            "pre-flight the API would answer an unexplained 403 (identical to a "
+            "role denial). Ask Keboola support to enable the feature."
         )
 
     # -- Reads ----------------------------------------------------------------

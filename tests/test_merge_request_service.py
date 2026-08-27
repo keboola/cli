@@ -17,7 +17,12 @@ import pytest
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.client.merge_requests import MergeRequests
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
+from keboola_agent_cli.errors import (
+    ConfigError,
+    ErrorCode,
+    FeatureNotEnabledError,
+    KeboolaApiError,
+)
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.merge_request_service import (
     MergeRequestService,
@@ -1045,3 +1050,25 @@ class TestOpusWireReviewFollowUps:
         mock.verify_token.assert_called_once()
         # admin_id=42 == creator -> locally derived, not None/None
         assert detail["viewer"] == {"is_creator": True, "has_approved": False}
+
+    def test_sox_project_gets_the_sox_refusal_not_a_generic_one(
+        self, store, client_factory
+    ) -> None:
+        # A SOX project (protected-default-branch, no branches-merge-requests)
+        # is refused as deliberate CLI policy -- the message must say so, not
+        # suggest enabling a feature the project deliberately does not have.
+        factory, mock = client_factory
+        mock.has_feature.side_effect = lambda f: f == "protected-default-branch"
+        with pytest.raises(FeatureNotEnabledError) as exc_info:
+            _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        assert "SOX" in str(exc_info.value)
+        assert exc_info.value.error_code == ErrorCode.FEATURE_NOT_ENABLED
+        mock.merge_requests.create.assert_not_called()
+
+    def test_plain_project_gets_the_enable_hint(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.has_feature.return_value = False
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        assert "not enabled" in str(exc_info.value)
+        assert "SOX" not in str(exc_info.value)
