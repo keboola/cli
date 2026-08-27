@@ -1031,3 +1031,17 @@ class TestOpusWireReviewFollowUps:
         assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
         assert "name" in exc_info.value.message
         mock.rebase_config.assert_not_called()
+
+    def test_empty_server_viewer_falls_back_to_local_derivation(
+        self, store, client_factory
+    ) -> None:
+        # Copilot review: a `viewer: {}` (or one with foreign keys) must NOT
+        # skip verify_token -- the skip predicate and derive_viewer's
+        # server-field predicate are one function, so they cannot disagree.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", viewer={})
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        mock.verify_token.assert_called_once()
+        # admin_id=42 == creator -> locally derived, not None/None
+        assert detail["viewer"] == {"is_creator": True, "has_approved": False}
