@@ -192,6 +192,21 @@ def derive_allowed_actions(mr: dict[str, Any]) -> list[str]:
     return list(_ALLOWED_ACTIONS_BY_STATE.get(mr.get("state") or "", ()))
 
 
+def _server_viewer(mr: dict[str, Any]) -> dict[str, Any] | None:
+    """The server-serialized ``viewer`` block, or None when absent/unusable.
+
+    THE single predicate for "did DMD-1988 land": both ``derive_viewer`` and
+    ``get_merge_request``'s verify_token skip use it, so they can never
+    disagree on what counts as a usable server field (a bare ``viewer: {}``
+    or one with foreign keys must fall back to the local derivation, not
+    silently yield None flags).
+    """
+    server = mr.get("viewer")
+    if isinstance(server, dict) and ("isCreator" in server or "hasApproved" in server):
+        return server
+    return None
+
+
 def derive_viewer(mr: dict[str, Any], admin_id: int | None) -> dict[str, bool | None]:
     """Derive the caller-relative flags: am I the creator, did I approve.
 
@@ -202,8 +217,8 @@ def derive_viewer(mr: dict[str, Any], admin_id: int | None) -> dict[str, bool | 
     a blocker into a next step: ``approvals`` + ``has_approved=True`` means
     "wait for the other reviewers", not "approve it".
     """
-    server = mr.get("viewer")
-    if isinstance(server, dict) and ("isCreator" in server or "hasApproved" in server):
+    server = _server_viewer(mr)
+    if server is not None:
         return {
             "is_creator": server.get("isCreator"),
             "has_approved": server.get("hasApproved"),
@@ -369,7 +384,7 @@ class MergeRequestService(BaseService):
             # scoped token has no admin identity -> flags are None, not
             # False.
             admin_id: int | None = None
-            if not isinstance(mr.get("viewer"), dict):
+            if _server_viewer(mr) is None:
                 admin_id = client.verify_token().admin_id
         finally:
             client.close()
