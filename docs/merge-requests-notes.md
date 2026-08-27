@@ -127,6 +127,23 @@ stronger one.
   `bi_rMergeRequestsApprovals` has no unique constraint on `(mergeRequestId, idAdmin)` and
   `hasEnoughApprovals()` counts rows rather than distinct admins.
 
+## Auto-merge: `immediately` merges WITHOUT anyone calling merge
+
+`autoMergeStrategy` is not metadata. A background tick selects every MR in `approved` whose
+strategy is `immediately` (or `scheduled` with `autoMergeAt <= now`) --
+`AutoMerge/AutoMergeCandidateRepository.php:38-47` (`findCandidates`: `WHERE mr.state =
+:approved AND (mr.autoMergeStrategy = :immediately OR (:scheduled AND autoMergeAt <= :now))`)
+-- and drives it through the **same `MergeProcessor`** the merge endpoint uses, under a
+system token (`AutoMerge/AutoMergeTickHandler.php:86`:
+`$this->mergeProcessor->process($legacyRow, new SystemToken(...))`). A conflict blocks the
+scheduled merge and the tick retries until it clears (`:88-94`).
+
+Consequence: on a non-SOX project with the default 0 required approvals,
+`create(auto_merge_strategy="immediately")` + `request_review()` ends in a production merge
+and the source branch's deletion, with `merge()` never called; an
+`update(auto_merge_strategy="immediately")` on an already-approved MR is enough on its own.
+Both service docstrings say so; Layer 1 escalates the flag's permission class accordingly.
+
 ## Roles and feature gating (non-SOX)
 
 Every write carries `#[MergeRequestsAllowedRoles(roles: [ProjectRole::ROLE_ADMIN,
@@ -136,6 +153,13 @@ request-review (`:43`), approve (`:43`), reject (`:49`), merge (`:40`). The `rev
 `#[ProtectedBranchAllowedRoles]` attribute, which `StorageRouteGuard` selects for the **SOX**
 feature — so those roles carry no MR privileges in a non-SOX project. Reads (list, detail,
 conflicts) are `#[AsReadOnlyAction]` with no role whitelist.
+
+Role whitelisting is not the only access axis, though: every `/merge-request/{id}` route --
+the read-only detail and conflicts actions included -- runs `MergeRequestVoter`, which denies
+a token with **no admin identity** (`Voters/MergeRequestVoter.php:49-56`, via
+`MergeRequestService::requireMergeRequest`). A scoped Storage token therefore gets 403 on
+detail/conflicts while the un-votered `GET /merge-request` list still works. Different axis
+(admin identity vs. role), not a contradiction of the sentence above.
 
 All six MR writes accept **either** `protected-default-branch` **or**
 `branches-merge-requests`; the reads and `/diff` are ungated; `/rebase` alone requires
@@ -205,6 +229,7 @@ final Layer 3 review:
 | diff/rebase 400 on default branch | `ConfigurationRebaseNotAvailableOnDefaultBranchException` / diff OA doc → `createBadRequestException` |
 | Diff shape `base`/`ours`/`theirs`, each nullable | `ConfigurationDiffResponse` |
 | Each diff side = `{version, isDeleted, diff: {name, description, changeDescription, isDisabled, configuration, rows}}` -- content NESTED under `diff`, version/deletion as side metadata; all six `diff` keys `required` | `ConfigurationVersionResponse` + `ConfigurationDiffData` OA schemas (re-verified 2026-08-27; a flat-side assumption breaks every take/classify consumer) |
+| Full `MergeRequestResponse` item: `id, creator{id,name}, title, description, state, branches{branchFromId,branchIntoId}, merge{mergedAt,mergerId,mergerName}, createdAt, externalId, autoMergeStrategy, autoMergeAt, approvals[], reviewers[]` -- `merge{}` is NESTED (no flat mergerName), `createdAt` is top-level; list and detail share this item shape byte-for-byte (detail adds `changeLog`, `?include=activityLog` adds `activityLog`) | `MergeRequestResponseProvider.php:86-117` (`getCreateMRResponseArray`), `:132-139` (list maps the same builder) |
 | Rebase replaces; missing `configuration` → `{}`, `isDisabled` → `false`, `description` → null | `RebaseRequest::mapValidatedData` (`?? new stdClass()`, `?? false`, `isset` → null); "complete 3-way diff result … fully replaces" verbatim in `ConfigurationRebaseService` docblock |
 | `rows` required for keep; `[]` deletes all rows; order = sort order | `validateDiffRows` + OA schema |
 | Empty `diff` `{}` = delete resolution (tombstone) | `validateDiff` empty-stdClass branch → `isDelete: true` |

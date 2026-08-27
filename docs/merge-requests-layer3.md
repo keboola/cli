@@ -19,13 +19,13 @@ Project-level — `isAvailableInBranch: false`, so **never** branch-prefixed:
 |---|---|---|---|
 | `GET /v2/storage/merge-request` | — | 200 | — |
 | `POST /v2/storage/merge-request` | JSON | **201** | 404 invalid branch, 422 invalid reviewer, 403 |
-| `GET /v2/storage/merge-request/{id}` | — | 200 | 404 |
+| `GET /v2/storage/merge-request/{id}` | — | 200 | 404, 403 (scoped token -- `MergeRequestVoter` requires an admin identity) |
 | `PUT /v2/storage/merge-request/{id}` | JSON | 200 | 403, 404, 422 |
 | `PUT …/{id}/request-review` | — | 200 | 403, 404, 422 |
 | `PUT …/{id}/approve` | — | 200 | 403, 404, 422 |
 | `PUT …/{id}/request-changes` | JSON `{reason?}` | 200 | 403, 404, 422 |
 | `PUT …/{id}/merge` | — | **202** + a Job | **409**, 403, 404 |
-| `GET …/{id}/conflicts` | — | 200 | 404 |
+| `GET …/{id}/conflicts` | — | 200 | 404, 403 (scoped token -- same voter) |
 
 Branch-scoped — `isAvailableInBranch: true, isAvailableWithoutBranch: false`, so **always**
 branch-prefixed:
