@@ -1305,3 +1305,25 @@ class TestApiErrorCodeDetails:
             assert "api_error_code" not in exc_info.value.details
         finally:
             client.close()
+
+    def test_params_context_lands_in_details(self, httpx_mock) -> None:
+        # The merge-conflict 409 delivers the conflicting configurations in
+        # params.errors (ExceptionConverter serializes HttpException context)
+        # -- surface it so callers don't re-fetch data the error carried.
+        params = {"errors": [{"componentId": "c", "configurationId": "1"}]}
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={
+                "error": "Merge request 7 cannot be merged.",
+                "code": "storage.mergeRequests.validation",
+                "params": params,
+            },
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert exc_info.value.details["api_error_params"] == params
+        finally:
+            client.close()

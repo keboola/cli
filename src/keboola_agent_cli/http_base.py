@@ -454,6 +454,14 @@ class BaseHttpClient:
                 api_error_code = body.get("code")
                 if isinstance(api_error_code, str) and api_error_code:
                     details["api_error_code"] = api_error_code
+                # A Package HttpException additionally serializes its context
+                # as `params` (ExceptionConverter) -- e.g. the merge-conflict
+                # 409 carries the conflicting configurations in
+                # `params.errors`. Surface it so a caller does not have to
+                # re-fetch data the error already delivered.
+                api_error_params = body.get("params")
+                if isinstance(api_error_params, dict) and api_error_params:
+                    details["api_error_params"] = api_error_params
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`

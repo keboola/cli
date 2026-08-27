@@ -313,7 +313,9 @@ class MergeRequests:
 
         The merge 409 has four causes in two response shapes (three "not
         ready" cases carry ``storage.mergeRequests.notReadyToMerge``, a
-        conflict does not); mapping them is Layer 2's concern.
+        conflict carries ``storage.mergeRequests.validation`` plus the
+        conflicting configurations in ``params.errors``); mapping them is
+        Layer 2's concern.
         """
         response = self._requester.request("PUT", f"{_BASE}/{merge_request_id}/merge")
         return self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
