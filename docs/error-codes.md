@@ -192,4 +192,4 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Code | Description |
 |---|---|
 | `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
-| `MR_MERGE_CONFLICT` | Merge answered 409 without a machine code: configurations changed on both branches. Not retryable -- resolve the conflicts (`kbagent merge-request conflicts`) and merge again |
+| `MR_MERGE_CONFLICT` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |

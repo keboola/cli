@@ -59,6 +59,19 @@ order; canonical vocabulary for all clients:
 | `in_merge` | `in_merge` (the one state the UI badge omits — we name it) | — |
 | `merged` | `published` | merged |
 
+Reliability caveat (Opus wire review 2026-08-27, verified against Connection): the
+`rejected` / self-`closed` rows depend on `reviewers[].status`, which the backend populates
+only within a review round anchored by a real `request_review` activity event — and
+`skip_review` writes none. With the non-SOX default of 0 required approvals, every
+`request-review` takes the skip path, so `status` is always `null` and those two overrides
+never fire; additionally, explicit reviewers shadow every non-reviewer's decision and the
+creator can never *be* a reviewer (422). **The UI badge has the identical blind spot** —
+this table is its port. The reliable source is the MR's **activity log**
+(`changes_requested` events, un-anchored and un-shadowed), which is what DMD-1988 asks
+Connection to derive `derivedState` from server-side. The CLI polyfill stays a best-effort
+port of the UI on purpose: matching the UI's (flawed) behavior until the backend serializes
+the truth beats maintaining a third, differently-wrong derivation.
+
 **2. `merge_blockers`** (detail only; list omits it — conflicts are not fetched per row) — a
 *list*, not a single enum, so concurrent blockers don't mask each other; plus sugar
 `mergeable: bool` (= empty list). Purely mechanical, **not a guard** — the merge 409 stays
@@ -75,10 +88,16 @@ sits in `development` and a non-SOX merge from there succeeds (auto-`skipReview`
 is told by `derived_state`, not by a fake blocker.
 
 **3. `allowed_actions`** (detail) — subset of `{request_review, approve, request_changes,
-merge, update, resolve_conflicts}`, mechanically from the state machine (what the UI buttons
-gate on: approve/reject only in `in_review|approved`, send-for-review only in `development`,
-…). The polyfill does *not* mix roles/features in (the pre-flight owns those); the backend
-adds them when it takes over.
+merge, update, resolve_conflicts}`, mechanically from the state machine. Corrected against
+the real workflow (Opus wire review 2026-08-27): `approve` exists **only in `in_review`**
+(its sole `from` place — from `approved` the backend answers 422; the UI button showing it
+there is wrong), and even in `in_review` it is further gated by `AddApprovalGuard` (not the
+creator, not already approved, required count not reached) — with the non-SOX default of 0
+required approvals, `approve` is 422 in every state and `in_review` itself is unreachable.
+`update` is blocked only in terminal states (an `in_merge` MR is still updatable);
+`request_changes` from `in_review|approved`; send-for-review only in `development`. The
+polyfill does *not* mix roles/features in (the pre-flight owns those); the backend adds them
+when it takes over.
 
 **4. `viewer`** (detail) — `{is_creator, has_approved}`, relative to the caller's identity
 (admin id from `verify_token`, compared against `creator.id` and `approvals[].approverId`).
@@ -119,7 +138,9 @@ The list endpoint has no query parameters — a `--state` filter is the service'
 
 The merge 409 has four causes in two shapes (`MergeAction.php:97-109`): three "not ready"
 cases carry the machine-readable `storage.mergeRequests.notReadyToMerge`; a conflict raises
-`MergeValidationException` **without** that code. Today both fall through `http_base.py`'s
+`MergeValidationException` with its own code `storage.mergeRequests.validation` (plus the
+conflicting configurations in `params.errors` -- see the notes doc, corrected 2026-08-27).
+Today both fall through `http_base.py`'s
 generic `API_ERROR` catch-all (`http_base.py:306-336`; neither 409 nor 422 is mapped, neither
 retryable).
 
@@ -130,9 +151,10 @@ the generic `http_base` layer cannot tell it apart:
 - `MR_NOT_READY_TO_MERGE` — the 409 carrying `storage.mergeRequests.notReadyToMerge` (three
   causes: merge lock / wrong state / another MR processing; distinguishable only by message
   text, hence one code). Transient states → `retryable=True`.
-- `MR_MERGE_CONFLICT` — a 409 from the merge endpoint *without* the string code (the body
-  lists the conflicting configurations). `retryable=False`, details carry a "run
-  merge-request conflicts" next-step hint.
+- `MR_MERGE_CONFLICT` — the 409 carrying `storage.mergeRequests.validation` (matched by
+  code; a code-less 409 falls back here for older stacks, any *other* code passes through
+  unmapped). The body's `params.errors` lists the conflicting configurations and is passed
+  through in details. `retryable=False`, message names the conflicts command as next step.
 
 Names may be polished to the enum's convention at implementation time. Both must be
 documented in `docs/error-codes.md` (`scripts/check_error_codes.py` enforces in CI).

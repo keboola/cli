@@ -43,19 +43,31 @@ _DERIVED_STATE_BY_RAW: dict[str, str] = {
     "canceled": "closed",
 }
 
-# Mechanical action availability per raw state -- what the UI buttons gate on
-# (approve/request-changes only in in_review|approved, send-for-review only in
-# development; editing/rebasing is allowed in development, in_review and
-# approved -- the dev branch is locked only while in_merge). `merge` appears
-# for `development` because a non-SOX merge from there succeeds when approvals
-# suffice (the backend auto-applies skip_review). Deliberately state-only:
-# roles and features are the pre-flight's job client-side, and the backend can
-# honor them once it serializes `allowedActions` (DMD-1988).
+# Mechanical action availability per raw state, verified against the Symfony
+# workflow (MergeRequestLifecycleStateMachine + guards; Opus wire review
+# 2026-08-27):
+# - `approve` exists ONLY in in_review (the transition's sole `from` place);
+#   from `approved` the backend answers 422. Even in in_review it is further
+#   gated by AddApprovalGuard (not the creator, not already approved,
+#   required count not yet reached) -- which no state-only table can express.
+#   With the non-SOX default of 0 required approvals, approve is 422 in every
+#   state and in_review itself is unreachable (request-review jumps straight
+#   to approved via skip_review).
+# - `merge` appears for `development` because a non-SOX merge from there
+#   succeeds when approvals suffice (the backend auto-applies skip_review).
+# - `update` is blocked server-side only in the terminal states
+#   (published/canceled) -- an in_merge MR is still updatable.
+# - `resolve_conflicts` (diff+rebase) is allowed while the MR is open; the
+#   in_merge branch lock is enforced on the SOX path only, but rebasing
+#   mid-merge is pointless, so the table deliberately omits it there.
+# Deliberately state-only: roles and features are the pre-flight's job
+# client-side, and the backend can honor them once it serializes
+# `allowedActions` (DMD-1988).
 _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     "development": ("request_review", "merge", "update", "resolve_conflicts"),
     "in_review": ("approve", "request_changes", "update", "resolve_conflicts"),
-    "approved": ("approve", "request_changes", "merge", "update", "resolve_conflicts"),
-    "in_merge": (),
+    "approved": ("request_changes", "merge", "update", "resolve_conflicts"),
+    "in_merge": ("update",),
     "published": (),
     "canceled": (),
 }
@@ -92,6 +104,19 @@ def derive_state(mr: dict[str, Any]) -> str:
       the hood, so a self-closed MR keeps ``state=development``.
     - otherwise the raw state mapped through ``_DERIVED_STATE_BY_RAW``
       (an unknown raw state passes through unchanged, defensively).
+
+    Reliability caveat (verified against Connection, Opus wire review
+    2026-08-27): ``reviewers[].status`` is populated only within a review
+    round anchored by an actual ``request_review`` event, and a non-reviewer's
+    decision (the creator's included -- the creator can never BE a reviewer)
+    is dropped whenever explicit reviewers exist. ``skip_review`` writes no
+    activity event, so in a project with the non-SOX default of 0 required
+    approvals every status is ``null`` and the ``rejected`` / self-``closed``
+    overrides never fire -- the same blind spot the UI badge has, since this
+    table is its port. The truth lives in the MR's activity log
+    (``changes_requested`` events, un-shadowed and un-anchored); serializing a
+    reliable ``derivedState`` from it is exactly what DMD-1988 asks Connection
+    to do. The fallback here stays best-effort by design.
     """
     server = mr.get("derivedState")
     if isinstance(server, str) and server:
@@ -334,7 +359,11 @@ class MergeRequestService(BaseService):
             if (mr.get("state") or "") in self._OPEN_STATES:
                 conflicts = client.merge_requests.conflicts(merge_request_id)
             # The verify_token call exists only to anchor the viewer
-            # polyfill (its admin block is the caller's identity); once the
+            # polyfill (its admin block is the caller's identity). Note the
+            # detail and conflicts endpoints themselves require an admin
+            # token (MergeRequestVoter denies a token with no admin) -- a
+            # scoped token fails above before viewer is ever derived; the
+            # None-flags path stays as defense in depth. Once the
             # server serializes `viewer` (DMD-1988), derive_viewer never
             # reads admin_id -- so skip the call and its cost with it. A
             # scoped token has no admin identity -> flags are None, not
@@ -507,6 +536,9 @@ class MergeRequestService(BaseService):
     # -- Merge ------------------------------------------------------------------
 
     _NOT_READY_CODE = "storage.mergeRequests.notReadyToMerge"
+    # MergeValidationException's string code (ExceptionConverter serializes
+    # it top-level as `code`, with the conflicting configs in `params.errors`).
+    _CONFLICT_CODE = "storage.mergeRequests.validation"
 
     def merge(self, alias: str, merge_request_id: int) -> dict[str, Any]:
         """Merge the MR into the default branch and clean local references.
@@ -517,13 +549,18 @@ class MergeRequestService(BaseService):
         when approvals are satisfied -- the backend auto-applies skip_review.
 
         The merge 409 is remapped onto its two wire shapes (the RFC's
-        decision; docs/error-codes.md):
+        decision; docs/error-codes.md). Both carry a machine string code
+        (ExceptionConverter serializes it top-level as ``code``):
 
         - ``storage.mergeRequests.notReadyToMerge`` (project merge lock /
           wrong state / another MR processing) -> ``MR_NOT_READY_TO_MERGE``,
           retryable -- all three causes are transient.
-        - a 409 without the string code is the conflict validation ->
-          ``MR_MERGE_CONFLICT``, not retryable, next step in the message.
+        - ``storage.mergeRequests.validation`` is the conflict validation ->
+          ``MR_MERGE_CONFLICT``, not retryable; the conflicting
+          configurations arrive in the 409's own ``params.errors`` and are
+          passed through in details. A code-less 409 is treated as a
+          conflict too (older stacks), but a 409 with any OTHER code passes
+          through unmapped -- never mislabeled as a conflict.
 
         A successful merge always also deletes the source branch -- as a
         second async job with no handle, so the result says the branch "is
@@ -603,15 +640,20 @@ class MergeRequestService(BaseService):
         return result
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
-        """Raise the RFC's dedicated error for a merge 409; return for others.
+        """Raise the RFC's dedicated error for a known merge 409; return for others.
 
-        Only this call site knows the 409 came from the merge endpoint, and
-        the conflict shape carries no machine string code -- which is why the
-        mapping cannot live in http_base (see docs/merge-requests-layer2.md).
+        Only this call site knows the 409 came from the merge endpoint --
+        which is why the mapping cannot live in http_base (see
+        docs/merge-requests-layer2.md). Both shapes match on the top-level
+        ``code`` of the error body (surfaced as ``details.api_error_code``);
+        a code-less 409 falls back to the conflict interpretation for older
+        stacks, but a 409 carrying any *other* code passes through unmapped
+        rather than being confidently mislabeled a conflict.
         """
         if exc.status_code != 409:
             return
-        if exc.details.get("api_error_code") == self._NOT_READY_CODE:
+        code = exc.details.get("api_error_code")
+        if code == self._NOT_READY_CODE:
             raise KeboolaApiError(
                 message=(
                     f"{exc.message} The merge lock, MR state or a concurrently "
@@ -623,17 +665,23 @@ class MergeRequestService(BaseService):
                 retryable=True,
                 details=exc.details,
             ) from exc
-        raise KeboolaApiError(
-            message=(
-                f"{exc.message} Configurations changed on both branches. Inspect them "
-                "with `kbagent merge-request conflicts`, resolve each one, then merge "
-                "again (conflicts are re-validated live on every attempt)."
-            ),
-            status_code=409,
-            error_code=ErrorCode.MR_MERGE_CONFLICT,
-            retryable=False,
-            details=exc.details,
-        ) from exc
+        if code == self._CONFLICT_CODE or code is None:
+            # The 409 already carries the conflicting configurations in
+            # params.errors (surfaced as details.api_error_params) -- keep
+            # them so the caller does not need a second round trip; the
+            # conflicts command remains the way to re-inspect later.
+            raise KeboolaApiError(
+                message=(
+                    f"{exc.message} Configurations changed on both branches. Inspect "
+                    "them with `kbagent merge-request conflicts`, resolve each one, "
+                    "then merge again (conflicts are re-validated live on every "
+                    "attempt)."
+                ),
+                status_code=409,
+                error_code=ErrorCode.MR_MERGE_CONFLICT,
+                retryable=False,
+                details=exc.details,
+            ) from exc
 
     # -- Conflicts / diff / resolution --------------------------------------------
 
@@ -847,7 +895,13 @@ class MergeRequestService(BaseService):
                     component_id, config_id, branch_id, version=onto_version
                 )
             else:
+                # `name` must also be non-empty: the diff envelope declares
+                # it nullable, but the rebase validator requires a non-empty
+                # trimmed string -- a null would sail through a bare presence
+                # check straight into a server 400.
                 missing = [key for key in ("name", "rows", "configuration") if key not in body]
+                if "name" not in missing and not str(body.get("name") or "").strip():
+                    missing.insert(0, "name")
                 if missing:
                     if take is not None:
                         # The diff side's envelope is server-produced and its
@@ -896,7 +950,14 @@ class MergeRequestService(BaseService):
         }
 
     def _branch_from_id_of(self, client: KeboolaClient, merge_request_id: int) -> int:
-        """The MR's source branch id -- the only branch a resolution may write to."""
+        """The MR's source branch id -- the only branch a resolution may write to.
+
+        The null check is best-effort, not airtight: `branchFromId` is nulled
+        by the FK's ON DELETE SET NULL when the source branch row is deleted,
+        and that deletion is a separate async job -- a freshly published MR
+        can still carry the id for a while. Harmless: the rebase then fails
+        server-side (the MR is no longer open), it just fails later.
+        """
         mr = client.merge_requests.get(merge_request_id)
         branch_from_id = (mr.get("branches") or {}).get("branchFromId")
         if branch_from_id is None:

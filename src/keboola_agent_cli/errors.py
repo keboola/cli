@@ -149,9 +149,10 @@ class ErrorCode(StrEnum):
 
     # Merge requests (DMD-1899). The merge 409 has four causes in two wire
     # shapes; these split exactly where the backend does (see
-    # docs/merge-requests-notes.md). Mapped in MergeRequestService.merge() --
-    # only the service knows the 409 came from the merge endpoint, and the
-    # conflict shape carries no machine string code for http_base to key on.
+    # docs/merge-requests-notes.md): storage.mergeRequests.notReadyToMerge
+    # vs storage.mergeRequests.validation, both in the body's top-level
+    # `code`. Mapped in MergeRequestService.merge() -- only the service
+    # knows the 409 came from the merge endpoint.
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
 

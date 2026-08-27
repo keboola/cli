@@ -140,20 +140,29 @@ class TestDeriveAllowedActions:
             "resolve_conflicts",
         ]
 
-    def test_review_states_gate_approve_and_request_changes(self) -> None:
-        # Mirrors the UI buttons: approve/request-changes only in
-        # in_review|approved.
+    def test_approve_exists_only_in_in_review(self) -> None:
+        # The approve transition's sole `from` place is in_review; from
+        # `approved` the backend answers 422 (Opus wire review 2026-08-27).
         assert "approve" in derive_allowed_actions(_mr("in_review"))
-        assert "approve" in derive_allowed_actions(_mr("approved"))
+        assert "approve" not in derive_allowed_actions(_mr("approved"))
         assert "approve" not in derive_allowed_actions(_mr("development"))
+
+    def test_request_changes_in_review_and_approved(self) -> None:
+        assert "request_changes" in derive_allowed_actions(_mr("in_review"))
+        assert "request_changes" in derive_allowed_actions(_mr("approved"))
 
     def test_merge_not_offered_from_in_review(self) -> None:
         # in_review means approvals are insufficient by definition; the
         # moment they suffice the backend auto-transitions to approved.
         assert "merge" not in derive_allowed_actions(_mr("in_review"))
 
-    def test_locked_and_terminal_states_offer_nothing(self) -> None:
-        for state in ("in_merge", "published", "canceled"):
+    def test_in_merge_offers_only_update(self) -> None:
+        # The server blocks update only in the terminal states; an in_merge
+        # MR is still updatable (metadata), nothing else is sensible.
+        assert derive_allowed_actions(_mr("in_merge")) == ["update"]
+
+    def test_terminal_states_offer_nothing(self) -> None:
+        for state in ("published", "canceled"):
             assert derive_allowed_actions(_mr(state)) == []
 
     def test_unknown_state_offers_nothing(self) -> None:
@@ -956,3 +965,65 @@ class TestReviewFollowUps:
         detail = _svc(store, factory).get_merge_request(ALIAS, 7)
         mock.verify_token.assert_not_called()
         assert detail["viewer"] == {"is_creator": True, "has_approved": False}
+
+
+class TestOpusWireReviewFollowUps:
+    """Regression tests for the Opus wire-truth review (2026-08-27)."""
+
+    def test_conflict_409_matches_the_validation_code(self, store, client_factory) -> None:
+        # The conflict 409 DOES carry a machine code
+        # (storage.mergeRequests.validation) plus the conflicting configs in
+        # params.errors -- both must survive into the remapped error.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        conflict_params = {
+            "errors": [{"componentId": "c", "configurationId": "1", "isDeleted": False}]
+        }
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="Merge request 7 cannot be merged.",
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            details={
+                "api_error_code": "storage.mergeRequests.validation",
+                "api_error_params": conflict_params,
+            },
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.MR_MERGE_CONFLICT
+        assert exc_info.value.details["api_error_params"] == conflict_params
+
+    def test_unknown_409_code_passes_through_unmapped(self, store, client_factory) -> None:
+        # A future backend 409 with a different code must NOT be confidently
+        # mislabeled as a merge conflict.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved")
+        mock.merge_requests.merge.side_effect = KeboolaApiError(
+            message="something else entirely",
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            details={"api_error_code": "storage.somethingElse.entirely"},
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.API_ERROR
+
+    def test_null_name_on_a_take_side_is_a_contract_violation(self, store, client_factory) -> None:
+        # The diff envelope declares name nullable, but the rebase validator
+        # requires a non-empty string -- a null must not sail through the
+        # presence check into a server 400.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        side = _side({"limit": 250}, version=7)
+        side["diff"]["name"] = None
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=side,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "name" in exc_info.value.message
+        mock.rebase_config.assert_not_called()

@@ -38,9 +38,14 @@ than enqueue:
 
 **409 therefore has four distinct causes, in two different response shapes**
 (`MergeAction.php:97-109`): the three `BranchIsNotReadyToMerge` cases carry the machine-readable
-`storage.mergeRequests.notReadyToMerge`, while a **conflict** raises `MergeValidationException`
-and is thrown *without* that string code. "Not ready" can be told from "conflicted" on that
-basis alone.
+`storage.mergeRequests.notReadyToMerge`, while a **conflict** raises `MergeValidationException`,
+whose own string code is **`storage.mergeRequests.validation`** (`getStringCode`,
+`MergeValidationException.php:174-177`) -- serialized top-level as `code` by
+`ExceptionConverter` (`legacy-app/.../ExceptionConverter.php:99-125`), alongside the human
+message in `error` and **the conflicting configurations in `params.errors`** (the
+HttpException context). "Not ready" vs "conflicted" is a code-vs-code match, not
+code-vs-absence -- an earlier reading of `MergeAction` missed the converter and recorded the
+conflict 409 as code-less (corrected by the Opus wire review, 2026-08-27).
 
 The merge itself is atomic: the job applies the configuration changes and transitions to
 `published` in one transaction, rolling back to `approved` on failure (`MergeRequestService.php`
@@ -194,7 +199,7 @@ final Layer 3 review:
 | `branchFromId`/`branchIntoId` must be JSON ints | `Assert\Type('int')` in `MergeRequestCreateRequest::getConstraint()` |
 | Non-default target & existing-MR-per-source-branch → **404** (not 400) | both throw `InvalidBranchException` in `MergeRequestCreateProcessor`, caught → `HTTP_NOT_FOUND` |
 | merge answers 202 + Storage job | `JsonResponse($job->toApiResponse(...), 202)` in `MergeAction` |
-| 409: three "not ready" causes carry `storage.mergeRequests.notReadyToMerge`, a conflict does not | exactly 3 `throw new BranchIsNotReadyToMerge` sites in `MergeProcessor` → `createConflictException(stringCode: ...)`; `MergeValidationException` → plain 409 |
+| 409: "not ready" carries `storage.mergeRequests.notReadyToMerge`, a conflict carries `storage.mergeRequests.validation` + `params.errors` with the conflicting configs | 3 `BranchIsNotReadyToMerge` sites in `MergeProcessor`; `MergeValidationException::getStringCode` + `ExceptionConverter.php:99-125` (re-verified 2026-08-27; previously mis-recorded as code-less) |
 | Failed merge rolls back the MR | `rollbackMerge` in `MergeDevBranchJob`'s catch |
 | Source branch deleted as a second job, no handle returned | `createAndEnqueueJobFromJob(..., DevBranchDelete::OPERATION_NAME, ...)` after commit in `MergeDevBranchJob` |
 | diff/rebase 400 on default branch | `ConfigurationRebaseNotAvailableOnDefaultBranchException` / diff OA doc → `createBadRequestException` |
