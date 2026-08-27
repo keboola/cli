@@ -359,6 +359,7 @@ class TestListComponentsViaAi:
         service.list_components(query="anything")
 
         assert seen_tokens == [dev_token]
+        mock_ai.close.assert_called_once()
 
 
 # ===========================================================================
@@ -396,6 +397,7 @@ class TestGetComponentDetail:
         service.get_component_detail(alias=None, component_id="keboola.ex-http")
 
         assert seen_tokens == [dev_token]
+        mock_ai.close.assert_called_once()
 
     def test_get_component_detail_success(self, tmp_config_dir: Path) -> None:
         """Returns parsed detail with schema_summary for a valid component."""

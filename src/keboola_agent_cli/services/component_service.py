@@ -913,11 +913,11 @@ class ComponentService(BaseService):
         """
         if aliases:
             projects = self.resolve_projects(aliases)
-            first_alias = next(iter(projects))
-            project = projects[first_alias]
+            query_alias = next(iter(projects))
+            project = projects[query_alias]
         else:
             resolved = self._resolve_alias_or_default(None)
-            first_alias, project = resolved.alias, resolved.project
+            query_alias, project = resolved.alias, resolved.project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         components: list[dict[str, Any]] = []
@@ -975,7 +975,7 @@ class ComponentService(BaseService):
         except KeboolaApiError as exc:
             errors.append(
                 {
-                    "project_alias": first_alias,
+                    "project_alias": query_alias,
                     "error_code": exc.error_code,
                     "message": exc.message,
                 }
@@ -983,7 +983,7 @@ class ComponentService(BaseService):
         except Exception as exc:
             errors.append(
                 {
-                    "project_alias": first_alias,
+                    "project_alias": query_alias,
                     "error_code": "UNEXPECTED_ERROR",
                     "message": str(exc),
                 }

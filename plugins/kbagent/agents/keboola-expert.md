@@ -188,6 +188,15 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   because the component ships none. Reach for `config examples` or an existing
   config in the project instead.
 
+**A command without `--project` refused with CONFIG_ERROR (or picked a project)**
+- On **vNEXT+** the `kai` group, `docs query`, `component detail`, `component
+  list --query`, `config examples`, and `config new` (scaffold mode) resolve an
+  omitted `--project` through the pin cascade: `--project` > `KBAGENT_PROJECT`
+  env > `project use` pin > sole project. Several projects and no pin -> exit 5
+  (`CONFIG_ERROR`). That exit is the fix working, not a bug -- pass `--project`
+  or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
+  registered project and ignored the pin (issue #684). gotchas.md.
+
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
   logs (`job run` tails only the run it started). `job list --offset/--sort-by/
