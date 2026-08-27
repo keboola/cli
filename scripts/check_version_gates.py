@@ -161,6 +161,17 @@ def find_vnext_residue(paths: list[Path]) -> list[VnextResidue]:
 # which has no anchor slug to break.
 HEADING_RE = re.compile(r"^ {0,3}#{1,6} ")
 
+# A code-fence delimiter: 3+ backticks or 3+ tildes, at most 3 spaces indented
+# (CommonMark). The heading check needs it because a ``#`` line INSIDE a fence
+# is content, not a heading -- it renders no anchor slug, so the slug-breakage
+# rationale does not apply there. CLAUDE.md's ``## All CLI Commands`` section
+# is one giant fence full of ``#`` comment lines, and feature PRs are REQUIRED
+# to tag new notes there with ``vNEXT`` (CONTRIBUTING.md, coding convention
+# #17) -- so flagging them would fail every PR that follows the process. This
+# is the same argument that already exempts ``#`` comments in ``.py`` files.
+# The residue scan is untouched: a fenced gate is still a live gate.
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
 
 def find_heading_placeholders(paths: list[Path]) -> list[VnextResidue]:
     """Return every markdown heading carrying a live ``vNEXT`` placeholder.
@@ -176,6 +187,11 @@ def find_heading_placeholders(paths: list[Path]) -> list[VnextResidue]:
     Numeric versions in headings are deliberately NOT flagged: an already
     resolved tag never changes again, so its slug is stable, and flagging the
     dozen historical ones would be noise with no inbound link at risk.
+
+    Lines inside a code fence are skipped -- they render as content, never as
+    headings, so no anchor slug is at risk (see ``FENCE_RE``). A closing fence
+    must repeat the opening character (CommonMark): a ``~~~`` inside a backtick
+    fence is content and does not close it.
     """
     flagged: list[VnextResidue] = []
     for path in paths:
@@ -185,9 +201,20 @@ def find_heading_placeholders(paths: list[Path]) -> list[VnextResidue]:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()
+        fence_open: str | None = None
         for lineno, line in enumerate(
             path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
         ):
+            fence = FENCE_RE.match(line)
+            if fence is not None:
+                marker = fence.group(1)
+                if fence_open is None:
+                    fence_open = marker
+                elif marker[0] == fence_open[0] and len(marker) >= len(fence_open):
+                    fence_open = None
+                continue
+            if fence_open is not None:
+                continue
             if VNEXT_TOKEN not in line or not HEADING_RE.match(line):
                 continue
             # Same quotation rule as the residue scan: a heading that merely
