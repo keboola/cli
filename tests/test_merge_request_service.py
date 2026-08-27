@@ -646,12 +646,18 @@ CONFLICT_ENTRY = {"componentId": "keboola.ex-db", "configurationId": "111"}
 class TestGetConfigDiff:
     def test_classifies_ours_theirs_both(self, store, client_factory) -> None:
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({"limit": 100, "timeout": 30, "flag": True}, version=3),
             ours=_side({"limit": 500, "timeout": 30, "flag": False}, version=4),
             theirs=_side({"limit": 250, "timeout": 60, "flag": True}, version=7),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        # The branch is derived from the MR, never caller-supplied -- the L3
+        # diff call must receive branchFromId (123), and the result echoes it.
+        mock.get_config_diff.assert_called_once_with("keboola.ex-db", "111", 123)
+        assert result["branch_id"] == 123
+        assert result["merge_request_id"] == 7
         by_path = {c["path"]: c for c in result["changes"]}
         assert by_path["configuration.limit"] == {
             "path": "configuration.limit",
@@ -672,24 +678,26 @@ class TestGetConfigDiff:
 
     def test_identical_change_on_both_sides_is_agreed(self, store, client_factory) -> None:
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({"limit": 100}, version=3),
             ours=_side({"limit": 500}, version=4),
             theirs=_side({"limit": 500}, version=7),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         (change,) = result["changes"]
         assert change["changed_by"] == "both"
         assert change["agreed"] is True
 
     def test_removed_key_shows_none_not_base(self, store, client_factory) -> None:
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({"secret": "old"}, version=3),
             ours=_side({}, version=4),  # ours REMOVED the key
             theirs=_side({"secret": "new"}, version=7),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         (change,) = result["changes"]
         assert change["changed_by"] == "both"
         assert change["agreed"] is False
@@ -702,24 +710,26 @@ class TestGetConfigDiff:
         # Only production" rendering would hide the most consequential
         # difference.
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({"limit": 100}, version=3),
             ours=_side({"limit": 100}, version=4),
             theirs=_side({"limit": 100}, version=7, is_deleted=True),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert result["theirs_deleted"] is True
         assert result["ours_deleted"] is False
         assert result["changes"] == []  # identical content, no paths
 
     def test_null_side_reports_none_deleted_flag(self, store, client_factory) -> None:
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=None,
             ours=None,  # never existed on this side
             theirs=_side({"a": 2}, version=7),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert result["ours_deleted"] is None
         by_path = {c["path"]: c for c in result["changes"]}
         assert by_path["configuration"]["changed_by"] == "theirs"
@@ -728,22 +738,24 @@ class TestGetConfigDiff:
         # changeDescription is a per-version commit message; two sides always
         # differ there and it is not something a resolution decides.
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({"a": 1}, version=3, changeDescription="base msg"),
             ours=_side({"a": 1}, version=4, changeDescription="ours msg"),
             theirs=_side({"a": 1}, version=7, changeDescription="theirs msg"),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert result["changes"] == []
 
     def test_rows_compare_wholesale(self, store, client_factory) -> None:
         factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
             base=_side({}, version=3, rows=[{"id": "r1"}]),
             ours=_side({}, version=4, rows=[{"id": "r1"}, {"id": "r2"}]),
             theirs=_side({}, version=7, rows=[{"id": "r1"}]),
         )
-        result = _svc(store, factory).get_config_diff(ALIAS, "keboola.ex-db", "111", 123)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         (change,) = result["changes"]
         assert change["path"] == "rows"
         assert change["changed_by"] == "ours"
@@ -1072,3 +1084,56 @@ class TestOpusWireReviewFollowUps:
             _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
         assert "not enabled" in str(exc_info.value)
         assert "SOX" not in str(exc_info.value)
+
+
+class TestLayer1FindingsFollowUps:
+    """Regression tests for tasks/dmd-1899-findings-from-layer1.md."""
+
+    def test_every_enriched_return_carries_allowed_actions(self, store, client_factory) -> None:
+        # Finding #2: a --json consumer of create/transitions must be able to
+        # answer "what can I do next" without a second call.
+        factory, mock = client_factory
+        mock.list_dev_branches.return_value = [{"id": 1, "isDefault": True}]
+        mock.merge_requests.create.return_value = _wire_mr(9, "development")
+        created = _svc(store, factory).create_merge_request(ALIAS, 123, "My MR")
+        assert created["allowed_actions"] == [
+            "request_review",
+            "merge",
+            "update",
+            "resolve_conflicts",
+        ]
+
+        mock.merge_requests.request_review.return_value = _wire_mr(9, "approved")
+        submitted = _svc(store, factory).request_review(ALIAS, 9)
+        assert "merge" in submitted["allowed_actions"]
+
+        mock.merge_requests.list.return_value = [_wire_mr(9, "published")]
+        rows = _svc(store, factory).list_merge_requests(ALIAS)["merge_requests"]
+        assert rows[0]["allowed_actions"] == []
+
+    def test_empty_list_reports_feature_enabled_flag(self, store, client_factory) -> None:
+        # Finding #6: 200 + [] on a project without the feature must be
+        # tellable from a genuinely empty project.
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = []
+        mock.has_feature.return_value = False
+        result = _svc(store, factory).list_merge_requests(ALIAS)
+        assert result["count"] == 0
+        assert result["feature_enabled"] is False
+
+    def test_non_empty_list_does_not_spend_the_feature_call(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [_wire_mr(1)]
+        result = _svc(store, factory).list_merge_requests(ALIAS)
+        assert "feature_enabled" not in result
+        mock.has_feature.assert_not_called()
+
+    def test_diff_on_a_closed_mr_is_refused(self, store, client_factory) -> None:
+        # Finding #1: the branch comes from the MR; a published/canceled MR
+        # has none (FK nulled it), so the diff is refused readably.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        mock.get_config_diff.assert_not_called()

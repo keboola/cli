@@ -75,9 +75,14 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
 
 # Everything `list_merge_requests`' --state filter accepts: the derived
 # vocabulary plus the raw lifecycle states (the two overlap on purpose).
-_STATE_FILTER_VOCABULARY: frozenset[str] = (
+# Public: Layer 1 enumerates it in --state help text and pre-validates to
+# exit 2 (house precedent: notification_service's KNOWN_EVENTS).
+STATE_FILTER_VOCABULARY: frozenset[str] = (
     frozenset(_DERIVED_STATE_BY_RAW) | frozenset(_DERIVED_STATE_BY_RAW.values()) | {"rejected"}
 )
+
+# The resolve_conflict take modes. Public for the same reason.
+TAKE_MODES: tuple[str, ...] = ("ours", "theirs", "delete")
 
 
 def _same_id(a: Any, b: Any) -> bool:
@@ -211,10 +216,13 @@ def derive_viewer(mr: dict[str, Any], admin_id: int | None) -> dict[str, bool | 
     """Derive the caller-relative flags: am I the creator, did I approve.
 
     ``admin_id`` is the caller's user id from ``verify_token`` (the response's
-    ``admin`` block); a scoped token has none, in which case both flags are
-    ``None`` -- honest "unknown", not ``False``. Server-first (``viewer``
-    with ``isCreator``/``hasApproved``, DMD-1988). These flags are what turns
-    a blocker into a next step: ``approvals`` + ``has_approved=True`` means
+    ``admin`` block); when it is ``None`` both flags are ``None`` -- honest
+    "unknown", not ``False``. In practice that branch is defense in depth
+    rather than a reachable path: a scoped token (no admin identity) is
+    denied by ``MergeRequestVoter`` on the detail/conflicts endpoints before
+    this function ever runs. Server-first (``viewer`` with
+    ``isCreator``/``hasApproved``, DMD-1988). These flags are what turns a
+    blocker into a next step: ``approvals`` + ``has_approved=True`` means
     "wait for the other reviewers", not "approve it".
     """
     server = _server_viewer(mr)
@@ -234,9 +242,16 @@ def derive_viewer(mr: dict[str, Any], admin_id: int | None) -> dict[str, bool | 
 
 
 def _enrich_row(mr: dict[str, Any]) -> dict[str, Any]:
-    """List-row enrichment: raw MR + derived_state (conflicts are not fetched
-    per row, so no blockers here -- detail-level enrichment does that)."""
-    return {**mr, "derived_state": derive_state(mr)}
+    """Row-level enrichment applied to every MR the service returns: raw MR +
+    derived_state + allowed_actions (both are free -- state-only). Conflicts
+    are not fetched here, so no blockers -- detail-level enrichment does that.
+    A --json consumer of create/update/transitions can answer "what can I do
+    next" without a second call (findings doc, DMD-1900)."""
+    return {
+        **mr,
+        "derived_state": derive_state(mr),
+        "allowed_actions": derive_allowed_actions(mr),
+    }
 
 
 class MergeRequestService(BaseService):
@@ -303,15 +318,23 @@ class MergeRequestService(BaseService):
         closed and known here, and a typo returning a silent ``count: 0``
         would read as "no MRs".
         """
-        if state is not None and state.lower() not in _STATE_FILTER_VOCABULARY:
+        if state is not None and state.lower() not in STATE_FILTER_VOCABULARY:
             raise ConfigError(
                 f"Unknown --state value {state!r}. Accepted values: "
-                f"{', '.join(sorted(_STATE_FILTER_VOCABULARY))}."
+                f"{', '.join(sorted(STATE_FILTER_VOCABULARY))}."
             )
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
             rows = [_enrich_row(mr) for mr in client.merge_requests.list()]
+            # The list endpoint is ungated, so a project without the feature
+            # answers 200 + [] -- indistinguishable from a genuinely empty
+            # project, while every subsequent write would fail. Disambiguate
+            # only for the empty result (the has_feature call costs one
+            # verify_token GET, so it is not spent on non-empty lists).
+            feature_enabled = (
+                client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE) if not rows else None
+            )
         finally:
             client.close()
 
@@ -328,6 +351,8 @@ class MergeRequestService(BaseService):
             "count": len(rows),
             "merge_requests": rows,
         }
+        if feature_enabled is not None:
+            result["feature_enabled"] = feature_enabled
         if state is not None:
             result["state_filter"] = state
         return result
@@ -435,6 +460,13 @@ class MergeRequestService(BaseService):
         readable error) and the output must state which branch the MR was
         created from. A source branch can have at most one MR, ever; a
         second create answers 404 server-side.
+
+        ``auto_merge_strategy="immediately"`` is NOT metadata: a background
+        backend tick merges any *approved* MR carrying it (same
+        MergeProcessor as the merge endpoint, under a system token) -- and on
+        non-SOX defaults ``request_review`` lands straight in approved, so
+        create+submit alone can end in a production merge and the source
+        branch's deletion. See the notes doc, *Auto-merge*.
         """
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
@@ -480,7 +512,12 @@ class MergeRequestService(BaseService):
     ) -> dict[str, Any]:
         """Update an MR's metadata. ``None`` = leave unchanged (the API cannot
         clear a field to null; an empty string clears description/externalId
-        server-side)."""
+        server-side).
+
+        ``auto_merge_strategy="immediately"`` on an already-approved MR is
+        enough for the backend's auto-merge tick to merge it -- no ``merge()``
+        call involved (see the notes doc, *Auto-merge*). Not just metadata.
+        """
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -657,6 +694,7 @@ class MergeRequestService(BaseService):
         if mr_after.get("state"):
             result["state"] = mr_after["state"]
             result["derived_state"] = derive_state(mr_after)
+            result["allowed_actions"] = derive_allowed_actions(mr_after)
         if mapping_cleanup:
             result["mapping_cleanup"] = mapping_cleanup
         if cleanup_warnings:
@@ -740,9 +778,16 @@ class MergeRequestService(BaseService):
         }
 
     def get_config_diff(
-        self, alias: str, component_id: str, config_id: str, branch_id: int
+        self, alias: str, merge_request_id: int, component_id: str, config_id: str
     ) -> dict[str, Any]:
         """Three-way diff of one config, flattened to a per-path classification.
+
+        The branch is derived from the merge request (``branches.branchFromId``)
+        for the same reason ``resolve_conflict`` derives it: a caller-supplied
+        branch id has no relation to the MR, so the diff could silently show an
+        unrelated branch (findings doc, DMD-1899/DMD-1900). One GET buys the
+        symmetry; the resolved ``branch_id`` is echoed in the result so Layer 1
+        never re-derives the branch->MR relation itself.
 
         No three panes: each touched path is tagged ``changed_by`` --
         ``ours`` (only the dev branch changed it), ``theirs`` (only
@@ -761,6 +806,7 @@ class MergeRequestService(BaseService):
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
+            branch_id = self._branch_from_id_of(client, merge_request_id)
             diff = client.get_config_diff(component_id, config_id, branch_id)
         finally:
             client.close()
@@ -768,6 +814,7 @@ class MergeRequestService(BaseService):
         ours = diff.get("ours")
         return {
             "alias": alias,
+            "merge_request_id": merge_request_id,
             "component_id": component_id,
             "config_id": config_id,
             "branch_id": branch_id,
@@ -874,8 +921,8 @@ class MergeRequestService(BaseService):
         """
         if (take is None) == (resolved is None):
             raise ConfigError("Pass exactly one of take=ours|theirs|delete or a resolved body.")
-        if take is not None and take not in ("ours", "theirs", "delete"):
-            raise ConfigError(f"Unknown take mode {take!r}: use ours, theirs or delete.")
+        if take is not None and take not in TAKE_MODES:
+            raise ConfigError(f"Unknown take mode {take!r}: use {', '.join(TAKE_MODES)}.")
 
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
