@@ -14,7 +14,11 @@ from typing import Any
 from ..auth.sentinel import is_session_token, parse_session_project_id, require_static_token
 from ..client import KeboolaClient
 from ..config_store import ConfigError, ConfigStore, project_not_found_error
-from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+from ..constants import (
+    ENV_KBAGENT_PROJECT,
+    ENV_MAX_PARALLEL_WORKERS,
+    UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
+)
 from ..errors import ErrorCode
 from ..models import ProjectConfig
 
@@ -216,6 +220,72 @@ class BaseService:
             resolved[alias] = config.projects[alias]
 
         return resolved
+
+    def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
+        """Resolve the effective project alias for a single-project operation.
+
+        Precedence (first match wins):
+        1. ``explicit`` argument (typically the CLI ``--project`` flag)
+        2. ``KBAGENT_PROJECT`` env var
+        3. Persisted ``default_project`` pin
+        4. If exactly one project is registered, fall back to it (source=sole)
+        5. Fail hard with ConfigError
+
+        This is the single-project analog of ``resolve_projects()`` (which
+        fans out to all projects). Every service that needs one implicit
+        project must go through this cascade -- never a "first registered
+        project" shortcut, which ignores the ``project use`` pin (issue #684).
+
+        Args:
+            explicit: Explicit alias from a CLI flag, or None.
+
+        Returns:
+            Tuple of (alias, source).
+
+        Raises:
+            ConfigError: If the resolved alias is not registered, or if none
+                can be resolved.
+        """
+        config = self._config_store.load()
+
+        if explicit:
+            if explicit not in config.projects:
+                raise project_not_found_error(
+                    explicit, self._config_store.config_path, self._config_store.source
+                )
+            return explicit, "explicit"
+
+        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
+        if env_value:
+            if env_value not in config.projects:
+                raise ConfigError(
+                    f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
+                    "that is not registered. Use 'kbagent project add' or "
+                    "unset the env var."
+                )
+            return env_value, "env"
+
+        pinned = config.default_project
+        if pinned:
+            if pinned not in config.projects:
+                raise ConfigError(
+                    f"Pinned default project '{pinned}' is not registered. "
+                    "Run 'kbagent project use <alias>' to repair."
+                )
+            return pinned, "pin"
+
+        if len(config.projects) == 1:
+            (sole,) = config.projects.keys()
+            return sole, "sole"
+
+        if not config.projects:
+            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
+
+        raise ConfigError(
+            "Multiple projects configured and no default pinned. "
+            "Pass --project <alias>, set KBAGENT_PROJECT, or run "
+            "'kbagent project use <alias>'."
+        )
 
     def _resolve_max_workers(self) -> int:
         """Resolve max parallel workers: env var > config.json > default (10).

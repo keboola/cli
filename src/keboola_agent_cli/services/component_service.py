@@ -32,9 +32,9 @@ AiClientFactory = Callable[[str, str], AiServiceClient]
 class ResolvedProject:
     """A project resolved together with the alias it was resolved under.
 
-    ``alias`` is the caller's alias when one was given, otherwise the first
-    configured project's -- the value response payloads report as
-    ``project_alias``. A dataclass rather than a bare 2-tuple per
+    ``alias`` is the caller's alias when one was given, otherwise the one
+    the default-project cascade resolved -- the value response payloads
+    report as ``project_alias``. A dataclass rather than a bare 2-tuple per
     CONTRIBUTING.md's multi-value-return rule.
     """
 
@@ -518,7 +518,7 @@ class ComponentService(BaseService):
         Two modes of operation:
         - With ``query``: Uses AI Service to suggest components matching a
           natural language description. Enriches each suggestion with detail
-          from get_component_detail(). Runs against first/default project.
+          from get_component_detail(). Runs against the default project.
         - Without ``query``: Uses Storage API list_components() across all
           resolved projects in parallel, returning unique components.
 
@@ -537,26 +537,22 @@ class ComponentService(BaseService):
             return self._list_via_ai(aliases, component_type, query)
         return self._list_via_storage(aliases, component_type)
 
-    def _resolve_alias_or_first(self, alias: str | None) -> ResolvedProject:
-        """Resolve *alias* to a project, defaulting to the first configured one.
+    def _resolve_alias_or_default(self, alias: str | None) -> ResolvedProject:
+        """Resolve *alias* to a project, defaulting via the shared cascade.
 
-        :meth:`BaseService.resolve_projects` falls back to "all projects" only
-        when the alias LIST itself is empty/None -- a ``[None]`` element goes
-        down its strict lookup and raises "Project 'None' not found". Commands
-        that document ``--project`` as optional (``component detail``,
-        ``config examples``, ``config new`` without ``--push``) must therefore
-        normalise an omitted alias here instead of passing it through.
+        Commands that document ``--project`` as optional (``component
+        detail``, ``config examples``, ``config new`` without ``--push``)
+        normalise an omitted alias here. The fallback goes through
+        :meth:`BaseService.resolve_pinned_alias` (KBAGENT_PROJECT env >
+        ``project use`` pin > sole project), never "first registered
+        project" -- that shortcut ignored the pin (issue #684).
 
         Raises:
-            ConfigError: If *alias* is given but unknown, or when no projects
-                are configured at all.
+            ConfigError: If *alias* is given but unknown, or when no default
+                project can be resolved.
         """
-        projects = self.resolve_projects([alias] if alias else None)
-        if not projects:
-            raise ConfigError(
-                "No projects configured. Use 'kbagent project add' to connect a project first."
-            )
-        resolved_alias = alias or next(iter(projects))
+        resolved_alias, _source = self.resolve_pinned_alias(explicit=alias)
+        projects = self.resolve_projects([resolved_alias])
         return ResolvedProject(alias=resolved_alias, project=projects[resolved_alias])
 
     def get_component_detail(self, alias: str | None, component_id: str) -> dict[str, Any]:
@@ -584,7 +580,7 @@ class ComponentService(BaseService):
 
         Args:
             alias: Project alias (used to derive stack URL and token). When
-                None, the first available project is used.
+                None, the default-project cascade resolves it.
             component_id: The component identifier (e.g. 'keboola.ex-aws-s3').
 
         Returns:
@@ -598,7 +594,7 @@ class ComponentService(BaseService):
                 re-raised unchanged only when the Storage catalog does not know
                 the component either (i.e. the id really is wrong).
         """
-        resolved = self._resolve_alias_or_first(alias)
+        resolved = self._resolve_alias_or_default(alias)
         project = resolved.project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
@@ -710,8 +706,8 @@ class ComponentService(BaseService):
         contract is a summary and stays unchanged).
 
         Args:
-            alias: Project alias. When None, the first available project is
-                used (only the stack URL and token are needed).
+            alias: Project alias. When None, the default-project cascade
+                resolves it (only the stack URL and token are needed).
             component_id: The component identifier (e.g. 'keboola.ex-google-drive').
 
         Returns:
@@ -722,7 +718,7 @@ class ComponentService(BaseService):
             ConfigError: If the alias is not found or no projects are configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        project = self._resolve_alias_or_first(alias).project
+        project = self._resolve_alias_or_default(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
@@ -856,7 +852,7 @@ class ComponentService(BaseService):
 
         Args:
             alias: Project alias (used to derive stack URL and token). When
-                None, the first available project is used (`config new`
+                None, the default-project cascade resolves it (`config new`
                 without --push documents --project as optional).
             component_id: The component identifier.
             name: Configuration name. If None, defaults to
@@ -870,7 +866,7 @@ class ComponentService(BaseService):
                 configured.
             KeboolaApiError: If the AI Service call fails.
         """
-        project = self._resolve_alias_or_first(alias).project
+        project = self._resolve_alias_or_default(alias).project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
@@ -910,13 +906,18 @@ class ComponentService(BaseService):
     ) -> dict[str, Any]:
         """Search components via AI Service suggestions.
 
-        Uses first/default project for AI queries, then enriches each
-        suggestion with component detail.
+        Runs the AI query against one project's stack: the first explicitly
+        requested alias, or the default-project cascade when none was given
+        (never "first registered" -- issue #684). Enriches each suggestion
+        with component detail.
         """
-        projects = self.resolve_projects(aliases)
-        # Use first project for AI queries
-        first_alias = next(iter(projects))
-        project = projects[first_alias]
+        if aliases:
+            projects = self.resolve_projects(aliases)
+            first_alias = next(iter(projects))
+            project = projects[first_alias]
+        else:
+            resolved = self._resolve_alias_or_default(None)
+            first_alias, project = resolved.alias, resolved.project
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         components: list[dict[str, Any]] = []

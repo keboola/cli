@@ -214,16 +214,26 @@ class TestDocsService:
             "source_urls": ["https://help.keboola.com/x"],
         }
 
-    def test_ask_docs_default_alias_uses_first_project(self, tmp_path: Path) -> None:
-        """alias=None falls back to the first configured project."""
+    def test_ask_docs_default_alias_uses_pin(self, tmp_path: Path, monkeypatch) -> None:
+        """alias=None resolves the ``project use`` pin, not the first project.
+
+        Regression test for issue #684: with two projects and the pin moved
+        to the second one, `docs query` without --project used the first
+        registered project.
+        """
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
         store = self._make_store(tmp_path, ["prod", "dev"])
+        # add_project() pinned "prod" (first added); repoint like `project use dev`.
+        cfg = store.load()
+        cfg.default_project = "dev"
+        store.save(cfg)
         raw = {"text": "Answer.", "sourceUrls": []}
         service, _mock_client, mock_factory = self._make_service(store, raw)
 
         result = service.ask_docs(alias=None, query="q")
 
         mock_factory.assert_called_once_with(
-            "https://connection.prod.keboola.com",
+            "https://connection.dev.keboola.com",
             TEST_TOKEN,
         )
         assert result["source_urls"] == []
