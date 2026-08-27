@@ -745,18 +745,22 @@ class TestGetConfigDiff:
 
 
 class TestResolveConflict:
+    # Sentinel: "keep the fixture's default side" -- distinct from an
+    # explicit None, which means "the side does not exist".
+    _DEFAULT_SIDE: Any = object()
+
     def _arm(
         self,
         mock: MagicMock,
-        ours: dict[str, Any] | None = ...,
-        theirs: dict[str, Any] | None = ...,
-    ) -> None:  # type: ignore[assignment]
+        ours: Any = _DEFAULT_SIDE,
+        theirs: Any = _DEFAULT_SIDE,
+    ) -> None:
         mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
         mock.get_config_diff.return_value = _diff(
             base=_side({"limit": 100}, version=3),
-            ours=_side({"limit": 500}, version=4) if ours is ... else ours,
-            theirs=_side({"limit": 250}, version=7) if theirs is ... else theirs,
+            ours=_side({"limit": 500}, version=4) if ours is self._DEFAULT_SIDE else ours,
+            theirs=(_side({"limit": 250}, version=7) if theirs is self._DEFAULT_SIDE else theirs),
         )
         mock.rebase_config.return_value = {"id": "111", "version": 8}
         mock.rebase_config_delete.return_value = {"id": "111", "version": 8, "isDeleted": True}

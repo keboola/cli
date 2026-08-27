@@ -771,6 +771,14 @@ class MergeRequestService(BaseService):
             e.path: e for e in compute_diff_entries(base, content(diff.get("theirs")))
         }
 
+        def side_value(entry: DiffEntry | None, base_val: Any) -> Any:
+            # A side that changed the path shows its own value (None when
+            # it REMOVED the key -- never the base value); a side with no
+            # entry did not touch the path and still holds the base.
+            if entry is not None:
+                return entry.new if entry.new_present else None
+            return base_val
+
         changes: list[dict[str, Any]] = []
         for path in sorted(set(ours_entries) | set(theirs_entries)):
             ours_entry = ours_entries.get(path)
@@ -781,15 +789,6 @@ class MergeRequestService(BaseService):
                 "both" if ours_entry and theirs_entry else ("ours" if ours_entry else "theirs")
             )
             base_value = reference.old if reference.old_present else None
-
-            def side_value(entry: DiffEntry | None, base_val: Any) -> Any:
-                # A side that changed the path shows its own value (None when
-                # it REMOVED the key -- never the base value); a side with no
-                # entry did not touch the path and still holds the base.
-                if entry is not None:
-                    return entry.new if entry.new_present else None
-                return base_val
-
             change: dict[str, Any] = {
                 "path": path,
                 "changed_by": changed_by,
