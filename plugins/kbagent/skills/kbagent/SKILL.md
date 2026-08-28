@@ -403,6 +403,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
 | **Storage column types** (native types, NOT NULL, DEFAULT, branch materialize) | [storage-types-workflow](references/storage-types-workflow.md) |
+| **Partition/cluster a BigQuery table** (create partitioned copy -> swap-tables -> revert pattern; STORAGE_JOB_TIMEOUT handling; physical verification via bq show) | [partition-table-workflow](references/partition-table-workflow.md) |
 | **Typify a typeless table** (profile -> CTAS -> swap-tables -> validate -> handoff) | [typify-table-workflow](references/typify-table-workflow.md) |
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
