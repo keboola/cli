@@ -100,19 +100,35 @@ def grant_target_projects(
 def request_elevation(
     client: MetastoreClient, item_type: SemanticType, item_id: str
 ) -> dict[str, Any]:
-    return item_status(client.request_scope_elevation(item_type, item_id))
+    """Flag an item as awaiting an org-admin's step-up decision.
+
+    Re-reads the item instead of rendering the endpoint's own response:
+    the ``scope-elevation-request`` (and ``PATCH``) response bodies omit
+    ``meta.targetProjectIds``, so reporting them directly prints
+    ``target_project_ids: null`` for an item whose grants are actually
+    intact -- verified live: `scope status` before and after shows
+    ``[5024]`` while the endpoint response shows ``None``. That reads as
+    "requesting elevation just wiped my grants", which is not what
+    happened. Same re-read pattern as :func:`grant_target_projects`.
+    """
+    client.request_scope_elevation(item_type, item_id)
+    return item_status(client.get_item(item_type, item_id))
 
 
 def withdraw_elevation(
     client: MetastoreClient, item_type: SemanticType, item_id: str
 ) -> dict[str, Any]:
-    return item_status(client.withdraw_scope_elevation(item_type, item_id))
+    """Clear a pending elevation request. Re-reads for the reason in :func:`request_elevation`."""
+    client.withdraw_scope_elevation(item_type, item_id)
+    return item_status(client.get_item(item_type, item_id))
 
 
 def elevate_to_organization(
     client: MetastoreClient, item_type: SemanticType, item_id: str
 ) -> dict[str, Any]:
-    return item_status(client.elevate_to_organization(item_type, item_id))
+    """Step an item up to organization scope. Re-reads for the reason in :func:`request_elevation`."""
+    client.elevate_to_organization(item_type, item_id)
+    return item_status(client.get_item(item_type, item_id))
 
 
 def list_pending_elevations(
