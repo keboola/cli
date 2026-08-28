@@ -208,7 +208,7 @@ class TestServiceScopeMethods:
     def test_scope_request_elevation_delegates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
-        mock.request_scope_elevation.return_value = _child_item(
+        mock.get_item.return_value = _child_item(
             "semantic-metric", "m1", {"name": "x"}, meta={"scopeElevationRequestedAt": "t"}
         )
         result = service.scope_request_elevation("prod", "metric", "m1")
@@ -218,21 +218,56 @@ class TestServiceScopeMethods:
     def test_scope_withdraw_elevation_delegates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
-        mock.withdraw_scope_elevation.return_value = _child_item(
-            "semantic-metric", "m1", {"name": "x"}
-        )
+        mock.get_item.return_value = _child_item("semantic-metric", "m1", {"name": "x"})
         service.scope_withdraw_elevation("prod", "metric", "m1")
         mock.withdraw_scope_elevation.assert_called_once_with("semantic-metric", "m1")
 
     def test_scope_elevate_delegates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
-        mock.elevate_to_organization.return_value = _child_item(
+        mock.get_item.return_value = _child_item(
             "semantic-metric", "m1", {"name": "x"}, meta={"scope": "organization"}
         )
         result = service.scope_elevate("prod", "metric", "m1")
         mock.elevate_to_organization.assert_called_once_with("semantic-metric", "m1")
         assert result["scope"] == "organization"
+
+    @pytest.mark.parametrize(
+        ("method", "client_call"),
+        [
+            ("scope_request_elevation", "request_scope_elevation"),
+            ("scope_withdraw_elevation", "withdraw_scope_elevation"),
+            ("scope_elevate", "elevate_to_organization"),
+        ],
+    )
+    def test_elevation_ops_report_grants_from_a_reread_not_the_endpoint_response(
+        self, tmp_path: Path, method: str, client_call: str
+    ) -> None:
+        """Grants must survive in the REPORTED status, not just on the server.
+
+        Verified live against metastore.us-east4: the
+        ``scope-elevation-request`` / ``PATCH`` responses omit
+        ``meta.targetProjectIds`` even though the item keeps its grants, so
+        rendering that response printed ``target_project_ids: null`` right
+        after a `scope status` had shown ``[5024]`` -- i.e. it looked like
+        requesting elevation had silently wiped every grant.
+        """
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        # What the mutating endpoint returns: grants missing from meta.
+        getattr(mock, client_call).return_value = _child_item(
+            "semantic-metric", "m1", {"name": "x"}, meta={"scope": "targeted"}
+        )
+        # What the item actually looks like when re-read.
+        mock.get_item.return_value = _child_item(
+            "semantic-metric",
+            "m1",
+            {"name": "x"},
+            meta={"scope": "targeted", "targetProjectIds": [5024]},
+        )
+        result = getattr(service, method)("prod", "metric", "m1")
+        assert result["target_project_ids"] == [5024]
+        mock.get_item.assert_called_with("semantic-metric", "m1")
 
     def test_scope_pending_delegates_with_pagination(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
