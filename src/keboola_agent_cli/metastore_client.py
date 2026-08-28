@@ -20,6 +20,31 @@ Verified contract (probed 2026-05-14 against e2e-1143):
   :data:`ErrorCode.ALREADY_EXISTS`.
 - Error envelope has top-level ``error``, ``code``, ``exception``, ``status``,
   ``context.path``, and an ``errors[]`` list for 422 validation failures.
+
+Scope/target-project contract (grounded in go-monorepo commit ``e4f62941``,
+services/metastore -- Linear PSGO-140; read from source, **not yet probed
+live**):
+
+- Every item's ``scope`` (``"project"`` | ``"organization"`` | ``"targeted"``),
+  ``targetProjectIds``, and ``scopeElevationRequestedAt`` live under the
+  response's ``meta`` block, not ``attributes`` (server:
+  ``MetaObjectResponse.JSONAPIMeta``).
+- ``POST`` accepts ``scope``/``targetProjectIds`` in the create envelope.
+  ``PUT /{id}`` (plain update) does **not** -- its server-side request struct
+  (``MetaObjectUpdatePutRequest``) has no such fields, so scope/grants can
+  only be set at creation or through the dedicated endpoints below.
+- Elevating to organization scope is ``PATCH /{id}`` with body
+  ``{"scope": "organization"}`` **only** -- it cannot be combined with a
+  name/data change in the same request, is one-way (no downgrade endpoint
+  exists), and requires the organization-admin role.
+- ``PUT /{id}/target-projects`` **replaces the whole grant set** (not
+  additive); only valid for an object created with ``scope="targeted"``.
+  204 on success, no body.
+- ``PUT``/``DELETE /{id}/scope-elevation-request`` self-service "request a
+  step-up" flag: empty body, 200 with the updated item. Idempotent.
+- ``GET /{type}/organization`` lists organization-visible items across
+  projects; supports the same generic ``field[op]=value`` filter query
+  language as every other list endpoint, plus bare ``limit=N``/``offset=N``.
 """
 
 import logging
@@ -34,15 +59,24 @@ from .http_base import BaseHttpClient
 logger = logging.getLogger(__name__)
 
 
-# The metastore's auth middleware collapses EVERY project-scope resolution
-# failure into this one opaque 401 string (go-monorepo
+# Pre-PSGO-282, the metastore's auth middleware collapsed EVERY project-scope
+# resolution failure into this one opaque 401 string (go-monorepo
 # ``services/metastore/internal/middleware/auth.go``, ``resolveProjectScope``
-# -- the underlying error is logged server-side and discarded). The dominant
-# cause is its master-token gate: ``NewProjectDeps`` is called without
-# ``WithoutMasterToken()``, so unlike the Storage API the metastore accepts
-# ONLY a master (project admin) Storage token, and every valid non-master
-# token lands here (issue #711; A/B-verified live on us-east4.gcp: non-master
-# token -> this 401 on every call, master token on the same stack -> 200).
+# -- the underlying error was logged server-side and discarded), because
+# ``NewProjectDeps`` was called without ``WithoutMasterToken()``: unlike the
+# Storage API, the metastore accepted ONLY a master (project admin) Storage
+# token and every valid non-master token landed here (issue #711;
+# A/B-verified live on us-east4.gcp: non-master token -> this 401 on every
+# call, master token on the same stack -> 200).
+#
+# Fixed server-side in go-monorepo#596 (PSGO-282, merged 2026-08-31): reads
+# now work with any valid, non-disabled, non-expired Storage token, writes
+# still require the token to belong to a project admin, and a 401 now relays
+# the Storage API's real error message instead of this generic string. A
+# fixed metastore will not emit this exact phrase again -- this
+# reclassification is kept only as a safety net for a deployment that has
+# not rolled the fix out yet (or an older regional stack); the message below
+# no longer claims every call needs a master token.
 _PROJECT_SCOPE_401_EXCEPTION = "Failed to create project scope"
 
 # Re-extracts the ``[exceptionId: ...]`` suffix `_raise_api_error` appended,
@@ -72,10 +106,20 @@ SEMANTIC_TYPES: tuple[str, ...] = (
 )
 
 
+ObjectScope = Literal["project", "organization", "targeted"]
+
 # Envelope fields kept constant across every POST (per metastore contract).
 _ENVELOPE_BRANCH = "main"
-_ENVELOPE_SCHEMA_VERSION = "1.0.0"
-_ENVELOPE_SCOPE = "project"
+# 1.1.0, not 1.0.0: every semantic-* schema's x-metastore.scope.supported is
+# ["project"] ONLY at 1.0.0 -- 1.1.0 is what adds "organization"/"targeted"
+# (go-monorepo migrations/schema/semantic-*_schema_1.1.0.json, diffed against
+# 1.0.0 at commit e4f62941: purely additive x-metastore.acl/scope blocks, no
+# `data` schema change, so this is safe for every existing caller). Sending
+# scope="organization"/"targeted" against 1.0.0 gets a clean 400
+# ErrScopeNotSupported from prepareCreateSchema -- the server resolves the
+# EXACT version string sent, never silently upgrades it.
+_ENVELOPE_SCHEMA_VERSION = "1.1.0"
+_DEFAULT_SCOPE: ObjectScope = "project"
 
 
 class MetastoreClient(BaseHttpClient):
@@ -106,14 +150,18 @@ class MetastoreClient(BaseHttpClient):
     def _do_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Funnel every metastore call through the project-scope-401 diagnosis.
 
-        A 401 carrying ``"Failed to create project scope"`` is the metastore's
-        master-token gate rejecting a valid non-master token (see
-        :data:`_PROJECT_SCOPE_401_EXCEPTION`), not a bad credential and not a
-        server fault to escalate -- so it is reclassified from the generic
-        401 mapping into :data:`ErrorCode.MISSING_MASTER_TOKEN` with the
-        actual remedy, mirroring the ``token create`` / ``config oauth-url``
-        pre-flight guards (#599). Kept at the request funnel (rather than one
-        try/except per verb method) so no endpoint can miss it.
+        A 401 carrying ``"Failed to create project scope"`` was the
+        metastore's pre-PSGO-282 master-token gate rejecting a valid
+        non-master token (see :data:`_PROJECT_SCOPE_401_EXCEPTION`), not a
+        bad credential and not a server fault to escalate -- so it is
+        reclassified from the generic 401 mapping into
+        :data:`ErrorCode.MISSING_MASTER_TOKEN`, mirroring the
+        ``token create`` / ``config oauth-url`` pre-flight guards (#599).
+        Kept at the request funnel (rather than one try/except per verb
+        method) so no endpoint can miss it, but since PSGO-282 a fixed
+        metastore only 401s this way on a WRITE against a non-admin token
+        (reads succeed for any valid token) -- the remedy below reflects
+        that, not a blanket master-token requirement.
         """
         try:
             return super()._do_request(method, path, **kwargs)
@@ -125,13 +173,15 @@ class MetastoreClient(BaseHttpClient):
             raise KeboolaApiError(
                 message=(
                     f"The Metastore API (semantic layer) rejected the request with "
-                    f"HTTP 401 {_PROJECT_SCOPE_401_EXCEPTION!r}. Unlike the Storage "
-                    f"API, the metastore accepts only a MASTER (project admin) "
-                    f"Storage token, and this is how it answers a valid non-master "
-                    f"token (token: {self._masked_token}). Check "
-                    f"`kbagent project info` -> is_master_token, and register a "
-                    f"master token (`kbagent project edit --token ...`) to use "
-                    f"semantic-layer commands.{id_suffix}"
+                    f"HTTP 401 {_PROJECT_SCOPE_401_EXCEPTION!r}. This is the "
+                    f"metastore's project-admin gate: writes need a token whose "
+                    f"Storage Admin role is `admin` on this project (a master "
+                    f"token qualifies, but so does any other project-admin "
+                    f"user's token); reads work with any valid token "
+                    f"(token: {self._masked_token}). Check `kbagent project "
+                    f"info` -> is_master_token, or register a project-admin "
+                    f"token (`kbagent project edit --token ...`) to use "
+                    f"semantic-layer write commands.{id_suffix}"
                 ),
                 status_code=exc.status_code,
                 error_code=ErrorCode.MISSING_MASTER_TOKEN,
@@ -205,24 +255,50 @@ class MetastoreClient(BaseHttpClient):
         item_type: SemanticType,
         name: str,
         data: dict[str, Any],
+        *,
+        scope: ObjectScope = _DEFAULT_SCOPE,
+        target_project_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         """Create an item. Returns the server's stored representation.
 
         ``data`` is the inner ``attributes`` payload (including ``modelUUID``
         for non-model types). The outer envelope is added here.
 
+        ``scope`` defaults to ``"project"`` (today's only behavior, unchanged
+        for every existing caller). ``target_project_ids`` is only meaningful
+        with ``scope="targeted"``; the server rejects the combination
+        otherwise (``meta_object_repository.go`` ``Create``: not a typed
+        sentinel error there, so it may surface as a 500 rather than a clean
+        400 -- checked client-side below instead of relying on that). Neither
+        can be changed later via :meth:`put_item` -- use
+        :meth:`elevate_to_organization` / :meth:`put_target_projects`.
+
         Normalizes the duplicate-name conflict into a clean
         :data:`ErrorCode.ALREADY_EXISTS`, accepting both shapes the metastore
         has used: HTTP 409 (post go-monorepo PR #513) and HTTP 500 with
         ``"Failed to create meta object"`` (legacy / pre-fix deployments).
         """
-        envelope = {
+        if scope not in ("project", "organization", "targeted"):
+            raise KeboolaApiError(
+                message=f"scope must be one of 'project'|'organization'|'targeted', got {scope!r}.",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+        if target_project_ids and scope != "targeted":
+            raise KeboolaApiError(
+                message=(
+                    f"target_project_ids is only valid with scope='targeted', got scope={scope!r}."
+                ),
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+        envelope: dict[str, Any] = {
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
             "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
-            "scope": _ENVELOPE_SCOPE,
+            "scope": scope,
         }
+        if target_project_ids is not None:
+            envelope["targetProjectIds"] = target_project_ids
         try:
             response = self._do_request(
                 "POST",
@@ -270,7 +346,12 @@ class MetastoreClient(BaseHttpClient):
         use, ``PUT`` updates the record in place and increments
         ``meta.revision`` server-side, preserving the metastore's revision
         history. ``data`` is the inner ``attributes`` payload; the outer
-        envelope is added here (identical shape to :meth:`post_item`).
+        envelope is added here.
+
+        Deliberately carries no ``scope``/``targetProjectIds`` -- the
+        server's request struct for this endpoint (``MetaObjectUpdatePutRequest``)
+        has no such fields, so scope/grants are untouched by a plain PUT.
+        Use :meth:`elevate_to_organization` / :meth:`put_target_projects`.
 
         Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
         """
@@ -279,7 +360,6 @@ class MetastoreClient(BaseHttpClient):
             "data": data,
             "branch": _ENVELOPE_BRANCH,
             "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
-            "scope": _ENVELOPE_SCOPE,
         }
         response = self._do_request(
             "PUT",
@@ -295,3 +375,97 @@ class MetastoreClient(BaseHttpClient):
         Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
         """
         self._do_request("DELETE", f"/api/v1/repository/{item_type}/{item_id}")
+
+    # ------------------------------------------------------------------
+    # Scope / target-project primitives (PSGO-140)
+    # ------------------------------------------------------------------
+
+    def elevate_to_organization(self, item_type: SemanticType, item_id: str) -> dict[str, Any]:
+        """Step an item up from project/targeted scope to organization scope.
+
+        ``PATCH /{id}`` with ``{"scope": "organization"}`` only -- the server
+        rejects combining a scope change with name/data in the same request,
+        so this method sends nothing else. One-way: there is no downgrade
+        endpoint. Requires the caller to hold the organization-admin role;
+        a caller without it gets ``ACCESS_DENIED`` (403).
+        """
+        response = self._do_request(
+            "PATCH",
+            f"/api/v1/repository/{item_type}/{item_id}",
+            json={"scope": "organization"},
+        )
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
+    def put_target_projects(
+        self,
+        item_type: SemanticType,
+        item_id: str,
+        target_project_ids: list[int],
+    ) -> None:
+        """Replace the full set of projects granted access to a targeted-scope item.
+
+        This is a **replace**, not a merge -- an empty list clears every
+        grant. Only the owning project or an organization admin may call
+        this; only valid for an item created with ``scope="targeted"``
+        (the server 400s otherwise, including for organization-scoped
+        items, where targeting is meaningless). 204 on success, no body.
+        """
+        self._do_request(
+            "PUT",
+            f"/api/v1/repository/{item_type}/{item_id}/target-projects",
+            json={"targetProjectIds": target_project_ids},
+        )
+
+    def request_scope_elevation(self, item_type: SemanticType, item_id: str) -> dict[str, Any]:
+        """Flag a project-scoped item as awaiting an org-admin's step-up decision.
+
+        Owner-only, idempotent (repeating just refreshes the timestamp). No
+        request body. Returns the updated item.
+        """
+        response = self._do_request(
+            "PUT",
+            f"/api/v1/repository/{item_type}/{item_id}/scope-elevation-request",
+        )
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
+    def withdraw_scope_elevation(self, item_type: SemanticType, item_id: str) -> dict[str, Any]:
+        """Clear a pending scope-elevation request. Idempotent no-op if none is pending."""
+        response = self._do_request(
+            "DELETE",
+            f"/api/v1/repository/{item_type}/{item_id}/scope-elevation-request",
+        )
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
+    def list_organization_items(
+        self,
+        item_type: SemanticType,
+        *,
+        pending_elevation_only: bool = False,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List organization-visible items of ``item_type`` across projects.
+
+        ``GET /{type}/organization``. ``pending_elevation_only`` applies the
+        server's documented discovery filter for an org-admin's queue
+        (``scope_elevation_requested_at[not][null]=true``); the generic
+        filter/limit/offset query language is shared with every other list
+        endpoint in this API.
+        """
+        params: dict[str, str] = {}
+        if pending_elevation_only:
+            params["scope_elevation_requested_at[not][null]"] = "true"
+        if limit is not None:
+            params["limit"] = str(limit)
+        if offset is not None:
+            params["offset"] = str(offset)
+        response = self._do_request(
+            "GET",
+            f"/api/v1/repository/{item_type}/organization",
+            params=params or None,
+        )
+        body = response.json()
+        return body.get("data", []) if isinstance(body, dict) else []

@@ -4981,3 +4981,77 @@ single-project command:
   project is not the first row of `project list`.
 - The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
   and `GET /components?query=...` resolved the project the same wrong way.
+
+## Metastore no longer requires a master token for reads (PSGO-282)
+
+*(since 0.93.0)* Every `semantic-layer` read (`show`, `model list`,
+`search-context`, `get-context`, `validate`, `diff`, `scope status`, `scope
+pending`) works with any valid, non-disabled, non-expired Storage token --
+programmatic (`kbc_at_*`/`kbc_pat_*`) included. Before this, the metastore
+rejected every non-master token with an opaque 401 `"Failed to create
+project scope"` on every single endpoint, including plain reads (#711); a
+valid non-master token used to get reclassified client-side to
+`MISSING_MASTER_TOKEN` (0.92.0+, #717) because there was no other way to
+succeed. That reclassification still fires, but now only on a genuine
+authorization failure:
+
+- **Writes still need a project-admin token.** `add`/`edit`/`remove`/
+  `import`/`promote`/`build`/`scope grant`/`scope elevate`/
+  `request-elevation` all require the token's Storage `Admin.Role` to be
+  `admin` -- a master token qualifies, and so does any other project-admin
+  user's token. A non-admin token gets 403 (or `MISSING_MASTER_TOKEN` if the
+  install is still on the old reclassification path) on the write, never on
+  a preceding read.
+- **Do not pre-flight `isMasterToken` before a read.** That workaround
+  predates the fix and now rejects tokens the server happily accepts --
+  drop it if you see it in older automation.
+- **401 body is honest now.** The metastore relays the Storage API's real
+  error message instead of the generic "Failed to create project scope",
+  so an actually-invalid/expired token surfaces as such rather than looking
+  like a master-token gate.
+
+## Metastore `scope`/`--target-project`/`scope elevate` (PSGO-140)
+
+*(since vNEXT)* `model create` / `add <kind>` gained `--scope
+project|organization|targeted` + `--target-project ALIAS ...`, and a new
+`semantic-layer scope <status|grant|request-elevation|withdraw-elevation|elevate|pending>`
+sub-app. See [metastore-scope-workflow.md](metastore-scope-workflow.md) for
+worked examples. Surprises worth knowing before you touch this:
+
+- **Requires metastore schema `1.1.0`, not `1.0.0`.** Every `semantic-*`
+  schema's `x-metastore.scope.supported` is `["project"]` ONLY at `1.0.0` --
+  `1.1.0` is what adds `organization`/`targeted` (purely additive ACL/scope
+  blocks, no `data` shape change, verified across all six semantic-* schema
+  pairs in go-monorepo). kbagent's envelope now sends `schemaVersion:
+  "1.1.0"` on every create -- the server resolves the EXACT version string
+  sent and never silently upgrades it, so a client still sending `"1.0.0"`
+  gets a clean 400 `ErrScopeNotSupported` for any scope override, no matter
+  how correct the rest of the request is.
+- **`scope grant` is a REPLACE on the wire, not a merge.** The underlying
+  `PUT .../target-projects` endpoint replaces the *whole* target-project
+  list; an empty array clears every grant. The CLI's default `--target-project
+  add`/`--remove-target-project remove` behavior is a client-side
+  read-modify-write built on top of that replace primitive -- **not atomic**
+  against a concurrent grant change on the same item (last write wins). Pass
+  `--replace` to send exactly the given set in one round trip instead.
+- **Creating directly at `--scope organization` needs the organization-admin
+  ROLE**, the same role `scope elevate` needs -- a normal project token gets
+  `ACCESS_DENIED` (403) on both. `--scope targeted` needs no special role.
+- **`scope elevate` is one-way.** There is no downgrade endpoint in the API.
+  Once an item is elevated to organization scope, it stays that way; the
+  only way "back" is deleting and re-creating it as project-scoped (losing
+  revision history in the process).
+- **A 403 vs a 404 on a scope call encodes something deliberate.** The
+  metastore returns 404 (not 403) when the caller cannot see the object at
+  all -- not its owner, not a granted project, not viewing an
+  organization-scoped object -- so a 403 never leaks "an object owned by
+  some other project exists." Do not collapse the two when surfacing errors.
+- **`edit <kind>` (DELETE+POST) preserves scope/grants automatically.** The
+  service reads the item's `meta.scope`/`meta.targetProjectIds` before the
+  DELETE and re-applies them on the POST half (including on rollback re-POST
+  after a failed edit) -- an organization/targeted-scope item is never
+  silently reset to `project` scope by a rename or attribute edit.
+- **No bulk-elevate.** There is no "promote every object in this project"
+  endpoint -- each item needs its own `request-elevation` + `elevate` call.
+  Never loop this over a whole project's objects without the user having
+  named which ones should become org-wide.

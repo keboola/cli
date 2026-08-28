@@ -1566,8 +1566,21 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   kbagent semantic-layer model list --project P
     List all semantic-layer models in a project.
 
-  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
-    Create a new model (default sql-dialect: Snowflake).
+  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS ...]
+    Create a new model (default sql-dialect: Snowflake). --scope defaults to
+    "project" (owner-only, unchanged). "targeted" = owner + explicit
+    --target-project grants (repeatable alias); any normal project token can
+    create at this scope. "organization" = visible to every project in the
+    org from creation -- the schema's ACL requires the organization-admin
+    ROLE to create directly at this scope (a normal project token gets 403
+    ACCESS_DENIED); an ordinary caller instead creates at project/targeted
+    scope and uses `scope request-elevation` + an org-admin's
+    `scope elevate` (below) to get there. ASK THE USER which project(s)
+    before ever passing --scope organization|targeted -- never guess. With
+    --scope targeted and no --target-project: on a real terminal this
+    launches an interactive picker over the other registered projects; in
+    --json/non-interactive it fails fast (exit 2) rather than silently
+    defaulting.
 
   kbagent semantic-layer model delete --project P --model M [--yes]
     Delete a model. Fails if the model still has child entities.
@@ -1622,14 +1635,16 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     delete --project P --id ID [--yes]. Member keys mirror the DIM_COA
     columns (account_code, account_name, parent_code, is_leaf, ...).
 
-  kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ...
+  kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ... [--scope project|organization|targeted] [--target-project ALIAS ...]
     Add one entity. Dataset auto-derives `fqn` from --table-id; --deep-fields
     fetches the storage schema and synthesises role-classified fields
     (PK_/FK_->key, *_DATE/*_DT->timestamp, numeric amount/value/rate->measure,
     else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
     error|warning|info (the 4-band health convention lives in the NAME suffix
     `_critical/_warning/_healthy/_review`, not the API severity). `--rule` is
-    a STRING expression (e.g. "value >= 0"), NEVER an object.
+    a STRING expression (e.g. "value >= 0"), NEVER an object. --scope /
+    --target-project: same semantics as `model create --scope` above --
+    ASK THE USER before ever passing --scope organization|targeted.
 
   kbagent semantic-layer edit metric|dataset|constraint|relationship|glossary ...
     DELETE+POST (no PATCH on metastore). Metric rename cascades through every
@@ -1647,6 +1662,10 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --new-metrics ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
+    The item's scope/target-project grants (`scope status` below) are
+    read from the pre-edit item and re-applied on the POST half of every
+    DELETE+POST -- editing an organization/targeted-scope item never
+    silently downgrades it back to project scope.
 
   kbagent semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes
@@ -1682,6 +1701,54 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Encrypt the project's storage token for transformation `user_properties`.
     Builds {{"#metastore_token": <token>}} and delegates to EncryptService.
     --encrypt is currently required; other modes refused with USAGE_ERROR.
+
+  kbagent semantic-layer scope status --project P --type T --id ID
+    Show an item's current scope ("project"|"organization"|"targeted"),
+    target_project_ids, and any pending scope_elevation_requested_at.
+
+  kbagent semantic-layer scope grant --project P --type T --id ID [--target-project ALIAS ...] [--remove-target-project ALIAS ...] [--replace] [--clear]
+    Grant/revoke/replace the target-project grant list of a --scope targeted
+    item. Default is an additive/subtractive merge (read current grants,
+    apply the delta, PUT the result) -- NOT atomic against a concurrent
+    grant change, last write wins. --replace sends exactly --target-project
+    as the whole set (the server's native replace-only semantics, one round
+    trip); --clear is --replace with an empty set (revokes every grant,
+    object becomes owner-only). Only the owning project or an
+    organization-admin may call this; the item must have been created with
+    scope="targeted" (400 otherwise, including against an
+    organization-scoped item -- targeting is meaningless there).
+
+  kbagent semantic-layer scope request-elevation --project P --type T --id ID
+    Owner-only. Flags a project-scoped item as awaiting an organization
+    admin's step-up decision (`scope elevate` below). Idempotent -- calling
+    again just refreshes the timestamp.
+
+  kbagent semantic-layer scope withdraw-elevation --project P --type T --id ID
+    Owner-only. Clears a pending elevation request. Idempotent no-op if
+    none is pending.
+
+  kbagent semantic-layer scope elevate --project P --type T --id ID [--yes]
+    Steps an item up to organization scope. REQUIRES the organization-admin
+    ROLE (a normal project token gets 403 ACCESS_DENIED) -- creating
+    directly with `--scope organization` needs the same role, so most
+    callers reach organization scope via request-elevation + this command,
+    run by whoever holds an org-admin-capable token. ONE-WAY: there is no
+    downgrade endpoint. Prompts for confirmation unless --yes or --json.
+    NEVER call this without the user explicitly naming the item to elevate
+    -- it makes the item (and its full revision history) visible to every
+    project in the organization, irreversibly.
+
+  kbagent semantic-layer scope pending --project P --type T [--limit N] [--offset N]
+    Lists items of --type awaiting an elevation decision, across the whole
+    organization (`GET .../organization?scope_elevation_requested_at[not][null]=true`).
+    This is the org-admin's discovery queue for `scope elevate`.
+
+  Elevating an EXISTING project's semantic-layer objects in bulk ("elevate
+  existing projects" as a migration): there is no bulk-elevate endpoint --
+  each object needs its own `scope request-elevation` + an org-admin's
+  `scope elevate`, one call per item. Do this deliberately, one object at a
+  time, only when the user has named which objects should become org-wide;
+  never loop this over every object in a project speculatively.
 
 
 ### Self-call HTTP (inside `kbagent serve` subprocesses)

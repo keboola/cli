@@ -295,6 +295,12 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope status --project PROJECT --type TYPE- --id ITEM-ID` |
+| Grant, revoke, or replace the target-project list of a targeted-scope item | `kbagent semantic-layer scope grant --project PROJECT --type TYPE- --id ITEM-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope withdraw-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
+| Step an item up to organization scope. | `kbagent semantic-layer scope elevate --project PROJECT --type TYPE- --id ITEM-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope pending --project PROJECT --type TYPE-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -328,6 +334,12 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope status --project PROJECT --type TYPE- --id ITEM-ID` |
+| Grant, revoke, or replace the target-project list of a targeted-scope item | `kbagent sl scope grant --project PROJECT --type TYPE- --id ITEM-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent sl scope withdraw-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
+| Step an item up to organization scope. | `kbagent sl scope elevate --project PROJECT --type TYPE- --id ITEM-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope pending --project PROJECT --type TYPE-` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |

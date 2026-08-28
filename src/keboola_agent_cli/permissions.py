@@ -321,6 +321,18 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # `scope` sub-app: visibility scope / target-project grants / elevation
+    # requests (PSGO-140). Parent key at the least-privileged level (read),
+    # same pattern as `reference-data` above. `elevate` is `destructive`,
+    # not `write` -- it is one-way (no downgrade endpoint exists) and
+    # widens an item's visibility to every project in the organization.
+    "semantic-layer.scope": "read",
+    "semantic-layer.scope.status": "read",
+    "semantic-layer.scope.pending": "read",
+    "semantic-layer.scope.grant": "write",
+    "semantic-layer.scope.request-elevation": "write",
+    "semantic-layer.scope.withdraw-elevation": "write",
+    "semantic-layer.scope.elevate": "destructive",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method under the taxonomy at the top
     # of this registry: GET = read, POST/PATCH = write (they create/modify),

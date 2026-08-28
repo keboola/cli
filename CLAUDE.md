@@ -905,7 +905,7 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
 kbagent semantic-layer model list --project P
-kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS ...]
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
@@ -914,11 +914,11 @@ kbagent semantic-layer get-context --project P --context-id ID
 kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
 kbagent semantic-layer diff (--project-a A | --file-a PATH) (--project-b B | --file-b PATH) [--model-a M] [--model-b M]
-kbagent semantic-layer add metric --project P [--model M] --name N --sql SQL --dataset TABLE_ID [--description D] [--yes]
-kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields]
-kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
-kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
-kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]
+kbagent semantic-layer add metric --project P [--model M] --name N --sql SQL --dataset TABLE_ID [--description D] [--yes] [--scope project|organization|targeted] [--target-project ALIAS ...]
+kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields] [--scope project|organization|targeted] [--target-project ALIAS ...]
+kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner] [--scope project|organization|targeted] [--target-project ALIAS ...]
+kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info] [--scope project|organization|targeted] [--target-project ALIAS ...]
+kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D] [--scope project|organization|targeted] [--target-project ALIAS ...]
 kbagent semantic-layer edit metric --project P [--model M] --name N [--new-name N2] [--new-sql SQL] [--new-dataset TABLE_ID] [--new-description D] [--yes]
 kbagent semantic-layer edit dataset --project P [--model M] --name N [--new-name N2] [--new-description D] [--new-grain G]
 kbagent semantic-layer edit constraint --project P [--model M] --name N [--new-name N2] [--new-rule "EXPR"] [--new-constraint-type T] [--new-severity error|warning|info] [--new-metrics M1,M2]
@@ -933,6 +933,24 @@ kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,.
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
+# scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
+#   (default, owner only), "organization" (every project in the org), or "targeted" (owner +
+#   explicit --target-project grants). --scope/--target-project are also accepted by `model
+#   create` and every `add <kind>` above (default "project", unchanged behavior). With --scope
+#   targeted and no --target-project: a real terminal launches an interactive picker over the
+#   other registered projects; --json/non-interactive fails fast (exit 2) instead of guessing.
+#   Creating directly at --scope organization requires the organization-admin ROLE (403
+#   otherwise) -- an ordinary token instead uses request-elevation + an org-admin's `scope
+#   elevate`. Elevation is ONE-WAY (no downgrade endpoint). `scope grant` is a REPLACE on the
+#   wire (`--replace`/`--clear`); the default add/remove mode is a client-side read-modify-write
+#   merge, not atomic against a concurrent grant change. `edit` preserves an item's scope/grants
+#   across its DELETE+POST cycle automatically -- it is never silently reset to "project".
+kbagent semantic-layer scope status --project P --type model|dataset|metric|relationship|constraint|glossary --id ID
+kbagent semantic-layer scope grant --project P --type T --id ID [--target-project ALIAS ...] [--remove-target-project ALIAS ...] [--replace] [--clear]
+kbagent semantic-layer scope request-elevation --project P --type T --id ID
+kbagent semantic-layer scope withdraw-elevation --project P --type T --id ID
+kbagent semantic-layer scope elevate --project P --type T --id ID [--yes]
+kbagent semantic-layer scope pending --project P --type T [--limit N] [--offset N]
 kbagent semantic-layer reference-data list --project P [--model M]
 kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
