@@ -18,7 +18,7 @@ Verified end-to-end 2026-08-25 against a real 6.29M-row BigQuery table on the eu
                                       (rollback artifact)
 ```
 
-The partitioned copy is created under a new timestamped name (`<TABLE>_part_<YYYYMMDD>_<HHMMSS>`) to avoid collision and to preserve the original as a rollback artifact. After the swap, the original table id carries the new partition/cluster spec, and the `_part_<ts>` name holds the old unpartitioned data — useful for reverting if needed.
+The partitioned copy is created under a new timestamped name (`<TABLE>_part_<YYYYMMDDHHMMSS>`) to avoid collision and to preserve the original as a rollback artifact. After the swap, the original table id carries the new partition/cluster spec, and the `_part_<ts>` name holds the old unpartitioned data — useful for reverting if needed.
 
 ## Typical workflow
 
@@ -40,7 +40,7 @@ kbagent permissions check storage.swap-tables
 # 5. Create a partitioned copy (never the original name, always timestamped)
 kbagent --json storage create-table \
   --project ALIAS --bucket-id BUCKET \
-  --name TABLE_part_20260825_143022 \
+  --name TABLE_part_20260825143022 \
   --source-table-id BUCKET.TABLE \
   --time-partitioning-type DAY --time-partitioning-field DATE_COL \
   --clustering-field COL1 --clustering-field COL2 \
@@ -48,18 +48,18 @@ kbagent --json storage create-table \
   --branch BRANCH_ID
 
 # 6. Verify the partition/cluster spec was actually applied (not just registered)
-bq show --format=prettyjson PROJECT_ID:DATASET.TABLE_part_20260825_143022
+bq show --format=prettyjson PROJECT_ID:DATASET.TABLE_part_20260825143022
 
 # 7. Dry-run the swap to confirm the two table ids
 kbagent --json storage swap-tables --project ALIAS \
   --table-id BUCKET.TABLE \
-  --target-table-id BUCKET.TABLE_part_20260825_143022 \
+  --target-table-id BUCKET.TABLE_part_20260825143022 \
   --branch BRANCH_ID --dry-run
 
 # 8. Swap for real
 kbagent --json storage swap-tables --project ALIAS \
   --table-id BUCKET.TABLE \
-  --target-table-id BUCKET.TABLE_part_20260825_143022 \
+  --target-table-id BUCKET.TABLE_part_20260825143022 \
   --branch BRANCH_ID --yes
 
 # 9. Verify the swap landed by checking the original table id now carries the partition/cluster spec
@@ -107,12 +107,12 @@ The original unpartitioned table sits under the `_part_<ts>` name after the swap
 ```bash
 kbagent --json storage swap-tables --project ALIAS \
   --table-id BUCKET.TABLE \
-  --target-table-id BUCKET.TABLE_part_20260825_143022 \
+  --target-table-id BUCKET.TABLE_part_20260825143022 \
   --branch BRANCH_ID --dry-run
 
 kbagent --json storage swap-tables --project ALIAS \
   --table-id BUCKET.TABLE \
-  --target-table-id BUCKET.TABLE_part_20260825_143022 \
+  --target-table-id BUCKET.TABLE_part_20260825143022 \
   --branch BRANCH_ID --yes
 ```
 
