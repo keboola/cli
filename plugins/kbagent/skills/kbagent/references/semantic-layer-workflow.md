@@ -18,6 +18,10 @@ For one-line command reference, see
 For the live-validated metastore contract surprises (constraint rule shape,
 name regex, CODE_METRIC cascade), see
 [gotchas.md](gotchas.md#semantic-layer-constraint-rule-is-a-string-not-an-object-since-v0340).
+To share an item with specific other projects, or make it organization-wide,
+see [metastore-scope-workflow.md](metastore-scope-workflow.md) -- **always
+ask the user which project(s) first**, this is a security-relevant, mostly
+irreversible decision.
 
 ## When to use what
 
@@ -34,6 +38,7 @@ name regex, CODE_METRIC cascade), see
 | Promote dev -> prod | `semantic-layer promote --from-project dev --to-project prod` |
 | Bootstrap a model from storage tables | `semantic-layer build --tables ...` (heuristic) |
 | Encrypt the storage token for a Python container | `semantic-layer token --encrypt` |
+| Share an item with named projects, or make it org-wide | see [metastore-scope-workflow.md](metastore-scope-workflow.md) |
 
 ---
 
