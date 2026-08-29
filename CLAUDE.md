@@ -348,13 +348,15 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
-# --conversation-id ID (since vNEXT, #716): sets the X-Conversation-ID observability header for the
+# --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
 #   agent harness does not persist shell state between tool calls, so the documented one-time `export`
 #   was unsatisfiable -- and re-prepending `export ...` to every command stops it matching a
 #   `Bash(kbagent ...)` permission allow-rule, so every call fell through to the safety classifier.
 #   For a whole session, set the env var in the harness's own env block instead (Claude Code:
-#   settings.json -> env). Neither set = header omitted, as before.
+#   settings.json -> env). Neither set = header omitted, as before. Version gate for this entry
+#   lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines,
+#   because check_version_gates.py parses them as ATX markdown headings (where a `vNEXT` is fatal).
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
