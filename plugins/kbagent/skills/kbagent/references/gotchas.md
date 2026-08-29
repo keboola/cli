@@ -11,6 +11,33 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## An HTTP 401 is not automatically a bad token
+
+*(since vNEXT, #711)*
+
+- **`INVALID_TOKEN` no longer covers every 401.** When the upstream 401 body
+  says something that does not describe a bad or expired credential, kbagent
+  reports `ErrorCode.AUTH_REJECTED` and a message that quotes the server
+  verbatim instead of asserting the token is invalid. The trigger case is
+  Keboola Metastore answering
+  `{"exception": "Failed to create project scope"}` with a 401 -- an internal
+  project-scope failure -- for a token the Storage API accepts on the very
+  same stack, which blocked every `semantic-layer` / `sl` command while
+  `project status` reported the token healthy (issue #711). **Rotating the
+  token does not fix an `AUTH_REJECTED`**; verify the token against another
+  endpoint on the same stack, then escalate with the exceptionId.
+- **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** Both are
+  authentication-class failures; only the diagnosis differs. A script
+  branching on `$?` sees nothing new -- one branching on
+  `error.code == "INVALID_TOKEN"` must now also accept `AUTH_REJECTED`.
+- **A 401 whose body is empty (or `{}`) still maps to `INVALID_TOKEN`.**
+  Silence is the textbook rejected-credential response; only a server that
+  actually said something else earns the new code.
+- **401 / 403 / 404 now carry `[exceptionId: ...]`.** They used to raise
+  before the id was appended (it reached only 5xx messages), so the one
+  handle Keboola support traces an incident by was dropped on exactly the
+  auth errors where the fault was server-side. Quote it when escalating.
+
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` requires a human at a browser (or a device to type a

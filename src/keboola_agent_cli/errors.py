@@ -18,6 +18,12 @@ class ErrorCode(StrEnum):
     PERMISSION_DENIED = "PERMISSION_DENIED"
     MISSING_MASTER_TOKEN = "MISSING_MASTER_TOKEN"
     UNAUTHORIZED = "UNAUTHORIZED"  # Bearer-auth rejection by `kbagent serve` (0.40.0+)
+    # An upstream HTTP 401 whose own error text does NOT describe a bad or
+    # expired credential -- see `TOKEN_VALIDITY_ERROR_MARKERS` (issue #711).
+    # Same "authentication" category and exit code 3 as INVALID_TOKEN; the
+    # distinction is that the fault is upstream, so rotating the token is not
+    # the fix.
+    AUTH_REJECTED = "AUTH_REJECTED"
 
     # Network / transport
     TIMEOUT = "TIMEOUT"
@@ -300,6 +306,7 @@ class SessionAuthUnsupportedError(ConfigError):
 # only when "api" would be wrong for it.
 _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.INVALID_TOKEN: "authentication",
+    ErrorCode.AUTH_REJECTED: "authentication",
     ErrorCode.MISSING_MASTER_TOKEN: "authentication",
     ErrorCode.TIMEOUT: "network",
     ErrorCode.CONNECTION_ERROR: "network",

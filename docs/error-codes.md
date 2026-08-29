@@ -21,6 +21,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `PERMISSION_DENIED` | Operation blocked by the active kbagent permission policy |
 | `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `token create`, `config oauth-url` pre-flight); maps to exit 3 |
 | `UNAUTHORIZED` | `kbagent serve` rejected the request's Bearer token |
+| `AUTH_REJECTED` | Upstream answered HTTP 401 but its own error text did not blame the credential (e.g. Metastore's `Failed to create project scope` for a token the Storage API accepts). Same exit 3 as `INVALID_TOKEN`; rotating the token is not the fix |
 
 ### Network / transport
 
