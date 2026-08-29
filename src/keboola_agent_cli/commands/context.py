@@ -23,11 +23,20 @@ structured JSON output for programmatic consumption.
 
 ## IMPORTANT: Set Conversation ID
 
-Before running any kbagent commands, set KBAGENT_CONVERSATION_ID to a unique
-identifier for the current conversation/session. This is REQUIRED for platform
-observability -- all API requests will include the X-Conversation-ID header.
+Identify the current conversation/session with a unique id. This is REQUIRED
+for platform observability -- all API requests will include the
+X-Conversation-ID header.
 
-  export KBAGENT_CONVERSATION_ID="<unique-conversation-id>"
+Pass it as a global flag on every call:
+
+  kbagent --json --conversation-id "<unique-conversation-id>" <command>
+
+Do NOT rely on a standalone `export`. Agent harnesses do not persist shell
+state between tool calls, so the variable is gone by the next command -- and a
+command starting with `export ...` no longer matches a `Bash(kbagent ...)`
+permission allow-rule. To set it once for a whole session, put
+KBAGENT_CONVERSATION_ID in the harness's own env block (Claude Code:
+settings.json -> env). The flag takes precedence over the env var.
 
 ## Quick Start
 
@@ -2024,7 +2033,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      kbagent --json project status   # test all connections
 
 7. Environment variables:
-     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
+     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header).
+                              Prefer the --conversation-id global flag from an agent harness:
+                              a standalone `export` does not survive between tool calls.
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
      KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
