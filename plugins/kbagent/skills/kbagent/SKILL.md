@@ -222,6 +222,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
+| Show every trigger kbagent can see for a flow (cron + table triggers) | `kbagent flow triggers --project PROJECT --flow-id FLOW-ID` |
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |

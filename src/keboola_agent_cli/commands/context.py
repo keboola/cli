@@ -1054,6 +1054,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+  kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+    # Cron schedules AND table triggers in one call. Cross-project triggers are
+    # NOT checked -- the result says so via cross_project_triggers_checked=false
+    # rather than returning an empty list. Table triggers are production-only.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.

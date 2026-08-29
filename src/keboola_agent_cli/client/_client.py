@@ -26,6 +26,7 @@ from .storage_files import _StorageFilesMixin
 from .storage_tables import _StorageTablesMixin
 from .stream import _StreamMixin
 from .tokens import _TokensMixin
+from .triggers import _TriggersMixin
 from .workspaces import _WorkspacesMixin
 
 
@@ -42,6 +43,7 @@ class KeboolaClient(
     _WorkspacesMixin,
     _BillingMixin,
     _NotificationsMixin,
+    _TriggersMixin,
     _MiscMixin,
     _CoreClient,
 ):

@@ -11,6 +11,38 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## "No schedules found" never meant "no trigger"
+
+*(since vNEXT, #714)*
+
+- **A flow has at least three automatic trigger mechanisms and kbagent used to
+  see one.** `schedule list` / `schedule find` / `search` read `keboola.scheduler`
+  configs only. A **table trigger** lives in a separate Storage API resource
+  (`GET /v2/storage/triggers`), not a component config, so nothing in kbagent
+  saw it; a **cross-project trigger** is a trigger-queue app config in a
+  *different* project. A flow that was demonstrably running got reported as
+  having no trigger, twice in one investigation, because "no schedules found"
+  reads as "no trigger of any kind".
+- **`kbagent flow triggers --project P --flow-id ID`** answers cron + table
+  triggers in one call.
+- **Read `cross_project_triggers_checked` before concluding anything.** It is
+  `false`, and cross-project triggers are deliberately NOT returned as an empty
+  list -- an empty list would read as "checked, found none". Empty output from
+  this command means *"no trigger that kbagent checked"*, never *"no trigger"*.
+- **Table triggers are production-only.** The Storage route is declared
+  `isAvailableInBranch: false`, so there is no branch-scoped variant. `--branch`
+  narrows the cron half only, and `table_triggers_branch_scoped` is always
+  `false`. A dev branch's triggers cannot be listed at all.
+- **`last_run: null` means "exists, never fired"**, not "disabled". Do not read
+  a blank last-run as evidence the trigger is inactive.
+- **`component` on a trigger is not necessarily `keboola.flow`.** The Storage
+  API's own example is the legacy `orchestration`; match on
+  `configurationId`, not on the component id.
+- **The `?configurationId=` filter is sent but not trusted.** kbagent narrows
+  the result again client-side, because the Notification Service precedent
+  (accepts `?event=`, ignores it -- #600) makes an unverified server-side
+  filter unsafe to rely on. A direct API caller should do the same.
+
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` requires a human at a browser (or a device to type a
