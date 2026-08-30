@@ -73,7 +73,7 @@ a critical failure.
    the task with workarounds.
    **Standalone binaries do not take `kbagent update`** -- if
    `kbagent --json version` carries `kbagent.install_channel`, quote its
-   `upgrade_command` (or `upgrade_hint` when that is empty) instead (0.79.0+).
+   `upgrade_command` (or `upgrade_hint` when that is empty) instead.
    `auth` needs **0.80.0+**; `login-password` needs **0.84.0+** -- else
    refuse and point at a static Storage token (`project add --token`).
 
@@ -100,7 +100,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 |---|---|---|---|
 | Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project P` (fetches the live schema; loop until clean) then `kbagent flow new` / `flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (0.66.1+; older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
-| What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (vNEXT+) -- cron schedules AND table triggers in one call | `kbagent schedule list` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
+| What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (0.92.0+) -- cron schedules AND table triggers in one call | `kbagent schedule list` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
 | Add / remove / re-point a notification recipient | `kbagent notification create --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
 | Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping derived from the name | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
@@ -150,7 +150,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Call the running `kbagent serve` from a scheduled-agent subprocess | `kbagent http get/post/patch/delete <PATH>` -- uses the `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` the scheduler injects; `http get /openapi.json` discovers endpoints | forking `kbagent <command>` (also fine -- `KBAGENT_CONFIG_DIR` is propagated) | `curl $KBAGENT_SERVE_URL/...` by hand (loses the auth header, error mapping and JSON formatting `kbagent http` adds) |
 | Launch the web UI for an end-user | `kbagent serve --ui [--port PORT]` -- one FastAPI process mounts the bundled React SPA and sets an HttpOnly `kbagent_session` cookie, so SSE works with no token in the URL or JS heap | the legacy Vite + Node BFF dev flow (`web/README.md`) | inventing a `--token-in-url` flag; running uvicorn directly against the dist (the cookie bootstrap only fires from `serve --ui`) |
 | Schedule / manage Agent Tasks | `kbagent agent <verb>` -- CRUD, `run [--stream]`, history, `test`/`cron-preview`/`prompt-improve`. Local-only; cron firing needs `kbagent serve`. See [agent-tasks-cli-workflow](../skills/kbagent/references/agent-tasks-cli-workflow.md) | `kbagent http <verb> /agents...` inside scheduled subprocesses | hand-editing `agents.json` |
-| Read a semantic-layer model (models, metrics, datasets, constraints) | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]`; `model list`; `search-context` / `get-context` for glob/id lookup; `validate [--deep]` before trusting one. The WHOLE `semantic-layer` family needs a MASTER token: a valid non-master token gets `MISSING_MASTER_TOKEN` (vNEXT+, #711; the Metastore's opaque 401 "Failed to create project scope") -- register a master token, do not escalate | -- | hand-rolled `httpx` loops against `metastore.*.keboola.com` (bypasses retry/backoff and the kbagent error envelope) |
+| Read a semantic-layer model (models, metrics, datasets, constraints) | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]`; `model list`; `search-context` / `get-context` for glob/id lookup; `validate [--deep]` before trusting one. The WHOLE `semantic-layer` family needs a MASTER token: a valid non-master token gets `MISSING_MASTER_TOKEN` (0.92.0+, #711; the Metastore's opaque 401 "Failed to create project scope") -- register a master token, do not escalate | -- | hand-rolled `httpx` loops against `metastore.*.keboola.com` (bypasses retry/backoff and the kbagent error envelope) |
 | ANY semantic-layer write (add / edit / remove / import / promote / build) | `kbagent semantic-layer export` FIRST (the metastore has no soft-delete and no version history -- the snapshot is the only restore path), then the write, `--dry-run` where offered. `Read` [semantic-layer-workflow.md](../skills/kbagent/references/semantic-layer-workflow.md) before starting: it carries the per-verb recipes, the rename cascade and the promote classification | `semantic-layer diff` (`--project-a/-b` or `--file-a/-b`) to confirm what a write would change | raw metastore REST (no rollback, no orphan scan, no modelUUID rewrite); a write with no export taken |
 | User asks to "log in" / authenticate via browser / register a session's projects | ATTENDED session + a background shell: run `kbagent auth login --device-code --stack URL --register-projects` in a **BACKGROUND** shell (capture stdout+stderr, human mode -- `--json` puts the panel on stderr), relay the verification URL + user code to the user, then poll `kbagent --json auth status` (exit 0 = signed in, exit 3 = not yet). The human's part is approving in the browser, not typing the command. No background shell -> hand the plain `auth login --stack URL --register-projects` to the user's terminal. To register projects from an EXISTING session, `kbagent auth register-projects --all` or `--project-id ID` is non-interactive and agent-safe | -- | running `auth login` in a FOREGROUND tool shell (~120 s timeout kills it mid-flight); running it unattended (nobody can approve); re-running it blind without checking `auth status` first (orphans a session); the flagless `register-projects` picker unattended; reading the token out of `auth.json`; using a numeric project id as an alias |
 | CI task has account credentials | `kbagent auth login-password --email E (--password-stdin \| --password P) [--totp-secret SEED]` (0.84.0+), agent-runnable | a static Storage token | `auth login` unattended |
@@ -203,6 +203,15 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   landed: check with `token list` / `job list` before repeating. The message
   carries the `exceptionId` -- quote it when escalating. gotchas.md.
 
+**A 401 is not always `INVALID_TOKEN` (0.92.0+)**
+- A 401 whose body names something other than a bad credential now raises
+  `AUTH_REJECTED`; the semantic-layer family's opaque metastore 401
+  reclassifies to `MISSING_MASTER_TOKEN` instead (see its matrix row).
+  Exit code is unchanged (3) for all three -- code checking
+  `error.code == "INVALID_TOKEN"` alone now misses two real cases; accept
+  all three before concluding the credential itself is bad. 401/403/404
+  now also carry `[exceptionId: ...]` -- quote it when escalating. gotchas.md.
+
 **Finding an existing Storage token**
 - `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
   that `token delete`/`refresh` need. Secrets are stripped from every row,
@@ -219,7 +228,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `structural schema validation skipped` warning). `flow update --file` is a
   **full-replace** of phases+tasks -- fetch `flow detail` first, merge locally,
   `flow validate --file @merged.yaml --project P` until clean, then push.
-- **"No schedules found" is not "no trigger" (vNEXT+)**: `schedule list` /
+- **"No schedules found" is not "no trigger" (0.92.0+)**: `schedule list` /
   `schedule find` / `search` only ever read `keboola.scheduler` configs. A
   **table trigger** is a separate Storage resource (`GET /v2/storage/triggers`)
   and a **cross-project trigger** is a config in ANOTHER project -- neither is a

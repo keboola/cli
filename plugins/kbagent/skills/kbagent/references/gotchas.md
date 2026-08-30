@@ -13,7 +13,7 @@ Versioning convention:
 
 ## An HTTP 401 is not automatically a bad token
 
-*(since vNEXT, #711)*
+*(since 0.92.0, #711)*
 
 - **`INVALID_TOKEN` no longer covers every 401.** When the upstream 401 body
   says something that does not describe a bad or expired credential, kbagent
@@ -48,7 +48,7 @@ Versioning convention:
 
 ## "No schedules found" never meant "no trigger"
 
-*(since vNEXT, #714)*
+*(since 0.92.0, #714)*
 
 - **A flow has at least three automatic trigger mechanisms and kbagent used to
   see one.** `schedule list` / `schedule find` / `search` read `keboola.scheduler`
@@ -122,7 +122,7 @@ Versioning convention:
   counterpart** -- it did not exist when this rule was written and does not
   fall under it.
 - **The device-login panel's one-click link is conditional -- relay only what
-  is actually printed (since vNEXT).** Alongside the verification URL and
+  is actually printed (since 0.92.0).** Alongside the verification URL and
   code, the panel also prints a pre-filled `verification_uri_complete` link
   ("Or open this link (code pre-filled):") whenever the stack's device
   response includes one; a stack that returns an empty
@@ -321,6 +321,18 @@ Versioning convention:
   (see `docs/auth.md`) -- treat the credentials backing it with the same
   care as any other long-lived secret, not as a lesser one than a scoped
   Storage token.
+
+## `doctor`'s `claude_plugin` check: `warn`/`skip` is not a setup failure (since v0.92.0, #704)
+
+- **The plugin is an upgrade, not a prerequisite.** `kbagent context` gives
+  any agent the full CLI surface without the plugin installed at all, so a
+  `warn` (plugin missing) or `skip` (`~/.claude/` absent) on this check does
+  not mean setup failed -- do not tell the user to stop and install the
+  plugin before continuing.
+- **The check sees only Claude Code's own on-disk cache**
+  (`~/.claude/plugins/cache/...`). A plugin installed from another client of
+  the same marketplace (e.g. Cursor) is invisible to it, so `warn`/`skip`
+  there is a detection gap, not evidence the plugin is actually missing.
 
 ## MCP passthrough is REMOVED (since v0.85.0)
 
@@ -2517,7 +2529,7 @@ type inventory and examples.
 
 Two channels, in precedence order:
 
-1. **`--conversation-id <id>` global flag** *(since vNEXT, #716)* -- the one to
+1. **`--conversation-id <id>` global flag** *(since 0.92.0, #716)* -- the one to
    use from an agent. `kbagent --json --conversation-id <id> <command>`.
 2. **`KBAGENT_CONVERSATION_ID` env var** -- for a persistent shell, or a
    harness that can set env for the whole session.

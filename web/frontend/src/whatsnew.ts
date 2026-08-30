@@ -37,6 +37,20 @@ export interface WhatsNewRelease {
 
 export const WHATS_NEW: WhatsNewRelease[] = [
   {
+    version: "0.92.0",
+    items: [
+      {
+        title: "Errors that stop blaming your token",
+        body:
+          "A failed call used to report \u201cInvalid or expired token\u201d whatever the server " +
+          "actually said. Now a rejection that is not about your credential says so in its own " +
+          "words \u2014 and the Semantic Layer page names the real cause it hid for so long: the " +
+          "metastore accepts only a master token, so a perfectly valid non-master one was being " +
+          "reported as expired.",
+      },
+    ],
+  },
+  {
     version: "0.90.1",
     items: [
       {
