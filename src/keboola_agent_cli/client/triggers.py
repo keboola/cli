@@ -23,13 +23,17 @@ Wire-format notes, taken from the Storage API's own controller
   ``isAvailableInBranch: false, isAvailableWithoutBranch: true``, so there is
   no branch-scoped variant to call and a dev branch cannot be queried. Callers
   must not advertise a branch-scoped answer here.
+- **Listing needs no elevated privilege**: the list/detail routes are
+  ``AsReadOnlyAction`` and scope only by the token's project -- even a
+  read-only Storage token sees every trigger in the project (verified by the
+  server's own ``testTriggersRestrictionsForReadOnlyUser`` E2E test). The
+  project token kbagent already holds is always sufficient here.
 
-Whether the server actually APPLIES the filters could not be confirmed from
-the published source (the filter object is threaded into
-``getTriggersByRequestFilter``, but that method's body is not readable), and
-this codebase has been burned by exactly that before: the Notification Service
-accepts ``?event=`` and then ignores it (issue #600). So the filters are sent
-AND the result is narrowed again in the service layer -- correct either way.
+The server DOES apply both filters (``TriggerRepository::findAllByFilter`` --
+exact match, AND-ed), so the service layer's re-narrowing is defense in depth,
+not a workaround: this codebase has been burned by an accepted-then-ignored
+query filter before (the Notification Service and ``?event=``, issue #600),
+and the second pass is one cheap iteration over a single-digit list.
 """
 
 from typing import Any

@@ -185,11 +185,11 @@ def _triggers_targeting_config(
 ) -> list[dict[str, Any]]:
     """Keep only the triggers that really target ``config_id``.
 
-    The Storage API is *sent* ``?configurationId=``, but whether it applies
-    the filter could not be confirmed from the published source -- and this
-    codebase has been burned by exactly that before (the Notification Service
-    accepts ``?event=`` and ignores it, issue #600). Narrowing again here is
-    correct whichever way the server behaves, and costs one pass over a list
+    The Storage API is *sent* ``?configurationId=`` and does apply it
+    (``TriggerRepository::findAllByFilter``, exact match) -- but this codebase
+    has been burned by an accepted-then-ignored query filter before (the
+    Notification Service and ``?event=``, issue #600), so the result is
+    narrowed again here as defense in depth. It costs one pass over a list
     that is single-digit long in practice.
 
     Compared as strings: trigger ids are strings in the response but flow ids

@@ -38,10 +38,15 @@ Versioning convention:
 - **`component` on a trigger is not necessarily `keboola.flow`.** The Storage
   API's own example is the legacy `orchestration`; match on
   `configurationId`, not on the component id.
-- **The `?configurationId=` filter is sent but not trusted.** kbagent narrows
-  the result again client-side, because the Notification Service precedent
-  (accepts `?event=`, ignores it -- #600) makes an unverified server-side
-  filter unsafe to rely on. A direct API caller should do the same.
+- **The `?configurationId=` filter is applied server-side, and kbagent still
+  narrows client-side.** The server applies both filters (exact match,
+  AND-ed), so a direct API caller can rely on them; kbagent re-narrows anyway
+  as defense in depth after the Notification Service precedent (accepts
+  `?event=`, ignores it -- #600).
+- **Listing triggers needs no elevated privilege.** The list route is a plain
+  read-only Storage action scoped to the token's project -- even a read-only
+  token sees every trigger. Only create/update/delete require
+  `canManageBuckets`, component access, or an admin token.
 
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
