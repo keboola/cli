@@ -26,6 +26,8 @@ from .constants import (
     MAX_RETRY_AFTER_SECONDS,
     RETRY_SAFE_METHODS,
     RETRYABLE_STATUS_CODES,
+    TOKEN_VALIDITY_ERROR_MARKERS,
+    UNINFORMATIVE_ERROR_MESSAGES,
 )
 from .errors import ErrorCode, KeboolaApiError, mask_token
 
@@ -333,6 +335,32 @@ class BaseHttpClient:
         return _EXCEPTION_ID_DISALLOWED.sub("", raw)[:MAX_EXCEPTION_ID_LENGTH]
 
     @staticmethod
+    def _is_token_validity_401(api_message: str) -> bool:
+        """Should this HTTP 401 keep the long-standing INVALID_TOKEN mapping?
+
+        True in two cases:
+
+        * The body describes a bad or expired credential, the way Keboola's
+          own 401s do ("Invalid access token", "Access token expired").
+        * The body says nothing at all. A 401 with no detail is the textbook
+          rejected-credential response, and claiming "the API did not report
+          the token as invalid" would be over-reading silence.
+
+        False only when the server said something substantive that blames
+        something else -- Metastore's `"Failed to create project scope"`, an
+        internal project-scope resolution failure for a token the Storage API
+        accepts on the very same stack (issue #711).
+
+        Deliberately permissive in the True direction: an unrecognised message
+        that DOES mention a token keeps the historical mapping, so the new
+        code appears only where the server demonstrably blamed something else.
+        """
+        lowered = api_message.strip().lower()
+        if lowered in UNINFORMATIVE_ERROR_MESSAGES:
+            return True
+        return any(marker in lowered for marker in TOKEN_VALIDITY_ERROR_MARKERS)
+
+    @staticmethod
     def _non_idempotent_note(method: str) -> str:
         """One sentence naming the partial-effect risk of an unrepeated write."""
         return (
@@ -448,17 +476,47 @@ class BaseHttpClient:
         if isinstance(api_message, str) and len(api_message) > MAX_API_ERROR_LENGTH:
             api_message = api_message[:MAX_API_ERROR_LENGTH] + "..."
 
+        # The exceptionId belongs on EVERY error, not just the 5xx family.
+        # These three branches used to raise before it was appended, so the
+        # one handle Keboola support traces an incident by was dropped on
+        # exactly the responses -- a 401 from Metastore -- where the fault was
+        # server-side and the operator most needed to escalate (issue #711;
+        # the 5xx half of this was fixed in #599). Bounded by
+        # `_safe_exception_id`, same as below.
+        id_suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
+
         if status == 401:
+            # A 401 is not automatically a credential problem. When the
+            # server's own text does not describe one, say what it actually
+            # said instead of asserting the token is bad -- see
+            # TOKEN_VALIDITY_ERROR_MARKERS.
+            if self._is_token_validity_401(api_message):
+                raise KeboolaApiError(
+                    message=(
+                        f"Invalid or expired token (token: {self._masked_token}): "
+                        f"{api_message}{id_suffix}"
+                    ),
+                    status_code=status,
+                    error_code=ErrorCode.INVALID_TOKEN,
+                    retryable=False,
+                )
             raise KeboolaApiError(
-                message=f"Invalid or expired token (token: {self._masked_token}): {api_message}",
+                message=(
+                    f"Authentication rejected by {url_label} with HTTP 401, but the API did "
+                    f"not report the token as invalid or expired (token: "
+                    f"{self._masked_token}): {api_message}{id_suffix}. Rotating the token is "
+                    "unlikely to help -- verify it against another endpoint on the same stack "
+                    "(`kbagent project status`), then escalate to Keboola support quoting the "
+                    "exceptionId above."
+                ),
                 status_code=status,
-                error_code=ErrorCode.INVALID_TOKEN,
+                error_code=ErrorCode.AUTH_REJECTED,
                 retryable=False,
             )
 
         if status == 403:
             raise KeboolaApiError(
-                message=f"Access denied (token: {self._masked_token}): {api_message}",
+                message=(f"Access denied (token: {self._masked_token}): {api_message}{id_suffix}"),
                 status_code=status,
                 error_code=ErrorCode.ACCESS_DENIED,
                 retryable=False,
@@ -466,7 +524,7 @@ class BaseHttpClient:
 
         if status == 404:
             raise KeboolaApiError(
-                message=f"Resource not found: {api_message}",
+                message=f"Resource not found: {api_message}{id_suffix}",
                 status_code=status,
                 error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
@@ -478,7 +536,7 @@ class BaseHttpClient:
         # the id went through `_safe_exception_id`. Never append raw
         # server-supplied text here -- the truncation is what keeps the
         # console (Rich, markup enabled) from rendering it as markup.
-        suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
+        suffix = id_suffix
         if hint:
             suffix += f" {hint}"
         raise KeboolaApiError(
