@@ -3,14 +3,13 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, workspace SQL debugging, GitOps config sync
-  (pull/push/diff/clone), bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots, data apps
-  (deploy/logs/secrets), flows and schedules, members and invitations,
+  lineage, dev branches, workspace SQL debugging, GitOps config sync,
+  bucket sharing and linking, encrypting secrets,
+  Storage tables, files, and snapshots, data apps,
+  flows and schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, the semantic
-  layer (models, metrics), the Developer Portal, browser login,
-  first-time setup (install the CLI, connect a project, verify) and
-  logging out -- in any client, with or without the plugin's slash commands.
+  layer, Developer Portal, browser login,
+  first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   data app, streamlit deploy, semantic layer, sl, dev-portal,
@@ -18,9 +17,8 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, undelete config, zero-copy clone, workspace load type,
-  set up keboola, setup, first-time setup, install kbagent,
-  connect project, log out, logout, sign out.
+  restore config, zero-copy clone, workspace load type,
+  set up keboola, setup, connect project, logout, sign out.
 ---
 
 # kbagent -- Keboola Agent CLI
