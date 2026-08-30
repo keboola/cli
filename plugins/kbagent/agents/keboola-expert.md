@@ -100,6 +100,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 |---|---|---|---|
 | Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project P` (fetches the live schema; loop until clean) then `kbagent flow new` / `flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (0.66.1+; older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
+| What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (vNEXT+) -- cron schedules AND table triggers in one call | `kbagent schedule list` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
 | Add / remove / re-point a notification recipient | `kbagent notification create --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
 | Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping derived from the name | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
@@ -218,6 +219,16 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `structural schema validation skipped` warning). `flow update --file` is a
   **full-replace** of phases+tasks -- fetch `flow detail` first, merge locally,
   `flow validate --file @merged.yaml --project P` until clean, then push.
+- **"No schedules found" is not "no trigger" (vNEXT+)**: `schedule list` /
+  `schedule find` / `search` only ever read `keboola.scheduler` configs. A
+  **table trigger** is a separate Storage resource (`GET /v2/storage/triggers`)
+  and a **cross-project trigger** is a config in ANOTHER project -- neither is a
+  schedule. Use `kbagent flow triggers` and read
+  `cross_project_triggers_checked` (always `false`) before reporting that a flow
+  is unscheduled. A flow that was already live via a table trigger was reported
+  as needing manual scheduling because of exactly this gap (#714). For the same
+  reason `job detail` on a flow job carries `trigger_hint`: a run with no
+  matching cron schedule is NOT proof of a manual run.
 - **`flow schedule` activates on the Scheduler Service (0.66.1+)**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
   the cron NEVER fired. Confirm `activated: true`; `activated: false` + warning

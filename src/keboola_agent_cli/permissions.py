@@ -348,6 +348,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Flow operations
     "flow.list": "read",
     "flow.detail": "read",
+    "flow.triggers": "read",
     "flow.schema": "read",
     "flow.examples": "read",
     "flow.validate": "read",

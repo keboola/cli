@@ -945,3 +945,16 @@ ROOT_LEVEL_CONFIG_COMPONENTS: frozenset[str] = frozenset(
         "keboola.orchestrator",  # legacy flows; kbagent cannot write them, but reads share this path
     }
 )
+
+# --- Components whose runs can be started by triggers invisible to `schedule list` ---
+# A flow/orchestration run with no matching cron schedule is NOT necessarily
+# manual: table triggers (Storage `/v2/storage/triggers`) and cross-project
+# trigger-queue configs also start them, and neither is a `keboola.scheduler`
+# config (issue #714). `job detail` uses this set to attach a trigger_hint
+# pointing at `flow triggers` instead of letting the investigation dead-end.
+ORCHESTRATION_JOB_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "keboola.flow",
+        "keboola.orchestrator",
+    }
+)

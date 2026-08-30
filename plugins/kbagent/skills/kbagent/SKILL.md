@@ -33,7 +33,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 ## Rules
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
-2. **Set conversation ID**: before first kbagent call, run `export KBAGENT_CONVERSATION_ID="<unique-id>"` (e.g. session UUID). All API requests include this as `X-Conversation-ID` header for platform observability.
+2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
 3. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
@@ -222,6 +222,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
+| Show every trigger kbagent can see for a flow (cron + table triggers) | `kbagent flow triggers --project PROJECT --flow-id FLOW-ID` |
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |

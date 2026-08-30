@@ -193,6 +193,22 @@ def list_schedules(
     )
 
 
+@router.get("/{project}/{config_id}/triggers", summary="List every trigger kbagent can see")
+def list_triggers(
+    project: str,
+    config_id: str,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Cron schedules AND table triggers for a flow.
+
+    Unlike `/schedules`, the response states what was NOT checked: consumers
+    must read `cross_project_triggers_checked` before concluding a flow has no
+    trigger (issue #714).
+    """
+    return registry.flow.get_flow_triggers(alias=project, config_id=config_id, branch_id=branch_id)
+
+
 @router.post("/{project}/{config_id}/schedule", summary="Set a cron schedule on a flow")
 def set_schedule(
     project: str,
