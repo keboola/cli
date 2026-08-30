@@ -925,6 +925,14 @@ kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
+# semantic-layer REQUIRES A MASTER (project admin) Storage token (#711): the Metastore's
+#   auth gate -- unlike the Storage API -- rejects every valid non-master token with an opaque
+#   401 "Failed to create project scope" (the underlying MasterTokenRequiredError is swallowed
+#   server-side). kbagent reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) with
+#   the remedy; other unexplained 401s anywhere map to AUTH_REJECTED instead of the false
+#   "Invalid or expired token" (INVALID_TOKEN stays for 401s that DO blame the credential).
+#   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
+#   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]

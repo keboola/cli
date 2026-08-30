@@ -15,11 +15,14 @@ from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 def metastore_scope_available(url: str, token: str) -> bool:
     """Probe whether a project has a usable metastore scope (E2E preflight).
 
-    Semantic-layer is a gated feature; a project that does not have it returns
-    HTTP 502 "Failed to create project scope" on every metastore call -- an
-    environment limitation, not a test failure. The semantic-layer E2E suites
-    call this and ``pytest.skip()`` when it returns False, so they skip cleanly
-    instead of reporting a wall of false-positive failures.
+    "Failed to create project scope" is the metastore's blanket answer when it
+    cannot build a project scope for the caller -- most commonly its
+    master-token gate rejecting a valid non-master token with a 401 (issue
+    #711; kbagent reclassifies that to ``MISSING_MASTER_TOKEN``), historically
+    also seen as a 502 on some deployments. Either way it is an environment
+    limitation, not a test failure. The semantic-layer E2E suites call this
+    and ``pytest.skip()`` when it returns False, so they skip cleanly instead
+    of reporting a wall of false-positive failures.
     """
     from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
 

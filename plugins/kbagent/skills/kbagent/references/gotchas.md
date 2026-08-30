@@ -18,18 +18,26 @@ Versioning convention:
 - **`INVALID_TOKEN` no longer covers every 401.** When the upstream 401 body
   says something that does not describe a bad or expired credential, kbagent
   reports `ErrorCode.AUTH_REJECTED` and a message that quotes the server
-  verbatim instead of asserting the token is invalid. The trigger case is
-  Keboola Metastore answering
-  `{"exception": "Failed to create project scope"}` with a 401 -- an internal
-  project-scope failure -- for a token the Storage API accepts on the very
-  same stack, which blocked every `semantic-layer` / `sl` command while
-  `project status` reported the token healthy (issue #711). **Rotating the
+  verbatim instead of asserting the token is invalid. **Rotating the
   token does not fix an `AUTH_REJECTED`**; verify the token against another
   endpoint on the same stack, then escalate with the exceptionId.
-- **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** Both are
+- **The reported trigger case has its own, more specific mapping: every
+  `semantic-layer` / `sl` command needs a MASTER token.** The Metastore's
+  401 `{"exception": "Failed to create project scope"}` is its master-token
+  gate: unlike the Storage API, the metastore accepts only a master (project
+  admin) Storage token, and this opaque 401 is how it answers a valid
+  non-master token -- which blocked every `semantic-layer` command while
+  `project status` reported the token healthy (issue #711; the underlying
+  `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
+  exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
+  the message. Fix: check `kbagent project info` -> `is_master_token`, and
+  register a master token (`kbagent project edit --token ...`). Do NOT
+  escalate this one to support -- it is by design.
+- **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
   authentication-class failures; only the diagnosis differs. A script
   branching on `$?` sees nothing new -- one branching on
-  `error.code == "INVALID_TOKEN"` must now also accept `AUTH_REJECTED`.
+  `error.code == "INVALID_TOKEN"` must now also accept `AUTH_REJECTED`
+  and (on metastore calls) `MISSING_MASTER_TOKEN`.
 - **A 401 whose body is empty (or `{}`) still maps to `INVALID_TOKEN`.**
   Silence is the textbook rejected-credential response; only a server that
   actually said something else earns the new code.

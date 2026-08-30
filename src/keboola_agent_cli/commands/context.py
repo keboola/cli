@@ -1525,7 +1525,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
-with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage, but it MUST be a
+MASTER (project admin) token -- the metastore rejects valid non-master tokens
+with an opaque 401 "Failed to create project scope", reclassified by kbagent to
+MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
+`kbagent --json project info --project P` -> is_master_token. Alias:
 `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
   kbagent semantic-layer model list --project P
