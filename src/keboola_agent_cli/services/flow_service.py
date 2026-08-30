@@ -180,6 +180,28 @@ def _schedules_targeting_flow(
     return matching
 
 
+def _triggers_targeting_config(
+    raw_triggers: list[dict[str, Any]], config_id: str
+) -> list[dict[str, Any]]:
+    """Keep only the triggers that really target ``config_id``.
+
+    The Storage API is *sent* ``?configurationId=`` and does apply it
+    (``TriggerRepository::findAllByFilter``, exact match) -- but this codebase
+    has been burned by an accepted-then-ignored query filter before (the
+    Notification Service and ``?event=``, issue #600), so the result is
+    narrowed again here as defense in depth. It costs one pass over a list
+    that is single-digit long in practice.
+
+    Compared as strings: trigger ids are strings in the response but flow ids
+    are numeric on some stacks.
+    """
+    return [
+        trigger
+        for trigger in raw_triggers
+        if isinstance(trigger, dict) and str(trigger.get("configurationId", "")) == str(config_id)
+    ]
+
+
 def _collect_schedules_by_parent(
     client: Any, branch_id: int | None
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
@@ -422,7 +444,12 @@ class FlowService(BaseService):
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Return full flow detail including phases, tasks, and schedule info.
+        """Return flow configuration detail including parsed phases and tasks.
+
+        The result is the raw config detail enriched with ``phases``, ``tasks``,
+        ``phase_count``, ``task_count``, ``component_id``, ``branch_id`` and
+        ``project_alias``. Schedule info is NOT included -- schedules live in a
+        separate scheduler config (see ``list_flows(with_schedules=True)``).
 
         Raises:
             ConfigError: If alias is not found.
@@ -687,6 +714,82 @@ class FlowService(BaseService):
             "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "schedules": schedules,
+        }
+
+    def get_flow_triggers(
+        self,
+        alias: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Report every trigger kbagent can see for one flow -- and say what it cannot.
+
+        A flow is started automatically by at least three mechanisms, and
+        ``schedule list`` only ever saw one of them (issue #714):
+
+        * **cron schedules** -- ``keboola.scheduler`` configs; covered here.
+        * **table triggers** -- a separate Storage API resource, not a
+          component config at all; covered here, and previously invisible to
+          every kbagent command.
+        * **cross-project triggers** -- a trigger-queue app config living in a
+          DIFFERENT project; **not** covered. Detecting them means scanning
+          every connected project and resolving each candidate's parameters
+          back to this project + flow, which is not implemented.
+
+        That third bullet is why the result carries
+        ``cross_project_triggers_checked: False`` rather than an empty list. A
+        flow with no cron schedule and no table trigger is "no trigger *that
+        kbagent checked*", never "no trigger" -- reporting the latter is the
+        exact false negative this method exists to prevent.
+
+        Table triggers are **production-only**: the Storage route has no
+        branch-scoped variant, so ``branch_id`` narrows the cron-schedule half
+        only and ``table_triggers_branch_scoped`` is always ``False``.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = branch_id or project.active_branch_id
+
+        schedules = self.list_flow_schedules(alias, config_id, branch_id=branch_id)["schedules"]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            raw_triggers = client.list_triggers(configuration_id=str(config_id))
+        except KeboolaApiError as exc:
+            if exc.error_code == ErrorCode.NOT_FOUND:
+                raw_triggers = []
+            else:
+                raise
+        finally:
+            client.close()
+
+        table_triggers = [
+            {
+                "trigger_id": str(trigger.get("id", "")),
+                "component_id": trigger.get("component", ""),
+                "tables": [
+                    t.get("tableId", "")
+                    for t in (trigger.get("tables") or [])
+                    if isinstance(t, dict)
+                ],
+                "cool_down_period_minutes": trigger.get("coolDownPeriodMinutes"),
+                "last_run": trigger.get("lastRun"),
+                "run_with_token_id": trigger.get("runWithTokenId"),
+            }
+            for trigger in _triggers_targeting_config(raw_triggers, config_id)
+        ]
+
+        return {
+            "project_alias": alias,
+            "component_id": FLOW_COMPONENT_ID,
+            "config_id": config_id,
+            "branch_id": effective_branch,
+            "cron_schedules": schedules,
+            "table_triggers": table_triggers,
+            # Deliberately not an empty list: an empty list reads as "checked,
+            # found none", which is the false negative #714 is about.
+            "cross_project_triggers_checked": False,
+            "table_triggers_branch_scoped": False,
         }
 
     def set_flow_schedule(

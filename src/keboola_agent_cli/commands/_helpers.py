@@ -104,6 +104,10 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
     - INVALID_TOKEN -> 3 (authentication error)
+    - AUTH_REJECTED -> 3 (an upstream 401 that did not blame the credential;
+      still an authentication-class failure, so the exit code is unchanged
+      from what the same response produced before issue #711 -- only the
+      code and the message text got more honest)
     - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT /
       STORAGE_JOB_TIMEOUT -> 4
       (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
@@ -122,6 +126,8 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     - Everything else -> 1 (general error)
     """
     if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
+        return 3
+    if exc.error_code == ErrorCode.AUTH_REJECTED:
         return 3
     if exc.error_code in (
         ErrorCode.SESSION_EXPIRED,

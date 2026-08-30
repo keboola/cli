@@ -13,7 +13,7 @@ from keboola_agent_cli.constants import (
     MAX_EXCEPTION_ID_LENGTH,
     MAX_RETRIES,
 )
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.http_base import BaseHttpClient, build_user_agent
 
 
@@ -1056,3 +1056,187 @@ class TestBaseHttpClientContextManager:
         ) as client:
             response = client._do_request("GET", "/test-path")
             assert response.status_code == 200
+
+
+class TestUnauthorizedErrorMapping:
+    """A 401 is not automatically a bad credential (issue #711)."""
+
+    def _client(self) -> BaseHttpClient:
+        return BaseHttpClient(
+            base_url=STACK_URL,
+            token=TOKEN,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    def test_metastore_project_scope_401_is_not_blamed_on_the_token(self, httpx_mock) -> None:
+        """The reported case: Metastore 401s for a token Storage accepts.
+
+        Calling that "Invalid or expired token" sent the reporter checking
+        expiry and master-token status for a server-side fault.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={
+                "error": 401,
+                "code": "401",
+                "exception": "Failed to create project scope",
+                "exceptionId": "metastore-fbfeCiBSXXBLk7D",
+                "status": "error",
+            },
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            exc = exc_info.value
+            assert exc.error_code == ErrorCode.AUTH_REJECTED
+            assert exc.status_code == 401
+            assert exc.retryable is False
+            assert "Failed to create project scope" in exc.message
+            # The wrong diagnosis must be gone, not merely de-emphasised.
+            assert "Invalid or expired token" not in exc.message
+        finally:
+            client.close()
+
+    def test_non_token_401_keeps_the_exception_id(self, httpx_mock) -> None:
+        """The handle support traces by must survive onto a 401.
+
+        It used to be appended only after the 401 branch had already raised,
+        so the reporter had to fall back to raw curl to obtain it.
+        """
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={
+                "exception": "Failed to create project scope",
+                "exceptionId": "metastore-fbfeCiBSXXBLk7D",
+            },
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert "metastore-fbfeCiBSXXBLk7D" in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_genuine_invalid_token_401_still_maps_to_invalid_token(self, httpx_mock) -> None:
+        """The long-standing mapping is unchanged when the API does blame the token."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={"error": "Invalid access token", "code": "401"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            exc = exc_info.value
+            assert exc.error_code == ErrorCode.INVALID_TOKEN
+            assert "Invalid or expired token" in exc.message
+        finally:
+            client.close()
+
+    def test_expired_token_401_still_maps_to_invalid_token(self, httpx_mock) -> None:
+        """Expiry phrasing that never mentions the word "token" is still a token fault."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={"error": "Your session has expired, please sign in again"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert exc_info.value.error_code == ErrorCode.INVALID_TOKEN
+        finally:
+            client.close()
+
+    def test_401_masks_the_token_under_both_mappings(self, httpx_mock) -> None:
+        """Neither branch may echo the credential in full."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={"exception": "Failed to create project scope"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert TOKEN not in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_403_keeps_the_exception_id(self, httpx_mock) -> None:
+        """Same early-return gap as the 401 branch."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=403,
+            json={"error": "You don't have access", "exceptionId": "kbc-connection-deadbeef"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            exc = exc_info.value
+            assert exc.error_code == ErrorCode.ACCESS_DENIED
+            assert "kbc-connection-deadbeef" in exc.message
+        finally:
+            client.close()
+
+    def test_404_keeps_the_exception_id(self, httpx_mock) -> None:
+        """Same early-return gap as the 401 branch."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=404,
+            json={"error": "Bucket not found", "exceptionId": "kbc-connection-cafe1234"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            exc = exc_info.value
+            assert exc.error_code == ErrorCode.NOT_FOUND
+            assert "kbc-connection-cafe1234" in exc.message
+        finally:
+            client.close()
+
+    def test_401_without_exception_id_adds_no_empty_suffix(self, httpx_mock) -> None:
+        """A stack that sends no exceptionId must not gain a dangling marker."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=401,
+            json={"error": "Invalid access token"},
+        )
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert "exceptionId" not in exc_info.value.message
+        finally:
+            client.close()
+
+    def test_401_with_no_message_at_all_stays_invalid_token(self, httpx_mock) -> None:
+        """Silence is not the server blaming something else.
+
+        A 401 with an empty body is the textbook rejected-credential
+        response; diverting it to AUTH_REJECTED would over-read the silence.
+        """
+        httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=401, json={})
+
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert exc_info.value.error_code == ErrorCode.INVALID_TOKEN
+        finally:
+            client.close()

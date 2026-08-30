@@ -347,7 +347,16 @@ plugins/kbagent/
 > "Plugin synchronization map" for the full list.
 
 ```
-# Global options: --json, --verbose, --no-color, --config-dir, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
+#   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
+#   agent harness does not persist shell state between tool calls, so the documented one-time `export`
+#   was unsatisfiable -- and re-prepending `export ...` to every command stops it matching a
+#   `Bash(kbagent ...)` permission allow-rule, so every call fell through to the safety classifier.
+#   For a whole session, set the env var in the harness's own env block instead (Claude Code:
+#   settings.json -> env). Neither set = header omitted, as before. Version gate for this entry
+#   lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines,
+#   because check_version_gates.py parses them as ATX markdown headings (where a `vNEXT` is fatal).
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
@@ -929,6 +938,14 @@ kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
+# semantic-layer REQUIRES A MASTER (project admin) Storage token (#711): the Metastore's
+#   auth gate -- unlike the Storage API -- rejects every valid non-master token with an opaque
+#   401 "Failed to create project scope" (the underlying MasterTokenRequiredError is swallowed
+#   server-side). kbagent reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) with
+#   the remedy; other unexplained 401s anywhere map to AUTH_REJECTED instead of the false
+#   "Invalid or expired token" (INVALID_TOKEN stays for 401s that DO blame the credential).
+#   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
+#   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
@@ -992,6 +1009,28 @@ kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+# flow triggers (#714): the honest answer to "what starts this flow automatically". A flow has at
+#   least three trigger mechanisms and kbagent used to see ONE: `schedule list` / `search` only ever
+#   read `keboola.scheduler` configs, so a flow driven by a TABLE TRIGGER came back "nothing found"
+#   and got reported as having no trigger -- twice in one investigation, for a flow that was already
+#   live. Table triggers are a SEPARATE Storage API resource (`GET /v2/storage/triggers`), not a
+#   component config, which is why nothing in kbagent saw them. This command returns cron_schedules
+#   AND table_triggers in one call.
+#   CROSS-PROJECT triggers (a trigger-queue app config in ANOTHER project) are NOT covered: the
+#   result carries `cross_project_triggers_checked: false`, deliberately NOT an empty list -- an
+#   empty list reads as "checked, found none", which is the exact false negative this exists to
+#   prevent. Read that flag before concluding a flow has no trigger.
+#   PRODUCTION ONLY: the Storage triggers route is declared `isAvailableInBranch: false`, so it has
+#   no branch-scoped variant. `--branch` narrows the CRON half only; `table_triggers_branch_scoped`
+#   is always false.
+#   `lastRun: null` means the trigger exists but has NEVER FIRED -- not that it is disabled.
+#   `schedule list` / `schedule find` now say "No cron schedules found. Table triggers and
+#   cross-project triggers were NOT checked -- see `kbagent flow triggers`" instead of the old
+#   "No schedules found".
+#   `job detail` on a keboola.flow / keboola.orchestrator job carries `trigger_hint` (same over
+#   `serve`): a run with no matching cron schedule is NOT necessarily manual -- check
+#   `flow triggers` first. Human mode adds "Created by token" (job provenance).
 # Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
 # IDs are strings; phases use next[].goto + conditions; tasks are typed (job/notification/variable).
 # flow new/update validate against the live CF schema fetched from the stack (AI Service

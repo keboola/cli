@@ -1041,3 +1041,12 @@ def flow_schedule_remove(
             formatter.success(f"Removed {count} schedule(s) from flow {escape(flow_id)}")
         for warning in result.get("warnings", []):
             formatter.warning(warning)
+
+
+# Mounted from a private module: `commands/flow.py` is exactly at the
+# commands soft ceiling, so `triggers` lives in its own file (CONTRIBUTING.md
+# file-size budgets). Flat registration keeps the permission key `flow.triggers`
+# and the `kbagent flow --help` listing unchanged.
+from ._flow_triggers import register as _register_trigger_commands  # noqa: E402
+
+_register_trigger_commands(flow_app)

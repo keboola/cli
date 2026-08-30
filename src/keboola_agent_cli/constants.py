@@ -76,6 +76,40 @@ DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.
 # --- API Error Handling ---
 MAX_API_ERROR_LENGTH: int = 500
 
+# Substrings that mark an HTTP 401 body as genuinely describing a bad or
+# expired credential ("Invalid access token", "Access token expired",
+# "Authentication failed", ...). Matched case-insensitively against the
+# server's own error text.
+#
+# A 401 is NOT automatically a token problem. Keboola Metastore answers
+# `{"exception": "Failed to create project scope"}` with a 401 when its
+# internal project-scope resolution fails, for a token the Storage API
+# accepts on the very same stack (issue #711). Labelling that "Invalid or
+# expired token" sends the operator off checking expiry and master-token
+# status for a fault that is entirely server-side. When none of these markers
+# appear, kbagent reports the upstream rejection verbatim under
+# `ErrorCode.AUTH_REJECTED` instead of asserting the credential is bad.
+# Error texts that carry no information at all -- an empty body, or the
+# json.dumps() of an empty container that `_raise_api_error` falls back to.
+# A 401 that says NOTHING is the textbook "your credential was rejected",
+# so these keep the long-standing INVALID_TOKEN mapping: only a server that
+# actually said something else earns AUTH_REJECTED.
+UNINFORMATIVE_ERROR_MESSAGES: frozenset[str] = frozenset({"", "{}", "[]", "null", "none"})
+
+TOKEN_VALIDITY_ERROR_MARKERS: tuple[str, ...] = (
+    "token",
+    "credential",
+    "authenticat",
+    "unauthorized",
+    "unauthorised",
+    "not authorized",
+    "not authorised",
+    "expired",
+    "log in",
+    "login",
+    "sign in",
+)
+
 # --- Developer Portal MFA ---
 # Challenge type sent on the second `/auth/login` step (after the first call
 # returns a `session` token). The apiary spec documents `SOFTWARE_TOKEN_MFA`
@@ -909,5 +943,18 @@ ROOT_LEVEL_CONFIG_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.flow",
         "keboola.orchestrator",  # legacy flows; kbagent cannot write them, but reads share this path
+    }
+)
+
+# --- Components whose runs can be started by triggers invisible to `schedule list` ---
+# A flow/orchestration run with no matching cron schedule is NOT necessarily
+# manual: table triggers (Storage `/v2/storage/triggers`) and cross-project
+# trigger-queue configs also start them, and neither is a `keboola.scheduler`
+# config (issue #714). `job detail` uses this set to attach a trigger_hint
+# pointing at `flow triggers` instead of letting the investigation dead-end.
+ORCHESTRATION_JOB_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "keboola.flow",
+        "keboola.orchestrator",
     }
 )

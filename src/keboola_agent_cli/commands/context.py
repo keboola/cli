@@ -23,11 +23,20 @@ structured JSON output for programmatic consumption.
 
 ## IMPORTANT: Set Conversation ID
 
-Before running any kbagent commands, set KBAGENT_CONVERSATION_ID to a unique
-identifier for the current conversation/session. This is REQUIRED for platform
-observability -- all API requests will include the X-Conversation-ID header.
+Identify the current conversation/session with a unique id. This is REQUIRED
+for platform observability -- all API requests will include the
+X-Conversation-ID header.
 
-  export KBAGENT_CONVERSATION_ID="<unique-conversation-id>"
+Pass it as a global flag on every call:
+
+  kbagent --json --conversation-id "<unique-conversation-id>" <command>
+
+Do NOT rely on a standalone `export`. Agent harnesses do not persist shell
+state between tool calls, so the variable is gone by the next command -- and a
+command starting with `export ...` no longer matches a `Bash(kbagent ...)`
+permission allow-rule. To set it once for a whole session, put
+KBAGENT_CONVERSATION_ID in the harness's own env block (Claude Code:
+settings.json -> env). The flag takes precedence over the env var.
 
 ## Quick Start
 
@@ -571,7 +580,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     grouped per project. Group them yourself if you need per-project blocks.
 
   kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
-    Full job detail including result message and timing.
+    Full job detail including result message and timing. A keboola.flow /
+    keboola.orchestrator job also carries trigger_hint: if no cron schedule
+    explains the run, check `kbagent flow triggers` before concluding it was
+    manual -- table triggers and cross-project triggers never appear in
+    `schedule list`. Human mode shows "Created by token" (the one factual
+    signal of HOW a run started).
 
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
@@ -1067,6 +1081,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+  kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+    # Cron schedules AND table triggers in one call. Cross-project triggers are
+    # NOT checked -- the result says so via cross_project_triggers_checked=false
+    # rather than returning an empty list. Table triggers are production-only.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.
@@ -1538,7 +1556,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
-with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage, but it MUST be a
+MASTER (project admin) token -- the metastore rejects valid non-master tokens
+with an opaque 401 "Failed to create project scope", reclassified by kbagent to
+MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
+`kbagent --json project info --project P` -> is_master_token. Alias:
 `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
   kbagent semantic-layer model list --project P
@@ -2037,7 +2059,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      kbagent --json project status   # test all connections
 
 7. Environment variables:
-     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
+     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header).
+                              Prefer the --conversation-id global flag from an agent harness:
+                              a standalone `export` does not survive between tool calls.
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
      KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).

@@ -11,6 +11,84 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## An HTTP 401 is not automatically a bad token
+
+*(since vNEXT, #711)*
+
+- **`INVALID_TOKEN` no longer covers every 401.** When the upstream 401 body
+  says something that does not describe a bad or expired credential, kbagent
+  reports `ErrorCode.AUTH_REJECTED` and a message that quotes the server
+  verbatim instead of asserting the token is invalid. **Rotating the
+  token does not fix an `AUTH_REJECTED`**; verify the token against another
+  endpoint on the same stack, then escalate with the exceptionId.
+- **The reported trigger case has its own, more specific mapping: every
+  `semantic-layer` / `sl` command needs a MASTER token.** The Metastore's
+  401 `{"exception": "Failed to create project scope"}` is its master-token
+  gate: unlike the Storage API, the metastore accepts only a master (project
+  admin) Storage token, and this opaque 401 is how it answers a valid
+  non-master token -- which blocked every `semantic-layer` command while
+  `project status` reported the token healthy (issue #711; the underlying
+  `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
+  exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
+  the message. Fix: check `kbagent project info` -> `is_master_token`, and
+  register a master token (`kbagent project edit --token ...`). Do NOT
+  escalate this one to support -- it is by design.
+- **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
+  authentication-class failures; only the diagnosis differs. A script
+  branching on `$?` sees nothing new -- one branching on
+  `error.code == "INVALID_TOKEN"` must now also accept `AUTH_REJECTED`
+  and (on metastore calls) `MISSING_MASTER_TOKEN`.
+- **A 401 whose body is empty (or `{}`) still maps to `INVALID_TOKEN`.**
+  Silence is the textbook rejected-credential response; only a server that
+  actually said something else earns the new code.
+- **401 / 403 / 404 now carry `[exceptionId: ...]`.** They used to raise
+  before the id was appended (it reached only 5xx messages), so the one
+  handle Keboola support traces an incident by was dropped on exactly the
+  auth errors where the fault was server-side. Quote it when escalating.
+
+## "No schedules found" never meant "no trigger"
+
+*(since vNEXT, #714)*
+
+- **A flow has at least three automatic trigger mechanisms and kbagent used to
+  see one.** `schedule list` / `schedule find` / `search` read `keboola.scheduler`
+  configs only. A **table trigger** lives in a separate Storage API resource
+  (`GET /v2/storage/triggers`), not a component config, so nothing in kbagent
+  saw it; a **cross-project trigger** is a trigger-queue app config in a
+  *different* project. A flow that was demonstrably running got reported as
+  having no trigger, twice in one investigation, because "no schedules found"
+  reads as "no trigger of any kind".
+- **`kbagent flow triggers --project P --flow-id ID`** answers cron + table
+  triggers in one call.
+- **Read `cross_project_triggers_checked` before concluding anything.** It is
+  `false`, and cross-project triggers are deliberately NOT returned as an empty
+  list -- an empty list would read as "checked, found none". Empty output from
+  this command means *"no trigger that kbagent checked"*, never *"no trigger"*.
+- **Table triggers are production-only.** The Storage route is declared
+  `isAvailableInBranch: false`, so there is no branch-scoped variant. `--branch`
+  narrows the cron half only, and `table_triggers_branch_scoped` is always
+  `false`. A dev branch's triggers cannot be listed at all.
+- **`last_run: null` means "exists, never fired"**, not "disabled". Do not read
+  a blank last-run as evidence the trigger is inactive.
+- **`component` on a trigger is not necessarily `keboola.flow`.** The Storage
+  API's own example is the legacy `orchestration`; match on
+  `configurationId`, not on the component id.
+- **The `?configurationId=` filter is applied server-side, and kbagent still
+  narrows client-side.** The server applies both filters (exact match,
+  AND-ed), so a direct API caller can rely on them; kbagent re-narrows anyway
+  as defense in depth after the Notification Service precedent (accepts
+  `?event=`, ignores it -- #600).
+- **Listing triggers needs no elevated privilege.** The list route is a plain
+  read-only Storage action scoped to the token's project -- even a read-only
+  token sees every trigger. Only create/update/delete require
+  `canManageBuckets`, component access, or an admin token.
+- **`job detail` on a flow job carries `trigger_hint`.** A run with no
+  matching cron schedule is NOT necessarily manual; the hint points at
+  `flow triggers` so the investigation does not dead-end into "someone ran it
+  by hand". Human mode also shows "Created by token" -- the token that created
+  the job (a human's email vs a scheduler's or trigger's token) is the one
+  factual provenance signal the Queue payload carries.
+
 ## Programmatic auth (browser login) needs a human to approve; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` always needs a human at a browser (or a device to
@@ -2437,9 +2515,27 @@ type inventory and examples.
 
 ## Conversation ID
 
-Set `KBAGENT_CONVERSATION_ID` env var before running kbagent commands. All API
-requests include it as `X-Conversation-ID` header for platform observability.
-If unset, the header is omitted.
+Two channels, in precedence order:
+
+1. **`--conversation-id <id>` global flag** *(since vNEXT, #716)* -- the one to
+   use from an agent. `kbagent --json --conversation-id <id> <command>`.
+2. **`KBAGENT_CONVERSATION_ID` env var** -- for a persistent shell, or a
+   harness that can set env for the whole session.
+
+All API requests include the value as the `X-Conversation-ID` header for
+platform observability. If neither is given, the header is omitted.
+
+**A standalone `export` does not work in an agent harness.** Claude Code's
+Bash tool persists the working directory but *not* environment variables or
+shell functions, so an `export` in one tool call is gone by the next. Before
+the flag existed, the only way to comply was to re-prepend
+`export KBAGENT_CONVERSATION_ID=...` to every single command -- and because
+Claude Code permission allow-rules are prefix matches on the command string, a
+command starting with `export ...` can never match
+`Bash(kbagent --json workspace query:*)`. Every invocation then fell through to
+the safety classifier and prompted. Use the flag, so the command still begins
+with `kbagent`; or set the variable in the harness's own env block (Claude
+Code: `settings.json` -> `env`), which survives across tool calls.
 
 ## Config resolution order
 

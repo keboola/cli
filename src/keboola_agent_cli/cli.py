@@ -215,6 +215,17 @@ def main(
         "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
         "are NOT blocked -- use --deny-writes for the wide net.",
     ),
+    conversation_id: str | None = typer.Option(
+        None,
+        "--conversation-id",
+        help="Conversation/session ID sent as the X-Conversation-ID header on "
+        "every API request (platform observability). Equivalent to setting "
+        "KBAGENT_CONVERSATION_ID, and takes precedence over it. Exists because "
+        "agent harnesses do not persist shell state between tool calls, so a "
+        "standalone `export` cannot set it -- and prefixing every command with "
+        "`export ...` stops the command matching a `Bash(kbagent ...)` "
+        "permission allow-rule.",
+    ),
     allow_env_manage_token: bool = typer.Option(
         False,
         "--allow-env-manage-token",
@@ -225,7 +236,19 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
+    import os
+
     from .auto_update import maybe_auto_update, show_post_update_changelog
+    from .constants import ENV_CONVERSATION_ID
+
+    # Published into the environment rather than threaded through the Typer
+    # context because that is where every consumer already reads it:
+    # `BaseHttpClient.__init__` stamps the header from os.environ for all
+    # seven clients, `doctor` reports on it, and scheduled-agent subprocesses
+    # inherit it for free. `serve` sets it the same way. The flag wins over an
+    # inherited env var -- it is the more specific instruction (issue #716).
+    if conversation_id is not None:
+        os.environ[ENV_CONVERSATION_ID] = conversation_id
 
     maybe_auto_update()
 
