@@ -47,6 +47,12 @@ Versioning convention:
   read-only Storage action scoped to the token's project -- even a read-only
   token sees every trigger. Only create/update/delete require
   `canManageBuckets`, component access, or an admin token.
+- **`job detail` on a flow job carries `trigger_hint`.** A run with no
+  matching cron schedule is NOT necessarily manual; the hint points at
+  `flow triggers` so the investigation does not dead-end into "someone ran it
+  by hand". Human mode also shows "Created by token" -- the token that created
+  the job (a human's email vs a scheduler's or trigger's token) is the one
+  factual provenance signal the Queue payload carries.
 
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 

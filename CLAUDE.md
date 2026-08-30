@@ -1007,6 +1007,9 @@ kbagent flow triggers --project NAME --flow-id ID [--branch ID]
 #   `schedule list` / `schedule find` now say "No cron schedules found. Table triggers and
 #   cross-project triggers were NOT checked -- see `kbagent flow triggers`" instead of the old
 #   "No schedules found".
+#   `job detail` on a keboola.flow / keboola.orchestrator job carries `trigger_hint` (same over
+#   `serve`): a run with no matching cron schedule is NOT necessarily manual -- check
+#   `flow triggers` first. Human mode adds "Created by token" (job provenance).
 # Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
 # IDs are strings; phases use next[].goto + conditions; tasks are typed (job/notification/variable).
 # flow new/update validate against the live CF schema fetched from the stack (AI Service

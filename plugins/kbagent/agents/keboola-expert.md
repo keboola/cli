@@ -226,7 +226,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   schedule. Use `kbagent flow triggers` and read
   `cross_project_triggers_checked` (always `false`) before reporting that a flow
   is unscheduled. A flow that was already live via a table trigger was reported
-  as needing manual scheduling because of exactly this gap (#714).
+  as needing manual scheduling because of exactly this gap (#714). For the same
+  reason `job detail` on a flow job carries `trigger_hint`: a run with no
+  matching cron schedule is NOT proof of a manual run.
 - **`flow schedule` activates on the Scheduler Service (0.66.1+)**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
   the cron NEVER fired. Confirm `activated: true`; `activated: false` + warning

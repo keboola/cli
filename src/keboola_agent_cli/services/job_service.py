@@ -20,6 +20,7 @@ from ..constants import (
     JOB_TERMINATE_GRACE_SECONDS,
     JOB_TERMINATE_POLL_INTERVAL,
     KILLABLE_JOB_STATUSES,
+    ORCHESTRATION_JOB_COMPONENTS,
     VALID_JOB_MODES,
     VALID_POLL_STRATEGIES,
 )
@@ -461,6 +462,17 @@ class JobService(BaseService):
             client.close()
 
         detail["project_alias"] = alias
+        if detail.get("component") in ORCHESTRATION_JOB_COMPONENTS:
+            # A flow run with no matching cron schedule is not necessarily
+            # manual -- table triggers and cross-project triggers also start
+            # flows and neither appears in `schedule list`. That dead-end is
+            # how issue #714's false "this flow has no trigger" happened, so
+            # point the investigation at the command that answers it.
+            detail["trigger_hint"] = (
+                "If no cron schedule explains this run, check `kbagent flow triggers "
+                f"--project {alias} --flow-id {detail.get('config', '')}` -- table "
+                "triggers and cross-project triggers never appear in `schedule list`."
+            )
         return detail
 
     def run_job(
