@@ -38,7 +38,7 @@ from ._workspace_load_plan import (
     coerce_data_size_bytes,
     plan_auto_load_type,
 )
-from .base import BaseService
+from .base import BaseService, normalize_job_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -873,7 +873,7 @@ class WorkspaceService(BaseService):
                 size guard trips and is neither forced nor approved.
         """
         requested = self._normalize_load_type(load_type)
-        max_wait = self._normalize_timeout(timeout)
+        max_wait = normalize_job_timeout(timeout, WORKSPACE_LOAD_JOB_MAX_WAIT)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -951,28 +951,6 @@ class WorkspaceService(BaseService):
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
         return normalized
-
-    @staticmethod
-    def _normalize_timeout(timeout: float | None) -> float:
-        """Resolve the load-job wait budget, rejecting a non-positive override.
-
-        ``None`` is the documented "use the default" sentinel and branches
-        explicitly to ``WORKSPACE_LOAD_JOB_MAX_WAIT`` -- deliberately NOT
-        ``timeout or WORKSPACE_LOAD_JOB_MAX_WAIT``, which would silently
-        promote a falsy-but-real ``0.0`` to the 300s default instead of
-        rejecting it. The CLI and the ``kbagent serve`` router both already
-        guard a non-positive timeout before calling in, but a direct
-        service/SDK caller would not go through either guard.
-        """
-        if timeout is None:
-            return WORKSPACE_LOAD_JOB_MAX_WAIT
-        if timeout <= 0:
-            raise KeboolaApiError(
-                message=f"Invalid timeout {timeout}. Must be greater than 0.",
-                status_code=0,
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-        return timeout
 
     def _plan_table_loads(
         self,

@@ -26,6 +26,7 @@ from keboola_agent_cli.services.base import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_CODE,
     BaseService,
+    normalize_job_timeout,
     project_error_entry,
 )
 
@@ -544,3 +545,28 @@ class TestDefaultClientFactory:
         service = _TestService(config_store=store, client_factory=mock_factory)
 
         assert service._client_factory is mock_factory
+
+
+class TestNormalizeJobTimeout:
+    """Shared async-job budget guard used by every service that waits on a job."""
+
+    def test_none_uses_the_default(self) -> None:
+        assert normalize_job_timeout(None, 300.0) == 300.0
+
+    def test_positive_override_wins(self) -> None:
+        assert normalize_job_timeout(900.0, 300.0) == 900.0
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, -900.0])
+    def test_non_positive_is_rejected(self, bad: float) -> None:
+        """0.0 must raise, not fall back to the default.
+
+        This is the whole reason the guard branches on ``is None`` rather
+        than writing ``timeout or default``: 0.0 is falsy, so the shorter
+        spelling would silently accept an invalid budget as "unset" and every
+        caller would look correct while validating nothing.
+        """
+        with pytest.raises(KeboolaApiError) as exc_info:
+            normalize_job_timeout(bad, 300.0)
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert str(bad) in exc_info.value.message

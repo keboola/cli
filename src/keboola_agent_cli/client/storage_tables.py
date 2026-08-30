@@ -512,6 +512,7 @@ class _StorageTablesMixin(_CoreClient):
         time_partitioning: dict[str, Any] | None = None,
         range_partitioning: dict[str, Any] | None = None,
         clustering: dict[str, Any] | None = None,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns (async, waits for completion).
 
@@ -537,6 +538,10 @@ class _StorageTablesMixin(_CoreClient):
             range_partitioning: Optional ``{"field": str, "range": {"start": str,
                     "end": str, "interval": str}}`` (BigQuery).
             clustering: Optional ``{"fields": list[str]}`` (BigQuery).
+            max_wait: Seconds to wait for the create job. ``None`` defers to
+                ``_wait_for_storage_job``'s own default. A ``source`` copy
+                moves real data and can far outlast the metadata-job default,
+                so callers doing one pass their own budget.
 
         Returns:
             Completed storage job results dict.
@@ -560,7 +565,7 @@ class _StorageTablesMixin(_CoreClient):
         if clustering is not None:
             body["clustering"] = clustering
         response = self._request("POST", f"{prefix}/buckets/{safe_id}/tables-definition", json=body)
-        job = self._wait_for_storage_job(response.json())
+        job = self._wait_for_storage_job(response.json(), max_wait=max_wait)
         return job.get("results", {})
 
     def prepare_file_upload(
@@ -882,6 +887,7 @@ class _StorageTablesMixin(_CoreClient):
         table_id: str,
         target_table_id: str,
         branch_id: int,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Swap two storage tables (async, waits for completion; branch-scoped).
 
@@ -902,6 +908,10 @@ class _StorageTablesMixin(_CoreClient):
             table_id: Full ID of the first table (e.g. "in.c-bucket.table").
             target_table_id: Full ID of the second table to swap with.
             branch_id: Development branch ID. Required by the API.
+            max_wait: Seconds to wait for the swap job. ``None`` defers to
+                ``_wait_for_storage_job``'s own default. A swap rewrites
+                table metadata but is measurably slower than the copy that
+                produced the replacement, so callers pass their own budget.
 
         Returns:
             Completed storage job dict.
@@ -910,7 +920,7 @@ class _StorageTablesMixin(_CoreClient):
         safe_id = quote(table_id, safe="")
         body = {"targetTableId": target_table_id}
         response = self._request("POST", f"{prefix}/tables/{safe_id}/swap", json=body)
-        return self._wait_for_storage_job(response.json())
+        return self._wait_for_storage_job(response.json(), max_wait=max_wait)
 
     def pull_table(self, table_id: str, branch_id: int) -> dict[str, Any]:
         """Pull (clone) a table from the default branch into a dev branch.

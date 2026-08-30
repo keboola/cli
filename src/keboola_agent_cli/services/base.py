@@ -15,7 +15,7 @@ from ..auth.sentinel import is_session_token, parse_session_project_id, require_
 from ..client import KeboolaClient
 from ..config_store import ConfigError, ConfigStore, project_not_found_error
 from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
-from ..errors import ErrorCode
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,37 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
     if len(raw) > UNEXPECTED_ERROR_MAX_MESSAGE_LEN:
         return raw[:UNEXPECTED_ERROR_MAX_MESSAGE_LEN] + "..."
     return raw
+
+
+def normalize_job_timeout(timeout: float | None, default: float) -> float:
+    """Resolve an async-job wait budget, rejecting a non-positive override.
+
+    ``None`` is the documented "use the default" sentinel and branches
+    explicitly -- deliberately NOT ``timeout or default``, which would
+    silently promote a falsy-but-real ``0.0`` to the default instead of
+    rejecting it. Every CLI command already constrains its own ``--timeout``,
+    but a direct service or SDK caller goes through neither guard, so the
+    check belongs here rather than in each command.
+
+    Args:
+        timeout: Caller-supplied budget in seconds, or ``None`` for ``default``.
+        default: Budget to use when ``timeout`` is ``None``.
+
+    Returns:
+        The resolved budget in seconds.
+
+    Raises:
+        KeboolaApiError: ``INVALID_ARGUMENT`` when ``timeout`` is <= 0.
+    """
+    if timeout is None:
+        return default
+    if timeout <= 0:
+        raise KeboolaApiError(
+            message=f"Invalid timeout {timeout}. Must be greater than 0.",
+            status_code=0,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+    return timeout
 
 
 def project_error_entry(

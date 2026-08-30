@@ -2668,3 +2668,96 @@ def test_workspace_load_invalid_load_type_answers_400(tmp_path: Path) -> None:
 
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+# ---------------------------------------------------------------------------
+# storage.py  POST /tables/{p} and POST /tables/{p}/{tid}/swap -- job budget
+# Service: storage.create_table(timeout=...) / storage.swap_tables(timeout=...)
+# Issue #713: the data-moving half of the BigQuery repartition path needs a
+# budget the caller can raise; a bad one must be a 422 at the boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_create_table_route_defaults_timeout_to_none(tmp_path: Path) -> None:
+    """Omitting `timeout` sends None so the service applies its own default."""
+    storage_svc = MagicMock()
+    storage_svc.create_table.return_value = {"table_id": "in.c-b.t"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={"bucket_id": "in.c-b", "name": "t", "columns": ["id:INTEGER"]},
+        )
+
+    assert res.status_code == 200, res.text
+    assert storage_svc.create_table.call_args.kwargs["timeout"] is None
+
+
+def test_create_table_route_forwards_timeout(tmp_path: Path) -> None:
+    storage_svc = MagicMock()
+    storage_svc.create_table.return_value = {"table_id": "in.c-b.t"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={
+                "bucket_id": "in.c-b",
+                "name": "t",
+                "source_table_id": "in.c-b.src",
+                "timeout": 1800,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert storage_svc.create_table.call_args.kwargs["timeout"] == 1800
+
+
+def test_create_table_route_rejects_non_positive_timeout(tmp_path: Path) -> None:
+    """A zero budget would make every create 'time out' instantly."""
+    storage_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}",
+            headers=AUTH,
+            json={"bucket_id": "in.c-b", "name": "t", "columns": ["id:INTEGER"], "timeout": 0},
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.create_table.assert_not_called()
+
+
+def test_swap_tables_route_forwards_timeout(tmp_path: Path) -> None:
+    storage_svc = MagicMock()
+    storage_svc.swap_tables.return_value = {"dry_run": False}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}/in.c-b.a/swap",
+            headers=AUTH,
+            json={"target_table_id": "in.c-b.b", "branch_id": 42, "timeout": 900},
+        )
+
+    assert res.status_code == 200, res.text
+    assert storage_svc.swap_tables.call_args.kwargs["timeout"] == 900
+
+
+def test_swap_tables_route_rejects_non_positive_timeout(tmp_path: Path) -> None:
+    storage_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/storage/tables/{PROJECT}/in.c-b.a/swap",
+            headers=AUTH,
+            json={"target_table_id": "in.c-b.b", "branch_id": 42, "timeout": -1},
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.swap_tables.assert_not_called()

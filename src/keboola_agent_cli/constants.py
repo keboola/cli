@@ -161,6 +161,15 @@ STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 
+# A create-table-from-source (BigQuery repartition copy) and the swap that
+# puts it in place both move real data, yet both used to inherit the 60s
+# STORAGE_JOB_MAX_WAIT meant for metadata operations. Measured on an 800 MB
+# BigQuery table: create 15s, swap 31s -- so a table a few times larger
+# blows the budget and reports STORAGE_JOB_TIMEOUT for a job that is still
+# running and will succeed. Giving up locally never cancels the job, so a
+# too-short budget buys nothing and costs a false negative.
+TABLE_DATA_JOB_MAX_WAIT: float = 300.0  # 5 min default for data-moving table jobs
+
 # --- Workspace Table Loading ---
 # A workspace load is NOT fire-and-forget: when the local poller gives up, the
 # server-side job keeps running (and keeps consuming warehouse resources). The
