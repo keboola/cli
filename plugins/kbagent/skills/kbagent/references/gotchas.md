@@ -2402,9 +2402,27 @@ type inventory and examples.
 
 ## Conversation ID
 
-Set `KBAGENT_CONVERSATION_ID` env var before running kbagent commands. All API
-requests include it as `X-Conversation-ID` header for platform observability.
-If unset, the header is omitted.
+Two channels, in precedence order:
+
+1. **`--conversation-id <id>` global flag** *(since vNEXT, #716)* -- the one to
+   use from an agent. `kbagent --json --conversation-id <id> <command>`.
+2. **`KBAGENT_CONVERSATION_ID` env var** -- for a persistent shell, or a
+   harness that can set env for the whole session.
+
+All API requests include the value as the `X-Conversation-ID` header for
+platform observability. If neither is given, the header is omitted.
+
+**A standalone `export` does not work in an agent harness.** Claude Code's
+Bash tool persists the working directory but *not* environment variables or
+shell functions, so an `export` in one tool call is gone by the next. Before
+the flag existed, the only way to comply was to re-prepend
+`export KBAGENT_CONVERSATION_ID=...` to every single command -- and because
+Claude Code permission allow-rules are prefix matches on the command string, a
+command starting with `export ...` can never match
+`Bash(kbagent --json workspace query:*)`. Every invocation then fell through to
+the safety classifier and prompted. Use the flag, so the command still begins
+with `kbagent`; or set the variable in the harness's own env block (Claude
+Code: `settings.json` -> `env`), which survives across tool calls.
 
 ## Config resolution order
 
