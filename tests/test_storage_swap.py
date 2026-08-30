@@ -584,6 +584,16 @@ class TestSwapTablesTimeout:
         The message must not read as "nothing happened": kbagent stops
         watching, the swap keeps running server-side. That is also why the
         code is retryable (exit 4), not a plain failure.
+
+        A budget already in the past puts the deadline behind the very first
+        check, so the timeout branch is reached without a poll, a sleep, or
+        any dependence on elapsed time. A tiny positive budget does NOT work:
+        ``time.monotonic()`` advances in ~15.6 ms ticks on Windows, so a
+        sub-millisecond deadline never registers as expired there and the
+        poller keeps polling (this test failed exactly that way in CI).
+        Stubbing the clock instead would patch the global ``time`` module,
+        which httpx also reads. Non-positive budgets are rejected for real
+        callers one layer up, in ``StorageService.swap_tables``.
         """
         httpx_mock.add_response(
             url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/swap",
@@ -591,26 +601,14 @@ class TestSwapTablesTimeout:
             json={"id": 777, "status": "waiting", "operationName": "tableSwap"},
             status_code=200,
         )
-        httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/jobs/777",
-            method="GET",
-            json={"id": 777, "status": "waiting", "operationName": "tableSwap"},
-            status_code=200,
-        )
 
         client = KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
-        # The deadline is only checked at the top of each iteration, so the
-        # budget cannot expire before the first poll however small it is.
-        # Skipping the real sleep keeps the test instant.
-        with (
-            patch("keboola_agent_cli.client._core.time.sleep"),
-            pytest.raises(KeboolaApiError) as exc_info,
-        ):
+        with pytest.raises(KeboolaApiError) as exc_info:
             client.swap_tables(
                 table_id="in.c-foo.a",
                 target_table_id="in.c-foo.b",
                 branch_id=42,
-                max_wait=0.0001,
+                max_wait=-1.0,
             )
         client.close()
 
