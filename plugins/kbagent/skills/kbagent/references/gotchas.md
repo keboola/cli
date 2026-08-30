@@ -89,16 +89,47 @@ Versioning convention:
   the job (a human's email vs a scheduler's or trigger's token) is the one
   factual provenance signal the Queue payload carries.
 
-## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
+## Programmatic auth (browser login) needs a human to approve; sentinel tokens; v1 scope (since v0.80.0)
 
-- **`kbagent auth login` requires a human at a browser (or a device to type a
-  code into) -- there is no headless/unattended path for THIS command.**
-  Never invoke it from an unattended AI agent task; if a user asks an agent
-  to "log in", the agent must tell the user to run `auth login` themselves in
-  their own terminal. Session tokens are deliberately not readable through
-  the CLI once issued. **`auth login-password` (since v0.84.0, below) is the
-  headless counterpart** -- it did not exist when this rule was written and
-  does not fall under it.
+- **`kbagent auth login` always needs a human at a browser (or a device to
+  type a code into) -- there is no headless/unattended path for THIS
+  command.** Two hard prohibitions follow: never run it in a **foreground**
+  tool shell (it blocks until the human finishes, and a foreground shell
+  timeout -- typically ~120s -- kills the flow mid-flight), and never run it
+  from an **unattended/headless** task at all (use `auth login-password` or a
+  static Storage token there). Session tokens are deliberately not readable
+  through the CLI once issued.
+- **In an ATTENDED session the agent SHOULD drive the login itself**, rather
+  than handing the command to the user, whenever a background shell is
+  available:
+  1. Run `kbagent auth login --device-code --stack <URL> --register-projects`
+     in a **background** shell.
+  2. Relay the verification URL and the user code to the user in chat. Both
+     are printed immediately, before polling starts, and flushed: to
+     **stdout** in human mode, to **stderr** under `--json` (capture `2>&1`
+     there; human mode is the easier read). The CLI also best-effort opens
+     the browser on the host.
+  3. Confirm completion by polling `kbagent --json auth status` -- **exit 0**
+     means signed in (`live`/`refreshed`/`degraded`), **exit 3** means not
+     yet (`missing`/`expired`). That exit code is the completion contract;
+     never re-run login blind, always check `auth status` first.
+
+  `auth.json` is written atomically on success only, so an abandoned or
+  killed login attempt corrupts nothing. `--register-projects` is fully
+  non-interactive. **With no background shell available**, fall back to
+  handing the exact command to the user's own terminal and waiting for them
+  to confirm. **`auth login-password` (since v0.84.0, below) is the headless
+  counterpart** -- it did not exist when this rule was written and does not
+  fall under it.
+- **The device-login panel's one-click link is conditional -- relay only what
+  is actually printed (since vNEXT).** Alongside the verification URL and
+  code, the panel also prints a pre-filled `verification_uri_complete` link
+  ("Or open this link (code pre-filled):") whenever the stack's device
+  response includes one; a stack that returns an empty
+  `verificationUriComplete` prints neither that line nor the label. Don't
+  promise the user a one-click link unconditionally when relaying the panel
+  -- check what actually came back and relay only those lines. The URL and
+  code lines are always present regardless.
 - **PKCE is the default; the device flow is a fallback, not a mode switch.**
   The CLI tries the browser (PKCE authorization-code) flow first and falls
   back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
@@ -248,14 +279,17 @@ Versioning convention:
   and any headless/unattended runner has two options since v0.84.0: `auth
   login-password` (below) if account credentials for this purpose exist, or
   a static Storage token otherwise -- browser login (`auth login` itself)
-  still has no non-interactive path by design.
+  still has no non-interactive path by design, and is out of bounds for an
+  unattended task regardless of how it is shelled out. An **attended**
+  session is the other case entirely: there an agent may run it in a
+  background shell and relay the code (see the first bullet of this section).
 - **Feature-flagged per stack.** A 404 from any `auth` endpoint means browser
   login is not enabled on that stack (not a wrong URL or a bug) -- the CLI
   reports it as `AUTH_NOT_SUPPORTED_ON_STACK` and suggests a static token.
 - See `auth-workflow.md` for the end-to-end login -> register -> status ->
   logout walkthrough and PKCE-vs-device troubleshooting.
 
-## `auth login-password` is the CI-safe, headless exception to "browser login is human-only" (since v0.84.0)
+## `auth login-password` is the CI-safe, headless exception to "browser login needs a human to approve" (since v0.84.0)
 
 - **Password-grant login, no browser, safe for an unattended agent task**:
   `kbagent auth login-password --email E (--password-stdin | --password P |
@@ -269,8 +303,9 @@ Versioning convention:
   (stdlib-only RFC 6238); no human ever types a code into this flow. An
   account with WebAuthn/passkey-only MFA cannot be resolved here -- the
   server rejects it and the CLI raises `AUTH_MFA_INVALID` (new error code,
-  exit 3, see the table below); fall back to telling the user to run
-  `kbagent auth login` themselves.
+  exit 3, see the table below); fall back to `kbagent auth login` for that
+  account -- backgrounded and relayed by the agent if the session is
+  attended, handed to the user's terminal otherwise.
 - **A wrong password reports a plain "invalid email or password", not the
   generic session-oriented `INVALID_TOKEN` wording** -- there is no
   client-level token in this flow, only a submitted credential the server

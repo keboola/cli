@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
+from keboola_agent_cli.auth.models import DeviceAuthorization
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
@@ -212,6 +213,57 @@ class TestLogin:
         result = _invoke(config_dir, svc, ["--json", "auth", "login"])
         assert result.exit_code != 0
         assert json.loads(result.output)["error"]["code"] == "AUTH_STATE_MISMATCH"
+
+    def _fire_device_prompt(self, svc: MagicMock, authorization: DeviceAuthorization) -> None:
+        """Make the mocked `service.login` invoke the CLI's `on_device_prompt`
+        callback with `authorization`, then return a normal login result --
+        mirrors what `AuthService.login` does for a real device-flow login."""
+
+        def _side_effect(**kwargs: Any) -> LoginResult:
+            kwargs["on_device_prompt"](authorization)
+            return _login_result()
+
+        svc.login.side_effect = _side_effect
+
+    def test_device_login_panel_includes_one_click_link_when_present(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        self._fire_device_prompt(
+            svc,
+            DeviceAuthorization(
+                deviceCode="device-code-1",
+                userCode="ABCD-EFGH",
+                verificationUri="https://connection.keboola.com/device",
+                verificationUriComplete=(
+                    "https://connection.keboola.com/device?user_code=ABCD-EFGH"
+                ),
+            ),
+        )
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "https://connection.keboola.com/device" in result.output
+        assert "ABCD-EFGH" in result.output
+        assert "Or open this link (code pre-filled):" in result.output
+        assert "https://connection.keboola.com/device?user_code=ABCD-EFGH" in result.output
+
+    def test_device_login_panel_omits_one_click_link_when_absent(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        self._fire_device_prompt(
+            svc,
+            DeviceAuthorization(
+                deviceCode="device-code-1",
+                userCode="ABCD-EFGH",
+                verificationUri="https://connection.keboola.com/device",
+            ),
+        )
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        assert "https://connection.keboola.com/device" in result.output
+        assert "ABCD-EFGH" in result.output
+        assert "Or open this link" not in result.output
 
 
 class TestLoginPassword:

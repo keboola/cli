@@ -477,6 +477,13 @@ class TestDoctorServiceCheckClaudePlugin:
         assert result["check"] == "claude_plugin"
         assert result["status"] == "skip"
         assert "Claude Code not detected" in result["message"]
+        # Caveat: this check only covers Claude Code's own cache layout, so it
+        # cannot see an install made by another client (e.g. Cursor) of the
+        # same marketplace, and the plugin is optional -- `kbagent context` is
+        # the client-agnostic substitute.
+        assert "only covers Claude Code" in result["message"]
+        assert "Cursor" in result["message"]
+        assert "kbagent context" in result["message"]
 
     def test_warn_when_plugin_missing(self, tmp_path: Path, monkeypatch) -> None:
         """When Claude Code is installed but plugin is absent, warn with install commands."""
@@ -489,6 +496,11 @@ class TestDoctorServiceCheckClaudePlugin:
         assert result["status"] == "warn"
         assert "/plugin marketplace add keboola/ai-kit" in result["message"]
         assert "/plugin install kbagent@keboola-claude-kit" in result["message"]
+        # Same caveat as the skip branch: only Claude Code is detectable here,
+        # and the plugin itself is optional.
+        assert "only covers Claude Code" in result["message"]
+        assert "Cursor" in result["message"]
+        assert "kbagent context" in result["message"]
 
     def test_warn_when_plugin_root_exists_but_empty(self, tmp_path: Path, monkeypatch) -> None:
         """Plugin root dir with no version subdir still counts as not-installed."""

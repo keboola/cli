@@ -382,9 +382,13 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   AUTH_MFA_INVALID.
 # auth (since 0.80.0): browser-based login -- PKCE authorization-code by default (falls back to the
 #   RFC 8628 device flow ONLY on a pre-exchange failure: no loopback browser, callback timeout, or an
-#   SSH/container/WSL heuristic; --device-code forces it). REQUIRES A HUMAN AT A BROWSER -- never attempt
-#   from an unattended AI agent task; use `auth login-password` or a static Storage token for
-#   CI/headless instead. Issues a
+#   SSH/container/WSL heuristic; --device-code forces it). APPROVAL REQUIRES A HUMAN AT A BROWSER,
+#   but driving the command does not: in an ATTENDED session an agent MAY run
+#   `auth login --device-code` in a BACKGROUND shell, relay the verification URL + user code it prints
+#   before polling starts, and confirm with `auth status` (exit 0 = signed in, exit 3 = not yet). Never
+#   in a foreground tool shell (~120s timeout kills the flow mid-flight), never from an unattended task
+#   (nobody can approve), never blind-retry without checking `auth status` first (orphans a session);
+#   use `auth login-password` or a static Storage token for CI/headless instead. Issues a
 #   USER-scoped "programmatic session" (kbc_at_* access token + kbc_rt_* refresh token) stored in
 #   auth.json (0600), a sibling of config.json -- config.json's schema and CURRENT_CONFIG_VERSION are
 #   unchanged. --register-projects writes each accessible project into config.json with the sentinel

@@ -152,7 +152,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Schedule / manage Agent Tasks | `kbagent agent <verb>` -- CRUD, `run [--stream]`, history, `test`/`cron-preview`/`prompt-improve`. Local-only; cron firing needs `kbagent serve`. See [agent-tasks-cli-workflow](../skills/kbagent/references/agent-tasks-cli-workflow.md) | `kbagent http <verb> /agents...` inside scheduled subprocesses | hand-editing `agents.json` |
 | Read a semantic-layer model (models, metrics, datasets, constraints) | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]`; `model list`; `search-context` / `get-context` for glob/id lookup; `validate [--deep]` before trusting one. The WHOLE `semantic-layer` family needs a MASTER token: a valid non-master token gets `MISSING_MASTER_TOKEN` (vNEXT+, #711; the Metastore's opaque 401 "Failed to create project scope") -- register a master token, do not escalate | -- | hand-rolled `httpx` loops against `metastore.*.keboola.com` (bypasses retry/backoff and the kbagent error envelope) |
 | ANY semantic-layer write (add / edit / remove / import / promote / build) | `kbagent semantic-layer export` FIRST (the metastore has no soft-delete and no version history -- the snapshot is the only restore path), then the write, `--dry-run` where offered. `Read` [semantic-layer-workflow.md](../skills/kbagent/references/semantic-layer-workflow.md) before starting: it carries the per-verb recipes, the rename cascade and the promote classification | `semantic-layer diff` (`--project-a/-b` or `--file-a/-b`) to confirm what a write would change | raw metastore REST (no rollback, no orphan scan, no modelUUID rewrite); a write with no export taken |
-| User asks to "log in" / authenticate via browser / register a session's projects | **DO NOT RUN `kbagent auth login` YOURSELF** -- it needs a human at the keyboard, no headless path. Ask the user to run `kbagent auth login [--register-projects]`, then continue with `auth status`. To register projects from an EXISTING session, `kbagent auth register-projects --all` or `--project-id ID` is non-interactive and agent-safe | -- | attempting `auth login` or the flagless `register-projects` picker unattended; reading the token out of `auth.json`; using a numeric project id as an alias |
+| User asks to "log in" / authenticate via browser / register a session's projects | ATTENDED session + a background shell: run `kbagent auth login --device-code --stack URL --register-projects` in a **BACKGROUND** shell (capture stdout+stderr, human mode -- `--json` puts the panel on stderr), relay the verification URL + user code to the user, then poll `kbagent --json auth status` (exit 0 = signed in, exit 3 = not yet). The human's part is approving in the browser, not typing the command. No background shell -> hand the plain `auth login --stack URL --register-projects` to the user's terminal. To register projects from an EXISTING session, `kbagent auth register-projects --all` or `--project-id ID` is non-interactive and agent-safe | -- | running `auth login` in a FOREGROUND tool shell (~120 s timeout kills it mid-flight); running it unattended (nobody can approve); re-running it blind without checking `auth status` first (orphans a session); the flagless `register-projects` picker unattended; reading the token out of `auth.json`; using a numeric project id as an alias |
 | CI task has account credentials | `kbagent auth login-password --email E (--password-stdin \| --password P) [--totp-secret SEED]` (0.84.0+), agent-runnable | a static Storage token | `auth login` unattended |
 
 If the table does not cover the user's task, **ask clarifying
@@ -351,9 +351,17 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 **Programmatic auth (browser login)** (0.80.0+) -- full prose in
 [`gotchas.md`](../skills/kbagent/references/gotchas.md) § Programmatic auth:
 
-- `auth login` is **human-only** -- it opens a browser or prints an RFC 8628
-  device code; never run it from an unattended agent task. Ask the user to
-  run it themselves, then use `auth status`/`auth logout` normally.
+- `auth login` needs **a human to approve in a browser**, not a human to type
+  the command. ATTENDED + a background shell: run
+  `auth login --device-code --stack URL --register-projects` **backgrounded**
+  with stdout+stderr captured (human mode -- `--json` writes the URL/code to
+  stderr and leaves stdout empty until the end), relay the verification URL +
+  user code, then poll `auth status` (exit 0 = signed in, exit 3 = not yet).
+  NEVER in a foreground tool shell (PKCE waits 115 s on the loopback callback,
+  the device flow polls until `expires_in`; a ~120 s timeout kills it
+  mid-flight and tells you nothing), NEVER unattended, NEVER a blind re-run --
+  check `auth status` first or you orphan a session. No background shell ->
+  hand the plain command to the user, then `auth status`/`auth logout` as usual.
   **`auth login-password` (0.84.0+) IS the headless path** -- email + password
   (+ TOTP seed), agent-runnable; WebAuthn-only -> `AUTH_MFA_INVALID`.
 - **Aliases derive from the project NAME, never the numeric id** --

@@ -8,12 +8,16 @@ lives in `_auth_picker.py` (terminal I/O only, same reasoning).
 
 Two ways to sign in, stored the same way in `auth.json`: `login` (PKCE
 authorization-code, or a device-code flow for headless/remote machines)
-requires a human at a browser -- an AI agent must not attempt it on its own
-initiative. `login-password` (email + password + TOTP) is the deliberate
-unattended exception, built for CI: it never opens a browser and is safe to
-run from a secret-backed workflow step. The resulting session tokens are
-never printed or retrievable via the CLI; every result below is built from
-a dataclass with no token field, so `--json` output is safe by construction.
+needs a human at a browser to APPROVE -- in an attended session (a human in
+the chat) an agent with a background shell should drive it, relaying the
+verification URL/code and confirming via `auth status`; it must never run
+in a foreground shell (the flow gets killed mid-flight) or from an
+unattended task. `login-password` (email + password + TOTP) is the
+deliberate unattended exception, built for CI: it never opens a browser and
+is safe to run from a secret-backed workflow step. The resulting session
+tokens are never printed or retrievable via the CLI; every result below is
+built from a dataclass with no token field, so `--json` output is safe by
+construction.
 """
 
 from __future__ import annotations
@@ -290,9 +294,12 @@ def auth_login(
 ) -> None:
     """Sign in to a Keboola stack via browser login (PKCE) or device code.
 
-    Requires a human at a browser -- an AI agent must not attempt this
-    headlessly. The verification URL and code are always printed (to stderr
-    in --json mode); session tokens themselves are never printed.
+    A human must approve in a browser. In an attended session an AI agent
+    should drive `--device-code` from a BACKGROUND shell -- never a
+    foreground one, and never unattended -- relaying the verification URL
+    and code, then confirming with `auth status`. The verification URL and
+    code are always printed (to stderr in --json mode); session tokens
+    themselves are never printed.
 
     When `--register-projects` is NOT passed and the session can see at
     least one project, a post-login hook offers to run the interactive
@@ -311,6 +318,14 @@ def auth_login(
             "",
             f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
         ]
+        if authorization.verification_uri_complete:
+            lines.extend(
+                [
+                    "",
+                    "Or open this link (code pre-filled):",
+                    f"[bold]{escape(authorization.verification_uri_complete)}[/bold]",
+                ]
+            )
         target_console.print(
             Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
         )

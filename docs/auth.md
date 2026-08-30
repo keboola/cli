@@ -5,19 +5,25 @@ instead of a pasted Storage API token. The result is a **programmatic
 session**: a short-lived access token (`kbc_at_*`) plus a rotating refresh
 token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 
-> **Read this first: `auth login` needs a human at a browser.**
+> **Read this first: `auth login` needs a human at a browser to approve.**
 >
-> There is **no headless or unattended path for `auth login`**. It opens a
-> browser window, or prints a code you type into a page on another device. An
-> AI agent must never run it on its own initiative — if asked to "set up
-> kbagent auth", hand the command back to the person and wait for them to
-> finish.
+> A person has to open the browser (or device-code page) and click approve
+> — that part is inherent to `auth login` and cannot be scripted away. But
+> *driving* the command is not the human's part: in an attended session (a
+> human present in the chat), an AI agent with a background shell should run
+> `auth login --device-code --stack URL --register-projects` there, relay
+> the printed verification URL + code into the chat for the human to
+> approve, and confirm success with `auth status`. What an agent must never
+> do is run `auth login` in a **foreground** tool shell (a ~120s timeout
+> kills the flow mid-flight and tells you nothing) or from an **unattended**
+> task (nobody is there to approve). With no background shell available,
+> hand the plain command to the user's own terminal instead.
 >
 > For CI, containers, cron, or any other unattended context, you have two
 > options: a **static Storage token** (`kbagent project add --token ...`, or
 > the token-only `KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` +
 > `KBC_STORAGE_API_URL` path -- unaffected by anything on this page), or
-> **`kbagent auth login-password`** (since v0.81.0) if you specifically need a
+> **`kbagent auth login-password`** (since v0.84.0) if you specifically need a
 > full USER-scoped session rather than a single project's token -- see
 > [section 2b](#2b-auth-login-password-the-unattended-exception) below. It is
 > the one deliberate exception to "no unattended path": it needs an account's

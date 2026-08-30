@@ -239,12 +239,13 @@ kbagent auth login --stack https://connection.keboola.com
 kbagent auth register-projects            # interactive picker
 kbagent auth register-projects --all      # non-interactive
 ```
-> **Needs a human at a browser.** There is no headless path, so never run
-> `auth login` from an unattended AI-agent task or a CI step — use a static
-> Storage token there. Session-registered projects also do not work with every
-> command (Kai, data apps, semantic layer, streams, the Python SDK need a
-> static token). Details, capability matrix and error codes:
-> [docs/auth.md](docs/auth.md).
+> **Approval needs a human at a browser.** Never run `auth login` from an
+> unattended AI-agent task or a CI step — use `auth login-password` or a
+> static Storage token there instead. In an attended session an agent may
+> drive it from a background shell and relay the code. Session-registered
+> projects also do not work with every command (Kai, data apps, semantic
+> layer, streams, the Python SDK need a static token). Details, capability
+> matrix and error codes: [docs/auth.md](docs/auth.md).
 
 Run `kbagent doctor` to verify setup (token validity, CLI version, Claude Code plugin install).
 
