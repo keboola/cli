@@ -549,7 +549,7 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".
 #   `storage tables` (the LIST endpoint) is unaffected: the API has no `definition` include.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
-kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
 kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]
 kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
@@ -558,7 +558,14 @@ kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--fo
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
-kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
+    # --timeout SECONDS on create-table and swap-tables (since vNEXT, #713): both halves
+    #   of the repartition path move real data yet used to inherit the 60s metadata-job
+    #   budget, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a job that was
+    #   still running and would succeed. Default is now 300s on both. A local timeout
+    #   NEVER cancels the job -- it keeps running server-side; poll
+    #   GET /v2/storage/jobs/{id} or verify with `storage table-detail` rather than
+    #   assuming the operation failed.
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
 kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
 kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]

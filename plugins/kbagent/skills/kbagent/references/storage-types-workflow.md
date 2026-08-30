@@ -333,6 +333,28 @@ kbagent --json storage table-detail --project prod --table-id in.c-main.events \
   | jq '.data.definition | {timePartitioning, clustering, requirePartitionFilter}'
 ```
 
+### Budget both steps on a large table
+
+*(since vNEXT, #713)*
+
+Steps 1 and 2 both move real data. Until vNEXT they inherited the 60s
+`STORAGE_JOB_MAX_WAIT` meant for metadata jobs -- measured on an 800 MB table,
+create takes ~15s and the swap ~31s, so a table a few times larger reported
+`STORAGE_JOB_TIMEOUT` on a job that was still running and would succeed. Both
+now default to **300s** and accept `--timeout SECONDS`:
+
+```bash
+kbagent storage create-table --project prod --bucket-id in.c-main \
+  --name events_repart --source-table-id in.c-main.events \
+  --time-partitioning-type DAY --time-partitioning-field created_at \
+  --timeout 3600
+```
+
+**A timeout is not a failure.** kbagent stops watching; the Storage job keeps
+running server-side. The error names the job id -- poll
+`GET /v2/storage/jobs/{id}`, or just run step 3. Never blindly re-issue the
+swap: repeating one that already landed swaps the tables straight back.
+
 On 0.87.0 and earlier `table-detail` dropped `definition`, so step 3 was not
 possible from kbagent at all. `create-table`'s own output is not a substitute:
 it echoes the layout you *requested*, and its `--if-not-exists` skip path

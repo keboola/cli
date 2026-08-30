@@ -651,8 +651,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     time. Response includes `legacy_branch_storage: true` and human mode prints a
     warning when this applies. See storage-types-workflow.md.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
     Create a typed table. --column repeatable.
+    - --timeout SECONDS (since vNEXT, default 300): budget for the async create job. A
+      --source-table-id copy moves real data and used to inherit the 60s metadata-job
+      default, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a copy that was
+      still running and would succeed. A local timeout NEVER cancels the job -- it keeps
+      running server-side; poll GET /v2/storage/jobs/{{id}} or verify with table-detail
+      instead of assuming failure. Exit code is 4 (retryable), not 1.
     - --if-not-exists: opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
@@ -724,7 +730,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
-  kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+  kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
     Swap two storage tables in any branch, including the default/production branch (POST /tables/{{id}}/swap). Both tables exchange physical positions;
     aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
     OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
@@ -732,6 +738,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     branch use'); service guards before any HTTP call when none is set. Any branch works, INCLUDING the
     default/production branch -- a default-branch swap is how a typed rebuild reaches prod (dev-branch merge
     does not carry storage schema).
+    --timeout SECONDS (since vNEXT, default 300): budget for the async swap job. A swap on a large
+    BigQuery table outlasts the old 60s metadata-job default. A local timeout NEVER cancels the swap --
+    it keeps running server-side and usually lands; verify with table-detail rather than re-issuing it.
 
   kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
     Clone (pull) a production table into a dev branch (POST /tables/{{id}}/pull). On storage-branches projects a

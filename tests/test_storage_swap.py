@@ -10,7 +10,8 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.constants import TABLE_DATA_JOB_MAX_WAIT
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
@@ -198,6 +199,7 @@ class TestSwapTablesService:
             table_id="in.c-foo.data",
             target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
+            max_wait=TABLE_DATA_JOB_MAX_WAIT,
         )
         mock_client.close.assert_called_once()
 
@@ -339,6 +341,7 @@ class TestSwapTablesCLI:
             target_table_id="in.c-foo.data_change_log",
             branch_id=9999,
             dry_run=False,
+            timeout=TABLE_DATA_JOB_MAX_WAIT,
         )
 
     def test_swap_dry_run(self, tmp_path: Path) -> None:
@@ -454,3 +457,205 @@ class TestSwapTablesCLI:
         payload = json.loads(result.output)
         assert payload["status"] == "error"
         assert "requires a branch" in payload["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Job wait budget (issue #713)
+# ---------------------------------------------------------------------------
+
+
+class TestSwapTablesTimeout:
+    """The swap job budget is caller-controllable and defaults to 5 minutes.
+
+    A swap moves a populated table into place; it used to inherit the 60s
+    ``STORAGE_JOB_MAX_WAIT`` meant for metadata jobs, so a large BigQuery
+    table reported ``STORAGE_JOB_TIMEOUT`` for a job that was still running
+    and would succeed. Giving up locally never cancels the job.
+    """
+
+    def test_service_default_is_table_data_budget(self, tmp_path: Path) -> None:
+        """No --timeout means TABLE_DATA_JOB_MAX_WAIT, not the 60s metadata default."""
+        from keboola_agent_cli.constants import STORAGE_JOB_MAX_WAIT
+
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.swap_tables.return_value = {"status": "ok"}
+        service = _make_service(store, mock_client)
+
+        service.swap_tables(
+            alias="test",
+            table_id="in.c-foo.a",
+            target_table_id="in.c-foo.b",
+            branch_id=42,
+        )
+
+        max_wait = mock_client.swap_tables.call_args.kwargs["max_wait"]
+        assert max_wait == TABLE_DATA_JOB_MAX_WAIT
+        assert max_wait > STORAGE_JOB_MAX_WAIT
+
+    def test_service_forwards_explicit_timeout(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.swap_tables.return_value = {"status": "ok"}
+        service = _make_service(store, mock_client)
+
+        service.swap_tables(
+            alias="test",
+            table_id="in.c-foo.a",
+            target_table_id="in.c-foo.b",
+            branch_id=42,
+            timeout=900.0,
+        )
+
+        assert mock_client.swap_tables.call_args.kwargs["max_wait"] == 900.0
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0])
+    def test_service_rejects_non_positive_timeout(self, tmp_path: Path, bad: float) -> None:
+        """0.0 must be rejected, not silently promoted to the default.
+
+        ``timeout or DEFAULT`` would treat a falsy-but-real 0 as "unset";
+        the guard branches on ``is None`` instead.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.swap_tables(
+                alias="test",
+                table_id="in.c-foo.a",
+                target_table_id="in.c-foo.b",
+                branch_id=42,
+                timeout=bad,
+            )
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.swap_tables.assert_not_called()
+
+    def test_service_rejects_non_positive_timeout_on_dry_run(self, tmp_path: Path) -> None:
+        """The guard runs before the dry-run short-circuit, so --dry-run validates too."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError):
+            service.swap_tables(
+                alias="test",
+                table_id="in.c-foo.a",
+                target_table_id="in.c-foo.b",
+                branch_id=42,
+                dry_run=True,
+                timeout=0.0,
+            )
+
+    def test_client_forwards_budget_to_the_poller(self, httpx_mock) -> None:
+        """swap_tables passes max_wait through to _wait_for_storage_job.
+
+        Asserted on the kwarg, not on elapsed time: an httpx mock never sees
+        the budget, so dropping the argument would leave every wire test green
+        while the swap silently fell back to the 60s metadata default.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/swap",
+            method="POST",
+            json={"id": 777, "status": "waiting", "operationName": "tableSwap"},
+            status_code=200,
+        )
+
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+        with patch.object(
+            KeboolaClient,
+            "_wait_for_storage_job",
+            return_value={"id": 777, "status": "success"},
+        ) as poller:
+            client.swap_tables(
+                table_id="in.c-foo.a",
+                target_table_id="in.c-foo.b",
+                branch_id=42,
+                max_wait=900.0,
+            )
+        client.close()
+
+        assert poller.call_args.kwargs["max_wait"] == 900.0
+
+    def test_expired_budget_reports_the_job_as_still_running(self, httpx_mock) -> None:
+        """An exhausted budget raises STORAGE_JOB_TIMEOUT naming the live job.
+
+        The message must not read as "nothing happened": kbagent stops
+        watching, the swap keeps running server-side. That is also why the
+        code is retryable (exit 4), not a plain failure.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/42/tables/in.c-foo.a/swap",
+            method="POST",
+            json={"id": 777, "status": "waiting", "operationName": "tableSwap"},
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/777",
+            method="GET",
+            json={"id": 777, "status": "waiting", "operationName": "tableSwap"},
+            status_code=200,
+        )
+
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+        # The deadline is only checked at the top of each iteration, so the
+        # budget cannot expire before the first poll however small it is.
+        # Skipping the real sleep keeps the test instant.
+        with (
+            patch("keboola_agent_cli.client._core.time.sleep"),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.swap_tables(
+                table_id="in.c-foo.a",
+                target_table_id="in.c-foo.b",
+                branch_id=42,
+                max_wait=0.0001,
+            )
+        client.close()
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is True
+        assert "777" in exc.message
+        assert "continues running" in exc.message
+
+    def test_cli_forwards_timeout(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.swap_tables.return_value = {
+                "project_alias": "test",
+                "branch_id": 42,
+                "table_id": "in.c-foo.a",
+                "target_table_id": "in.c-foo.b",
+                "dry_run": False,
+                "response": {"status": "success"},
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "swap-tables",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-foo.a",
+                    "--target-table-id",
+                    "in.c-foo.b",
+                    "--branch",
+                    "42",
+                    "--timeout",
+                    "900",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert svc.swap_tables.call_args.kwargs["timeout"] == 900.0

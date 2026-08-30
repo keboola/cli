@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from ..dependencies import ServiceRegistry, get_registry
 
@@ -47,6 +47,9 @@ class CreateTable(BaseModel):
     range_partitioning_end: str | None = None
     range_partitioning_interval: str | None = None
     clustering_fields: list[str] | None = None
+    # `gt=0` mirrors the CLI guard so a bad budget is a 422 at the boundary
+    # rather than an INVALID_ARGUMENT raised from the service.
+    timeout: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _columns_xor_source(self) -> CreateTable:
@@ -110,6 +113,9 @@ class LoadFileToTable(BaseModel):
 class SwapTables(BaseModel):
     target_table_id: str
     branch_id: int
+    # `gt=0` mirrors the CLI guard so a bad budget is a 422 at the boundary
+    # rather than an INVALID_ARGUMENT raised from the service.
+    timeout: float | None = Field(default=None, gt=0)
 
 
 class CloneTable(BaseModel):
@@ -343,6 +349,7 @@ def create_table(
         range_partitioning_end=body.range_partitioning_end,
         range_partitioning_interval=body.range_partitioning_interval,
         clustering_fields=body.clustering_fields,
+        timeout=body.timeout,
     )
 
 
@@ -443,6 +450,7 @@ def swap_tables(
         target_table_id=body.target_table_id,
         branch_id=body.branch_id,
         dry_run=dry_run,
+        timeout=body.timeout,
     )
 
 
