@@ -422,7 +422,12 @@ class FlowService(BaseService):
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Return full flow detail including phases, tasks, and schedule info.
+        """Return flow configuration detail including parsed phases and tasks.
+
+        The result is the raw config detail enriched with ``phases``, ``tasks``,
+        ``phase_count``, ``task_count``, ``component_id``, ``branch_id`` and
+        ``project_alias``. Schedule info is NOT included -- schedules live in a
+        separate scheduler config (see ``list_flows(with_schedules=True)``).
 
         Raises:
             ConfigError: If alias is not found.
