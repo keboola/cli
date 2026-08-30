@@ -11,6 +11,49 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## "No schedules found" never meant "no trigger"
+
+*(since vNEXT, #714)*
+
+- **A flow has at least three automatic trigger mechanisms and kbagent used to
+  see one.** `schedule list` / `schedule find` / `search` read `keboola.scheduler`
+  configs only. A **table trigger** lives in a separate Storage API resource
+  (`GET /v2/storage/triggers`), not a component config, so nothing in kbagent
+  saw it; a **cross-project trigger** is a trigger-queue app config in a
+  *different* project. A flow that was demonstrably running got reported as
+  having no trigger, twice in one investigation, because "no schedules found"
+  reads as "no trigger of any kind".
+- **`kbagent flow triggers --project P --flow-id ID`** answers cron + table
+  triggers in one call.
+- **Read `cross_project_triggers_checked` before concluding anything.** It is
+  `false`, and cross-project triggers are deliberately NOT returned as an empty
+  list -- an empty list would read as "checked, found none". Empty output from
+  this command means *"no trigger that kbagent checked"*, never *"no trigger"*.
+- **Table triggers are production-only.** The Storage route is declared
+  `isAvailableInBranch: false`, so there is no branch-scoped variant. `--branch`
+  narrows the cron half only, and `table_triggers_branch_scoped` is always
+  `false`. A dev branch's triggers cannot be listed at all.
+- **`last_run: null` means "exists, never fired"**, not "disabled". Do not read
+  a blank last-run as evidence the trigger is inactive.
+- **`component` on a trigger is not necessarily `keboola.flow`.** The Storage
+  API's own example is the legacy `orchestration`; match on
+  `configurationId`, not on the component id.
+- **The `?configurationId=` filter is applied server-side, and kbagent still
+  narrows client-side.** The server applies both filters (exact match,
+  AND-ed), so a direct API caller can rely on them; kbagent re-narrows anyway
+  as defense in depth after the Notification Service precedent (accepts
+  `?event=`, ignores it -- #600).
+- **Listing triggers needs no elevated privilege.** The list route is a plain
+  read-only Storage action scoped to the token's project -- even a read-only
+  token sees every trigger. Only create/update/delete require
+  `canManageBuckets`, component access, or an admin token.
+- **`job detail` on a flow job carries `trigger_hint`.** A run with no
+  matching cron schedule is NOT necessarily manual; the hint points at
+  `flow triggers` so the investigation does not dead-end into "someone ran it
+  by hand". Human mode also shows "Created by token" -- the token that created
+  the job (a human's email vs a scheduler's or trigger's token) is the one
+  factual provenance signal the Queue payload carries.
+
 ## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` requires a human at a browser (or a device to type a

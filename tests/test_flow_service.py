@@ -577,3 +577,144 @@ def test_remove_flow_schedule_service_failure_warns_but_deletes_config():
     assert result["deleted_count"] == 1
     assert len(result["warnings"]) == 1
     client.delete_config.assert_called_once()
+
+
+class TestGetFlowTriggers:
+    """`flow triggers` must report BOTH mechanisms, and admit what it skipped (#714)."""
+
+    @staticmethod
+    def _client(triggers: list[dict], schedules: list[dict] | None = None) -> MagicMock:
+        client = MagicMock()
+        client.list_component_configs.return_value = schedules or []
+        client.list_triggers.return_value = triggers
+        return client
+
+    @staticmethod
+    def _table_trigger(config_id: str = "500", trigger_id: str = "3") -> dict:
+        """A trigger in the exact shape the Storage API's own controller documents."""
+        return {
+            "id": trigger_id,
+            "runWithTokenId": 123,
+            "component": "orchestration",
+            "configurationId": config_id,
+            "lastRun": "2026-08-28T05:36:00+0200",
+            "creatorToken": {"id": 1, "description": "dev@keboola.com"},
+            "coolDownPeriodMinutes": 720,
+            "tables": [{"tableId": "out.c-bucket.TABLE"}],
+        }
+
+    def test_table_trigger_is_reported(self) -> None:
+        """The whole point: a flow driven by a table trigger is no longer invisible."""
+        client = self._client([self._table_trigger()])
+        service = _make_flow_service(client)
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert len(result["table_triggers"]) == 1
+        trigger = result["table_triggers"][0]
+        assert trigger["trigger_id"] == "3"
+        assert trigger["tables"] == ["out.c-bucket.TABLE"]
+        assert trigger["cool_down_period_minutes"] == 720
+        assert trigger["last_run"] == "2026-08-28T05:36:00+0200"
+
+    def test_no_triggers_is_reported_as_not_fully_checked(self) -> None:
+        """An empty result must never read as "this flow has no trigger"."""
+        service = _make_flow_service(self._client([]))
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert result["table_triggers"] == []
+        assert result["cron_schedules"] == []
+        # Not an empty list -- "checked, found none" and "not covered" lead to
+        # opposite conclusions about whether the flow is safe to leave alone.
+        assert result["cross_project_triggers_checked"] is False
+
+    def test_triggers_for_other_configs_are_filtered_out(self) -> None:
+        """The server filter is sent but not trusted -- narrow again locally.
+
+        The Notification Service accepts `?event=` and ignores it (#600); an
+        unnarrowed response here would attribute another flow's trigger to
+        this one.
+        """
+        client = self._client(
+            [
+                self._table_trigger(config_id="999", trigger_id="7"),
+                self._table_trigger(config_id="500", trigger_id="3"),
+            ]
+        )
+        service = _make_flow_service(client)
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert [t["trigger_id"] for t in result["table_triggers"]] == ["3"]
+
+    def test_numeric_configuration_id_still_matches(self) -> None:
+        """Trigger ids are strings in the response, flow ids numeric on some stacks."""
+        trigger = self._table_trigger()
+        trigger["configurationId"] = 500
+        service = _make_flow_service(self._client([trigger]))
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert len(result["table_triggers"]) == 1
+
+    def test_configuration_id_is_sent_to_the_api(self) -> None:
+        """Send the server-side filter too -- narrowing locally is the backstop."""
+        client = self._client([])
+        service = _make_flow_service(client)
+
+        service.get_flow_triggers("prod", "500")
+
+        client.list_triggers.assert_called_once_with(configuration_id="500")
+
+    def test_cron_schedules_are_included_alongside(self) -> None:
+        """One call answers the whole question, not just the half kbagent had."""
+        schedules = [
+            {
+                "id": "sched-1",
+                "name": "Nightly",
+                "configuration": {
+                    "target": {"componentId": FLOW_COMPONENT_ID, "configurationId": "500"},
+                    "schedule": {"cronTab": "0 6 * * *", "timezone": "UTC", "state": "enabled"},
+                },
+            }
+        ]
+        client = self._client([self._table_trigger()], schedules=schedules)
+        service = _make_flow_service(client)
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert [c["cron_tab"] for c in result["cron_schedules"]] == ["0 6 * * *"]
+        assert len(result["table_triggers"]) == 1
+
+    def test_table_triggers_are_never_advertised_as_branch_scoped(self) -> None:
+        """The Storage route is declared isAvailableInBranch: false."""
+        service = _make_flow_service(self._client([self._table_trigger()]))
+
+        result = service.get_flow_triggers("prod", "500", branch_id=42)
+
+        assert result["table_triggers_branch_scoped"] is False
+        assert result["branch_id"] == 42
+
+    def test_missing_triggers_endpoint_degrades_to_empty(self) -> None:
+        """A stack without the resource must not break the cron half."""
+        client = self._client([])
+        client.list_triggers.side_effect = KeboolaApiError(
+            message="not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        service = _make_flow_service(client)
+
+        result = service.get_flow_triggers("prod", "500")
+
+        assert result["table_triggers"] == []
+
+    def test_other_trigger_api_errors_propagate(self) -> None:
+        """A 500 is not "no triggers" -- silently swallowing it recreates #714."""
+        client = self._client([])
+        client.list_triggers.side_effect = KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+        service = _make_flow_service(client)
+
+        with pytest.raises(KeboolaApiError):
+            service.get_flow_triggers("prod", "500")

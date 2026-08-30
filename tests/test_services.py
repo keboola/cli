@@ -3357,6 +3357,49 @@ class TestJobServiceGetJobDetail:
         assert exc_info.value.error_code == "NOT_FOUND"
         mock_client.close.assert_called_once()
 
+    def _service_with_job(self, tmp_config_dir: Path, detail: dict) -> JobService:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ),
+        )
+        mock_client = MagicMock()
+        mock_client.get_job_detail.return_value = detail
+        return JobService(config_store=store, client_factory=lambda url, token: mock_client)
+
+    def test_flow_job_carries_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """A flow run with no matching cron may be trigger-started -- say where to look (#714)."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.flow", "config": "500"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "kbagent flow triggers --project prod --flow-id 500" in result["trigger_hint"]
+
+    def test_legacy_orchestrator_job_carries_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """Legacy orchestrations are trigger targets too (the API's own example)."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.orchestrator", "config": "77"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "--flow-id 77" in result["trigger_hint"]
+
+    def test_non_flow_job_has_no_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """An extractor job cannot be flow-trigger-started; no noise on its detail."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.ex-db-snowflake", "config": "9"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "trigger_hint" not in result
+
     def test_get_job_detail_client_closed_on_error(self, tmp_config_dir: Path) -> None:
         """get_job_detail closes the client even when API call fails."""
         store = ConfigStore(config_dir=tmp_config_dir)

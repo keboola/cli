@@ -29,6 +29,19 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
+# This group only ever sees `keboola.scheduler` configs. A flow can also be
+# started by a table trigger (a separate Storage API resource) or by a
+# trigger-queue config in ANOTHER project -- neither of which is a schedule, so
+# neither appears here. Saying "no schedules found" invited the reading "this
+# flow has no trigger", which is a false negative with real consequences: a
+# flow that was already live via a table trigger got reported as still needing
+# manual scheduling (issue #714). Name the mechanism, and name what was not
+# checked.
+_NOT_CHECKED = (
+    "Table triggers and cross-project triggers were NOT checked -- see `kbagent flow triggers`."
+)
+_NO_CRON_SCHEDULES = f"No cron schedules found. {_NOT_CHECKED}"
+
 schedule_app = typer.Typer(
     help="Discover and audit cron schedules across projects (keboola.scheduler)"
 )
@@ -166,7 +179,7 @@ def schedule_list(
 
     schedules = result.get("schedules", [])
     if not schedules:
-        formatter.console.print("[dim]No schedules found.[/dim]")
+        formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
     else:
         _format_schedule_table(formatter, schedules)
     _emit_errors(formatter, result.get("errors", []))
@@ -329,7 +342,7 @@ def schedule_find(
 
     schedules = result.get("schedules", [])
     if not schedules:
-        formatter.console.print("[dim]No schedules match the filters.[/dim]")
+        formatter.console.print(f"[dim]No cron schedules match the filters. {_NOT_CHECKED}[/dim]")
     else:
         extras: list[str] = []
         if cron_window is not None:

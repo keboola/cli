@@ -997,6 +997,28 @@ kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+# flow triggers (#714): the honest answer to "what starts this flow automatically". A flow has at
+#   least three trigger mechanisms and kbagent used to see ONE: `schedule list` / `search` only ever
+#   read `keboola.scheduler` configs, so a flow driven by a TABLE TRIGGER came back "nothing found"
+#   and got reported as having no trigger -- twice in one investigation, for a flow that was already
+#   live. Table triggers are a SEPARATE Storage API resource (`GET /v2/storage/triggers`), not a
+#   component config, which is why nothing in kbagent saw them. This command returns cron_schedules
+#   AND table_triggers in one call.
+#   CROSS-PROJECT triggers (a trigger-queue app config in ANOTHER project) are NOT covered: the
+#   result carries `cross_project_triggers_checked: false`, deliberately NOT an empty list -- an
+#   empty list reads as "checked, found none", which is the exact false negative this exists to
+#   prevent. Read that flag before concluding a flow has no trigger.
+#   PRODUCTION ONLY: the Storage triggers route is declared `isAvailableInBranch: false`, so it has
+#   no branch-scoped variant. `--branch` narrows the CRON half only; `table_triggers_branch_scoped`
+#   is always false.
+#   `lastRun: null` means the trigger exists but has NEVER FIRED -- not that it is disabled.
+#   `schedule list` / `schedule find` now say "No cron schedules found. Table triggers and
+#   cross-project triggers were NOT checked -- see `kbagent flow triggers`" instead of the old
+#   "No schedules found".
+#   `job detail` on a keboola.flow / keboola.orchestrator job carries `trigger_hint` (same over
+#   `serve`): a run with no matching cron schedule is NOT necessarily manual -- check
+#   `flow triggers` first. Human mode adds "Created by token" (job provenance).
 # Flows are conditional flows (keboola.flow). keboola.orchestrator is NOT supported (dropped 0.57.0).
 # IDs are strings; phases use next[].goto + conditions; tasks are typed (job/notification/variable).
 # flow new/update validate against the live CF schema fetched from the stack (AI Service

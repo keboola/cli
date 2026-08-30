@@ -567,7 +567,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     grouped per project. Group them yourself if you need per-project blocks.
 
   kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
-    Full job detail including result message and timing.
+    Full job detail including result message and timing. A keboola.flow /
+    keboola.orchestrator job also carries trigger_hint: if no cron schedule
+    explains the run, check `kbagent flow triggers` before concluding it was
+    manual -- table triggers and cross-project triggers never appear in
+    `schedule list`. Human mode shows "Created by token" (the one factual
+    signal of HOW a run started).
 
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
@@ -1063,6 +1068,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+  kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+    # Cron schedules AND table triggers in one call. Cross-project triggers are
+    # NOT checked -- the result says so via cross_project_triggers_checked=false
+    # rather than returning an empty list. Table triggers are production-only.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.

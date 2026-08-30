@@ -494,6 +494,12 @@ def format_job_detail(console: Console, data: dict[str, Any]) -> None:
     if orch_job:
         lines.append(f"[bold]Orchestration Job:[/bold] {orch_job}")
 
+    # Provenance: the token that created the job is the one factual signal of
+    # HOW a run started (a human's email vs a scheduler's or trigger's token).
+    creator = data.get("token")
+    if isinstance(creator, dict) and creator.get("description"):
+        lines.append(f"[bold]Created by token:[/bold] {creator.get('description')}")
+
     # URL
     url = data.get("url", "")
     if url:
@@ -511,6 +517,10 @@ def format_job_detail(console: Console, data: dict[str, Any]) -> None:
             error_type = error_info.get("type", "")
             if error_type:
                 lines.append(f"[bold]Error Type:[/bold] {error_type}")
+
+    trigger_hint = data.get("trigger_hint")
+    if trigger_hint:
+        lines.append(f"\n[dim]{trigger_hint}[/dim]")
 
     panel = Panel("\n".join(lines), title=f"Job Detail - {job_id}", expand=False)
     console.print(panel)
