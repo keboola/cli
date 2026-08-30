@@ -73,7 +73,7 @@ a critical failure.
    the task with workarounds.
    **Standalone binaries do not take `kbagent update`** -- if
    `kbagent --json version` carries `kbagent.install_channel`, quote its
-   `upgrade_command` (or `upgrade_hint` when that is empty) instead (0.79.0+).
+   `upgrade_command` (or `upgrade_hint` when that is empty) instead.
    `auth` needs **0.80.0+**; `login-password` needs **0.84.0+** -- else
    refuse and point at a static Storage token (`project add --token`).
 
@@ -99,7 +99,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
 | Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project P` (fetches the live schema; loop until clean) then `kbagent flow new` / `flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
-| Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (0.66.1+; older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
+| Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
 | What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (vNEXT+) -- cron schedules AND table triggers in one call | `kbagent schedule list` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
 | Add / remove / re-point a notification recipient | `kbagent notification create --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
@@ -121,7 +121,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` | -- | re-creating via raw REST to `tables-definition` |
 | Add one column to an existing table | `kbagent storage add-column --project P --table-id in.c-foo.data --column status:VARCHAR(20) [--not-null] [--default active]` -- synchronous, same `name:TYPE(length)` grammar as `create-table` | -- | re-creating the whole table to add a field (loses data / PK / dependents) |
 | Promote a rebuilt table into the original name | `kbagent storage swap-tables --project P --table-id in.c-foo.data --target-table-id in.c-foo.data_new --branch <ID> --yes` -- async `tableSwap`; the service refuses without a branch (any branch, prod included) | -- | renaming or delete + re-upload (loses history; every downstream config needs rewriting) |
-| Repartition / recluster a populated BigQuery table | `kbagent storage create-table --source-table-id <src> --time-partitioning-type DAY --time-partitioning-field created_at --clustering-field tenant_id` (0.66.0+, BigQuery only) to copy the data into the new layout, then `swap-tables` to flip it in. `--source-table-id` derives the schema, so `--column` is forbidden. Range partitioning: all four `--range-partitioning-*` flags together. VERIFY the result with `storage table-detail --json` -> `.definition.timePartitioning` / `.clustering` (0.88.0+) -- `create-table` only echoes the layout you REQUESTED, so it proves nothing. See [storage-types-workflow.md](../skills/kbagent/references/storage-types-workflow.md) | -- | `CREATE TABLE ... AS SELECT` in a workspace (drops NOT NULL + primary key) |
+| Repartition / recluster a populated BigQuery table | `kbagent storage create-table --source-table-id <src> --time-partitioning-type DAY --time-partitioning-field created_at --clustering-field tenant_id` (BigQuery only) to copy the data into the new layout, then `swap-tables` to flip it in. `--source-table-id` derives the schema, so `--column` is forbidden. Range partitioning: all four `--range-partitioning-*` flags together. VERIFY the result with `storage table-detail --json` -> `.definition.timePartitioning` / `.clustering` (0.88.0+) -- `create-table` only echoes the layout you REQUESTED, so it proves nothing. See [storage-types-workflow.md](../skills/kbagent/references/storage-types-workflow.md) | -- | `CREATE TABLE ... AS SELECT` in a workspace (drops NOT NULL + primary key) |
 | Re-seed a table without losing schema / PK / dependents | `kbagent storage truncate-table --project P --table-id in.c-foo.data [--dry-run] [--yes]` -- rows only, uniformly async-via-job on every branch; batch via repeated `--table-id` | -- | drop + recreate (loses descriptions, PK, sharing edges, and breaks every downstream reference); deleting rows via raw SQL in a workspace (bypasses the Storage audit trail) |
 | Back up / restore a table around a risky change | `kbagent storage snapshot-create --table-id ...` then, to restore, `kbagent storage table-from-snapshot --snapshot-id ID --bucket-id B --name NEW` -- restore is always a NEW table (`--name` REQUIRED, no overwrite): verify it, then `swap-tables`. See [snapshot-workflow.md](../skills/kbagent/references/snapshot-workflow.md) | `storage snapshots` / `snapshot-detail` to find one | exporting to CSV as a "backup" (loses column types + PK); `create-table --snapshot-id` (not a thing) |
 | Debug a failed job | `kbagent job detail --project P --job-id J --json` + `kbagent job run ... --log-tail-lines 200` | `kbagent workspace from-transformation` for SQL repro | "I think the issue is..." without reading logs |
@@ -229,7 +229,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   as needing manual scheduling because of exactly this gap (#714). For the same
   reason `job detail` on a flow job carries `trigger_hint`: a run with no
   matching cron schedule is NOT proof of a manual run.
-- **`flow schedule` activates on the Scheduler Service (0.66.1+)**: older
+- **`flow schedule` activates on the Scheduler Service**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
   the cron NEVER fired. Confirm `activated: true`; `activated: false` + warning
   = written but dormant (token lacks the privilege). **VERSION GATE**: schedules
@@ -438,7 +438,7 @@ kbagent --json config update --project P --component-id C --config-id K \
 
 # 3. SHOW DIFF TO PARENT. STOP. WAIT FOR CONFIRMATION.
 
-# 4. Apply (--change-description writes the version-history audit line; 0.77.0+)
+# 4. Apply (--change-description writes the version-history audit line)
 kbagent --json config update --project P --component-id C --config-id K \
     --set "parameters.foo=bar" --change-description "why this change, ticket ref"
 
@@ -493,7 +493,7 @@ kbagent workspace delete --project P --workspace-id W
 Use this for TYPE AUDITS before planning retypes, ROW COUNT COMPARISONS
 between branches, and SQL DEBUGGING of failing transformations.
 
-(0.59.0+) `workspace query` returns results inline and fast, but **capped at
+`workspace query` returns results inline and fast, but **capped at
 `--limit` rows (default 500)**. For ROW COUNTS use `SELECT COUNT(*)` (one row,
 never truncated), NOT `len(rows)` of a `SELECT *`. For exact comparisons of a
 result set bigger than the cap, raise `--limit` or pass `--full` (complete CSV
