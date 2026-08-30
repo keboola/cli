@@ -24,6 +24,60 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.92.0": [
+        "New (#719): `kbagent flow triggers --project P --flow-id ID` answers what actually "
+        "starts a flow -- cron schedules AND table triggers in one call. A table trigger is a "
+        "separate Storage API resource (`GET /v2/storage/triggers`), not a component config, so "
+        "`schedule list` / `schedule find` / `search` never saw one: a live flow came back "
+        '"nothing found" and was reported as having no trigger. Cross-project triggers are still '
+        "out of reach, and the result says so with `cross_project_triggers_checked: false` rather "
+        'than an empty list -- an empty list reads as "checked, found none". Table triggers are '
+        "production-only, so `--branch` narrows the cron half only, and `last_run: null` means the "
+        "trigger has never fired, not that it is disabled. `job detail` on a flow job now carries "
+        '`trigger_hint`, and the old "No schedules found" message says what was not checked.',
+        "Fix (#717): an HTTP 401 is no longer automatically blamed on your token. A 401 whose "
+        "message does not describe a bad or expired credential now raises `AUTH_REJECTED` and "
+        "quotes the server verbatim, so nobody rotates a healthy token chasing a server-side "
+        "fault. The reported case has its own diagnosis: every `semantic-layer` / `sl` command "
+        "needs a MASTER token, and the Metastore answers a valid non-master token with an opaque "
+        "401 `Failed to create project scope` -- now reclassified to `MISSING_MASTER_TOKEN` with "
+        "the remedy. 401 / 403 / 404 also carry `[exceptionId: ...]` at last, the handle Keboola "
+        "support traces an incident by. Exit code stays 3; a script matching on "
+        '`error.code == "INVALID_TOKEN"` must now also accept the two new codes.',
+        "Fix (#704, #722): `/kbagent:setup` can finish in the chat instead of sending you to a "
+        "terminal. Approving in a browser is still a human step, but driving the command is not: "
+        "in an attended session an agent runs `auth login --device-code` in a background shell, "
+        "relays the verification URL and code, and confirms with `auth status`. Foreground tool "
+        "shells and unattended tasks stay banned -- the ~120 s timeout that kills the flow "
+        "mid-flight was the real hazard. The kbagent skill now carries first-time setup and "
+        "logout natively, so a client with no slash commands (Claude Desktop) can be set up by "
+        "asking; per-client marketplace notes are documented (Cursor needs the full ai-kit URL); "
+        "and the device-login panel prints the one-click link when the stack returns one.",
+        "Change (#704, #722): the plugin is documented as an upgrade, not a prerequisite. "
+        "`kbagent project add` plus `kbagent context` is a complete setup in any client with a "
+        "shell. `doctor`'s plugin check now states it can only detect Claude Code's own cache "
+        "layout, so a Cursor install it cannot see is no longer reported as a missing plugin.",
+        "New (#716, #718): `kbagent --conversation-id ID` sets the observability header for one "
+        "invocation. It is equivalent to `KBAGENT_CONVERSATION_ID` and takes precedence over "
+        "it. The documented one-time `export` could not be satisfied in an agent harness (no shell state "
+        "between tool calls), and re-prepending it to every command stopped kbagent matching a "
+        "`Bash(kbagent ...)` allow-rule -- so a rule meant to improve observability made every "
+        "call fall through to the safety classifier instead.",
+        "Change (#706): 223 stale version gates retired across 18 files, at a 0.80.0 floor, with "
+        "no content removed. kbagent self-updates on startup, so a gate below the floor protects "
+        "almost nobody while it keeps making agents refuse commands the user actually has. Safety "
+        "gates are kept at any age -- wherever not knowing the version causes silent data loss or "
+        "a false all-clear rather than an error message.",
+        "New (#702): the release process is enforced rather than remembered. `make vnext-resolve` "
+        "rewrites version-gate placeholders only outside inline-code spans (a line-level `sed` "
+        "corrupts the mixed case), a `vNEXT` inside a markdown heading now fails CI on every PR "
+        "because a resolving placeholder changes the anchor slug and breaks inbound links, and "
+        "`make release-scope-check` proves the changelog covers every PR the tag will actually "
+        "contain -- v0.91.0 shipped a PR that merged nine minutes before the release PR did.",
+        "Note (#721): `FlowService.get_flow_detail`'s docstring claimed it returns schedule "
+        "info; it never did. Schedules come from `flow list --with-schedules` (and, since this "
+        "release, `flow triggers`).",
+    ],
     "0.91.0": [
         "New (#692): `workspace load` now picks a zero-copy CLONE per table by default "
         "instead of always copying. Eligibility mirrors the server's own `LoadTypeDecider` "

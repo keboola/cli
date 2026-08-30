@@ -8,7 +8,7 @@ the same `X-StorageApi-Token` as Storage, **with one extra requirement: it
 must be a MASTER (project admin) token**. The metastore's auth gate rejects
 every valid non-master token with an opaque 401 `Failed to create project
 scope`, which kbagent reclassifies to `MISSING_MASTER_TOKEN` with the remedy
-(since vNEXT, #711). Pre-flight: `kbagent --json project info --project P`
+(since 0.92.0, #711). Pre-flight: `kbagent --json project info --project P`
 -> `is_master_token`.
 
 `kbagent semantic-layer ...` (alias `kbagent sl ...`, hidden) wraps the
