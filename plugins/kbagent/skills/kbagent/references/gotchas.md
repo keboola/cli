@@ -11,7 +11,7 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
-## Programmatic auth (browser login) is human-only; sentinel tokens; v1 scope (since v0.80.0)
+## Programmatic auth (browser login) needs a human to approve; sentinel tokens; v1 scope (since v0.80.0)
 
 - **`kbagent auth login` always needs a human at a browser (or a device to
   type a code into) -- there is no headless/unattended path for THIS
@@ -43,6 +43,15 @@ Versioning convention:
   to confirm. **`auth login-password` (since v0.84.0, below) is the headless
   counterpart** -- it did not exist when this rule was written and does not
   fall under it.
+- **The device-login panel's one-click link is conditional -- relay only what
+  is actually printed (since vNEXT).** Alongside the verification URL and
+  code, the panel also prints a pre-filled `verification_uri_complete` link
+  ("Or open this link (code pre-filled):") whenever the stack's device
+  response includes one; a stack that returns an empty
+  `verificationUriComplete` prints neither that line nor the label. Don't
+  promise the user a one-click link unconditionally when relaying the panel
+  -- check what actually came back and relay only those lines. The URL and
+  code lines are always present regardless.
 - **PKCE is the default; the device flow is a fallback, not a mode switch.**
   The CLI tries the browser (PKCE authorization-code) flow first and falls
   back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
@@ -202,7 +211,7 @@ Versioning convention:
 - See `auth-workflow.md` for the end-to-end login -> register -> status ->
   logout walkthrough and PKCE-vs-device troubleshooting.
 
-## `auth login-password` is the CI-safe, headless exception to "browser login is human-only" (since v0.84.0)
+## `auth login-password` is the CI-safe, headless exception to "browser login needs a human to approve" (since v0.84.0)
 
 - **Password-grant login, no browser, safe for an unattended agent task**:
   `kbagent auth login-password --email E (--password-stdin | --password P |

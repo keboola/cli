@@ -1,14 +1,16 @@
 # Programmatic Auth (Browser Login and Unattended Login) workflow
 
 > Audience: a human user of kbagent (or an agent relaying instructions to
-> one) who wants to authenticate via a browser instead of pasting a static
-> Storage API token -- or, since v0.84.0, an agent running unattended with
-> real account credentials for CI. Goal: sign in once, understand what got
-> stored where, and know how to check on / tear down the session later.
+> one, or -- in an attended session with a background shell -- an agent
+> driving the login itself) who wants to authenticate via a browser instead
+> of pasting a static Storage API token -- or, since v0.84.0, an agent
+> running unattended with real account credentials for CI. Goal: sign in
+> once, understand what got stored where, and know how to check on / tear
+> down the session later.
 > Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`).
 > Full command reference: `commands-reference.md` > "Programmatic Auth
 > (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
-> login) is human-only; sentinel tokens; v1 scope" and > "`auth
+> login) needs a human to approve; sentinel tokens; v1 scope" and > "`auth
 > login-password` is the CI-safe, headless exception...".
 
 ## Read this first: `auth login` needs a human -- `auth login-password` does not
