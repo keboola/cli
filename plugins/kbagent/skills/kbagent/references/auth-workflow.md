@@ -15,11 +15,49 @@
 
 `kbagent auth login` opens a real browser window (or, on the device flow,
 prints a short code you type into a page on any device). There is **no**
-headless or unattended path for *this specific command* -- an AI agent must
-never run it on its own initiative. If an agent is asked to "set up kbagent
-auth" or "log me in" and no account credentials were supplied for an
-unattended path, the correct behavior is to hand the exact command back to
-the user and wait:
+headless or unattended path for *this specific command*. Two rules are
+absolute:
+
+- **Never run it in a foreground tool shell.** It blocks until the human
+  finishes; a foreground shell timeout (typically ~120s) kills the flow
+  mid-flight.
+- **Never run it from an unattended or headless task at all** -- no CI step,
+  no scheduled agent task, no background job with nobody watching the chat.
+  Those have their own paths (`auth login-password`, or a static token).
+
+### Attended sessions: the agent drives the login
+
+When a human IS present in the conversation and a **background** shell is
+available, the agent should drive the login itself rather than handing it
+off:
+
+```bash
+# 1. start it in a BACKGROUND shell (never foreground)
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+```
+
+- `--device-code` forces the RFC 8628 flow, which is the agent-friendly one:
+  the verification URL and the short `user_code` are printed **immediately**,
+  before polling starts, and flushed. In human output mode they go to
+  stdout; under `--json` the panel goes to **stderr**, so capture `2>&1`
+  there. Human mode is the easier read.
+- **Relay the URL and the code to the user in chat.** The CLI also
+  best-effort opens the browser on the host machine, but the user may be
+  looking at a different device.
+- **Confirm completion by polling `kbagent --json auth status`** -- exit
+  code `0` means signed in (`live` / `refreshed` / `degraded`), exit code
+  `3` means not yet (`missing` / `expired`). That is the completion signal;
+  do not guess from the login process's own output, and never re-run login
+  blind -- check `auth status` first.
+- `auth.json` is written atomically on success only, so an abandoned or
+  killed attempt leaves nothing half-written.
+- `--register-projects` is fully non-interactive, so it is safe to include
+  in the backgrounded command.
+
+### Fallback: hand it to the user's terminal
+
+With no background shell available, hand the exact command back to the user
+and wait:
 
 ```
 Please run this yourself in a terminal where a browser can open:
@@ -29,12 +67,14 @@ Please run this yourself in a terminal where a browser can open:
 Then let me know once it's done and I'll continue with `kbagent auth status`.
 ```
 
-For CI, containers, or any other unattended context there are now two
-options (since v0.84.0): if the task has account email + password (+ a TOTP
-seed for MFA), use `kbagent auth login-password` -- see
-"Unattended login" below, an agent MAY run it directly. Otherwise keep using
-a static Storage token (`kbagent project add --token ...` or
-`KBAGENT_PROJECT_FROM_ENV`) -- that path is unchanged by either feature.
+### Unattended contexts
+
+For CI, containers, or any other unattended context there are two options
+(since v0.84.0): if the task has account email + password (+ a TOTP seed for
+MFA), use `kbagent auth login-password` -- see "Unattended login" below, an
+agent MAY run it directly. Otherwise keep using a static Storage token
+(`kbagent project add --token ...` or `KBAGENT_PROJECT_FROM_ENV`) -- that
+path is unchanged by either feature.
 
 ## What `login` actually does
 
@@ -138,8 +178,9 @@ Exactly one selection method applies:
 | Neither | The interactive picker -- but only on a TTY without `--json`. |
 
 `--all` and `--project-id` are the non-interactive forms, so this one
-command is safe for an agent to run *after* a human has logged in. The login
-itself still needs the human.
+command is safe for an agent to run *after* the session exists -- including
+right after an agent-driven backgrounded login, once `auth status` reports
+exit 0. The browser step itself still needs the human.
 
 ### The picker
 
@@ -194,6 +235,12 @@ that alias rather than offered a second, colliding suggestion.
 ```
 # 1. Sign in (opens a browser; falls back to a device code if needed)
 kbagent auth login --register-projects
+
+# 1-AGENT. Attended session, agent-driven: same login in a BACKGROUND shell,
+#          device flow so the URL + code can be relayed to the user in chat.
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+#          ...then poll for completion (exit 0 = signed in, 3 = not yet):
+kbagent --json auth status
 
 # 1-CI. The unattended equivalent, given real account credentials
 #       (since v0.84.0) -- no browser, safe from a secret-backed step:

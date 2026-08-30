@@ -311,6 +311,14 @@ def auth_login(
             "",
             f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
         ]
+        if authorization.verification_uri_complete:
+            lines.extend(
+                [
+                    "",
+                    "Or open this link (code pre-filled):",
+                    f"[bold]{escape(authorization.verification_uri_complete)}[/bold]",
+                ]
+            )
         target_console.print(
             Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
         )

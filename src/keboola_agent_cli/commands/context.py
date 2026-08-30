@@ -60,14 +60,25 @@ Use `kbagent <command> --help` for full flag details and examples.
   authorization on SSH/containers/WSL, or with --device-code) as an
   alternative to a long-lived static Storage API token.
 
-  IMPORTANT FOR AI AGENTS: `auth login` (PKCE / device flow) REQUIRES A
-  HUMAN AT A BROWSER. There is no unattended path for THAT command, and
-  session tokens are deliberately not readable through the CLI -- do NOT
-  attempt `auth login` from an unattended agent task. `auth login-password`
-  (below) is the one deliberate, explicit exception: it is safe to run
-  unattended given the credentials it needs, and is what CI/automation
-  should use to get a full session (as opposed to a single-project static
-  Storage token via `project add --token` / `KBAGENT_PROJECT_FROM_ENV`).
+  IMPORTANT FOR AI AGENTS: `auth login` (PKCE / device flow) needs a HUMAN
+  AT A BROWSER to APPROVE, but driving the command is not the human's part.
+  In an ATTENDED session (a human is in the chat) an agent SHOULD complete
+  it when its harness has a background shell: run `auth login --device-code
+  --stack URL --register-projects` in a BACKGROUND shell capturing stdout
+  and stderr (human mode, NOT --json -- there the verification URL and user
+  code go to stderr and stdout stays empty until the flow ends), relay the
+  URL + code printed before polling starts, then confirm with `auth status`
+  (exit 0 = signed in, exit 3 = not yet). NEVER run it in a FOREGROUND tool
+  shell -- a ~120s timeout kills the flow mid-flight and the kill tells you
+  nothing. NEVER run it from an UNATTENDED task -- nobody is there to
+  approve. NEVER re-run it blind: check `auth status` first, or you orphan
+  a session. With no background shell available, hand the plain command to
+  the user's own terminal. Session tokens are deliberately not readable
+  through the CLI. `auth login-password` (below) is the unattended path: it
+  is safe to run headlessly given the credentials it needs, and is what
+  CI/automation should use to get a full session (as opposed to a
+  single-project static Storage token via `project add --token` /
+  `KBAGENT_PROJECT_FROM_ENV`).
 
   kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
     Opens the Keboola login page in a browser (or falls back to the RFC 8628
@@ -115,9 +126,11 @@ Use `kbagent <command> --help` for full flag details and examples.
     needs a real browser). Stores the resulting session in auth.json
     exactly like `auth login` does -- same downstream command support,
     same `project list` "session" auth-mode column, same
-    --register-projects contract. AN AI AGENT MAY run this command when
-    given real credentials for this purpose (unlike `auth login`), but
-    must never invent, guess, or reuse credentials from another context.
+    --register-projects contract. AN AI AGENT MAY run this command
+    UNATTENDED when given real credentials for this purpose (unlike
+    `auth login`, which always needs a human to approve in a browser),
+    but must never invent, guess, or reuse credentials from another
+    context.
     Storing an account's password (and TOTP seed) as CI secrets is a
     bigger blast radius than one scoped project token -- use a dedicated,
     least-privileged service account, never a real human's own login.

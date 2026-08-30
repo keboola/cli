@@ -8,7 +8,9 @@ description: >
   Storage tables, files, and snapshots, data apps
   (deploy/logs/secrets), flows and schedules, members and invitations,
   feature flags, OTLP data streams, scoped Storage tokens, the semantic
-  layer (models, metrics), the Developer Portal, browser login.
+  layer (models, metrics), the Developer Portal, browser login,
+  first-time setup (install the CLI, connect a project, verify) and
+  logging out -- in any client, with or without the plugin's slash commands.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   data app, streamlit deploy, semantic layer, sl, dev-portal,
@@ -16,7 +18,9 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, undelete config, zero-copy clone, workspace load type.
+  restore config, undelete config, zero-copy clone, workspace load type,
+  set up keboola, setup, first-time setup, install kbagent,
+  connect project, log out, logout, sign out.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -423,32 +427,98 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Deep column-level lineage** (`lineage build --ai`, column graph, ER + HTML output) | [lineage-deep-workflow](references/lineage-deep-workflow.md) |
 | **Session permissions firewall** (`--deny-writes` / `--deny-destructive`, persisted policies, `permissions check`) | [permissions-workflow](references/permissions-workflow.md) |
 | **Kai** (project-aware AI Q&A: ping / preflight / ask / chat / history) | [kai-workflow](references/kai-workflow.md) |
-| **Programmatic auth** (browser login: PKCE/device flow, `auth login`/`status`/`logout`; HUMAN-ONLY, never run headlessly) | [auth-workflow](references/auth-workflow.md) |
+| **Programmatic auth** (browser login: PKCE/device flow, `auth login`/`status`/`logout`; never in a foreground shell, never unattended -- attended agents drive `--device-code` in the background and relay the code) | [auth-workflow](references/auth-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup
 
-**In Claude Code with this plugin installed, run `/kbagent:setup`.** It is
-the one-command path: it installs the CLI if missing, connects a project
-(browser login via `auth login --register-projects`, then
-`auth login-password` from the environment, then a static token),
-and verifies with `kbagent doctor`. Every step is conditional, so it is safe
-to re-run on a half-finished setup. Run `/kbagent:setup` to see the steps it
-takes -- it announces each one.
+**In Claude Code with this plugin installed, `/kbagent:setup` is the
+one-command path.** It installs the CLI if missing, connects a project, and
+verifies with `kbagent doctor`. Every step is conditional, so it is safe to
+re-run on a half-finished setup, and it announces each step as it goes.
 
-Everything below is the manual equivalent -- for a plain shell, or another
-agent, or when you want to drive the steps yourself.
+**In every other client there is no slash command** -- Claude Desktop has no
+slash-command surface at all, Cursor may not expose one, and a plain chat
+with a shell has none either. There you run the same flow inline: the steps
+below ARE that flow, and this skill is what the user's natural-language ask
+("set up Keboola", "connect my project", "log me out") should trigger.
 
-If kbagent is not yet installed:
+**The plugin is an upgrade, not a prerequisite.** kbagent is a CLI: in any
+client with a shell, `kbagent project add` plus the steps below is a complete
+setup. `kbagent context` prints the full command reference and is the manual
+substitute for this skill -- it teaches any agent the whole surface. And
+`doctor`'s `claude_plugin` check warns or skips when the plugin is absent;
+that is informational and never means setup failed.
+
+**Login is shared across clients.** The session lives in the same local
+config directory (`auth.json` next to `config.json`), so signing in once --
+in any client, or in a plain terminal -- is inherited by all of them. Always
+check the existing state before starting a login.
+
+### 1. Is the CLI installed?
+
+```bash
+kbagent version
+```
+
+If the command is not found, install it, then re-check:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 # the installer puts kbagent on PATH for its own process only --
 # 'source $HOME/.local/bin/env' or open a new shell
-kbagent doctor
 ```
 
-Then add projects:
+### 2. Is a project already connected?
+
+```bash
+kbagent --json project list      # non-empty -> already connected, skip to step 4
+kbagent --json auth status       # exit 0 = a session is already signed in
+```
+
+### 3. Connect -- the login ladder
+
+Take the first rung that fits the situation.
+
+**a. Browser login, driven by the agent (attended sessions).**
+`kbagent auth login` must **never** run in a foreground tool shell -- it
+blocks until the human finishes, and a foreground shell timeout (~120s)
+kills it mid-flight -- and **never** from an unattended or headless task.
+But in an attended session, when a background shell is available, the agent
+should drive it rather than handing it off:
+
+```bash
+# run this in a BACKGROUND shell, not a foreground one
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+```
+
+- The verification URL and user code are printed immediately, before polling
+  starts. In human output they go to stdout; with `--json` the panel goes to
+  **stderr**, so capture `2>&1`. Prefer human mode here.
+- Relay the URL and the code to the user in chat. The CLI also best-effort
+  opens the browser on the host machine.
+- Confirm completion with `kbagent --json auth status`: exit 0 means signed
+  in (`live` / `refreshed` / `degraded`), exit 3 means not yet
+  (`missing` / `expired`). Poll that -- never re-run login blind.
+- `auth.json` is written atomically on success only, so an abandoned or
+  killed attempt corrupts nothing.
+- `--register-projects` is fully non-interactive and registers every
+  accessible project; without it, use `kbagent auth register-projects --all`
+  afterwards.
+- **No background shell available?** Then hand the exact command to the
+  user's own terminal and wait for them to confirm before continuing.
+
+**b. Unattended: `auth login-password`** -- the headless path, when the task
+was given real account credentials (a dedicated service account, never a
+human's own):
+
+```bash
+KBC_LOGIN_EMAIL=... KBC_LOGIN_PASSWORD=... KBC_LOGIN_TOTP_SECRET=... \
+  kbagent auth login-password --password-stdin --register-projects <<< "$KBC_LOGIN_PASSWORD"
+```
+
+**c. Static Storage token** -- always works, no browser and no account
+credentials:
 
 ```bash
 # Single project
@@ -463,16 +533,55 @@ KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org
 KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
 ```
 
+### 4. Verify
+
+```bash
+kbagent --json doctor
+```
+
+A `claude_plugin` warn or skip is expected outside Claude Code and does not
+make the setup incomplete.
+
+### Logging out
+
+Unlike login, logout is fully agent-runnable. Check the state first, then
+revoke:
+
+```bash
+kbagent --json auth status                  # what is signed in, on which stack
+kbagent --json auth logout                  # revoke + delete the local session
+kbagent auth logout --remove-projects --yes # also drop session-registered aliases
+```
+
+Use `--json` or `--yes` so the command does not stop on the confirmation
+prompt. `--remove-projects` only removes aliases backed by this session's
+sentinel token; a static-token project is never touched -- remove those with
+`kbagent project remove --project ALIAS`. Because the session is shared, a
+logout signs the user out of every client at once.
+
 ### Installing this plugin
 
 This plugin ships through Keboola's `keboola-claude-kit` marketplace, published
-from `keboola/ai-kit`. To (re)install it in Claude Code:
+from `keboola/ai-kit`. It is optional (see above) -- the CLI alone is a working
+setup. Per client:
 
-```
-/plugin marketplace add keboola/ai-kit
-/plugin install kbagent@keboola-claude-kit
-```
+- **Claude Code:**
+
+  ```
+  /plugin marketplace add keboola/ai-kit
+  /plugin install kbagent@keboola-claude-kit
+  ```
+
+- **Cursor:** add the marketplace through the UI. It **requires the full
+  URL** -- `https://github.com/keboola/ai-kit`. The short `keboola/ai-kit`
+  form that Claude Code accepts is rejected there with an opaque
+  `[invalid_argument] Error`.
+- **Claude Desktop:** Settings (Customise) -> Plugins -> add the
+  `keboola/ai-kit` marketplace, then install `kbagent`. Claude Desktop has
+  **no slash commands**, so `/kbagent:setup` and `/keboola` are unavailable
+  there -- setup and everything else happen through this skill's
+  natural-language triggers instead.
 
 Copies installed from the older `keboola-agent-cli` marketplace (this CLI's own
-repo) still work and still update, but that entry is deprecated -- the two lines
-above are how a user moves to the maintained one.
+repo) still work and still update, but that entry is deprecated -- moving to
+`keboola/ai-kit` is how a user gets the maintained one.
