@@ -550,6 +550,7 @@ class BaseHttpClient:
                     status_code=status,
                     error_code=ErrorCode.INVALID_TOKEN,
                     retryable=False,
+                    details=details,
                 )
             raise KeboolaApiError(
                 message=(
