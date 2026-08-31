@@ -10,6 +10,7 @@ import pytest
 from keboola_agent_cli.constants import (
     APP_NAME,
     MAX_API_ERROR_LENGTH,
+    MAX_API_ERROR_PARAMS_LIST_ITEMS,
     MAX_EXCEPTION_ID_LENGTH,
     MAX_RETRIES,
 )
@@ -1325,5 +1326,68 @@ class TestApiErrorCodeDetails:
             with pytest.raises(KeboolaApiError) as exc_info:
                 client._do_request("GET", "/test-path")
             assert exc_info.value.details["api_error_params"] == params
+        finally:
+            client.close()
+
+    def test_small_params_pass_through_unbounded(self, httpx_mock) -> None:
+        params = {"errors": [{"componentId": "c", "configurationId": str(i)} for i in range(3)]}
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={
+                "error": "conflict",
+                "code": "storage.mergeRequests.validation",
+                "params": params,
+            },
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            assert exc_info.value.details["api_error_params"] == params
+            assert "api_error_params_truncated" not in exc_info.value.details
+        finally:
+            client.close()
+
+    def test_oversized_params_lists_are_truncated_with_a_marker(self, httpx_mock) -> None:
+        # A merge over hundreds of conflicting configs must not flood the
+        # agent-consumed --json envelope: lists cap at
+        # MAX_API_ERROR_PARAMS_LIST_ITEMS, and the truncation is flagged.
+        errors = [
+            {"componentId": "keboola.ex-db", "configurationId": str(i), "message": "x" * 100}
+            for i in range(500)
+        ]
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={"error": "conflict", "params": {"errors": errors}},
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            details = exc_info.value.details
+            assert details["api_error_params_truncated"] is True
+            assert len(details["api_error_params"]["errors"]) == MAX_API_ERROR_PARAMS_LIST_ITEMS
+            # the kept prefix is verbatim
+            assert details["api_error_params"]["errors"][0]["configurationId"] == "0"
+        finally:
+            client.close()
+
+    def test_untruncatable_oversized_params_are_dropped_with_the_marker(self, httpx_mock) -> None:
+        # No top-level list to slim -- one huge scalar blob. Drop params, keep
+        # the marker, never crash the error path.
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/test-path",
+            status_code=409,
+            json={"error": "conflict", "params": {"blob": "x" * 50000}},
+        )
+        client = self._client()
+        try:
+            with pytest.raises(KeboolaApiError) as exc_info:
+                client._do_request("GET", "/test-path")
+            details = exc_info.value.details
+            assert "api_error_params" not in details
+            assert details["api_error_params_truncated"] is True
         finally:
             client.close()

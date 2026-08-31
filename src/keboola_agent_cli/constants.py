@@ -110,6 +110,17 @@ TOKEN_VALIDITY_ERROR_MARKERS: tuple[str, ...] = (
     "sign in",
 )
 
+# Ceiling for the server-supplied `params` context copied into
+# KeboolaApiError.details["api_error_params"] (serialized JSON length).
+# The message above is capped, so this structured sibling must be too --
+# a merge 409's params.errors carries one entry per conflicting config and
+# an agent-consumed --json envelope must not grow unbounded with it. When
+# over the cap, top-level lists are truncated to
+# MAX_API_ERROR_PARAMS_LIST_ITEMS entries; if still over, params is dropped
+# (details carries api_error_params_truncated: true either way).
+MAX_API_ERROR_PARAMS_LENGTH: int = 8192
+MAX_API_ERROR_PARAMS_LIST_ITEMS: int = 20
+
 # --- Developer Portal MFA ---
 # Challenge type sent on the second `/auth/login` step (after the first call
 # returns a `session` token). The apiary spec documents `SOFTWARE_TOKEN_MFA`

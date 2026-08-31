@@ -363,7 +363,13 @@ class MergeRequestService(BaseService):
 
         The list endpoint cannot filter server-side, so this lists and
         matches ``branches.branchFromId`` client-side. Raises ``NOT_FOUND``
-        when the branch has no MR, with the create command as the next step.
+        when the branch has no MR, with the create command as the next step
+        -- but first checks the feature on the no-match path: the list
+        endpoint is ungated, so a project without ``branches-merge-requests``
+        also answers ``200 + []``, and a NOT_FOUND prescribing ``create``
+        would send the user into a guaranteed FEATURE_NOT_ENABLED loop
+        (Zajca's PR review). The feature check costs one verify_token GET
+        and is spent only when nothing matched.
         """
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
@@ -371,6 +377,9 @@ class MergeRequestService(BaseService):
             for mr in client.merge_requests.list():
                 if _same_id((mr.get("branches") or {}).get("branchFromId"), branch_id):
                     return {"alias": alias, **_enrich_row(mr)}
+            # No match: tell "feature off" apart from "branch has no MR"
+            # before prescribing a next step that could not succeed.
+            self._require_merge_requests_feature(client)
         finally:
             client.close()
         raise KeboolaApiError(
@@ -965,11 +974,21 @@ class MergeRequestService(BaseService):
                     component_id, config_id, branch_id, version=onto_version
                 )
             else:
-                # `name` must also be non-empty: the diff envelope declares
-                # it nullable, but the rebase validator requires a non-empty
-                # trimmed string -- a null would sail through a bare presence
-                # check straight into a server 400.
-                missing = [key for key in ("name", "rows", "configuration") if key not in body]
+                # Present-but-null defeats a bare presence check for every
+                # key, not just `name` (Zajca's PR review): the backend's
+                # `?? new stdClass()` fires on null as well as on absence, so
+                # a `configuration: null` would REPLACE the config body with
+                # {} and return 200 -- silent data loss, the exact thing this
+                # guard exists to refuse. A null `rows` is equally ambiguous
+                # (`[]` means delete-all-rows and must stay expressible, null
+                # means nothing). And `name` must additionally be non-empty:
+                # the diff envelope declares it nullable, but the rebase
+                # validator requires a non-empty trimmed string.
+                missing = [
+                    key
+                    for key in ("name", "rows", "configuration")
+                    if key not in body or body[key] is None
+                ]
                 if "name" not in missing and not str(body.get("name") or "").strip():
                     missing.insert(0, "name")
                 if missing:

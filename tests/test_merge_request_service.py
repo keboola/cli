@@ -1137,3 +1137,85 @@ class TestLayer1FindingsFollowUps:
             _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
         mock.get_config_diff.assert_not_called()
+
+
+class TestZajcaReviewFollowUps:
+    """Regression tests for Zajca's PR #703 review (2026-08-28)."""
+
+    def test_null_configuration_in_resolved_body_is_refused(self, store, client_factory) -> None:
+        # PHP's `?? new stdClass()` fires on null as well as absence: a
+        # configuration: null would silently REPLACE the config body with {}.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        body = {"name": "My config", "rows": [], "configuration": None}
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert "configuration" in str(exc_info.value)
+        mock.rebase_config.assert_not_called()
+
+    def test_null_rows_on_a_take_side_is_a_contract_violation(self, store, client_factory) -> None:
+        # rows: null is ambiguous ([] means delete-all and must stay
+        # expressible) -- refuse instead of guessing.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        side = _side({"limit": 250}, version=7)
+        side["diff"]["rows"] = None
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=side,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "rows" in exc_info.value.message
+        mock.rebase_config.assert_not_called()
+
+    def test_empty_rows_list_stays_a_legal_resolution(self, store, client_factory) -> None:
+        # The null guard must NOT swallow the legitimate [] (delete all rows).
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        mock.rebase_config.return_value = {"id": "111", "version": 8}
+        body = {"name": "My config", "rows": [], "configuration": {"limit": 300}}
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", resolved=body
+        )
+        assert result["resolution"] == "custom"
+        assert mock.rebase_config.call_args.kwargs["rows"] == []
+
+    def test_find_on_a_featureless_project_says_so_not_not_found(
+        self, store, client_factory
+    ) -> None:
+        # 200 + [] from the ungated list on a project without the feature must
+        # not become NOT_FOUND prescribing a create that is guaranteed to fail.
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = []
+        mock.has_feature.return_value = False
+        with pytest.raises(FeatureNotEnabledError):
+            _svc(store, factory).find_merge_request_for_branch(ALIAS, 123)
+
+    def test_find_no_match_with_feature_stays_not_found(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = []
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).find_merge_request_for_branch(ALIAS, 123)
+        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
+
+    def test_find_happy_path_does_not_spend_the_feature_call(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.list.return_value = [_wire_mr(1, branch_from=123)]
+        _svc(store, factory).find_merge_request_for_branch(ALIAS, 123)
+        mock.has_feature.assert_not_called()
