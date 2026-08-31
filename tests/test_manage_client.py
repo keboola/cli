@@ -146,6 +146,83 @@ class TestListOrganizationProjects:
         client.close()
 
 
+class TestCreateProject:
+    """Tests for create_project()."""
+
+    def test_success(self, httpx_mock) -> None:
+        """Creates a project and returns the response dict with the new id."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/organizations/42/projects",
+            json={"id": 12345, "name": "Agent Sandbox"},
+            status_code=201,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        result = client.create_project(organization_id=42, name="Agent Sandbox")
+
+        assert result["id"] == 12345
+        assert result["name"] == "Agent Sandbox"
+        client.close()
+
+    def test_name_is_sole_payload_key_without_extras(self, httpx_mock) -> None:
+        """With no extra_params, name is the only body field sent."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/organizations/42/projects",
+            json={"id": 1, "name": "Agent Sandbox"},
+            status_code=201,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        client.create_project(organization_id=42, name="Agent Sandbox")
+
+        request = httpx_mock.get_request()
+        import json
+
+        body = json.loads(request.content)
+        assert body == {"name": "Agent Sandbox"}
+        client.close()
+
+    def test_extra_params_merged_into_payload(self, httpx_mock) -> None:
+        """extra_params are passed through verbatim alongside name."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/organizations/42/projects",
+            json={"id": 1, "name": "PoC"},
+            status_code=201,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        client.create_project(
+            organization_id=42,
+            name="PoC",
+            extra_params={"type": "poc6months", "defaultBackend": "snowflake"},
+        )
+
+        request = httpx_mock.get_request()
+        import json
+
+        body = json.loads(request.content)
+        assert body["name"] == "PoC"
+        assert body["type"] == "poc6months"
+        assert body["defaultBackend"] == "snowflake"
+        client.close()
+
+    def test_403_access_denied(self, httpx_mock) -> None:
+        """Raises KeboolaApiError with ACCESS_DENIED on 403 (non-admin token)."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/organizations/42/projects",
+            json={"error": "You don't have access to this organization"},
+            status_code=403,
+        )
+
+        client = ManageClient(stack_url=STACK_URL, manage_token=MANAGE_TOKEN)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.create_project(organization_id=42, name="Nope")
+
+        assert exc_info.value.error_code == "ACCESS_DENIED"
+        assert exc_info.value.status_code == 403
+        client.close()
+
+
 class TestCreateProjectToken:
     """Tests for create_project_token()."""
 
