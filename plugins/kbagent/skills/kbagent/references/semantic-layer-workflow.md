@@ -4,12 +4,17 @@ The Keboola semantic layer (aka **metastore**) is a project-scoped catalogue
 of datasets, metrics, relationships, constraints, and glossary terms. It is
 served from a separate API at `metastore.<stack>` (derived from
 `connection.<stack>` by string-substitution; cloud/region-agnostic). Auth is
-the same `X-StorageApi-Token` as Storage, **with one extra requirement: it
-must be a MASTER (project admin) token**. The metastore's auth gate rejects
-every valid non-master token with an opaque 401 `Failed to create project
-scope`, which kbagent reclassifies to `MISSING_MASTER_TOKEN` with the remedy
-(since 0.92.0, #711). Pre-flight: `kbagent --json project info --project P`
--> `is_master_token`.
+the same `X-StorageApi-Token` as Storage: **reads work with any valid,
+non-disabled, non-expired token** (vNEXT, PSGO-282); **writes** (add /
+edit / remove / import / promote / build / scope grant / elevate) still need
+a project-admin token -- a master token qualifies, but so does any other
+project-admin user's token. Before PSGO-282, the metastore's auth gate
+rejected every valid non-master token -- including reads -- with an opaque
+401 `Failed to create project scope`, which kbagent reclassifies to
+`MISSING_MASTER_TOKEN` with the remedy (since 0.92.0, #711); that
+reclassification now only fires on a write against a non-admin token, or
+against a metastore deployment that predates the fix. Pre-flight for a
+write: `kbagent --json project info --project P` -> `is_master_token`.
 
 `kbagent semantic-layer ...` (alias `kbagent sl ...`, hidden) wraps the
 metastore so AI agents and CI scripts don't roll their own `urllib` loops.
