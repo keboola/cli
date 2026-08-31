@@ -982,6 +982,12 @@ kbagent kai ask --message "question" [--project NAME]
 kbagent kai chat --message "msg" [--chat-id ID] [--project NAME]
 kbagent kai chat-detail --chat-id ID [--project NAME]
 kbagent kai history [--project NAME] [--limit N]
+# Default-project resolution (since vNEXT, #684): the `kai` group, `docs query`, `component detail`,
+#   `component list --query`, `config examples`, and `config new` (scaffold mode) resolve an omitted
+#   --project through the shared cascade (--project > KBAGENT_PROJECT env > `project use` pin > sole
+#   project). Before vNEXT these paths used the FIRST REGISTERED project and ignored the pin.
+#   Several projects with no pin now exit 5 (CONFIG_ERROR) instead of silently picking the first.
+#   Same fix over `kbagent serve`: /kai/*, POST /documentation/query, GET /components?query=...
 
 kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
 kbagent transformation show --project NAME --config-id ID [--component-id ID] [--branch ID]

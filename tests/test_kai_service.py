@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from helpers import setup_single_project
+from helpers import setup_single_project, setup_two_projects
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services.kai_service import KaiService
@@ -524,9 +524,26 @@ class TestKaiServiceResolveAlias:
         assert service.resolve_alias("prod") == "prod"
 
     def test_resolve_default_alias(self, tmp_config_dir: Path) -> None:
-        """resolve_alias with None returns the first (default) project."""
+        """resolve_alias with None returns the sole configured project."""
         service, _ = _make_kai_service(tmp_config_dir)
         assert service.resolve_alias(None) == "prod"
+
+    def test_resolve_default_honors_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        """resolve_alias(None) returns the pin, not the first project.
+
+        Regression test for issue #684: with two projects and the pin moved
+        to the second one, `kai ping/preflight/ask/chat` without --project
+        acted on the first registered project.
+        """
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = setup_two_projects(tmp_config_dir)
+        # add_project() pinned "prod" (first added); repoint like `project use dev`.
+        cfg = store.load()
+        cfg.default_project = "dev"
+        store.save(cfg)
+
+        service = KaiService(config_store=store, client_factory=lambda url, token: MagicMock())
+        assert service.resolve_alias(None) == "dev"
 
     def test_resolve_unknown_alias(self, tmp_config_dir: Path) -> None:
         """resolve_alias raises ConfigError for unknown alias."""

@@ -206,7 +206,7 @@ def component_detail(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses first available if not set)",
+        help="Project alias (defaults to the pinned default project)",
     ),
 ) -> None:
     """Show detailed information about a specific component."""

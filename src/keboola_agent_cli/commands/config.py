@@ -415,7 +415,7 @@ def config_examples(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses first available if not set)",
+        help="Project alias (defaults to the pinned default project)",
     ),
     row: bool = typer.Option(
         False,

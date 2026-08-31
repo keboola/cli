@@ -4702,6 +4702,8 @@ fallback (`config examples` already resolved it correctly).
   `component detail`'s `project_alias` reports the alias actually used (never
   `None`). With NO projects configured at all, the failure is an actionable
   `CONFIG_ERROR: No projects configured. Use 'kbagent project add' ...`.
+  Since vNEXT the fallback is the `project use` pin, not the first project --
+  see the vNEXT gotcha on the `project use` pin (issue #684).
 - **<= 0.89.x**: pass `--project` explicitly to these two commands -- the help
   text's "first available" promise does not work there.
 - `component sync-action` is unaffected: its `--project` is genuinely required
@@ -4954,3 +4956,28 @@ volatile components without waiting for an upstream kbagent release.
   and pushing DELETED the config in production. If you are stuck on an older
   version, do not delete-dir-then-push a `keboola.mcp-server-tool` (or any
   MCP-workspace) directory -- upgrade instead.
+
+## `kai` / `docs query` / `component` / `config new` now honor the `project use` pin
+
+*(since vNEXT, closes #684)* These commands take an optional `--project`: the whole `kai` group,
+`docs query`, `component detail`, `component list --query`, `config examples`,
+and `config new` (scaffold mode). Before vNEXT, they resolved an omitted
+`--project` to the **first registered project**. They ignored the pin from
+`kbagent project use`. With two or more projects registered, the command acted
+on the wrong project and reported no warning.
+
+An omitted `--project` now resolves through the same cascade as every other
+single-project command:
+
+1. explicit `--project`
+2. `KBAGENT_PROJECT` env var
+3. the `project use` pin
+4. the sole registered project
+
+- **New failure mode**: several projects and no pin now fail with
+  `CONFIG_ERROR` (exit 5). The message names the three fixes. Before, the
+  command silently used the first registered project.
+- **On 0.90.1 and older**: pass `--project` explicitly whenever the pinned
+  project is not the first row of `project list`.
+- The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
+  and `GET /components?query=...` resolved the project the same wrong way.
