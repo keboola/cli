@@ -21,18 +21,31 @@ Versioning convention:
   verbatim instead of asserting the token is invalid. **Rotating the
   token does not fix an `AUTH_REJECTED`**; verify the token against another
   endpoint on the same stack, then escalate with the exceptionId.
-- **The reported trigger case has its own, more specific mapping: every
-  `semantic-layer` / `sl` command needs a MASTER token.** The Metastore's
-  401 `{"exception": "Failed to create project scope"}` is its master-token
-  gate: unlike the Storage API, the metastore accepts only a master (project
-  admin) Storage token, and this opaque 401 is how it answers a valid
-  non-master token -- which blocked every `semantic-layer` command while
-  `project status` reported the token healthy (issue #711; the underlying
-  `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
-  exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
-  the message. Fix: check `kbagent project info` -> `is_master_token`, and
-  register a master token (`kbagent project edit --token ...`). Do NOT
-  escalate this one to support -- it is by design.
+- **The reported trigger case has its own, more specific mapping: a
+  `semantic-layer` / `sl` WRITE needs a project-admin token.** The
+  Metastore's 401 `{"exception": "Failed to create project scope"}` is its
+  admin-token gate: writes (add/edit/remove/import/promote/build/scope
+  grant/elevate) require the token's Storage Admin role to be `admin` -- a
+  master token qualifies, so does any other project-admin user's token --
+  and this opaque 401 was how it answered a valid non-admin token, on
+  every call, while `project status` reported the token healthy (issue
+  #711; the underlying `MasterTokenRequiredError` was swallowed
+  server-side). kbagent reclassifies exactly that 401 to
+  `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in the message. Fix:
+  check `kbagent project info` -> `is_master_token`, and register a
+  project-admin token (`kbagent project edit --token ...`). Do NOT escalate
+  this one to support -- it is by design.
+  - **(updated vNEXT -- PSGO-282, go-monorepo#596):** the "every call"
+    part above is now history. The Metastore no longer requires a master
+    token for a plain read (`show`, `model list`, `search-context`,
+    `get-context`, `validate`, `diff`, `scope status`, `scope pending`) --
+    any valid, non-disabled, non-expired Storage token works. Only writes
+    still hit this gate. `MISSING_MASTER_TOKEN` on a read now means either
+    an outdated kbagent replaying the old client-side reclassification, or
+    a metastore deployment that predates the fix -- not a real requirement.
+    See [Metastore no longer requires a master token for reads
+    (PSGO-282)](#metastore-no-longer-requires-a-master-token-for-reads-psgo-282)
+    below for the full writeup.
 - **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
   authentication-class failures; only the diagnosis differs. A script
   branching on `$?` sees nothing new -- one branching on
@@ -4984,7 +4997,7 @@ single-project command:
 
 ## Metastore no longer requires a master token for reads (PSGO-282)
 
-*(since 0.93.0)* Every `semantic-layer` read (`show`, `model list`,
+*(since vNEXT)* Every `semantic-layer` read (`show`, `model list`,
 `search-context`, `get-context`, `validate`, `diff`, `scope status`, `scope
 pending`) works with any valid, non-disabled, non-expired Storage token --
 programmatic (`kbc_at_*`/`kbc_pat_*`) included. Before this, the metastore
