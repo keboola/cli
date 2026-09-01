@@ -412,6 +412,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
+| **Authorizing an OAuth component** (`config oauth-url`; auto-open, always echo the URL in a fenced block, verify `oauth_api.version`) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |

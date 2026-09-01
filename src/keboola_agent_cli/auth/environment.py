@@ -28,6 +28,10 @@ from dataclasses import dataclass
 # wslview from stalling the login flow.
 _WSLVIEW_PROBE_TIMEOUT_SECONDS = 2.0
 
+# Timeout for handing a URL to `wslview`: it returns as soon as the Windows side
+# has accepted the request, so anything longer means the shim is wedged.
+_WSLVIEW_OPEN_TIMEOUT_SECONDS = 10.0
+
 
 @dataclass(frozen=True)
 class BrowserEnvironment:
@@ -168,6 +172,26 @@ def detect_browser_environment() -> BrowserEnvironment:
     return BrowserEnvironment(loopback_browser_usable=True, reason="", opener=opener)
 
 
+def _open_via_wslview(url: str) -> bool:
+    """Hand ``url`` to the Windows-side default browser through `wslview`.
+
+    Runs synchronously so the exit status is the answer: unlike the
+    `webbrowser` path there is no thread to swallow, and the whole point is to
+    know whether Windows accepted the URL. Output is captured, never logged --
+    the URL must not reach stderr.
+    """
+    try:
+        completed = subprocess.run(
+            ["wslview", url],
+            capture_output=True,
+            timeout=_WSLVIEW_OPEN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 def open_browser(url: str) -> bool:
     """Best-effort `webbrowser.open` on a daemon thread.
 
@@ -177,7 +201,15 @@ def open_browser(url: str) -> bool:
     before spawning the thread) and True once the open has been dispatched;
     a True return does not guarantee a browser window actually appeared, only
     that a handler accepted the request.
+
+    Under WSL the URL goes to `wslview` first: `webbrowser` keys its Windows
+    handling off ``sys.platform == "win32"``, which is ``linux`` inside WSL, so
+    it would either find no handler at all or open a browser in the Linux
+    session -- a separate profile that shares none of the logins the URL needs.
     """
+    if _env_flag_set("WSL_INTEROP") and _wslview_is_working():
+        return _open_via_wslview(url)
+
     try:
         webbrowser.get()
     except webbrowser.Error:
