@@ -317,6 +317,25 @@ ENV_KBC_LOGIN_PASSWORD: str = "KBC_LOGIN_PASSWORD"
 ENV_KBC_LOGIN_TOTP_SECRET: str = "KBC_LOGIN_TOTP_SECRET"
 ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 
+# --- Command telemetry (since vNEXT) ---
+# Per-invocation usage event posted best-effort to the project's own Storage
+# events (POST /v2/storage/events), the same mechanism the kbc CLI uses. It is
+# NOT the audit trail: mutations are recorded server-side by Connection
+# regardless of this event (see docs). Default ON; either env var (any truthy
+# value) turns it off. DO_NOT_TRACK is the cross-tool console-telemetry
+# convention (https://consoledonottrack.com/); KBAGENT_DISABLE_TELEMETRY is the
+# kbagent-specific kill switch.
+ENV_DISABLE_TELEMETRY: str = "KBAGENT_DISABLE_TELEMETRY"
+ENV_DO_NOT_TRACK: str = "DO_NOT_TRACK"
+# componentId sent in the event; Connection stores it as `ext.<component>.<configId>`.
+# CLI invocations send no configId -> `ext.keboola.cli.`; serve sends `serve` ->
+# `ext.keboola.cli.serve`, so the two interfaces are separable in telemetry.
+TELEMETRY_COMPONENT_ID: str = "keboola.cli"
+TELEMETRY_SERVE_CONFIG_ID: str = "serve"
+# Short per-request timeout (seconds) for the fire-and-forget event POST, so a
+# slow or firewall-blocked events endpoint never stalls the actual command.
+TELEMETRY_TIMEOUT: float = 3.0
+
 # --- Serve subprocess context (since v0.7.x) ---
 # Injected by `kbagent serve` into scheduled-agent subprocess env so AI CLIs
 # (claude / codex / gemini) and plain `kbagent` invocations can talk to the

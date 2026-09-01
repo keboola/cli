@@ -3,6 +3,7 @@
 Extracted verbatim from the former single-file ``client.py`` (issue #520).
 """
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from ..constants import (
@@ -17,6 +18,59 @@ if TYPE_CHECKING:
 
 class _MiscMixin(_CoreClient):
     """Cross-cutting endpoints: global search, OAuth URL, encryption, sync actions."""
+
+    def trigger_event(
+        self,
+        *,
+        component_id: str,
+        message: str,
+        event_type: str,
+        params: dict[str, Any] | None = None,
+        results: dict[str, Any] | None = None,
+        duration: float | None = None,
+        configuration_id: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Post a custom Storage event (POST /v2/storage/events).
+
+        Connection stores the event under the name ``ext.<component_id>.<configuration_id>``
+        (an empty ``configuration_id`` yields a trailing dot, e.g. ``ext.keboola.cli.``)
+        and stamps it server-side with the caller's token + user agent. Used for
+        per-invocation usage telemetry; callers treat it as fire-and-forget.
+
+        Args:
+            component_id: Registered component id (e.g. ``keboola.cli``).
+            message: Human-readable event message.
+            event_type: ``info`` / ``success`` / ``warn`` / ``error``.
+            params: Optional JSON object matching the component's event schema.
+            results: Optional JSON object (e.g. ``projectId`` / ``error``).
+            duration: Optional processing duration in seconds; the events API
+                ignores floats, so it is rounded up to whole seconds.
+            configuration_id: Optional second name segment (interface discriminator).
+            timeout: Optional short per-request timeout override.
+
+        Returns:
+            The API response dict (``{"id": ...}``).
+        """
+        payload: dict[str, Any] = {
+            "component": component_id,
+            "message": message,
+            "type": event_type,
+        }
+        if configuration_id:
+            payload["configurationId"] = configuration_id
+        if params:
+            payload["params"] = params
+        if results:
+            payload["results"] = results
+        if duration is not None:
+            payload["duration"] = math.ceil(duration)
+
+        request_kwargs: dict[str, Any] = {"json": payload}
+        if timeout is not None:
+            request_kwargs["timeout"] = timeout
+        response = self._request("POST", "/v2/storage/events", **request_kwargs)
+        return response.json()
 
     def encrypt_values(
         self,

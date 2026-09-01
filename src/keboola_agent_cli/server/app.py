@@ -17,18 +17,23 @@ import asyncio
 import contextlib
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
+from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Mount
 
-from .. import __version__
+from .. import __version__, telemetry
 from ..config_store import ConfigStore, resolve_config_dir
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..permissions import PermissionEngine, apply_firewall_flags
+from ._serve_command_map import SERVE_COMMAND_MAP
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
 from .dependencies import ServiceRegistry, install_permission_engine, install_registry
@@ -604,6 +609,80 @@ def _default_permission_engine(
     )
 
 
+class _UsageTelemetryMiddleware:
+    """Post one best-effort usage event per serve operation (``ext.keboola.cli.serve``).
+
+    Pure ASGI (not ``BaseHTTPMiddleware``) so it never buffers the response body
+    -- SSE / streaming routes keep working. It posts nothing for non-HTTP scopes,
+    CORS preflights, unmatched (static / UI) requests, or infra paths; the blocking
+    event POST runs on a worker thread so the event loop is never stalled.
+    """
+
+    def __init__(self, app: Any, config_store: ConfigStore) -> None:
+        self.app = app
+        self._config_store = config_store
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start = time.monotonic()
+        status = {"code": 200}
+
+        async def _send(message: Any) -> None:
+            if message.get("type") == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            # telemetry must never affect the response
+            with contextlib.suppress(Exception):
+                await self._emit(scope, status["code"], time.monotonic() - start)
+
+    async def _emit(self, scope: Any, status_code: int, duration_s: float) -> None:
+        method = scope.get("method", "")
+        if method in ("OPTIONS", "HEAD"):
+            return
+        route = scope.get("route")
+        path = scope.get("path", "")
+        if route is None or isinstance(route, Mount):
+            return
+        if path in telemetry.SERVE_SKIP_PATHS or path.startswith("/health"):
+            return
+
+        # command == the equivalent CLI command so serve and CLI telemetry share one
+        # `command` (only `interface` differs). The map is exhaustive (enforced by a
+        # test); an empty value marks a route with no CLI counterpart -- still logged,
+        # under a route-derived label.
+        template = getattr(route, "path", "")
+        command = SERVE_COMMAND_MAP.get((method, template)) or (
+            getattr(route, "name", "") or ""
+        ).replace("_", " ")
+        if not command:
+            return
+
+        # Most serve routes carry the project in the path (/jobs/{project}/run);
+        # a few take it as ?project=. Fall back to the server's default project.
+        project_alias = (scope.get("path_params") or {}).get("project")
+        if not project_alias:
+            values = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("project")
+            project_alias = values[0] if values else None
+
+        await asyncio.to_thread(
+            telemetry.send_serve_event,
+            self._config_store,
+            method=method,
+            path=path,
+            operation=command,
+            status_code=status_code,
+            duration_s=duration_s,
+            project_alias=project_alias,
+        )
+
+
 def create_app(
     *,
     config_dir: str | None = None,
@@ -728,6 +807,10 @@ def create_app(
         serve_token=resolved_token,
     )
     install_registry(app, registry)
+
+    # Outermost middleware: posts a best-effort per-request usage event
+    # (ext.keboola.cli.serve) after the response, off the event loop.
+    app.add_middleware(_UsageTelemetryMiddleware, config_store=config_store)
 
     # The engine lives on app.state, NOT on the registry: server tests routinely
     # override `get_registry` with a hand-built mock, and an engine reachable

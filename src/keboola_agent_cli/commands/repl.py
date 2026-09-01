@@ -9,6 +9,7 @@ import contextlib
 import os
 import shlex
 import sys
+import time
 from pathlib import Path
 from typing import TypeGuard
 
@@ -20,7 +21,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 
-from .. import __version__
+from .. import __version__, telemetry
 from ._helpers import get_formatter
 
 
@@ -209,14 +210,31 @@ def _run_repl(
             sys.stderr.write("Already in REPL mode.\n")
             continue
 
-        # Execute the command via Typer
+        # Execute the command via Typer, then post one usage event -- a REPL
+        # line is a normal command, so it is logged exactly like a direct
+        # invocation. standalone_mode=False returns the command result (None on
+        # success), returns the code of a raised typer.Exit as an int, and lets
+        # any other exception propagate.
+        telemetry.reset()
+        start = time.monotonic()
+        exit_code = 0
+        error: BaseException | None = None
         try:
             click_app = typer.main.get_command(typer_app)
-            click_app(full_argv, standalone_mode=False)
-        except SystemExit:
-            pass  # Typer/Click raises SystemExit on --help or errors
+            result = click_app(full_argv, standalone_mode=False)
+            if isinstance(result, int):
+                exit_code = result  # typer.Exit(code); 0 = success
+        except SystemExit as exc:
+            code = exc.code
+            exit_code = code if isinstance(code, int) else (0 if code is None else 1)
         except Exception as exc:
+            exit_code = 1
+            error = exc
             sys.stderr.write(f"Error: {exc}\n")
+        finally:
+            telemetry.emit_cli_invocation(
+                ["kbagent", *full_argv], exit_code, error, time.monotonic() - start
+            )
 
 
 def repl_command(ctx: typer.Context) -> None:

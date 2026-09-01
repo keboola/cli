@@ -2,10 +2,12 @@
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 import typer
 
+from . import telemetry
 from .commands.agent import agent_app
 from .commands.auth import auth_app
 from .commands.billing import billing_app
@@ -449,3 +451,34 @@ def main(
             deny_destructive=deny_destructive,
         )
         raise typer.Exit()
+
+
+def run() -> None:
+    """Console-script entry point.
+
+    Wraps ``app()`` so exactly one best-effort usage event is posted per
+    invocation (see :mod:`telemetry`), carrying the command's exit code and
+    wall-clock duration. Telemetry never changes the exit code, swallows the
+    raised exception, or stalls the command.
+    """
+    telemetry.reset()
+    start = time.monotonic()
+    exit_code = 0
+    error: BaseException | None = None
+    interrupted = False
+    try:
+        app()
+    except KeyboardInterrupt:
+        interrupted = True
+        raise
+    except SystemExit as exc:
+        code = exc.code
+        exit_code = code if isinstance(code, int) else (0 if code is None else 1)
+        raise
+    except BaseException as exc:  # recorded for telemetry, then re-raised
+        exit_code = 1
+        error = exc
+        raise
+    finally:
+        if not interrupted:
+            telemetry.emit_cli_invocation(sys.argv, exit_code, error, time.monotonic() - start)

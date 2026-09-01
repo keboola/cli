@@ -33,7 +33,7 @@ server = [
 ]
 
 [project.scripts]
-kbagent = "keboola_agent_cli.cli:app"
+kbagent = "keboola_agent_cli.cli:run"
 
 [build-system]
 requires = ["hatchling"]
