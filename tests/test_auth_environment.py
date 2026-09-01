@@ -366,3 +366,54 @@ class TestOpenBrowser:
         for thread in list(environment.threading.enumerate()):
             if thread is not environment.threading.current_thread():
                 thread.join(timeout=1.0)
+
+
+class TestOpenBrowserUnderWsl:
+    """WSL is `sys.platform == "linux"`, so `webbrowser` never reaches Windows itself."""
+
+    def test_hands_the_url_to_wslview(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        url = "https://external.keboola.com/oauth/index.html?token=t&sapiUrl=u#/comp/cfg"
+
+        assert open_browser(url) is True
+        assert calls == [["wslview", "--version"], ["wslview", url]]
+
+    def test_reports_failure_when_wslview_rejects_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            code = 0 if cmd[1:] == ["--version"] else 1
+            return subprocess.CompletedProcess(cmd, code, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        assert open_browser("https://external.keboola.com/oauth/index.html?token=t") is False
+
+    def test_falls_back_to_webbrowser_without_a_working_wslview(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        opened: list[str] = []
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(environment.webbrowser, "get", lambda: object())
+        monkeypatch.setattr(environment.webbrowser, "open", opened.append)
+
+        assert open_browser("https://external.keboola.com/oauth/index.html?token=t") is True
+
+        for thread in list(environment.threading.enumerate()):
+            if thread is not environment.threading.current_thread():
+                thread.join(timeout=1.0)
+
+        assert opened == ["https://external.keboola.com/oauth/index.html?token=t"]
