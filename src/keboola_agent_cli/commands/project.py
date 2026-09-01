@@ -4,7 +4,6 @@ Thin CLI layer: parses arguments, calls ProjectService, formats output.
 No business logic belongs here.
 """
 
-import sys
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -25,11 +24,18 @@ from ..constants import (
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._helpers import (
+    KEEP_TOKEN_FILE_OPTION,
+    TOKEN_ENV_OPTION,
+    TOKEN_FILE_OPTION,
+    TOKEN_STDIN_OPTION,
     check_cli_permission,
+    discard_token_file,
     get_formatter,
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
+    resolve_storage_token_input,
+    token_came_from_command_line,
 )
 from ._metadata_input import resolve_text_input
 
@@ -151,39 +157,6 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     console.print(table)
 
 
-def _resolve_token(token: str | None) -> str:
-    """Resolve the Storage API token, falling back to interactive prompt.
-
-    Token resolution order (Typer handles steps 1-2 automatically via envvar):
-    1. --token CLI argument
-    2. KBC_TOKEN env var (handled by Typer's envvar parameter)
-    3. Interactive prompt with hidden input (if TTY)
-    4. Error if none available
-
-    Args:
-        token: Token from --token or KBC_TOKEN env var (resolved by Typer), or None.
-
-    Returns:
-        The Storage API token.
-
-    Raises:
-        typer.Exit: If no token can be resolved.
-    """
-    if token:
-        return token
-
-    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-    if is_tty:
-        return typer.prompt("Storage API token", hide_input=True)
-
-    typer.echo(
-        f"Error: No token available. Pass --token, set {ENV_KBC_TOKEN} env var, "
-        "or run interactively.",
-        err=True,
-    )
-    raise typer.Exit(code=2)
-
-
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
@@ -195,17 +168,34 @@ def project_add(
     ),
     token: str | None = typer.Option(
         None,
-        help="Storage API token (also via KBC_TOKEN env var)",
+        help="Storage API token. Also settable via KBC_TOKEN. Prefer --token-stdin: a "
+        "token passed here lands in your shell history and in a process listing.",
         envvar=ENV_KBC_TOKEN,
     ),
+    token_stdin: bool = TOKEN_STDIN_OPTION,
+    token_file: Path | None = TOKEN_FILE_OPTION,
+    token_env: str | None = TOKEN_ENV_OPTION,
+    keep_token_file: bool = KEEP_TOKEN_FILE_OPTION,
 ) -> None:
     """Add a new Keboola project connection.
 
-    Token is read from --token, KBC_TOKEN env var, or prompted interactively.
+    The token comes from --token-stdin, --token-file, --token-env, --token,
+    the KBC_TOKEN env var, or an interactive prompt. Every source other than
+    --token keeps the value out of your shell history.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
-    resolved_token = _resolve_token(token)
+    resolved_token = resolve_storage_token_input(
+        token=token,
+        token_stdin=token_stdin,
+        token_file=token_file,
+        token_env=token_env,
+        keep_token_file=keep_token_file,
+        required=True,
+        # `--token` and KBC_TOKEN arrive in one parameter; only a value typed
+        # on the command line is in the shell history.
+        token_from_cli=token_came_from_command_line(ctx),
+    )
 
     try:
         result = service.add_project(alias=alias, stack_url=url, token=resolved_token)
@@ -216,6 +206,7 @@ def project_add(
                 f"added (project: {escape(d['project_name'])}, id: {d['project_id']})"
             ),
         )
+        discard_token_file(token_file, keep=keep_token_file)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         formatter.error(
@@ -273,9 +264,14 @@ def project_edit(
             "New Storage API token. On a project registered by 'kbagent auth "
             "login' this deliberately converts it to a static-token project, "
             "which 'kbagent auth logout --remove-projects' no longer cleans up; "
-            "a warning says so."
+            "a warning says so. Prefer --token-stdin: a token passed here lands in "
+            "your shell history and in a process listing."
         ),
     ),
+    token_stdin: bool = TOKEN_STDIN_OPTION,
+    token_file: Path | None = TOKEN_FILE_OPTION,
+    token_env: str | None = TOKEN_ENV_OPTION,
+    keep_token_file: bool = KEEP_TOKEN_FILE_OPTION,
     new_alias: str | None = typer.Option(
         None,
         "--new-alias",
@@ -302,19 +298,37 @@ def project_edit(
 ) -> None:
     """Edit an existing Keboola project connection.
 
-    If --token is provided, the token is re-verified against the API.
-    Combined with --new-alias, the rename is applied first and any
-    --url / --token mutation lands on the new alias key. Pass --dry-run
-    to preview without mutating state.
+    A new token can come from --token-stdin, --token-file, --token-env or
+    --token; every source other than --token keeps the value out of your
+    shell history. The token is optional here, so with none of them the
+    command changes no credential and never prompts.
+
+    Unlike `project add`, this command ignores KBC_TOKEN. A new token
+    rewrites the alias's project_id and project_name from whatever the
+    token verifies as, so an exported variable could silently repoint the
+    alias at another project during an unrelated edit such as --new-alias.
+
+    If a token is provided, it is re-verified against the API. Combined
+    with --new-alias, the rename is applied first and any --url / --token
+    mutation lands on the new alias key. Pass --dry-run to preview without
+    mutating state.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
+    resolved_token = resolve_storage_token_input(
+        token=token,
+        token_stdin=token_stdin,
+        token_file=token_file,
+        token_env=token_env,
+        keep_token_file=keep_token_file,
+        required=False,
+    )
 
     try:
         result = service.edit_project(
             alias=alias,
             stack_url=url,
-            token=token,
+            token=resolved_token,
             new_alias=new_alias,
             dry_run=dry_run,
         )
@@ -354,6 +368,7 @@ def project_edit(
             formatter.warning(warning)
 
         formatter.output(result, _human)
+        discard_token_file(token_file, keep=keep_token_file, dry_run=dry_run)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         formatter.error(

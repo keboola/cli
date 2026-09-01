@@ -11,6 +11,7 @@ import getpass
 import os
 import secrets
 import sys
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -18,6 +19,7 @@ import typer
 from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
+    ENV_KBC_TOKEN,
     EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
@@ -73,21 +75,259 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
     raise typer.Exit(code=2)
 
 
-def read_password_stdin() -> str:
-    """Read a password from stdin.
+def read_password_stdin(label: str = "Password: ") -> str:
+    """Read a secret from stdin.
 
     TTY -> getpass (hidden, line-based, Enter to confirm).
     Pipe/redirected -> read to EOF, strip whitespace.
     Using `sys.stdin.read()` unconditionally would hang interactively
     until the user sent EOF (Ctrl-D); getpass on TTY fixes that.
 
-    Shared by `auth login-password --password-stdin` and `dev-portal
-    identity add/edit --password-stdin` -- the same input contract, so one
-    helper rather than a private copy per command module.
+    Shared by `auth login-password --password-stdin`, `dev-portal identity
+    add/edit --password-stdin` and `project add/edit --token-stdin` -- the
+    same input contract, so one helper rather than a private copy per
+    command module. ``label`` is the prompt shown on a TTY.
     """
     if sys.stdin.isatty():
-        return getpass.getpass("Password: ").strip()
+        return getpass.getpass(label).strip()
     return sys.stdin.read().strip()
+
+
+def _read_token_file(path: Path) -> str:
+    """Read a Storage API token out of a file, and check the file's mode."""
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"Cannot read token file {path}: {exc}",
+            param_hint="--token-file",
+        ) from exc
+    if not token:
+        raise typer.BadParameter(f"Token file {path} is empty.", param_hint="--token-file")
+    # Windows reports fabricated POSIX bits (an ordinary file reads as ~0o666),
+    # so the mode check would warn on every use. Skip it there, as
+    # auth/state_store.py and services/doctor_service.py already do.
+    if os.name != "nt":
+        try:
+            mode = path.stat().st_mode & 0o777
+        except OSError:  # pragma: no cover - the read above already succeeded
+            mode = 0
+        if mode & 0o077:
+            typer.echo(
+                f"Warning: {path} is accessible to other users (mode {mode:04o}). "
+                "A token file should be 0600.",
+                err=True,
+            )
+    return token
+
+
+# Shared declarations for the token-input flags. `project add` and `project
+# edit` offer the same set, and one definition keeps their help text from
+# drifting apart -- `project.py` is already over its soft size ceiling.
+TOKEN_STDIN_OPTION = typer.Option(
+    False,
+    "--token-stdin",
+    help="Read the token from stdin instead of --token. On a TTY this is a hidden "
+    "prompt (Enter to confirm); on a pipe it reads until EOF (e.g. "
+    "`printf '%s' \"$TOKEN\" | kbagent project edit --project P --token-stdin`). "
+    "The token stays out of your shell history and out of a process listing.",
+)
+
+TOKEN_FILE_OPTION = typer.Option(
+    None,
+    "--token-file",
+    help="Read the token from this file. kbagent deletes the file after the command "
+    "succeeds -- pass --keep-token-file to keep it. Deleting a file removes the "
+    "directory entry, not the bytes on disk. Give the file mode 0600.",
+    exists=True,
+    readable=True,
+    dir_okay=False,
+)
+
+TOKEN_ENV_OPTION = typer.Option(
+    None,
+    "--token-env",
+    help="Read the token from the environment variable with this name, e.g. "
+    "`--token-env CI_KBC_TOKEN`. kbagent reads no variable unless you name it. "
+    "Use this in CI, where the runner sets the variable from a secret.",
+)
+
+KEEP_TOKEN_FILE_OPTION = typer.Option(
+    False,
+    "--keep-token-file",
+    help="Keep the --token-file file instead of deleting it. Use this for a "
+    "read-only mount, or for a file you read more than once.",
+)
+
+
+def token_came_from_command_line(ctx: typer.Context, param_name: str = "token") -> bool:
+    """Report whether a parameter's value was typed on the command line.
+
+    `--token` and its `envvar=` reach the command in one parameter, and only
+    the typed one is in the shell history, so the warning has to tell them
+    apart. Click records the origin, but Typer bundles its own copy of Click
+    (`typer._click`), so the `ParameterSource` enum a running context returns
+    is a different class from `click.core.ParameterSource`. Comparing the two
+    with `==` is always False, which switches the warning off without a word.
+    Match on the member name, which is the same in both copies.
+
+    An unknown origin counts as the command line: a missing warning defeats
+    the point of the flag, while a spare one costs the reader a line.
+    """
+    source = ctx.get_parameter_source(param_name)
+    return source is None or source.name == "COMMANDLINE"
+
+
+def resolve_storage_token_input(
+    *,
+    token: str | None,
+    token_stdin: bool = False,
+    token_file: Path | None = None,
+    token_env: str | None = None,
+    keep_token_file: bool = False,
+    required: bool,
+    token_from_cli: bool = True,
+) -> str | None:
+    """Resolve a Storage API token from exactly one permitted source.
+
+    The point of every source other than ``--token`` is that the value
+    never reaches the command line, where it lands in the shell history,
+    in the kbagent REPL history file, and in a process listing.
+
+    Resolution order -- the four explicit sources are mutually exclusive:
+
+    1. ``--token-stdin`` -- hidden prompt on a TTY, read to EOF on a pipe.
+    2. ``--token-file`` -- read the file. Call ``discard_token_file()``
+       after the command succeeds to delete it.
+    3. ``--token-env`` -- read the named environment variable.
+    4. ``token`` -- the ``--token`` value. For ``project add`` this also
+       carries ``KBC_TOKEN``, because Typer merges the flag and the envvar
+       into one parameter. Such a value is implicit, so it does not count
+       as an explicit source and it gets no shell-history warning; the
+       caller reports the difference through ``token_from_cli``.
+    5. Nothing given -- prompt on a TTY when ``required`` is True, and
+       exit 2 when there is no TTY. A caller whose token is optional
+       (``project edit``) passes ``required=False`` and gets ``None``.
+
+    Args:
+        token: Value of ``--token``, or of the envvar the caller declares.
+        token_stdin: ``--token-stdin`` was passed.
+        token_file: Path from ``--token-file``.
+        token_env: Variable name from ``--token-env``.
+        keep_token_file: ``--keep-token-file`` was passed. Validated here
+            because it is meaningless without ``--token-file``; the flag
+            itself is acted on by ``discard_token_file()``.
+        required: The command cannot continue without a token.
+        token_from_cli: ``token`` came from the command line, not from the
+            environment. Keeps the shell-history warning truthful.
+
+    Returns:
+        The token, or ``None`` when nothing was given and ``required`` is
+        False.
+
+    Raises:
+        typer.BadParameter: More than one explicit source, an unreadable or
+            empty file, an unset or empty named variable, or
+            ``--keep-token-file`` without ``--token-file``.
+        typer.Exit: ``required`` is True and there is nothing to read
+            (exit code 2).
+    """
+    if keep_token_file and token_file is None:
+        raise typer.BadParameter(
+            "--keep-token-file applies only together with --token-file.",
+            param_hint="--keep-token-file",
+        )
+
+    given = [
+        flag
+        for flag, present in (
+            ("--token", token is not None and token_from_cli),
+            ("--token-stdin", token_stdin),
+            ("--token-file", token_file is not None),
+            ("--token-env", token_env is not None),
+        )
+        if present
+    ]
+    if len(given) > 1:
+        raise typer.BadParameter(
+            f"Specify exactly one of {' / '.join(given)}.",
+            param_hint=given[0],
+        )
+
+    if token_stdin:
+        return read_password_stdin(label="Storage API token: ")
+
+    if token_file is not None:
+        return _read_token_file(token_file)
+
+    if token_env is not None:
+        value = os.environ.get(token_env, "")
+        if not value:
+            raise typer.BadParameter(
+                f"Environment variable {token_env} is unset or empty.",
+                param_hint="--token-env",
+            )
+        return value
+
+    if token:
+        if token_from_cli and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            typer.echo(
+                "Warning: the token you passed with --token is now in your shell "
+                "history. Delete that history entry, or invalidate the token. "
+                "Use --token-stdin to keep the next one out of the history.",
+                err=True,
+            )
+        return token
+
+    if not required:
+        return None
+
+    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        return typer.prompt("Storage API token", hide_input=True)
+
+    typer.echo(
+        "Error: No token available. Pass --token-stdin, --token-file, "
+        f"--token-env, or --token; set {ENV_KBC_TOKEN}; or run interactively.",
+        err=True,
+    )
+    raise typer.Exit(code=2)
+
+
+def discard_token_file(path: Path | None, *, keep: bool = False, dry_run: bool = False) -> None:
+    """Delete the ``--token-file`` after the command that read it succeeded.
+
+    The file carries the token to kbagent; it is not a store. Deleting it
+    at read time would cost the user the file every time the token failed
+    verification, and deleting it during ``--dry-run`` would make a preview
+    destructive. So the caller invokes this only on the success path.
+
+    A failed unlink is a warning, not an error. A read-only mount (a
+    Kubernetes secret, a CI volume) is a legitimate setup, and the command
+    has already done its work by this point.
+
+    ``unlink`` removes the directory entry; it does not scrub the bytes. On
+    a copy-on-write filesystem or an SSD the content can survive.
+    """
+    if path is None:
+        return
+    if dry_run:
+        typer.echo(f"Note: {path} was kept (--dry-run). It still holds the token.", err=True)
+        return
+    if keep:
+        typer.echo(
+            f"Warning: {path} still holds the token (--keep-token-file). Delete it yourself.",
+            err=True,
+        )
+        return
+    try:
+        path.unlink()
+    except OSError as exc:
+        typer.echo(
+            f"Warning: could not delete {path} ({exc}). It still holds the token.",
+            err=True,
+        )
+        return
+    typer.echo(f"Deleted the token file {path}.", err=True)
 
 
 def get_formatter(ctx: typer.Context) -> OutputFormatter:

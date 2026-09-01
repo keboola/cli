@@ -1,9 +1,20 @@
 """Tests for commands._helpers shared command-layer utilities."""
 
+from collections.abc import Callable
+from pathlib import Path
+
 import pytest
 import typer
+from typer.testing import CliRunner
 
-from keboola_agent_cli.commands._helpers import map_error_to_exit_code, read_password_stdin
+from keboola_agent_cli.commands import _helpers
+from keboola_agent_cli.commands._helpers import (
+    discard_token_file,
+    map_error_to_exit_code,
+    read_password_stdin,
+    resolve_storage_token_input,
+    token_came_from_command_line,
+)
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError, map_error_code_to_type
 
 
@@ -744,3 +755,296 @@ class TestRequireRandomCodeConfirmation:
 
             require_random_code_confirmation("patch app")
         assert exc.value.exit_code == 6
+
+
+class TestResolveStorageTokenInput:
+    """`project add` / `project edit` accept a Storage token from four sources.
+
+    Everything except `--token` keeps the value off the command line, and so
+    out of the shell history, the kbagent REPL history file, and a process
+    listing. The sources are mutually exclusive, and only a command-line
+    `--token` earns the shell-history warning -- a value that Typer merged in
+    from KBC_TOKEN was never typed, so warning about it would be a lie.
+    """
+
+    _SENTINEL = "9999-kbagent-test-sentinel-storage-token"
+
+    def _write_token_file(self, tmp_path: Path, mode: int = 0o600) -> Path:
+        path = tmp_path / "token.txt"
+        path.write_text(f"{self._SENTINEL}\n", encoding="utf-8")
+        path.chmod(mode)
+        return path
+
+    # ----- one source at a time -----
+
+    def test_stdin_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            _helpers, "read_password_stdin", lambda label="Password: ": self._SENTINEL
+        )
+        result = resolve_storage_token_input(token=None, token_stdin=True, required=True)
+        assert result == self._SENTINEL
+
+    def test_file_source_strips_trailing_newline(self, tmp_path: Path) -> None:
+        path = self._write_token_file(tmp_path)
+        assert resolve_storage_token_input(token=None, token_file=path, required=True) == (
+            self._SENTINEL
+        )
+
+    def test_env_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI_KBC_TOKEN", self._SENTINEL)
+        result = resolve_storage_token_input(token=None, token_env="CI_KBC_TOKEN", required=True)
+        assert result == self._SENTINEL
+
+    def test_token_from_cli_returns_value(self) -> None:
+        result = resolve_storage_token_input(token=self._SENTINEL, required=True)
+        assert result == self._SENTINEL
+
+    # ----- the shell-history warning -----
+
+    def test_cli_token_on_a_tty_warns_about_shell_history(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        resolve_storage_token_input(token=self._SENTINEL, required=True, token_from_cli=True)
+        assert "shell history" in capsys.readouterr().err
+
+    def test_env_token_never_warns(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A KBC_TOKEN value reaches the resolver in the same parameter as
+        `--token`, but it was never typed, so it is not in the history."""
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        resolve_storage_token_input(token=self._SENTINEL, required=True, token_from_cli=False)
+        assert "shell history" not in capsys.readouterr().err
+
+    def test_no_tty_does_not_warn(self, capsys: pytest.CaptureFixture[str]) -> None:
+        resolve_storage_token_input(token=self._SENTINEL, required=True, token_from_cli=True)
+        assert "shell history" not in capsys.readouterr().err
+
+    # ----- mutual exclusion -----
+
+    def test_two_explicit_sources_are_rejected(self, tmp_path: Path) -> None:
+        path = self._write_token_file(tmp_path)
+        with pytest.raises(typer.BadParameter, match="Specify exactly one of"):
+            resolve_storage_token_input(
+                token=None, token_stdin=True, token_file=path, required=True
+            )
+
+    def test_cli_token_conflicts_with_an_explicit_source(self, tmp_path: Path) -> None:
+        path = self._write_token_file(tmp_path)
+        with pytest.raises(typer.BadParameter, match="Specify exactly one of"):
+            resolve_storage_token_input(token=self._SENTINEL, token_file=path, required=True)
+
+    def test_env_token_loses_to_an_explicit_source(self, tmp_path: Path) -> None:
+        """KBC_TOKEN is implicit, so it does not collide -- explicit wins."""
+        path = self._write_token_file(tmp_path)
+        result = resolve_storage_token_input(
+            token="9999-value-from-the-environment",
+            token_file=path,
+            required=True,
+            token_from_cli=False,
+        )
+        assert result == self._SENTINEL
+
+    def test_keep_token_file_without_token_file_is_rejected(self) -> None:
+        with pytest.raises(typer.BadParameter, match="only together with --token-file"):
+            resolve_storage_token_input(token=None, keep_token_file=True, required=False)
+
+    # ----- bad input -----
+
+    def test_empty_file_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty.txt"
+        path.write_text("   \n", encoding="utf-8")
+        with pytest.raises(typer.BadParameter, match="is empty"):
+            resolve_storage_token_input(token=None, token_file=path, required=True)
+
+    def test_unreadable_file_is_rejected(self, tmp_path: Path) -> None:
+        path = self._write_token_file(tmp_path, mode=0o000)
+        with pytest.raises(typer.BadParameter, match="Cannot read token file"):
+            resolve_storage_token_input(token=None, token_file=path, required=True)
+
+    @pytest.mark.parametrize("value", ["", None])
+    def test_unset_or_empty_named_variable_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, value: str | None
+    ) -> None:
+        if value is None:
+            monkeypatch.delenv("CI_KBC_TOKEN", raising=False)
+        else:
+            monkeypatch.setenv("CI_KBC_TOKEN", value)
+        with pytest.raises(typer.BadParameter, match="unset or empty"):
+            resolve_storage_token_input(token=None, token_env="CI_KBC_TOKEN", required=True)
+
+    # ----- file mode -----
+
+    def test_world_readable_file_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(_helpers.os, "name", "posix")
+        path = self._write_token_file(tmp_path, mode=0o644)
+        resolve_storage_token_input(token=None, token_file=path, required=True)
+        assert "accessible to other users" in capsys.readouterr().err
+
+    def test_private_file_does_not_warn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(_helpers.os, "name", "posix")
+        path = self._write_token_file(tmp_path, mode=0o600)
+        resolve_storage_token_input(token=None, token_file=path, required=True)
+        assert "accessible to other users" not in capsys.readouterr().err
+
+    def test_permission_check_is_skipped_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Windows reports fabricated POSIX bits, so the mode check would warn
+        on every use. It must be skipped there, as the two sibling checks are."""
+        monkeypatch.setattr(_helpers.os, "name", "nt")
+        path = self._write_token_file(tmp_path, mode=0o644)
+        assert resolve_storage_token_input(token=None, token_file=path, required=True) == (
+            self._SENTINEL
+        )
+        assert "accessible to other users" not in capsys.readouterr().err
+
+    # ----- nothing given -----
+
+    def test_optional_token_returns_none_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`project edit --new-alias` passes no token and must not be asked for one."""
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        monkeypatch.setattr(
+            _helpers.typer, "prompt", lambda *a, **k: pytest.fail("must not prompt")
+        )
+        assert resolve_storage_token_input(token=None, required=False) is None
+
+    def test_required_token_prompts_on_a_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        monkeypatch.setattr(_helpers.typer, "prompt", lambda *a, **k: "prompted-token")
+        assert resolve_storage_token_input(token=None, required=True) == "prompted-token"
+
+    def test_required_token_without_a_tty_exits_2(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(typer.Exit) as excinfo:
+            resolve_storage_token_input(token=None, required=True)
+        assert excinfo.value.exit_code == 2
+        err = capsys.readouterr().err
+        for flag in ("--token-stdin", "--token-file", "--token-env", "KBC_TOKEN"):
+            assert flag in err
+
+    # ----- leak regression -----
+
+    def test_token_value_never_appears_in_captured_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Regression pin: no source may echo the token to stdout or stderr."""
+        monkeypatch.setenv("CI_KBC_TOKEN", self._SENTINEL)
+        monkeypatch.setattr(
+            _helpers, "read_password_stdin", lambda label="Password: ": self._SENTINEL
+        )
+        monkeypatch.setattr(_helpers.sys.stdin, "isatty", lambda: True, raising=False)
+        token_file = self._write_token_file(tmp_path, mode=0o644)
+        sources: list[Callable[[], str | None]] = [
+            lambda: resolve_storage_token_input(token=self._SENTINEL, required=True),
+            lambda: resolve_storage_token_input(token=None, token_stdin=True, required=True),
+            lambda: resolve_storage_token_input(token=None, token_file=token_file, required=True),
+            lambda: resolve_storage_token_input(
+                token=None, token_env="CI_KBC_TOKEN", required=True
+            ),
+        ]
+        for resolve in sources:
+            assert resolve() == self._SENTINEL
+            captured = capsys.readouterr()
+            assert self._SENTINEL not in captured.out
+            assert self._SENTINEL not in captured.err
+
+
+class TestDiscardTokenFile:
+    """`--token-file` is a carrier, not a store, so the file goes once the
+    command has succeeded. Never on a preview, never on a failure, and never
+    loudly enough to fail a command that already did its work."""
+
+    def _token_file(self, tmp_path: Path) -> Path:
+        path = tmp_path / "token.txt"
+        path.write_text("9999-carrier\n", encoding="utf-8")
+        return path
+
+    def test_deletes_the_file(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        path = self._token_file(tmp_path)
+        discard_token_file(path)
+        assert not path.exists()
+        assert "Deleted the token file" in capsys.readouterr().err
+
+    def test_keep_leaves_the_file_and_warns(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = self._token_file(tmp_path)
+        discard_token_file(path, keep=True)
+        assert path.exists()
+        assert "still holds the token" in capsys.readouterr().err
+
+    def test_dry_run_leaves_the_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = self._token_file(tmp_path)
+        discard_token_file(path, dry_run=True)
+        assert path.exists()
+        assert "--dry-run" in capsys.readouterr().err
+
+    def test_no_file_is_a_no_op(self, capsys: pytest.CaptureFixture[str]) -> None:
+        discard_token_file(None)
+        assert capsys.readouterr().err == ""
+
+    def test_unlink_failure_warns_but_does_not_raise(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A Kubernetes secret or a CI volume is read-only. The command has
+        already succeeded by this point, so failing it here would be worse
+        than the leftover file."""
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        path = locked / "token.txt"
+        path.write_text("9999-carrier\n", encoding="utf-8")
+        locked.chmod(0o500)
+        try:
+            discard_token_file(path)
+            assert path.exists()
+            assert "could not delete" in capsys.readouterr().err
+        finally:
+            locked.chmod(0o700)
+
+
+class TestTokenCameFromCommandLine:
+    """Regression pin for the vendored-Click trap.
+
+    Typer ships its own copy of Click, so `click.core.ParameterSource` and the
+    enum a running context returns are different classes. The first version of
+    this check compared them with `==`, which is always False -- the
+    shell-history warning went silent and `--token` stopped conflicting with
+    the other sources. Matching on the member name survives both copies.
+    """
+
+    def _probe_app(self) -> tuple[typer.Typer, list[bool]]:
+        seen: list[bool] = []
+        app = typer.Typer()
+
+        @app.command()
+        def probe(
+            ctx: typer.Context,
+            token: str | None = typer.Option(None, envvar="PROBE_TOKEN"),
+        ) -> None:
+            seen.append(token_came_from_command_line(ctx))
+
+        return app, seen
+
+    def test_command_line_value_is_reported_as_typed(self) -> None:
+        app, seen = self._probe_app()
+        result = CliRunner().invoke(app, ["--token", "typed-value"])
+        assert result.exit_code == 0, result.output
+        assert seen == [True]
+
+    def test_environment_value_is_not_reported_as_typed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PROBE_TOKEN", "env-value")
+        app, seen = self._probe_app()
+        result = CliRunner().invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert seen == [False]
