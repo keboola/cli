@@ -44,8 +44,7 @@ _DERIVED_STATE_BY_RAW: dict[str, str] = {
 }
 
 # Mechanical action availability per raw state, verified against the Symfony
-# workflow (MergeRequestLifecycleStateMachine + guards; Opus wire review
-# 2026-08-27):
+# workflow (MergeRequestLifecycleStateMachine + its guards):
 # - `approve` exists ONLY in in_review (the transition's sole `from` place);
 #   from `approved` the backend answers 422. Even in in_review it is further
 #   gated by AddApprovalGuard (not the creator, not already approved,
@@ -91,6 +90,21 @@ def _same_id(a: Any, b: Any) -> bool:
     return a is not None and b is not None and str(a) == str(b)
 
 
+def _coerce_branch_id(value: Any) -> int | None:
+    """A wire branch id as int, or None when absent or not numeric.
+
+    The payload mixes int and str ids (the reason _same_id exists); a
+    non-numeric value must degrade to "no usable branch id", never to an
+    unhandled ValueError on the error path.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _creator_id(mr: dict[str, Any]) -> Any:
     return (mr.get("creator") or {}).get("id")
 
@@ -110,8 +124,7 @@ def derive_state(mr: dict[str, Any]) -> str:
     - otherwise the raw state mapped through ``_DERIVED_STATE_BY_RAW``
       (an unknown raw state passes through unchanged, defensively).
 
-    Reliability caveat (verified against Connection, Opus wire review
-    2026-08-27): ``reviewers[].status`` is populated only within a review
+    Reliability caveat (verified against Connection): ``reviewers[].status`` is populated only within a review
     round anchored by an actual ``request_review`` event, and a non-reviewer's
     decision (the creator's included -- the creator can never BE a reviewer)
     is dropped whenever explicit reviewers exist. ``skip_review`` writes no
@@ -246,7 +259,15 @@ def _enrich_row(mr: dict[str, Any]) -> dict[str, Any]:
     derived_state + allowed_actions (both are free -- state-only). Conflicts
     are not fetched here, so no blockers -- detail-level enrichment does that.
     A --json consumer of create/update/transitions can answer "what can I do
-    next" without a second call (findings doc, DMD-1900)."""
+    next" without a second call.
+
+    State-only also means FEATURE-BLIND: on a project that once had merge
+    requests and lost the feature, rows still advertise write actions the
+    pre-flight will refuse. Deliberate -- closing it would cost a
+    verify_token GET on every non-empty list for a rare configuration, and
+    the pre-flight answers any attempted write with the precise error; the
+    real fix is the server serializing ``allowedActions`` (DMD-1988), which
+    can honor features."""
     return {
         **mr,
         "derived_state": derive_state(mr),
@@ -367,8 +388,8 @@ class MergeRequestService(BaseService):
         -- but first checks the feature on the no-match path: the list
         endpoint is ungated, so a project without ``branches-merge-requests``
         also answers ``200 + []``, and a NOT_FOUND prescribing ``create``
-        would send the user into a guaranteed FEATURE_NOT_ENABLED loop
-        (Zajca's PR review). The feature check costs one verify_token GET
+        would send the user into a guaranteed FEATURE_NOT_ENABLED loop.
+        The feature check costs one verify_token GET
         and is spent only when nothing matched.
         """
         project = self._project(alias)
@@ -655,7 +676,7 @@ class MergeRequestService(BaseService):
             raw_branch_from = (
                 client.merge_requests.get(merge_request_id).get("branches") or {}
             ).get("branchFromId")
-            branch_from_id = int(raw_branch_from) if raw_branch_from is not None else None
+            branch_from_id = _coerce_branch_id(raw_branch_from)
             try:
                 job = client.merge_requests.merge(merge_request_id)
             except KeboolaApiError as exc:
@@ -667,15 +688,21 @@ class MergeRequestService(BaseService):
         was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
         cleanup_warnings: list[str] = []
+        # The merge already happened: a failed local cleanup must not turn it
+        # into a failed command -- and the two cleanups are independent, so a
+        # failed config write must not skip the mapping unlink (or vice versa).
         try:
             if was_active:
                 self._config_store.set_project_branch(alias, None)
+        except Exception as exc:
+            logger.warning("Post-merge active-branch reset failed: %s", exc)
+            cleanup_warnings.append(f"Post-merge active-branch reset failed: {exc}")
+        try:
             if branch_from_id is not None:
                 mapping_cleanup = cleanup_branch_id_from_mapping(branch_from_id)
         except Exception as exc:
-            # a failed local cleanup must not turn it into a failed command.
-            logger.warning("Post-merge cleanup failed: %s", exc)
-            cleanup_warnings.append(f"Post-merge cleanup failed: {exc}")
+            logger.warning("Post-merge sync-mapping cleanup failed: %s", exc)
+            cleanup_warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
 
         results = job.get("results")
         mr_after: dict[str, Any] = results if isinstance(results, dict) else {}
@@ -837,11 +864,22 @@ class MergeRequestService(BaseService):
         }
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
-        """Intersect the two pairwise diffs (base->ours, base->theirs) per path."""
+        """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
+
+        Only meaningful when BOTH sides exist: a null side (the config never
+        existed there) is a side-level fact carried by the ``ours_deleted`` /
+        ``theirs_deleted`` flags, and fabricating per-path rows against an
+        empty stand-in would emit contradictions -- every base key rendered
+        as "that side removed it" next to a flag saying the side does not
+        exist. So a null ours/theirs yields no ``changes`` at all.
+        """
+        if diff.get("ours") is None or diff.get("theirs") is None:
+            return []
 
         def content(side: dict[str, Any] | None) -> dict[str, Any]:
             # The side's content lives in its nested ``diff`` envelope (wire
-            # truth above); a null side contributes nothing.
+            # truth above); a null base (config created on both sides)
+            # contributes nothing.
             envelope = (side or {}).get("diff") or {}
             return {key: envelope[key] for key in self._DIFF_CONTENT_KEYS if key in envelope}
 
@@ -919,9 +957,12 @@ class MergeRequestService(BaseService):
           resolution too -- "production deleted it, dev changed it" and its
           mirror are live conflict shapes.
         - ``resolved={...}``: a caller-authored three-way merge -- a FLAT
-          body that must carry ``name``, ``rows`` and ``configuration``
-          explicitly (rebase REPLACES; a missing key would silently wipe
-          data, so it is refused instead of defaulted).
+          body that must carry ALL FIVE replaced fields explicitly:
+          ``name``, ``rows``, ``configuration``, ``isDisabled`` and
+          ``description`` (nullable, but must be present). Rebase REPLACES;
+          a missing key would silently wipe data -- re-enable a disabled
+          config, drop a description -- so it is refused instead of
+          defaulted.
 
         The config must be in the MR's live conflict set; ``version`` is
         taken from the diff's ``theirs.version`` (the default-branch version
@@ -969,26 +1010,48 @@ class MergeRequestService(BaseService):
                 else:
                     body, resolution = side.get("diff") or {}, take
 
+            warnings: list[str] = []
             if body is None:
                 configuration = client.rebase_config_delete(
                     component_id, config_id, branch_id, version=onto_version
                 )
+                if change_description is not None:
+                    # The delete envelope is exactly {"version": N, "diff": {}}
+                    # -- changeDescription lives INSIDE the diff envelope, so
+                    # the wire cannot carry one and the server writes its
+                    # default message. Say so instead of silently ignoring it.
+                    warnings.append(
+                        "change_description ignored: the delete resolution's wire "
+                        "envelope cannot carry one; the server records its default "
+                        "message."
+                    )
             else:
                 # Present-but-null defeats a bare presence check for every
-                # key, not just `name` (Zajca's PR review): the backend's
+                # key, not just `name`: the backend's
                 # `?? new stdClass()` fires on null as well as on absence, so
                 # a `configuration: null` would REPLACE the config body with
                 # {} and return 200 -- silent data loss, the exact thing this
                 # guard exists to refuse. A null `rows` is equally ambiguous
                 # (`[]` means delete-all-rows and must stay expressible, null
-                # means nothing). And `name` must additionally be non-empty:
-                # the diff envelope declares it nullable, but the rebase
+                # means nothing). The same replace semantics cover the other
+                # two fields: a defaulted `isDisabled` would silently
+                # re-enable a disabled config, a defaulted `description`
+                # would wipe one -- so ALL FIVE replaced-body keys are
+                # required. And `name` must additionally be non-empty: the
+                # diff envelope declares it nullable, but the rebase
                 # validator requires a non-empty trimmed string.
                 missing = [
                     key
-                    for key in ("name", "rows", "configuration")
+                    for key in ("name", "rows", "configuration", "isDisabled")
                     if key not in body or body[key] is None
                 ]
+                # description is the one genuinely nullable replaced field --
+                # only ABSENCE is refused (an explicit null is a legitimate
+                # resolved value; the wire treats null and absent the same,
+                # but a caller who spelled it out has decided, one who omitted
+                # it has not).
+                if "description" not in body:
+                    missing.append("description")
                 if "name" not in missing and not str(body.get("name") or "").strip():
                     missing.insert(0, "name")
                 if missing:
@@ -1020,14 +1083,14 @@ class MergeRequestService(BaseService):
                     name=body["name"],
                     rows=body["rows"],
                     configuration=body["configuration"],
-                    is_disabled=bool(body.get("isDisabled", False)),
+                    is_disabled=bool(body["isDisabled"]),
                     description=body.get("description"),
                     change_description=change_description,
                 )
         finally:
             client.close()
 
-        return {
+        result: dict[str, Any] = {
             "alias": alias,
             "merge_request_id": merge_request_id,
             "component_id": component_id,
@@ -1037,6 +1100,9 @@ class MergeRequestService(BaseService):
             "onto_version": onto_version,
             "configuration": configuration,
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def _branch_from_id_of(self, client: KeboolaClient, merge_request_id: int) -> int:
         """The MR's source branch id -- the only branch a resolution may write to.
@@ -1048,7 +1114,7 @@ class MergeRequestService(BaseService):
         server-side (the MR is no longer open), it just fails later.
         """
         mr = client.merge_requests.get(merge_request_id)
-        branch_from_id = (mr.get("branches") or {}).get("branchFromId")
+        branch_from_id = _coerce_branch_id((mr.get("branches") or {}).get("branchFromId"))
         if branch_from_id is None:
             raise KeboolaApiError(
                 message=(
@@ -1060,7 +1126,7 @@ class MergeRequestService(BaseService):
                 error_code=ErrorCode.VALIDATION_ERROR,
                 retryable=False,
             )
-        return int(branch_from_id)
+        return branch_from_id
 
     def _require_in_conflict_set(
         self, client: KeboolaClient, merge_request_id: int, component_id: str, config_id: str

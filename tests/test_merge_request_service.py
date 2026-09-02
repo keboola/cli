@@ -721,7 +721,10 @@ class TestGetConfigDiff:
         assert result["ours_deleted"] is False
         assert result["changes"] == []  # identical content, no paths
 
-    def test_null_side_reports_none_deleted_flag(self, store, client_factory) -> None:
+    def test_null_side_reports_none_deleted_flag_and_no_paths(self, store, client_factory) -> None:
+        # A null side is a side-level fact (the config never existed there);
+        # per-path rows against an empty stand-in would contradict the
+        # ours_deleted/theirs_deleted flags, so none are emitted.
         factory, mock = client_factory
         mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
         mock.get_config_diff.return_value = _diff(
@@ -731,8 +734,7 @@ class TestGetConfigDiff:
         )
         result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert result["ours_deleted"] is None
-        by_path = {c["path"]: c for c in result["changes"]}
-        assert by_path["configuration"]["changed_by"] == "theirs"
+        assert result["changes"] == []
 
     def test_change_description_is_not_content(self, store, client_factory) -> None:
         # changeDescription is a per-version commit message; two sides always
@@ -890,12 +892,20 @@ class TestResolveConflict:
     def test_custom_body_rebases_verbatim(self, store, client_factory) -> None:
         factory, mock = client_factory
         self._arm(mock)
-        body = {"name": "merged", "rows": [], "configuration": {"limit": 300}}
+        body = {
+            "name": "merged",
+            "rows": [],
+            "configuration": {"limit": 300},
+            "isDisabled": True,
+            "description": None,  # nullable, but must be spelled out
+        }
         result = _svc(store, factory).resolve_conflict(
             ALIAS, 7, "keboola.ex-db", "111", resolved=body, change_description="3-way"
         )
         kwargs = mock.rebase_config.call_args.kwargs
         assert kwargs["configuration"] == {"limit": 300}
+        assert kwargs["is_disabled"] is True
+        assert kwargs["description"] is None
         assert kwargs["change_description"] == "3-way"
         assert result["resolution"] == "custom"
 
@@ -1189,7 +1199,13 @@ class TestZajcaReviewFollowUps:
             theirs=_side({"limit": 250}, version=7),
         )
         mock.rebase_config.return_value = {"id": "111", "version": 8}
-        body = {"name": "My config", "rows": [], "configuration": {"limit": 300}}
+        body = {
+            "name": "My config",
+            "rows": [],
+            "configuration": {"limit": 300},
+            "isDisabled": False,
+            "description": None,
+        }
         result = _svc(store, factory).resolve_conflict(
             ALIAS, 7, "keboola.ex-db", "111", resolved=body
         )
@@ -1219,3 +1235,119 @@ class TestZajcaReviewFollowUps:
         mock.merge_requests.list.return_value = [_wire_mr(1, branch_from=123)]
         _svc(store, factory).find_merge_request_for_branch(ALIAS, 123)
         mock.has_feature.assert_not_called()
+
+
+class TestZajcaSecondReviewFollowUps:
+    """Regression tests for Zajca's second PR #703 review (2026-09-02)."""
+
+    def _arm(self, mock: MagicMock) -> None:
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        mock.rebase_config.return_value = {"id": "111", "version": 8}
+        mock.rebase_config_delete.return_value = {"id": "111", "version": 8, "isDeleted": True}
+
+    def test_missing_is_disabled_is_refused_not_defaulted(self, store, client_factory) -> None:
+        # BLOCKING finding: a defaulted isDisabled=False silently re-enables
+        # a disabled config -- rebase REPLACES, so the key is required.
+        factory, mock = client_factory
+        self._arm(mock)
+        body = {"name": "n", "rows": [], "configuration": {}, "description": None}
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert "isDisabled" in str(exc_info.value)
+        mock.rebase_config.assert_not_called()
+
+    def test_missing_description_is_refused_but_explicit_null_is_legal(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        body = {"name": "n", "rows": [], "configuration": {}, "isDisabled": False}
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert "description" in str(exc_info.value)
+        # ... while an explicit null is a decision, not an omission:
+        body["description"] = None
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", resolved=body
+        )
+        assert result["resolution"] == "custom"
+
+    def test_take_side_forwards_is_disabled_verbatim(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        theirs = _side({"limit": 250}, version=7)
+        theirs["diff"]["isDisabled"] = True
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=theirs,
+        )
+        _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
+        assert mock.rebase_config.call_args.kwargs["is_disabled"] is True
+
+    def test_delete_with_change_description_warns_about_the_drop(
+        self, store, client_factory
+    ) -> None:
+        # The delete tombstone's wire envelope cannot carry a
+        # changeDescription -- say so instead of silently ignoring it.
+        factory, mock = client_factory
+        self._arm(mock)
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", take="delete", change_description="bye"
+        )
+        assert any("change_description ignored" in w for w in result["warnings"])
+
+    def test_delete_without_change_description_has_no_warning(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", take="delete"
+        )
+        assert "warnings" not in result
+
+    def test_non_numeric_wire_branch_id_degrades_instead_of_raising(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        # merge(): a garbage branchFromId must not crash the success path --
+        # it degrades to "no usable branch id" (cleanup skipped).
+        factory, mock = client_factory
+        mr = _wire_mr(7, "approved")
+        mr["branches"]["branchFromId"] = "not-a-number"
+        mock.merge_requests.get.return_value = mr
+        mock.merge_requests.merge.return_value = {"id": 5, "status": "success", "results": {}}
+        called: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: called.append(branch_id),
+        )
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["branch_from_id"] is None
+        assert called == []
+
+    def test_failed_branch_reset_does_not_skip_mapping_cleanup(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        # The two post-merge cleanups are independent try blocks.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved", branch_from=123)
+        mock.merge_requests.merge.return_value = {"id": 5, "status": "success", "results": {}}
+        store.set_project_branch(ALIAS, 123)
+
+        def boom(alias: str, branch_id: object) -> None:
+            raise OSError("config write failed")
+
+        monkeypatch.setattr(store, "set_project_branch", boom)
+        cleaned: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: cleaned.append(branch_id) or None,
+        )
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert any("active-branch reset failed" in w for w in result["cleanup_warnings"])
+        assert cleaned == [123]  # mapping cleanup still ran

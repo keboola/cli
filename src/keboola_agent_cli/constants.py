@@ -536,8 +536,6 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # but the fence holds ONLY as long as a SOX project never also carries
 # `branches-merge-requests`. The pre-flight is thus deliberately stricter
 # than the server for a project with only `protected-default-branch`.
-# (Renamed from FEATURE_BRANCHES_MERGE_REQUESTS to match this file's
-# dominant `..._FEATURE` suffix convention; decided in DMD-1899.)
 BRANCHES_MERGE_REQUESTS_FEATURE: str = "branches-merge-requests"
 
 # The SOX flavour of protected branches. kbagent does NOT support its

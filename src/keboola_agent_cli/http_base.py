@@ -489,6 +489,9 @@ class BaseHttpClient:
                 # re-fetch data the error already delivered -- BOUNDED, like
                 # the message below: this rides every 4xx/5xx from every
                 # BaseHttpClient subclass into agent-consumed --json output.
+                # Passed through UNMASKED by decision: it is server-authored
+                # error context (ids, names, version identifiers), not
+                # credentials -- the same trust the error message text gets.
                 api_error_params = body.get("params")
                 if isinstance(api_error_params, dict) and api_error_params:
                     bounded, truncated = _bound_error_params(api_error_params)
