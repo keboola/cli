@@ -491,6 +491,7 @@ class JobService(BaseService):
         mode: str = DEFAULT_JOB_MODE,
         idempotency_key: str | None = None,
         force_rerun: bool = False,
+        only_flow_task_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -550,6 +551,11 @@ class JobService(BaseService):
                 wrong job.
             force_rerun: If True, ignore any recorded ``idempotency_key`` entry
                 and always create a fresh job (overwriting the stored entry).
+            only_flow_task_ids: Optional ``keboola.flow`` task-id allowlist for
+                a partial flow run (issue #725). Resolved by
+                ``FlowService.resolve_flow_task_ids``; passed through verbatim.
+                Meaningless for a non-flow component -- the Queue API ignores
+                it there.
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -605,6 +611,7 @@ class JobService(BaseService):
                     branch_id=branch_id,
                     variable_values_id=resolved_values_id,
                     mode=mode,
+                    only_flow_task_ids=only_flow_task_ids,
                 )
 
             store = self._default_idempotency_store() if idempotency_key else None

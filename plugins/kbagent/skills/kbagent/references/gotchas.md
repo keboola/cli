@@ -4981,3 +4981,49 @@ single-project command:
   project is not the first row of `project list`.
 - The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
   and `GET /components?query=...` resolved the project the same wrong way.
+
+
+## A partial `flow run` does not evaluate the flow's conditions
+
+*(since vNEXT)* `kbagent flow run --from-phase` / `--only-task` sends the Queue
+API's `onlyFlowTaskIds`, and the job-queue daemon treats that as a **task
+selection**, not as "start the flow here". Per
+`keboola/job-queue-daemon` `docs/flow-documentation.md`, such a run:
+
+1. runs **only** the selected tasks -- every other task, notification and
+   variable task included, is left out entirely and does not appear in the
+   result;
+2. **does not evaluate any condition.** The phase graph is linearized into one
+   sequential chain of synthetic unconditional transitions with id
+   `selected-run` (visible in the result's `phases[].conditions[]`);
+3. traverses phases kept only to route to a selected task as **empty phases** --
+   they run an empty phase container and report `success` with no tasks;
+4. **does not stop on a failing task.** The transitions are unconditional, so
+   the chain continues through a failed or warning phase;
+5. reports as the flow's final status the status of the **last phase in the
+   chain**. Combined with (4), a selected run whose last phase succeeded
+   reports `success` even though an earlier selected task **failed** -- the
+   failure is visible in the task and phase entries, not in the job status.
+   **Never read a partial run's `success` as "everything in it passed"**; read
+   the per-task results;
+6. does not merge flow variables defined by unselected variable tasks -- the
+   selected tasks fall back to their component variable configuration.
+
+The consequence worth internalising: **a partial run cannot verify that new
+`next[].condition` logic evaluates correctly.** That was the motivation in
+issue #725, and no API satisfies it short of a full run -- the conditions are
+precisely the thing a selected run throws away. Use `flow run` to *re-run* part
+of a flow cheaply; to exercise a new condition, run the whole flow (a dev
+branch keeps that cheap). Every payload from the command carries
+`conditions_evaluated: false` so an agent cannot conclude otherwise from the
+JSON alone.
+
+kbagent pre-empts the daemon's own user-errors locally, before a job exists:
+an unknown phase id (the message lists the valid ones), a `--from-phase` that
+is not reachable from the flow's entry phase, an unknown or **disabled**
+`--only-task` id, and a selection that resolves to nothing all exit **2**
+without creating a job. A disabled task inside a `--from-phase` scope is
+different: it is skipped silently and reported under
+`skipped_disabled_task_ids`, because the caller selected a phase, not that
+task.
+

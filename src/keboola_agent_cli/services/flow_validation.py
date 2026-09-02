@@ -165,6 +165,33 @@ def validate_conditional_flow(
     return _semantic_errors(phases, tasks)
 
 
+def reachable_phases(phases: list[dict[str, Any]], start_id: str) -> list[str]:
+    """Return the ids of ``start_id`` and every phase reachable from it.
+
+    Walks ``next[].goto`` edges breadth-first; a ``goto`` of ``None`` is the
+    flow's END marker and terminates that branch. Ids come back in the order
+    they appear in ``phases`` (not in visit order), so callers get a stable,
+    flow-ordered selection regardless of the graph shape. An unknown
+    ``start_id`` yields an empty list -- callers validate the id themselves so
+    they can raise with the list of valid ones.
+    """
+    by_id = {str(p.get("id")): p for p in phases}
+    if start_id not in by_id:
+        return []
+    seen: set[str] = set()
+    queue: deque[str] = deque([start_id])
+    while queue:
+        pid = queue.popleft()
+        if pid in seen or pid not in by_id:
+            continue
+        seen.add(pid)
+        for transition in by_id[pid].get("next", []):
+            goto = transition.get("goto")
+            if goto is not None:
+                queue.append(str(goto))
+    return [str(p.get("id")) for p in phases if str(p.get("id")) in seen]
+
+
 def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
     """Return ids of phases not reachable from the entry phase (first in the
     list) by following next[].goto edges. WARNING-level only -- never blocks a
@@ -172,17 +199,5 @@ def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
     """
     if not phases:
         return []
-    by_id = {str(p.get("id")): p for p in phases}
-    entry = str(phases[0].get("id"))
-    reachable: set[str] = set()
-    queue: deque[str] = deque([entry])
-    while queue:
-        pid = queue.popleft()
-        if pid in reachable or pid not in by_id:
-            continue
-        reachable.add(pid)
-        for transition in by_id[pid].get("next", []):
-            goto = transition.get("goto")
-            if goto is not None:
-                queue.append(str(goto))
+    reachable = set(reachable_phases(phases, str(phases[0].get("id"))))
     return [str(p.get("id")) for p in phases if str(p.get("id")) not in reachable]

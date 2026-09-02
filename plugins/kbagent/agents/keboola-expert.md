@@ -100,6 +100,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 |---|---|---|---|
 | Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --file @flow.yaml --project P` (fetches the live schema; loop until clean) then `kbagent flow new` / `flow update --file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
 | Schedule flow | `kbagent flow schedule --cron ... [--timezone]` -- confirm `activated: true` (older versions wrote a config whose cron NEVER fired) | -- | raw REST to `/storage/configurations/keboola.scheduler` |
+| Re-run part of a flow / run a flow from a phase onward | `kbagent flow run --project P --flow-id ID --from-phase PHASE --dry-run` to preview, then without `--dry-run` (vNEXT+) | `--only-task ID` for an explicit task allowlist; a full `kbagent flow run` when the conditions themselves matter | claiming a partial run VERIFIES new `next[].condition` logic -- it does NOT, conditions are ignored; reading a partial run's `success` as "every selected task passed" (the chain does not stop on failure and the final status is the LAST phase's); `job run --component-id keboola.flow` when only one phase needs re-running |
 | What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (0.92.0+) -- cron schedules AND table triggers in one call | `kbagent schedule list` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
 | Add / remove / re-point a notification recipient | `kbagent notification create --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
@@ -247,6 +248,17 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   as needing manual scheduling because of exactly this gap (#714). For the same
   reason `job detail` on a flow job carries `trigger_hint`: a run with no
   matching cron schedule is NOT proof of a manual run.
+- **A partial `flow run` IGNORES the flow's conditions (vNEXT+)**:
+  `--from-phase` / `--only-task` send the Queue API's `onlyFlowTaskIds`, and the
+  daemon then linearizes the phase graph into an UNCONDITIONAL chain: no
+  `next[].condition` is evaluated, routing-only phases run empty, a failing
+  task does not stop the run, and the flow's final status is the LAST phase's
+  -- so a partial run can report `success` with a failed task inside it. Read
+  the per-task results, never the job status alone. It is the right tool to
+  RE-RUN part of a flow cheaply; it is the wrong tool to prove new condition
+  logic works (nothing short of a full run does that -- use a dev branch).
+  Preview any selection with `--dry-run` first: `--from-phase` expands to every
+  downstream phase's tasks, which is usually more than the caller pictured.
 - **`flow schedule` activates on the Scheduler Service**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
   the cron NEVER fired. Confirm `activated: true`; `activated: false` + warning

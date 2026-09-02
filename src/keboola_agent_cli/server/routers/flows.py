@@ -7,6 +7,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ...constants import (
+    DEFAULT_JOB_RUN_TIMEOUT,
+    DEFAULT_LOG_TAIL_LINES,
+    DEFAULT_POLL_STRATEGY,
+)
 from ...services.flow_service import FLOW_COMPONENT_ID, get_flow_examples
 from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ..dependencies import ServiceRegistry, get_registry
@@ -35,6 +40,20 @@ class FlowSchedule(BaseModel):
     timezone: str = "UTC"
     enabled: bool = True
     schedule_name: str | None = None
+    branch_id: int | None = None
+
+
+class FlowRun(BaseModel):
+    """Body for a (possibly partial) flow run.
+
+    ``from_phase`` and ``only_task_ids`` are mutually exclusive; with neither,
+    this is an ordinary full flow run. With either, the Queue API runs ONLY the
+    selected tasks and IGNORES the flow's phase conditions -- see
+    ``commands/_flow_run.py`` for why that distinction matters.
+    """
+
+    from_phase: str | None = None
+    only_task_ids: list[str] | None = None
     branch_id: int | None = None
 
 
@@ -207,6 +226,62 @@ def list_triggers(
     trigger (issue #714).
     """
     return registry.flow.get_flow_triggers(alias=project, config_id=config_id, branch_id=branch_id)
+
+
+@router.post("/{project}/{config_id}/run", summary="Run a flow, optionally only part of it")
+def run(
+    project: str,
+    config_id: str,
+    body: FlowRun,
+    dry_run: bool = False,
+    wait: bool = False,
+    timeout: float = DEFAULT_JOB_RUN_TIMEOUT,
+    poll_strategy: str = DEFAULT_POLL_STRATEGY,
+    log_tail_lines: int = DEFAULT_LOG_TAIL_LINES,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Run a flow, optionally limited to a phase or an explicit task allowlist.
+
+    Mirrors `kbagent flow run`. `dry_run=true` resolves the selection and
+    returns it without creating a job; it requires a selector, since a full
+    run has nothing to preview.
+    """
+    if body.from_phase and body.only_task_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="from_phase and only_task_ids are mutually exclusive.",
+        )
+    selection: dict[str, Any] | None = None
+    if body.from_phase or body.only_task_ids:
+        selection = registry.flow.resolve_flow_task_ids(
+            alias=project,
+            config_id=config_id,
+            from_phase=body.from_phase,
+            only_task_ids=body.only_task_ids,
+            branch_id=body.branch_id,
+        )
+    elif dry_run:
+        raise HTTPException(
+            status_code=400,
+            detail="dry_run requires from_phase or only_task_ids.",
+        )
+    if dry_run and selection is not None:
+        return {**selection, "dry_run": True}
+
+    result = registry.job.run_job(
+        alias=project,
+        component_id=FLOW_COMPONENT_ID,
+        config_id=config_id,
+        wait=wait,
+        timeout=timeout,
+        branch_id=body.branch_id,
+        poll_strategy=poll_strategy,
+        log_tail_lines=log_tail_lines,
+        only_flow_task_ids=selection["task_ids"] if selection else None,
+    )
+    if selection:
+        result["flow_task_selection"] = selection
+    return result
 
 
 @router.post("/{project}/{config_id}/schedule", summary="Set a cron schedule on a flow")

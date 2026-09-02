@@ -29,7 +29,11 @@ from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
 from ..scheduler_client import SchedulerClient
 from .base import BaseService, ClientFactory, project_error_entry
-from .flow_validation import find_unreachable_phases, validate_conditional_flow
+from .flow_validation import (
+    find_unreachable_phases,
+    reachable_phases,
+    validate_conditional_flow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -479,6 +483,192 @@ class FlowService(BaseService):
         detail["phase_count"] = len(phases)
         detail["task_count"] = len(tasks)
         return detail
+
+    # ── partial-run task selection (issue #725) ─────────────────────
+
+    def resolve_flow_task_ids(
+        self,
+        alias: str,
+        config_id: str,
+        from_phase: str | None = None,
+        only_task_ids: list[str] | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a ``keboola.flow`` task-id allowlist for a partial run.
+
+        Exactly one selector must be given:
+
+        - ``from_phase`` -- take every enabled task in that phase and in every
+          phase reachable from it via ``next[].goto``. Disabled tasks are
+          dropped silently: the Queue API rejects a selection containing one,
+          and a phase-level selection never named them individually.
+        - ``only_task_ids`` -- an explicit allowlist. Unknown or disabled ids
+          are a hard error here, because the caller named them: silently
+          dropping a task the caller asked for would run something other than
+          what was requested.
+
+        WHAT A SELECTED RUN IS NOT: the Queue daemon linearizes the phase
+        graph and runs the selection through synthetic unconditional
+        transitions, so ``next[].condition`` expressions are NOT evaluated
+        (keboola/job-queue-daemon ``docs/flow-documentation.md``). This
+        resolves "run this part of the flow again", never "rehearse the
+        flow's condition logic".
+
+        Returns:
+            Dict with ``task_ids`` plus the resolution context (selected
+            phases, skipped disabled tasks) so the caller can show what a
+            ``--from-phase`` expanded to before anything runs.
+
+        Raises:
+            ConfigError: If alias is not found.
+            KeboolaApiError: On API failure, or INVALID_ARGUMENT when the
+                selector is unusable (bad phase id, unknown/disabled task id,
+                empty resolution).
+        """
+        if (from_phase is None) == (only_task_ids is None):
+            raise KeboolaApiError(
+                message=(
+                    "Pass exactly one of from_phase / only_task_ids to select "
+                    "the tasks a partial flow run should execute."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+
+        detail = self.get_flow_detail(alias=alias, config_id=config_id, branch_id=branch_id)
+        phases: list[dict[str, Any]] = detail.get("phases") or []
+        tasks: list[dict[str, Any]] = detail.get("tasks") or []
+
+        if only_task_ids is not None:
+            selected, skipped = self._select_named_tasks(tasks, only_task_ids)
+            selected_phase_ids = [str(t.get("phase")) for t in selected]
+        else:
+            selected, skipped, selected_phase_ids = self._select_tasks_from_phase(
+                phases, tasks, str(from_phase)
+            )
+
+        task_ids = [str(t.get("id")) for t in selected]
+        if not task_ids:
+            raise KeboolaApiError(
+                message=(
+                    f"Task selection for flow {config_id} resolved to no runnable tasks"
+                    + (
+                        f" (every task from phase '{from_phase}' onward is disabled)"
+                        if from_phase
+                        else ""
+                    )
+                    + ". The Queue API rejects an empty selection."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+
+        phase_names = {str(p.get("id")): str(p.get("name") or "") for p in phases}
+        ordered_phase_ids = [pid for pid in dict.fromkeys(selected_phase_ids)]
+        return {
+            "project_alias": alias,
+            "component_id": FLOW_COMPONENT_ID,
+            "config_id": config_id,
+            "branch_id": detail.get("branch_id"),
+            "from_phase": from_phase,
+            "task_ids": task_ids,
+            "selected_tasks": [
+                {
+                    "id": str(t.get("id")),
+                    "name": str(t.get("name") or ""),
+                    "phase": str(t.get("phase")),
+                }
+                for t in selected
+            ],
+            "selected_phases": [
+                {"id": pid, "name": phase_names.get(pid, "")} for pid in ordered_phase_ids
+            ],
+            "skipped_disabled_task_ids": skipped,
+            "conditions_evaluated": False,
+        }
+
+    @staticmethod
+    def _select_named_tasks(
+        tasks: list[dict[str, Any]], only_task_ids: list[str]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Validate an explicit task-id allowlist against the flow definition.
+
+        Returns the matching task dicts in flow order (NOT in the order the
+        caller listed them -- the run order is the flow's, so presenting the
+        caller's order would misrepresent it). ``skipped`` is always empty:
+        a named task is never silently dropped.
+        """
+        by_id = {str(t.get("id")): t for t in tasks}
+        wanted = list(dict.fromkeys(str(tid) for tid in only_task_ids))
+
+        unknown = [tid for tid in wanted if tid not in by_id]
+        if unknown:
+            raise KeboolaApiError(
+                message=(
+                    f"Unknown task id(s): {', '.join(unknown)}. "
+                    "Run `kbagent flow detail` to list the flow's task ids."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+        disabled = [tid for tid in wanted if not by_id[tid].get("enabled", True)]
+        if disabled:
+            raise KeboolaApiError(
+                message=(
+                    f"Task id(s) disabled in the flow: {', '.join(disabled)}. "
+                    "The Queue API rejects a selection containing a disabled "
+                    "task -- enable it in the flow or drop it from --only-task."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+
+        chosen = set(wanted)
+        return [t for t in tasks if str(t.get("id")) in chosen], []
+
+    @staticmethod
+    def _select_tasks_from_phase(
+        phases: list[dict[str, Any]],
+        tasks: list[dict[str, Any]],
+        from_phase: str,
+    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+        """Expand a phase id into the tasks of it and everything downstream."""
+        known_phase_ids = [str(p.get("id")) for p in phases]
+        if from_phase not in known_phase_ids:
+            raise KeboolaApiError(
+                message=(
+                    f"Unknown phase id '{from_phase}'. "
+                    f"Known phases: {', '.join(known_phase_ids) or '(none)'}."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+        # The daemon refuses a selection whose phases cannot be reached from
+        # the flow's entry phase, so catch that here rather than paying for a
+        # round trip to have the job rejected.
+        if from_phase in find_unreachable_phases(phases):
+            raise KeboolaApiError(
+                message=(
+                    f"Phase '{from_phase}' is not reachable from the flow's entry "
+                    f"phase '{known_phase_ids[0]}', so the Queue API cannot route "
+                    "a run to it."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+
+        downstream = set(reachable_phases(phases, from_phase))
+        in_scope = [t for t in tasks if str(t.get("phase")) in downstream]
+        selected = [t for t in in_scope if t.get("enabled", True)]
+        skipped = [str(t.get("id")) for t in in_scope if not t.get("enabled", True)]
+        selected_phase_ids = [pid for pid in known_phase_ids if pid in downstream]
+        return selected, skipped, selected_phase_ids
 
     # ── create ──────────────────────────────────────────────────────
 
