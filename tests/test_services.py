@@ -3475,6 +3475,7 @@ class TestJobServiceRunJob:
             branch_id=None,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
         mock_client.close.assert_called_once()
 
@@ -3520,6 +3521,7 @@ class TestJobServiceRunJob:
             branch_id=789,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
 
     def test_run_job_with_branch_and_wait(self, tmp_config_dir: Path) -> None:
@@ -3567,6 +3569,7 @@ class TestJobServiceRunJob:
             branch_id=123,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
         mock_client.wait_for_queue_job.assert_called_once_with(
             "557", max_wait=60.0, poll_strategy="exponential"
@@ -4219,6 +4222,7 @@ class TestJobServiceVariableValuesResolution:
             branch_id=None,
             variable_values_id="row-first",
             mode="run",
+            only_flow_task_ids=None,
         )
 
     def test_run_job_explicit_override_wins(self, tmp_config_dir: Path) -> None:
