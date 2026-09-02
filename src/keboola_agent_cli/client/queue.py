@@ -126,6 +126,7 @@ class _QueueMixin(_CoreClient):
         mode: str = "run",
         branch_id: int | None = None,
         variable_values_id: str | None = None,
+        only_flow_task_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create and run a Queue API job.
 
@@ -142,6 +143,16 @@ class _QueueMixin(_CoreClient):
                 ``keboola.variables`` config. When set, the Queue API binds
                 the row's values to the job's `{{ variable }}` placeholders.
                 Omit for configurations that have no linked variables.
+            only_flow_task_ids: Optional ``keboola.flow`` task-id allowlist
+                (issue #725). Only meaningful for a flow job; the Queue API
+                then runs ONLY those tasks. Note the daemon **linearizes the
+                phase graph and ignores every configured condition** in such
+                a run -- a selected run is a partial re-execution, not a
+                rehearsal of the flow's ``next[].condition`` logic. Must be
+                non-empty when set (the API rejects an empty array), and the
+                deprecated ``onlyOrchestrationTaskIds`` alias is deliberately
+                not sent: the API rejects the two together and mirrors this
+                one back under both keys anyway.
 
         Returns:
             Job dict from the Queue API.
@@ -159,6 +170,8 @@ class _QueueMixin(_CoreClient):
             body["configRowIds"] = config_row_ids
         if variable_values_id:
             body["variableValuesId"] = variable_values_id
+        if only_flow_task_ids:
+            body["onlyFlowTaskIds"] = only_flow_task_ids
         response = self._queue_request("POST", "/jobs", json=body)
         return response.json()
 

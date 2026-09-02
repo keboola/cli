@@ -1015,6 +1015,27 @@ kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+kbagent flow run --project NAME --flow-id ID [--from-phase PHASE_ID | --only-task TASK_ID ...] [--dry-run] [--wait] [--timeout N] [--branch ID] [--poll-strategy exponential|fixed] [--log-tail-lines N]
+# flow run (#725): run a flow, optionally only PART of it. With neither selector it is the
+#   ordinary full run (same as `job run --component-id keboola.flow`). With one, kbagent sends
+#   `onlyFlowTaskIds` on POST /jobs -- a documented Queue API field the CLI never set, which is
+#   why partial runs were UI-only. --from-phase expands a phase id into its tasks plus every task
+#   in every phase reachable via next[].goto (disabled tasks in scope are skipped silently);
+#   --only-task takes explicit ids (an unknown OR disabled id is a hard error -- the caller named
+#   it). The two are mutually exclusive. --dry-run prints the resolved selection and creates NO
+#   job; it REQUIRES a selector (a full run has nothing to preview).
+#   CRITICAL SEMANTICS -- a selected run IGNORES the flow's phase conditions. The Queue daemon
+#   linearizes the phase graph into one sequential chain of synthetic unconditional `selected-run`
+#   transitions, phases kept only to route to a selected task run EMPTY, a failing task does NOT
+#   stop the chain, and the flow's final status is that of the LAST phase in the chain (so a run
+#   whose last phase succeeded reports `success` even though an earlier selected task failed).
+#   Unselected variable tasks do not run, so their flow variables are not merged. Use this to
+#   RE-RUN part of a flow -- never to verify that new next[].condition logic evaluates correctly;
+#   no API does the latter without a full run. Every payload carries `conditions_evaluated: false`.
+#   A rejected selector (unknown phase, unknown/disabled task, empty selection) exits 2, and an
+#   unreachable --from-phase is refused locally before a job is created. Result JSON gains
+#   `flow_task_selection` (ids + names + phases) so a caller keeping only the run payload still
+#   knows what ran. Over `serve`: POST /flows/{project}/{config_id}/run.
 kbagent flow triggers --project NAME --flow-id ID [--branch ID]
 # flow triggers (#714): the honest answer to "what starts this flow automatically". A flow has at
 #   least three trigger mechanisms and kbagent used to see ONE: `schedule list` / `search` only ever

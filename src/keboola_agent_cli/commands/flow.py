@@ -1047,6 +1047,8 @@ def flow_schedule_remove(
 # commands soft ceiling, so `triggers` lives in its own file (CONTRIBUTING.md
 # file-size budgets). Flat registration keeps the permission key `flow.triggers`
 # and the `kbagent flow --help` listing unchanged.
+from ._flow_run import register as _register_run_command  # noqa: E402
 from ._flow_triggers import register as _register_trigger_commands  # noqa: E402
 
 _register_trigger_commands(flow_app)
+_register_run_command(flow_app)

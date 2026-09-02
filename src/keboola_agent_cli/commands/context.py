@@ -1081,6 +1081,17 @@ remain branch-aware because modifying a dev branch is the expected intent.
     surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+  kbagent flow run --project NAME --flow-id ID [--from-phase PHASE_ID | --only-task TASK_ID ...] [--dry-run] [--wait] [--timeout N] [--branch ID] [--poll-strategy exponential|fixed] [--log-tail-lines N]
+    Run a flow, optionally only part of it. No selector = ordinary full run (identical to
+    `job run --component-id keboola.flow`). --from-phase expands a phase into its tasks plus every
+    task in every phase reachable via next[].goto; --only-task takes explicit ids. Mutually
+    exclusive. --dry-run previews the resolved selection without creating a job (needs a selector).
+    A SELECTED RUN IGNORES THE FLOW'S PHASE CONDITIONS: the graph is linearized into an
+    unconditional chain, phases kept only for routing run empty, a failing task does not stop the
+    run, and the final status is that of the last phase in the chain. It re-runs part of a flow;
+    it does NOT verify next[].condition logic. Payloads carry conditions_evaluated=false.
+    Unknown/unreachable phase, unknown or disabled --only-task id, or an empty selection => exit 2.
+
   kbagent flow triggers --project NAME --flow-id ID [--branch ID]
     # Cron schedules AND table triggers in one call. Cross-project triggers are
     # NOT checked -- the result says so via cross_project_triggers_checked=false
