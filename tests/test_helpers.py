@@ -1,5 +1,6 @@
 """Tests for commands._helpers shared command-layer utilities."""
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -859,9 +860,14 @@ class TestResolveStorageTokenInput:
             resolve_storage_token_input(token=None, token_file=path, required=True)
 
     def test_unreadable_file_is_rejected(self, tmp_path: Path) -> None:
-        path = self._write_token_file(tmp_path, mode=0o000)
+        # A directory makes read_text() raise OSError on every platform, which is
+        # exactly what the resolver must turn into a BadParameter. chmod(0o000)
+        # would not achieve this on Windows (nor as root on POSIX), so it is not
+        # a portable way to produce an unreadable path.
+        not_a_file = tmp_path / "a_directory"
+        not_a_file.mkdir()
         with pytest.raises(typer.BadParameter, match="Cannot read token file"):
-            resolve_storage_token_input(token=None, token_file=path, required=True)
+            resolve_storage_token_input(token=None, token_file=not_a_file, required=True)
 
     @pytest.mark.parametrize("value", ["", None])
     def test_unset_or_empty_named_variable_is_rejected(
@@ -876,28 +882,41 @@ class TestResolveStorageTokenInput:
 
     # ----- file mode -----
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="POSIX mode bits are not the access-control mechanism on Windows: "
+        "chmod cannot narrow an ACL, stat reports 0o666, and the check "
+        "short-circuits before grading them (same reason as "
+        "test_auth_state_store.py / test_doctor_service.py)",
+    )
     def test_world_readable_file_warns(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(_helpers.os, "name", "posix")
         path = self._write_token_file(tmp_path, mode=0o644)
         resolve_storage_token_input(token=None, token_file=path, required=True)
         assert "accessible to other users" in capsys.readouterr().err
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="POSIX mode bits are not the access-control mechanism on Windows: "
+        "chmod cannot narrow an ACL, stat reports 0o666, and the check "
+        "short-circuits before grading them",
+    )
     def test_private_file_does_not_warn(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(_helpers.os, "name", "posix")
         path = self._write_token_file(tmp_path, mode=0o600)
         resolve_storage_token_input(token=None, token_file=path, required=True)
         assert "accessible to other users" not in capsys.readouterr().err
 
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="verifies the real Windows behaviour: the mode check is skipped, "
+        "so a path that stat reports as group/other-accessible raises no warning",
+    )
     def test_permission_check_is_skipped_on_windows(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Windows reports fabricated POSIX bits, so the mode check would warn
-        on every use. It must be skipped there, as the two sibling checks are."""
-        monkeypatch.setattr(_helpers.os, "name", "nt")
         path = self._write_token_file(tmp_path, mode=0o644)
         assert resolve_storage_token_input(token=None, token_file=path, required=True) == (
             self._SENTINEL
@@ -995,20 +1014,19 @@ class TestDiscardTokenFile:
     def test_unlink_failure_warns_but_does_not_raise(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A Kubernetes secret or a CI volume is read-only. The command has
-        already succeeded by this point, so failing it here would be worse
-        than the leftover file."""
-        locked = tmp_path / "locked"
-        locked.mkdir()
-        path = locked / "token.txt"
-        path.write_text("9999-carrier\n", encoding="utf-8")
-        locked.chmod(0o500)
-        try:
-            discard_token_file(path)
-            assert path.exists()
-            assert "could not delete" in capsys.readouterr().err
-        finally:
-            locked.chmod(0o700)
+        """discard must warn, not raise, when the unlink fails -- a read-only
+        mount (a Kubernetes secret, a CI volume) is a legitimate setup, and the
+        command has already succeeded by this point.
+
+        A directory makes unlink() raise OSError on every platform, so it stands
+        in for the read-only-mount failure without depending on POSIX directory
+        permissions -- chmod(0o500) on a directory does not block deletion of a
+        file inside it on Windows."""
+        not_a_file = tmp_path / "a_directory"
+        not_a_file.mkdir()
+        discard_token_file(not_a_file)
+        assert not_a_file.exists()
+        assert "could not delete" in capsys.readouterr().err
 
 
 class TestTokenCameFromCommandLine:
