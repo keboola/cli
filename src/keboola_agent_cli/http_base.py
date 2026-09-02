@@ -156,6 +156,7 @@ class BaseHttpClient:
         client: httpx.Client | None = None,
         base_url: str | None = None,
         retry_safe: bool | None = None,
+        max_attempts: int | None = None,
         **kwargs: Any,
     ) -> httpx.Response:
         """Execute an HTTP request with retry and exponential backoff.
@@ -196,12 +197,16 @@ class BaseHttpClient:
         # An explicit override wins: RETRY_SAFE_METHODS reasons about the METHOD,
         # but idempotency is a property of the endpoint. See the `retry_safe` arg.
         retry_safe = method.upper() in RETRY_SAFE_METHODS if retry_safe is None else retry_safe
+        # A caller can cap the attempt count. Best-effort telemetry passes 1 so a
+        # blocked or unreachable events endpoint fails in one bounded attempt --
+        # never the ~12s retry+backoff that would stall the command behind it.
+        attempts = MAX_RETRIES if max_attempts is None else max_attempts
         # Counted separately from `attempt`: a 429 burns an attempt without
         # being a server error, so using the attempt index would report "the
         # same 5xx came back on N attempts" after seeing exactly one.
         server_error_attempts = 0
 
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(attempts):
             try:
                 response = http_client.request(method, path, **kwargs)
 
@@ -215,7 +220,7 @@ class BaseHttpClient:
                 if (
                     response.status_code in RETRYABLE_STATUS_CODES
                     and may_repeat
-                    and attempt < MAX_RETRIES - 1
+                    and attempt < attempts - 1
                 ):
                     if response.status_code == 429:
                         retry_after = response.headers.get("Retry-After")
@@ -259,7 +264,7 @@ class BaseHttpClient:
                 timeout_repeatable = retry_safe or isinstance(
                     exc, httpx.ConnectTimeout | httpx.PoolTimeout
                 )
-                if timeout_repeatable and attempt < MAX_RETRIES - 1:
+                if timeout_repeatable and attempt < attempts - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
@@ -283,7 +288,7 @@ class BaseHttpClient:
                 ) from exc
 
             except httpx.ConnectError as exc:
-                if attempt < MAX_RETRIES - 1:
+                if attempt < attempts - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (connection error), delay %.1fs",

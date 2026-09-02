@@ -66,7 +66,9 @@ class _MiscMixin(_CoreClient):
         if duration is not None:
             payload["duration"] = math.ceil(duration)
 
-        request_kwargs: dict[str, Any] = {"json": payload}
+        # One bounded attempt, never retried: a blocked or unreachable events
+        # endpoint must fail fast, not stall the caller behind retry+backoff.
+        request_kwargs: dict[str, Any] = {"json": payload, "max_attempts": 1}
         if timeout is not None:
             request_kwargs["timeout"] = timeout
         response = self._request("POST", "/v2/storage/events", **request_kwargs)

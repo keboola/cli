@@ -152,7 +152,8 @@ def emit_cli_invocation(
         )
         config_store = ConfigStore(config_dir=resolved_dir, source=source)
 
-        explicit = _option_value(argv, "--project")
+        # `-p` is the declared alias for `--project` on feature / stream / project / token.
+        explicit = _option_value(argv, "--project") or _option_value(argv, "-p")
         try:
             alias, _ = ProjectService(config_store).resolve_pinned_alias(explicit=explicit)
         except Exception:

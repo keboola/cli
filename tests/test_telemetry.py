@@ -125,3 +125,35 @@ def test_repl_line_is_logged_like_a_direct_command(monkeypatch: pytest.MonkeyPat
     assert argv[-2:] == ["storage", "buckets"]
     assert exit_code == 0
     assert error is None
+
+
+def test_run_entry_point_reports_the_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run() re-raises the outcome and reports the exit code / error to telemetry."""
+    from keboola_agent_cli import cli
+
+    seen: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(
+        cli.telemetry,
+        "emit_cli_invocation",
+        lambda argv, exit_code, error, duration_s: seen.append(
+            (exit_code, type(error).__name__ if error is not None else None)
+        ),
+    )
+
+    def app_raising(exc: BaseException):
+        def _app() -> None:
+            raise exc
+
+        return _app
+
+    monkeypatch.setattr(cli, "app", app_raising(SystemExit(0)))  # success
+    with pytest.raises(SystemExit):
+        cli.run()
+    monkeypatch.setattr(cli, "app", app_raising(SystemExit(5)))  # mapped error -> typer.Exit(5)
+    with pytest.raises(SystemExit):
+        cli.run()
+    monkeypatch.setattr(cli, "app", app_raising(RuntimeError("boom")))  # unmapped exception
+    with pytest.raises(RuntimeError):
+        cli.run()
+
+    assert seen == [(0, None), (5, None), (1, "RuntimeError")]

@@ -4981,3 +4981,21 @@ single-project command:
   project is not the first row of `project list`.
 - The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
   and `GET /components?query=...` resolved the project the same wrong way.
+
+## Usage telemetry: one `ext.keboola.cli.` event per command (opt-out with an env var)
+
+*(since vNEXT)* Every CLI command, REPL line, and `kbagent serve` request posts one
+best-effort usage event to the **acting project's own** Storage events
+(`POST /v2/storage/events`), the same mechanism the original Keboola Go CLI uses.
+Connection stores it as `ext.keboola.cli.` (CLI/REPL) or `ext.keboola.cli.serve` (serve).
+It carries the command name, the outcome, and the duration -- never argument values.
+
+- **It shows up in the project's own event log.** An agent auditing a project's events
+  sees one `ext.keboola.cli.` entry per kbagent command. That is expected, not a stray write.
+- **It is best-effort and bounded.** The POST runs as a single attempt with a short timeout
+  and no retry, so a blocked or unreachable events endpoint fails fast. It never changes a
+  command's exit code and never stalls it.
+- **Opt-out**: set `KBAGENT_DISABLE_TELEMETRY=1` or `DO_NOT_TRACK=1`. Advise this for a
+  restricted / air-gapped network, or whenever the extra event is unwanted.
+- It fires only when the invocation resolves a project token and stack. A command with no
+  registered project (fresh install, `init`, `auth login`) posts nothing.
