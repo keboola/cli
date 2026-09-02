@@ -3,7 +3,10 @@
 Business logic for the future ``kbagent merge-request`` command group, over the
 Layer 3 namespace ``client.merge_requests`` (shipped in #556) and the config
 diff/rebase endpoints in ``client/configs.py``. Scope is the **non-SOX** flow
-(``branches-merge-requests``); design record: ``docs/merge-requests-layer2.md``.
+(``branches-merge-requests``). Design record: the merge-request RFC set --
+the L2 RFC and the wire-truth notes referenced throughout this module -- lives
+on branch ``ms/merge-requests-rfcs`` (kept out of main deliberately) and in
+DMD-1899.
 
 The module-level functions below are the **status-derivation polyfill**: the
 derived vocabulary (``derived_state`` / ``merge_blockers`` / ``allowed_actions``
@@ -304,7 +307,7 @@ class MergeRequestService(BaseService):
         never also carries `branches-merge-requests` -- and it is deliberately
         stricter than the server for a project with only
         `protected-default-branch` (SOX approvals semantics are out of
-        kbagent's scope). See docs/merge-requests-layer2.md.
+        kbagent's scope). See the L2 RFC (module docstring says where).
         """
         if client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE):
             return
@@ -741,8 +744,8 @@ class MergeRequestService(BaseService):
         """Raise the RFC's dedicated error for a known merge 409; return for others.
 
         Only this call site knows the 409 came from the merge endpoint --
-        which is why the mapping cannot live in http_base (see
-        docs/merge-requests-layer2.md). Both shapes match on the top-level
+        which is why the mapping cannot live in http_base (see the L2
+        RFC). Both shapes match on the top-level
         ``code`` of the error body (surfaced as ``details.api_error_code``);
         a code-less 409 falls back to the conflict interpretation for older
         stacks, but a 409 carrying any *other* code passes through unmapped

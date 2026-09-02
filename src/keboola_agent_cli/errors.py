@@ -154,8 +154,8 @@ class ErrorCode(StrEnum):
     PAYG_NOT_AVAILABLE = "PAYG_NOT_AVAILABLE"
 
     # Merge requests (DMD-1899). The merge 409 has four causes in two wire
-    # shapes; these split exactly where the backend does (see
-    # docs/merge-requests-notes.md): storage.mergeRequests.notReadyToMerge
+    # shapes; these split exactly where the backend does (wire-truth notes on
+    # branch ms/merge-requests-rfcs): storage.mergeRequests.notReadyToMerge
     # vs storage.mergeRequests.validation, both in the body's top-level
     # `code`. Mapped in MergeRequestService.merge() -- only the service
     # knows the 409 came from the merge endpoint.

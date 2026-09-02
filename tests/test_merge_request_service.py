@@ -1,7 +1,7 @@
 """Tests for MergeRequestService and the status-derivation polyfill (DMD-1899).
 
-The derivation tables are the canonical spec from the L2 RFC
-(docs/merge-requests-layer2.md, "Derived status") and DMD-1988 -- a port of
+The derivation tables are the canonical spec from the L2 RFC ("Derived
+status" section; branch ms/merge-requests-rfcs) and DMD-1988 -- a port of
 the UI list badge. When Connection serializes the fields, the server-first
 tests keep passing and the fallback tests get deleted with the fallbacks.
 """
