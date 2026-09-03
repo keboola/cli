@@ -4982,7 +4982,9 @@ single-project command:
 - The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
   and `GET /components?query=...` resolved the project the same wrong way.
 
-## `merge-request` group: arming auto-merge IS a production merge (since vNEXT)
+## `merge-request` group: arming auto-merge IS a production merge
+
+*(since vNEXT, DMD-1900)*
 
 `kbagent merge-request` (alias `mr`) merges a dev branch into production with review
 (non-SOX "Branches 2.0", project feature `branches-merge-requests`). Full playbook:
