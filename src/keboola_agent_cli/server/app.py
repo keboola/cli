@@ -51,6 +51,7 @@ from .routers import (
     kai,
     lineage,
     members,
+    merge_requests,
     notifications,
     org,
     projects,
@@ -295,6 +296,18 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Dev branch lifecycle (create / use / reset / delete / "
             "merge) and branch metadata. "
             "Mirrors `kbagent branch *`."
+        ),
+    },
+    {
+        "name": "merge-requests",
+        "description": (
+            "**Development.** "
+            "Merge requests (Branches 2.0, non-SOX): list / detail / create / "
+            "update / review transitions / merge, plus conflict inspection and "
+            "resolution. Every route enforces the permission policy; `merge` and "
+            "any operation that arms or completes an auto-merge are destructive. "
+            "`POST .../merge` is synchronous and may block up to 600 s. "
+            "Mirrors `kbagent merge-request *`."
         ),
     },
     {
@@ -807,6 +820,7 @@ def create_app(
     app.include_router(token.router)
     app.include_router(jobs.router)
     app.include_router(branches.router)
+    app.include_router(merge_requests.router)
     app.include_router(workspaces.router)
     app.include_router(flows.router)
     app.include_router(schedules.router)

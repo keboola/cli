@@ -36,6 +36,7 @@ from ..services.job_service import JobService
 from ..services.kai_service import KaiService
 from ..services.lineage_service import LineageService
 from ..services.member_service import MemberService
+from ..services.merge_request_service import MergeRequestService
 from ..services.notification_service import NotificationService
 from ..services.org_service import OrgService
 from ..services.project_service import ProjectService
@@ -135,6 +136,7 @@ class ServiceRegistry:
     transformation: TransformationService = field(init=False)
     billing: BillingService = field(init=False)
     auth: AuthService = field(init=False)
+    merge_request: MergeRequestService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -146,6 +148,7 @@ class ServiceRegistry:
         self.stream = StreamService(config_store=cs)
         self.job = JobService(config_store=cs)
         self.branch = BranchService(config_store=cs)
+        self.merge_request = MergeRequestService(config_store=cs)
         self.workspace = WorkspaceService(config_store=cs)
         self.flow = FlowService(config_store=cs)
         self.schedule = ScheduleService(config_store=cs)
