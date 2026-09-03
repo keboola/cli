@@ -55,13 +55,14 @@ def storage_create_bucket(ctx, project, stage, name):
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result) if formatter.json_mode else ...
 
+
 # BAD -- business logic leaked into command
 @storage_app.command("create-bucket")
 def storage_create_bucket(ctx, project, stage, name):
     if stage not in ("in", "out"):  # This belongs in service!
         ...
-    client = KeboolaClient(...)     # This belongs in service!
-    client.create_bucket(...)       # Commands don't call clients!
+    client = KeboolaClient(...)  # This belongs in service!
+    client.create_bucket(...)  # Commands don't call clients!
 ```
 
 ### Validate at system boundaries
@@ -128,10 +129,11 @@ caught immediately.
 
 ```python
 # BAD -- caller has to remember positional meaning
-def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]:
-    ...
+def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]: ...
+
 
 resolved_alias, project = resolve_project(alias)  # which is which?
+
 
 # GOOD -- self-documenting at every call site
 @dataclass(frozen=True)
@@ -139,8 +141,9 @@ class ResolvedProject:
     alias: str
     config: ProjectConfig
 
-def resolve_project(alias: str | None) -> ResolvedProject:
-    ...
+
+def resolve_project(alias: str | None) -> ResolvedProject: ...
+
 
 resolved = resolve_project(alias)
 resolved.alias, resolved.config  # unambiguous
@@ -159,6 +162,7 @@ formatter.error(message="Bucket not found", error_code=ErrorCode.NOT_FOUND)
 # GOOD -- category first, then the variable part
 formatter.error(error_code=ErrorCode.NOT_FOUND, message="Bucket not found")
 
+
 def log_failure(error_code: ErrorCode, message: str) -> None: ...
 def raise_api_error(error_code: ErrorCode, *, message: str, status: int) -> None: ...
 ```
@@ -175,6 +179,7 @@ raise KeboolaApiError(message="...", error_code="not_found")
 
 # GOOD
 from .errors import ErrorCode
+
 raise KeboolaApiError(error_code=ErrorCode.NOT_FOUND, message="...")
 ```
 
@@ -245,9 +250,11 @@ Single-expression `sort` keys and `filter` predicates are fine as lambdas. Anyth
 parse_row = lambda r: {"id": r[0], "name": r[1], "active": r[2] == "Y"}
 rows = [parse_row(r) for r in raw]
 
+
 # GOOD
 def _parse_storage_row(raw: tuple[str, str, str]) -> dict[str, Any]:
     return {"id": raw[0], "name": raw[1], "active": raw[2] == "Y"}
+
 
 rows = [_parse_storage_row(r) for r in raw]
 
