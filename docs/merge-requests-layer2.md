@@ -180,7 +180,33 @@ already performs exactly this cleanup today. After a successful merge:
 - workspaces on the branch need nothing: the server drops them with the branch (notes doc);
   leftovers are `workspace list --orphaned` / `workspace gc` territory,
 - output says the source branch "is being deleted" — never "is deleted" — and the result is
-  structured like `delete_branch`'s (`was_active`, `mapping_cleanup`, `message`).
+  structured like `delete_branch`'s (`was_active`, `mapping_cleanup`, `message`),
+- cleanup failures land under **`warnings[]`** (decided 2026-09-03, with the Layer 1 RFC): the
+  same key `resolve_conflict` uses, so the group has one soft-failure channel — "the operation
+  landed, something secondary did not, exit stays 0". It was briefly `cleanup_warnings`; a
+  renderer reading `warnings` would have silently dropped exactly the post-merge ones a user
+  must act on.
+
+## Additions made for Layer 1 (2026-09-03)
+
+Three small additions decided while walking PR #703's review findings into the Layer 1 RFC
+([`merge-requests-layer1.md`](merge-requests-layer1.md), "Layer 2 changes shipping with this
+PR"). Each exists so Layer 1 does not re-derive something the service already knows:
+
+- **`get_merge_request_row(alias, merge_request_id)`** — the row tier (`_enrich_row`:
+  raw + `derived_state` + `allowed_actions`) addressed by id. `list` / `find` already return
+  rows, but only by branch; the sole by-id method was the **detail**, which also spends a
+  conflicts GET and a `verify_token` GET. Layer 1 needs one field *before* a write (is the MR
+  armed for auto-merge? which branch will `merge` delete?) and must not inherit a dependency on
+  the conflicts endpoint for it. Layer 3's `merge_requests.get()` was always this one GET.
+- **`get_config_diff` → `resolution_candidate`** — the ours envelope through
+  `_DIFF_CONTENT_KEYS` (`name`, `description`, `isDisabled`, `configuration`, `rows`;
+  `description` as an explicit `null`; `changeDescription` excluded), or `null` when ours is
+  absent / `isDeleted`. Composed here so the prefill `diff --output` writes and the five-key
+  replace guard in `resolve_conflict` are fed by the same constant — a candidate built in Layer
+  1 that dropped a null `description` would be a file kbagent writes and then refuses. Pinned
+  by a round-trip test: the candidate passes `resolve_conflict(resolved=…)` unmodified.
+- **`merge()` `cleanup_warnings` → `warnings`** — above.
 
 ## Rebase / conflict resolution semantics
 
