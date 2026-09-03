@@ -335,7 +335,7 @@ class SyncService(BaseService):
                     path=default_branch_name,
                 )
             ]
-            if default_branch_id
+            if default_branch_id is not None
             else [],
             configurations=[],
         )

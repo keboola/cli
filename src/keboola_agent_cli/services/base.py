@@ -122,14 +122,20 @@ def find_default_branch_id(branches: list[dict[str, Any]]) -> int | None:
     """The id of the ``isDefault`` branch in a ``list_dev_branches()`` result.
 
     The one home for the ``isDefault`` scan shared by the config, sync,
-    workspace and merge-request services. Returns ``None`` when no branch is
-    flagged (or the flagged entry carries no id) -- what that means (error
-    vs. fallback) stays the caller's decision. ``lib.py`` keeps its own loop
-    deliberately: the SDK facade does not import the services layer.
+    workspace and merge-request services. Returns ``None`` when no flagged
+    branch carries a usable (int-coercible) id -- an entry that cannot be
+    coerced is skipped, never raised on, so a degenerate payload cannot
+    crash a caller mid-operation. What ``None`` means (error vs. fallback)
+    stays the caller's decision. ``lib.py`` keeps its own loop deliberately:
+    the SDK facade does not import the services layer.
     """
     for branch in branches:
-        if branch.get("isDefault") and branch.get("id") is not None:
+        if not branch.get("isDefault"):
+            continue
+        try:
             return int(branch["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
     return None
 
 

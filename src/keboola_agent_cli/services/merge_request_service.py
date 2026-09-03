@@ -691,15 +691,33 @@ class MergeRequestService(BaseService):
         was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
         cleanup_warnings: list[str] = []
+        if raw_branch_from is not None and branch_from_id is None:
+            # "Absent" and "present but not numeric" must not collapse
+            # silently: with no usable id the local cleanup below is skipped,
+            # leaving active_branch_id and the sync mapping pointing at the
+            # branch the merge just doomed -- and the caller must hear that.
+            logger.warning("branchFromId %r is not a numeric branch id", raw_branch_from)
+            cleanup_warnings.append(
+                f"branchFromId {raw_branch_from!r} is not a numeric branch id -- local "
+                "cleanup (active-branch reset, sync-mapping unlink) was skipped. If this "
+                "project's active branch pointed at the merged branch, run "
+                "`kbagent branch reset` and `kbagent sync branch-unlink` yourself."
+            )
         # The merge already happened: a failed local cleanup must not turn it
         # into a failed command -- and the two cleanups are independent, so a
         # failed config write must not skip the mapping unlink (or vice versa).
+        branch_reset_done = False
         try:
             if was_active:
                 self._config_store.set_project_branch(alias, None)
+                branch_reset_done = True
         except Exception as exc:
             logger.warning("Post-merge active-branch reset failed: %s", exc)
-            cleanup_warnings.append(f"Post-merge active-branch reset failed: {exc}")
+            cleanup_warnings.append(
+                f"Post-merge active-branch reset failed: {exc}. The active branch "
+                "still points at the deleted branch -- run `kbagent branch reset "
+                f"--project {alias}`."
+            )
         try:
             if branch_from_id is not None:
                 mapping_cleanup = cleanup_branch_id_from_mapping(branch_from_id)
@@ -716,7 +734,7 @@ class MergeRequestService(BaseService):
                 f"Source branch {branch_from_id} is being deleted (a separate async "
                 "job -- it may still briefly exist)."
             )
-        if was_active:
+        if branch_reset_done:
             message_parts.append("Active branch reset to main.")
         if mapping_cleanup:
             unlinked = ", ".join(mapping_cleanup["git_branches_unlinked"])
@@ -869,14 +887,21 @@ class MergeRequestService(BaseService):
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
 
-        Only meaningful when BOTH sides exist: a null side (the config never
-        existed there) is a side-level fact carried by the ``ours_deleted`` /
-        ``theirs_deleted`` flags, and fabricating per-path rows against an
-        empty stand-in would emit contradictions -- every base key rendered
-        as "that side removed it" next to a flag saying the side does not
-        exist. So a null ours/theirs yields no ``changes`` at all.
+        Only meaningful when BOTH sides carry comparable content. A null
+        side (the config never existed there), a tombstoned one
+        (``isDeleted`` -- the criterion ``resolve_conflict`` already treats
+        as "no content to take") and an empty envelope are all side-level
+        facts carried by the ``ours_deleted`` / ``theirs_deleted`` flags;
+        fabricating per-path rows against an empty stand-in would emit
+        contradictions -- every base key rendered as "that side removed it"
+        next to a flag saying the side does not exist. Any of them yields no
+        ``changes`` at all.
         """
-        if diff.get("ours") is None or diff.get("theirs") is None:
+
+        def classifiable(side: dict[str, Any] | None) -> bool:
+            return side is not None and not side.get("isDeleted") and bool(side.get("diff"))
+
+        if not classifiable(diff.get("ours")) or not classifiable(diff.get("theirs")):
             return []
 
         def content(side: dict[str, Any] | None) -> dict[str, Any]:
@@ -1048,21 +1073,46 @@ class MergeRequestService(BaseService):
                     for key in ("name", "rows", "configuration", "isDisabled")
                     if key not in body or body[key] is None
                 ]
-                # description is the one genuinely nullable replaced field --
-                # only ABSENCE is refused (an explicit null is a legitimate
-                # resolved value; the wire treats null and absent the same,
-                # but a caller who spelled it out has decided, one who omitted
-                # it has not).
-                if "description" not in body:
+                # description is the one genuinely nullable replaced field,
+                # and the two paths differ: a CALLER-authored body must spell
+                # it out (an explicit null is a decision, an omission is not),
+                # but a take side is the server's own envelope with no intent
+                # to elicit -- and rebase_config omits the key for None
+                # anyway, so absent and null are wire-identical there.
+                # Refusing the take side would prescribe hand-authoring the
+                # very body this code just declined to compose.
+                if take is None and "description" not in body:
                     missing.append("description")
                 if "name" not in missing and not str(body.get("name") or "").strip():
                     missing.insert(0, "name")
+                if "isDisabled" not in missing and not isinstance(body["isDisabled"], bool):
+                    # bool("false") is True: a string boolean from a hand-edited
+                    # or tool-generated file would DISABLE the config on a
+                    # replace and return 200. Refuse, per the guard's
+                    # refuse-don't-default policy -- blaming the right party:
+                    # on a take side the envelope is server-produced.
+                    detail = (
+                        "isDisabled must be a JSON boolean (true/false), got "
+                        f"{type(body['isDisabled']).__name__} {body['isDisabled']!r}."
+                    )
+                    if take is not None:
+                        raise KeboolaApiError(
+                            message=(
+                                f"The diff's {take} side carries a non-boolean "
+                                f"isDisabled -- {detail} Author the resolution "
+                                "manually and pass it as a resolved body instead."
+                            ),
+                            status_code=0,
+                            error_code=ErrorCode.VALIDATION_ERROR,
+                            retryable=False,
+                        )
+                    raise ConfigError(detail)
                 if missing:
                     if take is not None:
-                        # The diff side's envelope is server-produced and its
-                        # schema marks all content keys required -- a hole
-                        # here is a backend contract violation, not caller
-                        # error. Point at the manual path as the workaround.
+                        # The envelope is server-produced with these keys
+                        # required by its schema -- a hole is a backend
+                        # contract violation, not caller error. Point at the
+                        # manual path as the workaround.
                         raise KeboolaApiError(
                             message=(
                                 f"The diff's {take} side carries no "
@@ -1086,7 +1136,7 @@ class MergeRequestService(BaseService):
                     name=body["name"],
                     rows=body["rows"],
                     configuration=body["configuration"],
-                    is_disabled=bool(body["isDisabled"]),
+                    is_disabled=body["isDisabled"],
                     description=body.get("description"),
                     change_description=change_description,
                 )
@@ -1117,14 +1167,23 @@ class MergeRequestService(BaseService):
         server-side (the MR is no longer open), it just fails later.
         """
         mr = client.merge_requests.get(merge_request_id)
-        branch_from_id = _coerce_branch_id((mr.get("branches") or {}).get("branchFromId"))
+        raw = (mr.get("branches") or {}).get("branchFromId")
+        branch_from_id = _coerce_branch_id(raw)
         if branch_from_id is None:
+            # "Absent" and "present but not numeric" are different faults --
+            # one points at the MR lifecycle, the other at the payload.
+            message = (
+                f"Merge request {merge_request_id} has no source branch (state: "
+                f"{mr.get('state', 'unknown')}) -- a published or canceled MR "
+                "cannot be resolved."
+                if raw is None
+                else (
+                    f"Merge request {merge_request_id}'s branchFromId is {raw!r} -- "
+                    "not a numeric branch id; cannot resolve against it."
+                )
+            )
             raise KeboolaApiError(
-                message=(
-                    f"Merge request {merge_request_id} has no source branch (state: "
-                    f"{mr.get('state', 'unknown')}) -- a published or canceled MR "
-                    "cannot be resolved."
-                ),
+                message=message,
                 status_code=0,
                 error_code=ErrorCode.VALIDATION_ERROR,
                 retryable=False,

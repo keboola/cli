@@ -1329,6 +1329,9 @@ class TestZajcaSecondReviewFollowUps:
         result = _svc(store, factory).merge(ALIAS, 7)
         assert result["branch_from_id"] is None
         assert called == []
+        # The degradation is RECORDED: cleanup was skipped, the caller hears
+        # it and gets the manual recovery steps.
+        assert any("not-a-number" in w and "branch reset" in w for w in result["cleanup_warnings"])
 
     def test_failed_branch_reset_does_not_skip_mapping_cleanup(
         self, store, client_factory, monkeypatch
@@ -1349,5 +1352,143 @@ class TestZajcaSecondReviewFollowUps:
             lambda branch_id: cleaned.append(branch_id) or None,
         )
         result = _svc(store, factory).merge(ALIAS, 7)
-        assert any("active-branch reset failed" in w for w in result["cleanup_warnings"])
+        assert any(
+            "active-branch reset failed" in w and "branch reset" in w
+            for w in result["cleanup_warnings"]
+        )
+        # The message reports the OUTCOME, not the precondition: no claim of
+        # a reset that did not happen.
+        assert "Active branch reset to main" not in result["message"]
         assert cleaned == [123]  # mapping cleanup still ran
+
+
+class TestZajcaThirdReviewFollowUps:
+    """Regression tests for Zajca's third PR #703 review (2026-09-03)."""
+
+    def _arm(self, mock: MagicMock, **diff_sides: Any) -> None:
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        sides = {
+            "base": _side({"limit": 100}, version=3),
+            "ours": _side({"limit": 500}, version=4),
+            "theirs": _side({"limit": 250}, version=7),
+        }
+        sides.update(diff_sides)
+        mock.get_config_diff.return_value = _diff(sides["base"], sides["ours"], sides["theirs"])
+        mock.rebase_config.return_value = {"id": "111", "version": 8}
+        mock.rebase_config_delete.return_value = {"id": "111", "version": 8, "isDeleted": True}
+
+    def test_string_boolean_is_disabled_is_refused_in_resolved_body(
+        self, store, client_factory
+    ) -> None:
+        # bool("false") is True -- a string boolean from a hand-edited file
+        # would DISABLE the config on a replace and return 200.
+        factory, mock = client_factory
+        self._arm(mock)
+        body = {
+            "name": "n",
+            "rows": [],
+            "configuration": {},
+            "isDisabled": "false",
+            "description": None,
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert "JSON boolean" in str(exc_info.value)
+        mock.rebase_config.assert_not_called()
+
+    def test_non_boolean_is_disabled_on_a_take_side_blames_the_server(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        theirs = _side({"limit": 250}, version=7)
+        theirs["diff"]["isDisabled"] = "false"
+        self._arm(mock, theirs=theirs)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="theirs")
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "resolved body" in exc_info.value.message  # names the workaround
+        mock.rebase_config.assert_not_called()
+
+    def test_is_disabled_forwards_verbatim_not_coerced(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        body = {
+            "name": "n",
+            "rows": [],
+            "configuration": {},
+            "isDisabled": False,
+            "description": None,
+        }
+        _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert mock.rebase_config.call_args.kwargs["is_disabled"] is False
+
+    def test_take_side_with_absent_description_composes_none(self, store, client_factory) -> None:
+        # rebase_config omits the key for None and the server treats null and
+        # absent identically -- refusing a wire-equivalent input would
+        # prescribe hand-authoring the very body this call composes.
+        factory, mock = client_factory
+        theirs = _side({"limit": 250}, version=7)
+        del theirs["diff"]["description"]
+        self._arm(mock, theirs=theirs)
+        result = _svc(store, factory).resolve_conflict(
+            ALIAS, 7, "keboola.ex-db", "111", take="theirs"
+        )
+        assert result["resolution"] == "theirs"
+        assert mock.rebase_config.call_args.kwargs["description"] is None
+
+    def test_resolved_body_still_requires_description_presence(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        self._arm(mock)
+        body = {"name": "n", "rows": [], "configuration": {}, "isDisabled": False}
+        with pytest.raises(ConfigError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=body)
+        assert "description" in str(exc_info.value)
+
+    def test_tombstoned_side_yields_no_classification_rows(self, store, client_factory) -> None:
+        # isDeleted is the same "no content to take" criterion
+        # resolve_conflict uses; the flags tell the story, not fabricated
+        # per-path rows.
+        factory, mock = client_factory
+        tombstone = {"version": 4, "isDeleted": True, "diff": {}}
+        self._arm(mock, ours=tombstone)
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert result["ours_deleted"] is True
+        assert result["changes"] == []
+
+    def test_non_numeric_branch_from_id_names_the_payload_not_the_lifecycle(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        mr = _wire_mr(7, "in_review", branch_from=123)
+        mr["branches"]["branchFromId"] = "b-123"
+        mock.merge_requests.get.return_value = mr
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="ours")
+        assert "'b-123'" in exc_info.value.message
+        assert "published or canceled" not in exc_info.value.message
+
+
+class TestFindDefaultBranchId:
+    def test_coerces_numeric_ids(self) -> None:
+        from keboola_agent_cli.services.base import find_default_branch_id
+
+        assert find_default_branch_id([{"isDefault": True, "id": 9}]) == 9
+        assert find_default_branch_id([{"isDefault": True, "id": "42"}]) == 42
+
+    def test_skips_uncoercible_entries_instead_of_raising(self) -> None:
+        from keboola_agent_cli.services.base import find_default_branch_id
+
+        assert find_default_branch_id([{"isDefault": True, "id": "main"}]) is None
+        assert find_default_branch_id([{"isDefault": True, "id": None}]) is None
+        assert find_default_branch_id([{"isDefault": True}]) is None
+        assert (
+            find_default_branch_id([{"isDefault": True, "id": None}, {"isDefault": True, "id": 9}])
+            == 9
+        )
+
+    def test_no_default_branch_is_none(self) -> None:
+        from keboola_agent_cli.services.base import find_default_branch_id
+
+        assert find_default_branch_id([]) is None
+        assert find_default_branch_id([{"isDefault": False, "id": 1}]) is None
