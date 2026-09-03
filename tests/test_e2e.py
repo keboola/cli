@@ -14409,3 +14409,181 @@ class TestE2EConfigState:
             "parameters.foo=1",
         )["data"]
         assert data["configuration"]["parameters"]["foo"] == 1
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EMergeRequestLifecycle:
+    """End-to-end tests for the `merge-request` group (DMD-1900).
+
+    GATED ON THE PROJECT FEATURE, not on credentials: the E2E project does not
+    carry ``branches-merge-requests`` today and kbagent cannot provision one
+    (no project-create in ManageClient). So ``setup`` runs ``merge-request
+    list`` and ``pytest.skip``s on ``feature_enabled: false`` -- the same shape
+    the conditional-flows tests use. The suite stays green and starts covering
+    the group the moment the flag lands (one-time, super-admin manage token:
+    ``kbagent feature project-add --project kbagent-e2e --feature
+    branches-merge-requests``). The skip is explicit and reported, never silent
+    (docs/merge-requests-layer1.md, Bookkeeping / E2E).
+
+    Two properties of the scenario worth knowing before reading on:
+
+    - **The happy path merges into production.** There is no dry-run merge, so
+      the test creates a throwaway ``ex-generic-v2`` config IN A DEV BRANCH,
+      merges the branch, and then deletes the config from production in
+      ``cleanup``. That is inside the blast radius the flow/config E2E tests
+      already have, but it is an explicit teardown -- never left for the next run.
+    - **``merge`` takes a project-wide lock** and refuses while another MR in
+      the project is processing (``MR_NOT_READY_TO_MERGE``). Two concurrent runs
+      collide; treat that error here as a known flake source, not a regression.
+
+    ``approve`` has no happy path on a 0-approval project (422 in every state,
+    ``in_review`` is unreachable) -- the test asserts the refusal.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-mr"[:60]
+        self.component_id = "ex-generic-v2"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created_branch_ids: list[int] = []
+        self._production_config_ids: list[str] = []
+
+        # The feature gate. `list` is ungated server-side, so on a project
+        # without the feature it answers 200 + [] and the service adds
+        # feature_enabled: false -- that, not an error, is the skip signal.
+        listing = self._run("merge-request", "list", "--project", self.alias)
+        if listing.exit_code != 0:
+            pytest.skip(f"merge-request list failed on the E2E project: {listing.output}")
+        if json.loads(listing.output)["data"].get("feature_enabled") is False:
+            pytest.skip(
+                "E2E project lacks the `branches-merge-requests` feature; enable it once with "
+                "`kbagent feature project-add --project kbagent-e2e --feature branches-merge-requests`"
+            )
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        # The merged config lives in PRODUCTION after a successful merge.
+        for cfg_id in self._production_config_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(component_id=self.component_id, config_id=cfg_id)
+        # A merged branch is deleted by the backend; an unmerged one (failed test) is ours.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def test_lifecycle_create_inspect_merge(self) -> None:
+        """branch -> config on the branch -> create MR -> detail/conflicts -> approve 422 -> merge."""
+        _step(1, "branch create", "the merge request's source")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-mr-src"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        _step(2, "create a throwaway config IN the branch", "something for the merge to carry")
+        cfg = self.client.create_config(
+            component_id=self.component_id,
+            name=f"{RUN_ID}-mr-config",
+            configuration={"parameters": {"e2e": RUN_ID}},
+            description="E2E throwaway -- DMD-1900 merge-request lifecycle",
+            branch_id=branch_id,
+        )
+        config_id = str(cfg["id"])
+        # After the merge this id exists in production -- schedule its deletion now.
+        self._production_config_ids.append(config_id)
+
+        _step(3, "merge-request create --branch", "explicit branch, no active-branch state")
+        created = self._run_ok(
+            "merge-request",
+            "create",
+            "--project",
+            self.alias,
+            "--branch",
+            str(branch_id),
+            "--title",
+            f"{RUN_ID} lifecycle",
+            "--description",
+            "E2E",
+        )["data"]
+        mr_id = int(created["id"])
+        assert created["branch_from_id"] == branch_id
+        assert created["derived_state"] == "in_development"
+        assert created["merge_request_id"] == mr_id and created["resolved_from_branch"] is False
+
+        _step(4, "list shows it newest-first with the derived state")
+        rows = self._run_ok("merge-request", "list", "--project", self.alias)["data"][
+            "merge_requests"
+        ]
+        assert any(int(r["id"]) == mr_id for r in rows)
+
+        _step(5, "detail: readiness, viewer, allowed_actions, empty change log in development")
+        detail = self._run_ok(
+            "merge-request", "detail", "--project", self.alias, "--merge-request-id", str(mr_id)
+        )["data"]
+        assert detail["conflicts_count"] == 0 and detail["mergeable"] is True
+        assert detail["viewer"]["is_creator"] is True
+        assert "merge" in detail["allowed_actions"]
+        assert not (detail.get("changeLog") or {}).get("configurations")
+
+        _step(5.1, "by-branch resolution via --branch instead of the id")
+        via_branch = self._run_ok(
+            "merge-request", "conflicts", "--project", self.alias, "--branch", str(branch_id)
+        )["data"]
+        assert via_branch["merge_request_id"] == mr_id and via_branch["count"] == 0
+
+        _step(6, "approve is 422 on a 0-approval project", "the refusal IS the expected outcome")
+        approve = self._run(
+            "merge-request", "approve", "--project", self.alias, "--merge-request-id", str(mr_id)
+        )
+        assert approve.exit_code != 0, approve.output
+        assert json.loads(approve.output)["error"]["code"] not in (ErrorCode.FEATURE_NOT_ENABLED,)
+
+        _step(7, "--json merge without an explicit target is exit 2 before any call")
+        bare = self._run("merge-request", "merge", "--project", self.alias)
+        assert bare.exit_code == 2, bare.output
+
+        _step(8, "merge --merge-request-id", "straight from development; blocks on the Storage job")
+        merged = self._run_ok(
+            "merge-request", "merge", "--project", self.alias, "--merge-request-id", str(mr_id)
+        )["data"]
+        assert merged["branch_from_id"] == branch_id
+        assert "is being deleted" in merged["message"]
+        assert merged.get("derived_state") in (None, "merged")
+
+        _step(9, "the config now exists in production")
+        prod = self.client.get_config_detail(component_id=self.component_id, config_id=config_id)
+        assert prod["id"] == config_id
+        # The backend deletes the source branch asynchronously; nothing to assert
+        # about its existence at this instant (the RFC's wording rule exists for
+        # exactly this reason).
