@@ -1584,3 +1584,20 @@ class TestOpusReviewFollowUps:
         )
         assert result.exit_code == 5
         assert _json(result)["error"]["code"] == ErrorCode.FEATURE_NOT_ENABLED
+
+
+class TestDiffEmptyEnvelope:
+    def test_no_rows_with_a_service_warning_does_not_claim_the_conflict_cleared(
+        self, tmp_path, service
+    ) -> None:
+        service.get_config_diff.return_value = _diff_result(
+            changes=[],
+            resolution_candidate=None,
+            warnings=[
+                "The diff's ours side carries no name -- no resolution candidate could be prefilled."
+            ],
+        )
+        result = _run(_DIFF_ARGS, _store(tmp_path), service)
+        assert result.exit_code == 0, result.output
+        assert "cleared" not in result.output
+        assert "carries no name" in result.output

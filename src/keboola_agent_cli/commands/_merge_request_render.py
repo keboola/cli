@@ -383,6 +383,15 @@ def format_config_diff(console: Console, data: dict[str, Any], *, full: bool = F
 
     changes: list[dict[str, Any]] = data.get("changes") or []
     if not changes:
+        if data.get("warnings"):
+            # The service produced no per-path rows AND said why (an empty or
+            # holed envelope on one side) -- do not claim the conflict cleared;
+            # the warning line that follows carries the reason.
+            console.print(
+                "No per-path classification could be produced for this configuration "
+                "(see the warning below)."
+            )
+            return
         # Both sides exist, neither deleted, nothing differs: the conflict
         # cleared between `conflicts` and `diff` -- say that, not "nothing changed".
         console.print(

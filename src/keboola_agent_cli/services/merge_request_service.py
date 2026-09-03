@@ -1291,10 +1291,14 @@ class MergeRequestService(BaseService):
             raise KeboolaApiError(
                 message=message,
                 status_code=0,
-                # A caller mistake (resolving/diffing a finished MR), not a backend fault:
-                # INVALID_ARGUMENT is what app.py maps to HTTP 400 over `serve`
-                # (VALIDATION_ERROR would answer 502 and invite a retry).
-                error_code=ErrorCode.INVALID_ARGUMENT,
+                # The two faults blame different parties, and the code carries
+                # that over `serve`: an absent id means the caller is resolving
+                # a finished MR -> INVALID_ARGUMENT (HTTP 400); a present but
+                # non-numeric id is the server's payload -> VALIDATION_ERROR
+                # (a gateway-side fault, not something to fix in the request).
+                error_code=(
+                    ErrorCode.INVALID_ARGUMENT if raw is None else ErrorCode.VALIDATION_ERROR
+                ),
                 retryable=False,
             )
         return branch_from_id
