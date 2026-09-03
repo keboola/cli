@@ -1643,3 +1643,83 @@ class TestLayer1RfcWalkFollowUps:
         with pytest.raises(KeboolaApiError) as garbage:
             svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
         assert garbage.value.error_code == ErrorCode.VALIDATION_ERROR
+
+
+class TestLayer2FollowupsInheritedByLayer1:
+    """docs/merge-requests-layer2-followups.md -- the non-blocking leftovers of PR #703
+    that go through the Layer 1 PR (F2, F3, F4, F5, F7)."""
+
+    def _arm_merge(self, mock: MagicMock, branch_from: Any) -> None:
+        row = _wire_mr(7, "approved")
+        row["branches"]["branchFromId"] = branch_from
+        mock.merge_requests.get.return_value = row
+        mock.merge_requests.merge.return_value = {"id": 1, "status": "success", "results": {}}
+
+    # F2 -- the empty-envelope half of the classifier had no test
+    def test_empty_envelope_side_yields_no_rows_and_a_warning(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs={"version": 7, "isDeleted": False, "diff": {}},
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert result["changes"] == []
+        assert result["theirs_deleted"] is False and result["ours_deleted"] is False
+        # ...and the renderer must not read that as "cleared": the reason is recorded.
+        assert any("theirs side has an empty content envelope" in w for w in result["warnings"])
+        # the ours side is intact, so the candidate is still composed
+        assert result["resolution_candidate"]["configuration"] == {"limit": 500}
+
+    # F3 -- the branch-id degradation is recorded structurally, not in prose only
+    def test_non_numeric_branch_from_id_is_recorded_structurally(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock, "0123x")
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["cleanup_skipped"] is True
+        assert result["branch_from_id_raw"] == "0123x"
+        assert result["branch_from_id"] is None
+        assert "Source branch id could not be read; see warnings." in result["message"]
+        assert "is being deleted" not in result["message"]
+
+    def test_legitimate_null_branch_carries_no_degradation_flag(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock, None)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert "cleanup_skipped" not in result and "branch_from_id_raw" not in result
+
+    # F7 -- the positive assertion for the outcome-gated sentence
+    def test_successful_reset_says_so(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        store.set_project_branch(ALIAS, 123)
+        self._arm_merge(mock, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["was_active"] is True
+        assert "Active branch reset to main." in result["message"]
+        assert store.get_project(ALIAS).active_branch_id is None
+
+    # F5 -- the detail tier is feature-aware for free
+    def test_detail_carries_feature_enabled(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = []
+        mock.has_feature.return_value = False
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["feature_enabled"] is False
+        # state-derived actions stay as they are -- the CONSUMER gates on the flag
+        assert "merge" in detail["allowed_actions"]
+
+    # F4 -- the shared helper logs the skip instead of folding it into None silently
+    def test_find_default_branch_id_logs_the_skipped_entry(self, caplog) -> None:
+        import logging
+
+        from keboola_agent_cli.services.base import find_default_branch_id
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.services.base"):
+            assert find_default_branch_id([{"isDefault": True, "id": "main"}]) is None
+        assert any("non-numeric id 'main'" in r.getMessage() for r in caplog.records)

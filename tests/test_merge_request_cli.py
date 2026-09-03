@@ -1601,3 +1601,44 @@ class TestDiffEmptyEnvelope:
         assert result.exit_code == 0, result.output
         assert "cleared" not in result.output
         assert "carries no name" in result.output
+
+
+class TestLayer2Followups:
+    def test_merge_render_keys_on_cleanup_skipped(self, tmp_path, service) -> None:
+        # F3: the renderer reads the structured flag, never the warning text.
+        service.merge.return_value = {
+            **_merged(),
+            "branch_from_id": None,
+            "was_active": False,
+            "cleanup_skipped": True,
+            "branch_from_id_raw": "0123x",
+            "message": "Merge request 7 merged into production. Source branch id could not be read; see warnings.",
+            "warnings": [
+                "branchFromId '0123x' is not a numeric branch id -- local cleanup was skipped."
+            ],
+        }
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Local cleanup skipped" in result.output and "0123x" in result.output
+        assert "branch reset" in result.output and "sync branch-unlink" in result.output
+
+    def test_detail_hint_respects_feature_enabled(self, tmp_path, service) -> None:
+        # F5: never recommend a write that cannot succeed.
+        service.get_merge_request.return_value = _detail(feature_enabled=False)
+        result = _run(
+            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+        )
+        assert result.exit_code == 0, result.output
+        assert "not enabled on this project" in result.output
+        assert "merge-request merge" not in result.output
+
+    def test_detail_hint_unchanged_when_feature_enabled(self, tmp_path, service) -> None:
+        service.get_merge_request.return_value = _detail(feature_enabled=True)
+        result = _run(
+            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+        )
+        assert "merge-request merge" in result.output

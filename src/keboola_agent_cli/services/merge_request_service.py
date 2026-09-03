@@ -152,7 +152,8 @@ def derive_state(mr: dict[str, Any]) -> str:
     - otherwise the raw state mapped through ``_DERIVED_STATE_BY_RAW``
       (an unknown raw state passes through unchanged, defensively).
 
-    Reliability caveat (verified against Connection): ``reviewers[].status`` is populated only within a review
+    Reliability caveat (verified against Connection): ``reviewers[].status`` is
+    populated only within a review
     round anchored by an actual ``request_review`` event, and a non-reviewer's
     decision (the creator's included -- the creator can never BE a reviewer)
     is dropped whenever explicit reviewers exist. ``skip_review`` writes no
@@ -501,6 +502,12 @@ class MergeRequestService(BaseService):
             admin_id: int | None = None
             if _server_viewer(mr) is None:
                 admin_id = client.verify_token().admin_id
+            # The detail tier already pays verify_token (above) in the common
+            # case, so the features cache is warm and this is free -- which is
+            # what the list tier could not afford (followups F5). A project that
+            # lost the feature keeps its MRs; the state-derived actions would
+            # advertise writes the pre-flight refuses.
+            feature_enabled = client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE)
         finally:
             client.close()
 
@@ -513,6 +520,7 @@ class MergeRequestService(BaseService):
             "mergeable": not blockers and conflicts is not None,
             "allowed_actions": derive_allowed_actions(mr),
             "viewer": derive_viewer(mr, admin_id),
+            "feature_enabled": feature_enabled,
         }
         if conflicts is not None:
             detail["conflicts"] = conflicts
@@ -739,11 +747,15 @@ class MergeRequestService(BaseService):
         was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
         warnings: list[str] = []
-        if raw_branch_from is not None and branch_from_id is None:
+        cleanup_skipped = raw_branch_from is not None and branch_from_id is None
+        if cleanup_skipped:
             # "Absent" and "present but not numeric" must not collapse
             # silently: with no usable id the local cleanup below is skipped,
             # leaving active_branch_id and the sync mapping pointing at the
             # branch the merge just doomed -- and the caller must hear that.
+            # Recorded STRUCTURALLY too (`cleanup_skipped`, `branch_from_id_raw`,
+            # followups F3): the prose alone left this result byte-identical
+            # to the legitimate published-MR null for a --json consumer.
             logger.warning("branchFromId %r is not a numeric branch id", raw_branch_from)
             warnings.append(
                 f"branchFromId {raw_branch_from!r} is not a numeric branch id -- local "
@@ -782,6 +794,8 @@ class MergeRequestService(BaseService):
                 f"Source branch {branch_from_id} is being deleted (a separate async "
                 "job -- it may still briefly exist)."
             )
+        elif cleanup_skipped:
+            message_parts.append("Source branch id could not be read; see warnings.")
         if branch_reset_done:
             message_parts.append("Active branch reset to main.")
         if mapping_cleanup:
@@ -802,6 +816,9 @@ class MergeRequestService(BaseService):
             result["allowed_actions"] = derive_allowed_actions(mr_after)
         if mapping_cleanup:
             result["mapping_cleanup"] = mapping_cleanup
+        if cleanup_skipped:
+            result["cleanup_skipped"] = True
+            result["branch_from_id_raw"] = raw_branch_from
         if warnings:
             # `warnings` is the group's one soft-failure key (resolve_conflict
             # uses the same name): "the operation landed, something secondary
@@ -938,9 +955,9 @@ class MergeRequestService(BaseService):
             "resolution_candidate": self._resolution_candidate(ours),
             "diff": diff,
         }
-        candidate_warnings = self._candidate_warnings(ours)
-        if candidate_warnings:
-            result["warnings"] = candidate_warnings
+        diff_warnings = self._diff_warnings(diff)
+        if diff_warnings:
+            result["warnings"] = diff_warnings
         return result
 
     def _resolution_candidate(self, ours: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -976,32 +993,60 @@ class MergeRequestService(BaseService):
             return None
         return {key: envelope.get(key) for key in self._DIFF_CONTENT_KEYS}
 
-    def _candidate_warnings(self, ours: dict[str, Any] | None) -> list[str]:
-        if ours is None or ours.get("isDeleted"):
-            return []
-        envelope = ours.get("diff") or {}
-        missing = [
-            key for key in ("name", "rows", "configuration", "isDisabled") if key not in envelope
-        ]
-        if not missing:
-            return []
-        return [
-            f"The diff's ours side carries no {', '.join(missing)} -- no resolution candidate "
-            "could be prefilled (backend envelope hole). Author the resolution manually."
-        ]
+    def _diff_warnings(self, diff: dict[str, Any]) -> list[str]:
+        """Say why a side yielded no classification / no candidate.
+
+        Two shapes, both backend contract violations (the OA schema marks
+        every content key required): an EMPTY envelope on either side -- the
+        classifier then emits no rows and a renderer must not read that as
+        "the conflict cleared" -- and a HOLED ours envelope, which yields no
+        resolution candidate rather than an explicit-null file the resolve
+        guard would blame the caller for.
+        """
+        warnings: list[str] = []
+        for label in ("ours", "theirs"):
+            side = diff.get(label)
+            if side is None or side.get("isDeleted"):
+                continue
+            envelope = side.get("diff") or {}
+            if not envelope:
+                warnings.append(
+                    f"The diff's {label} side has an empty content envelope -- no per-path "
+                    "classification is possible (backend envelope hole)."
+                )
+                continue
+            if label == "ours":
+                missing = [
+                    key
+                    for key in ("name", "rows", "configuration", "isDisabled")
+                    if key not in envelope
+                ]
+                if missing:
+                    warnings.append(
+                        f"The diff's ours side carries no {', '.join(missing)} -- no resolution "
+                        "candidate could be prefilled (backend envelope hole). Author the "
+                        "resolution manually."
+                    )
+        return warnings
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
 
         Only meaningful when BOTH sides carry comparable content. A null
         side (the config never existed there), a tombstoned one
-        (``isDeleted`` -- the criterion ``resolve_conflict`` already treats
-        as "no content to take") and an empty envelope are all side-level
-        facts carried by the ``ours_deleted`` / ``theirs_deleted`` flags;
-        fabricating per-path rows against an empty stand-in would emit
-        contradictions -- every base key rendered as "that side removed it"
-        next to a flag saying the side does not exist. Any of them yields no
-        ``changes`` at all.
+        (``isDeleted``) and an empty envelope (``diff: {}``) all yield no
+        ``changes`` at all: fabricating per-path rows against an empty
+        stand-in would emit contradictions -- every base key rendered as
+        "that side removed it" next to a flag saying the side does not exist.
+
+        The classifier is deliberately STRICTER than ``resolve_conflict``:
+        the resolver shares the ``isDeleted`` criterion but treats an empty
+        envelope on a take side as a VALIDATION_ERROR (missing content keys),
+        never as "nothing to take" -- collapsing it to the delete resolution
+        would destroy a configuration, so refusing is the safe direction
+        there, while here silence is (followups F2). The side-level facts a
+        renderer needs live on ``ours_deleted`` / ``theirs_deleted`` and, for
+        the empty-envelope case, in ``warnings``.
         """
 
         def classifiable(side: dict[str, Any] | None) -> bool:

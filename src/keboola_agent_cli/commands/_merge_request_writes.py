@@ -469,12 +469,29 @@ def merge_request_merge(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_error(formatter, exc)
 
-    formatter.output(
-        result,
-        lambda c, d: c.print(f"[bold green]Success:[/bold green] {escape(str(d['message']))}"),
-    )
+    formatter.output(result, _render_merge_result)
     _emit_warnings(formatter, result)
-    _hint_next(formatter, "`merge-request list` -- the merged request now shows as merged")
+    if result.get("cleanup_skipped"):
+        _hint_next(
+            formatter,
+            "`kbagent branch reset` and `kbagent sync branch-unlink` if this project's active "
+            "branch pointed at the merged branch",
+        )
+    else:
+        _hint_next(formatter, "`merge-request list` -- the merged request now shows as merged")
+
+
+def _render_merge_result(console: Any, data: dict[str, Any]) -> None:
+    console.print(f"[bold green]Success:[/bold green] {escape(str(data['message']))}")
+    if data.get("cleanup_skipped"):
+        # Keyed on the structured flag (followups F3), never on warning text:
+        # the local cleanup did NOT run, so active_branch_id and the sync
+        # mapping may still point at the branch the merge just doomed.
+        console.print(
+            "[yellow]Local cleanup skipped[/yellow]: the source branch id could not be read "
+            f"({escape(str(data.get('branch_from_id_raw')))}); active branch and sync mapping "
+            "were left untouched."
+        )
 
 
 @writes_app.command("resolve")

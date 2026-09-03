@@ -788,9 +788,12 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   `MR_NOT_READY_TO_MERGE` (exit 1; the latter retryable) come from the merge 409; a truncated conflict
 #   list in the error carries `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
 #   `merge` blocks for up to 10 minutes (no --wait/--timeout). Every result may carry `warnings[]`
-#   (post-merge cleanup failures, a dropped --change-description on a delete resolution). On a project
-#   where the feature was later switched OFF, `allowed_actions` (and the hint-next line) still recommend
-#   writes that will fail FEATURE_NOT_ENABLED -- state-derived, feature-blind by Layer 2's decision.
+#   (post-merge cleanup failures, a dropped --change-description on a delete resolution). A merge whose
+#   source branch id could not be read carries `cleanup_skipped: true` + `branch_from_id_raw` (the local
+#   active-branch reset / sync unlink did NOT run -- key on the flag, not on warning text). On a project
+#   where the feature was later switched OFF, `list` rows' `allowed_actions` still recommend writes that
+#   will fail FEATURE_NOT_ENABLED (state-derived, feature-blind); `detail` carries `feature_enabled` and
+#   its hint-next respects it.
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
 kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]

@@ -111,9 +111,13 @@ kbagent mr resolve --project P --component-id C --config-id I --resolved @resolv
   `MR_NOT_READY_TO_MERGE`, the latter retryable).
 - The **change log is empty until the MR is sent for review** -- the backend writes it then.
   Not a gap; "what will this merge" is unavailable in `development`.
-- `allowed_actions` (and the human hint-next line) are state-derived and **feature-blind**: on
-  a project where the feature was later switched off they recommend writes that will fail
-  `FEATURE_NOT_ENABLED`.
+- `allowed_actions` are state-derived and **feature-blind** in `list`: on a project where the
+  feature was later switched off, rows recommend writes that will fail `FEATURE_NOT_ENABLED`.
+  `detail` carries `feature_enabled` (free there) and its hint-next respects it -- read the flag
+  before acting on a detail's actions.
+- A merge whose source branch id could not be read carries **`cleanup_skipped: true`** and
+  `branch_from_id_raw`: the local active-branch reset and sync unlink did **not** run. Key on the
+  flag, not on warning text; recover with `branch reset` + `sync branch-unlink`.
 - Every result may carry `warnings[]` (a failed post-merge cleanup, a dropped
   change-description). Render or log it.
 - A **truncated conflict list** inside `MR_MERGE_CONFLICT` carries

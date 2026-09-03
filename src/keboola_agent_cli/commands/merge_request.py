@@ -167,6 +167,15 @@ def merge_request_detail(
 
     formatter.output(result, format_merge_request_detail)
     _emit_warnings(formatter, result)
+    if result.get("feature_enabled") is False:
+        # State-derived actions are feature-blind; the detail knows better
+        # (followups F5) and must not recommend a write that cannot succeed.
+        _hint_next(
+            formatter,
+            "none of the write actions can succeed here -- 'branches-merge-requests' is not "
+            "enabled on this project",
+        )
+        return
     hints = next_step_hints(result.get("allowed_actions"))
     if hints:
         _hint_next(formatter, " | ".join(f"`{h}`" for h in hints))

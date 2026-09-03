@@ -169,7 +169,7 @@ class ConfigService(BaseService):
                 if not folder_branch_id:
                     # Fetch default branch ID from dev-branches endpoint
                     folder_branch_id = find_default_branch_id(client.list_dev_branches())
-                if folder_branch_id:
+                if folder_branch_id is not None:
                     result = client.list_config_folder_metadata(branch_id=folder_branch_id)
                     folder_map = result if isinstance(result, dict) else {}
             except Exception:
