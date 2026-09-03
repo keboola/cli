@@ -1627,3 +1627,19 @@ class TestLayer1RfcWalkFollowUps:
         assert validate_auto_merge_flags("immediately", "2026-09-04T10:00:00Z")
         assert arms_auto_merge("immediately") and arms_auto_merge("scheduled")
         assert not arms_auto_merge("none") and not arms_auto_merge(None)
+
+    def test_branch_from_id_faults_blame_the_right_party(self, store, client_factory) -> None:
+        # absent id = the caller is resolving a finished MR (INVALID_ARGUMENT -> 400 over serve);
+        # a non-numeric id = the server's payload (VALIDATION_ERROR).
+        factory, mock = client_factory
+        svc = _svc(store, factory)
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        with pytest.raises(KeboolaApiError) as absent:
+            svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert absent.value.error_code == ErrorCode.INVALID_ARGUMENT
+        garbage_row = _wire_mr(7, "development")
+        garbage_row["branches"]["branchFromId"] = "main"  # a non-numeric wire id
+        mock.merge_requests.get.return_value = garbage_row
+        with pytest.raises(KeboolaApiError) as garbage:
+            svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert garbage.value.error_code == ErrorCode.VALIDATION_ERROR
