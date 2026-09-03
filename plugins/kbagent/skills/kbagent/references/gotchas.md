@@ -5015,7 +5015,10 @@ It carries the command name, the outcome, and the duration -- never argument val
   reads `type=info`, so a consumer never counts a routine signed-out check as an error. Keep
   this list aligned when another command documents a non-zero exit as an expected result.
 
-## `merge-request` group: arming auto-merge IS a production merge (since vNEXT)
+
+## `merge-request` group: arming auto-merge IS a production merge
+
+*(since vNEXT, DMD-1900)*
 
 `kbagent merge-request` (alias `mr`) merges a dev branch into production with review
 (non-SOX "Branches 2.0", project feature `branches-merge-requests`). Full playbook:
