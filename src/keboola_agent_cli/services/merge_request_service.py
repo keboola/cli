@@ -86,6 +86,31 @@ STATE_FILTER_VOCABULARY: frozenset[str] = (
 # The resolve_conflict take modes. Public for the same reason.
 TAKE_MODES: tuple[str, ...] = ("ours", "theirs", "delete")
 
+# The auto-merge vocabulary (AutoMergeStrategy enum, wire-exact). Public and
+# validated HERE so the CLI and the serve router cannot drift from each other:
+# an arming value one surface recognises and the other does not is a safety
+# divergence (--deny-destructive would stop escalating on one of them).
+AUTO_MERGE_DISARMED = "none"
+AUTO_MERGE_STRATEGIES: tuple[str, ...] = ("immediately", "scheduled", AUTO_MERGE_DISARMED)
+
+
+def validate_auto_merge_flags(strategy: str | None, at: str | None) -> str | None:
+    """Return the usage-error message for a bad strategy / strategy-at pairing, or
+    None when the pair is acceptable. Pure: the caller decides how to fail
+    (exit 2 on the CLI, 400 over REST)."""
+    if strategy is not None and strategy not in AUTO_MERGE_STRATEGIES:
+        return f"Unknown auto-merge strategy {strategy!r}: use {', '.join(AUTO_MERGE_STRATEGIES)}."
+    if strategy == "scheduled" and not at:
+        return "Auto-merge strategy 'scheduled' requires an auto-merge time (auto_merge_at)."
+    if at is not None and strategy != "scheduled":
+        return "An auto-merge time is only meaningful with the 'scheduled' strategy."
+    return None
+
+
+def arms_auto_merge(strategy: str | None) -> bool:
+    """True when the value ARMS auto-merge (anything but absent or the disarm)."""
+    return strategy is not None and strategy != AUTO_MERGE_DISARMED
+
 
 def _same_id(a: Any, b: Any) -> bool:
     """Compare two ids that may arrive as int or str (approverId is a string
@@ -898,7 +923,7 @@ class MergeRequestService(BaseService):
             client.close()
         theirs = diff.get("theirs") or {}
         ours = diff.get("ours")
-        return {
+        result: dict[str, Any] = {
             "alias": alias,
             "merge_request_id": merge_request_id,
             "component_id": component_id,
@@ -913,6 +938,10 @@ class MergeRequestService(BaseService):
             "resolution_candidate": self._resolution_candidate(ours),
             "diff": diff,
         }
+        candidate_warnings = self._candidate_warnings(ours)
+        if candidate_warnings:
+            result["warnings"] = candidate_warnings
+        return result
 
     def _resolution_candidate(self, ours: dict[str, Any] | None) -> dict[str, Any] | None:
         """The ours-prefilled body a caller edits and hands back to ``resolve_conflict``.
@@ -934,7 +963,32 @@ class MergeRequestService(BaseService):
         if ours is None or ours.get("isDeleted"):
             return None
         envelope = ours.get("diff") or {}
+        # A hole in the server-produced envelope is a backend contract
+        # violation (the schema marks every content key required). Writing it
+        # as an explicit null would make `resolve --resolved @file` blame the
+        # CALLER for a file kbagent wrote -- so there is no candidate, and the
+        # caller learns why from `warnings` (the same message the --take path
+        # raises as VALIDATION_ERROR).
+        missing = [
+            key for key in ("name", "rows", "configuration", "isDisabled") if key not in envelope
+        ]
+        if missing:
+            return None
         return {key: envelope.get(key) for key in self._DIFF_CONTENT_KEYS}
+
+    def _candidate_warnings(self, ours: dict[str, Any] | None) -> list[str]:
+        if ours is None or ours.get("isDeleted"):
+            return []
+        envelope = ours.get("diff") or {}
+        missing = [
+            key for key in ("name", "rows", "configuration", "isDisabled") if key not in envelope
+        ]
+        if not missing:
+            return []
+        return [
+            f"The diff's ours side carries no {', '.join(missing)} -- no resolution candidate "
+            "could be prefilled (backend envelope hole). Author the resolution manually."
+        ]
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
@@ -1237,7 +1291,10 @@ class MergeRequestService(BaseService):
             raise KeboolaApiError(
                 message=message,
                 status_code=0,
-                error_code=ErrorCode.VALIDATION_ERROR,
+                # A caller mistake (resolving/diffing a finished MR), not a backend fault:
+                # INVALID_ARGUMENT is what app.py maps to HTTP 400 over `serve`
+                # (VALIDATION_ERROR would answer 502 and invite a retry).
+                error_code=ErrorCode.INVALID_ARGUMENT,
                 retryable=False,
             )
         return branch_from_id
@@ -1258,6 +1315,7 @@ class MergeRequestService(BaseService):
                 "See `kbagent merge-request conflicts` for the current set."
             ),
             status_code=0,
-            error_code=ErrorCode.VALIDATION_ERROR,
+            # Caller mistake -> INVALID_ARGUMENT (HTTP 400 over `serve`, see above).
+            error_code=ErrorCode.INVALID_ARGUMENT,
             retryable=False,
         )

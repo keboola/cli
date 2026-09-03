@@ -746,7 +746,7 @@ kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|defa
 #   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
 #   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI
 #   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
-kbagent merge-request list [--project A] [--state in_development|in_review|approved|in_merge|merged|closed|rejected]
+kbagent merge-request list [--project A] [--state STATE]   # derived (in_development|in_review|approved|in_merge|merged|closed|rejected) or raw (development|published|canceled) states; `--help` lists them
 kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
 kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]
 kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy S] [--auto-merge-at TS] [--external-id X] [--yes]

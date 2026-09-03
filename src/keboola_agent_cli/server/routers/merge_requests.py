@@ -28,13 +28,18 @@ from pydantic import BaseModel
 
 from ...errors import ErrorCode, KeboolaApiError
 from ...permissions import PermissionEngine
-from ...services.merge_request_service import STATE_FILTER_VOCABULARY, TAKE_MODES
+from ...services.merge_request_service import (
+    AUTO_MERGE_DISARMED,
+    STATE_FILTER_VOCABULARY,
+    TAKE_MODES,
+    arms_auto_merge,
+    validate_auto_merge_flags,
+)
 from ..dependencies import ServiceRegistry, get_permission_engine, get_registry, require_permission
 
 router = APIRouter(prefix="/merge-requests", tags=["merge-requests"])
 
-_AUTO_MERGE_DISARMED = "none"
-_AUTO_MERGE_STRATEGIES = ("immediately", "scheduled", _AUTO_MERGE_DISARMED)
+_REASON_MAX_LENGTH = 1000  # MergeRequestRejectRequest::REASON_MAX_LENGTH, same cap as the CLI
 
 
 def _perm(operation: str) -> Any:
@@ -50,16 +55,12 @@ def _invalid(message: str) -> KeboolaApiError:
 
 
 def _arming(strategy: str | None, at: str | None) -> bool:
-    """Validate the auto-merge flag pairing (400 on a bad one); return whether it ARMS."""
-    if strategy is not None and strategy not in _AUTO_MERGE_STRATEGIES:
-        raise _invalid(
-            f"Unknown auto_merge_strategy {strategy!r}: use {', '.join(_AUTO_MERGE_STRATEGIES)}."
-        )
-    if strategy == "scheduled" and not at:
-        raise _invalid("auto_merge_strategy 'scheduled' requires auto_merge_at.")
-    if at is not None and strategy != "scheduled":
-        raise _invalid("auto_merge_at is only meaningful with auto_merge_strategy 'scheduled'.")
-    return strategy is not None and strategy != _AUTO_MERGE_DISARMED
+    """400 on a bad strategy / pairing (the service owns the rule, so the CLI and
+    this router cannot drift); return whether the body ARMS auto-merge."""
+    problem = validate_auto_merge_flags(strategy, at)
+    if problem:
+        raise _invalid(problem)
+    return arms_auto_merge(strategy)
 
 
 def _escalate_if_armed(
@@ -73,7 +74,7 @@ def _escalate_if_armed(
     production merge; apply the same state-derived escalation the CLI does.
     One row GET, never the three-call detail."""
     row = registry.merge_request.get_merge_request_row(project, merge_request_id)
-    if (row.get("autoMergeStrategy") or _AUTO_MERGE_DISARMED) != _AUTO_MERGE_DISARMED:
+    if (row.get("autoMergeStrategy") or AUTO_MERGE_DISARMED) != AUTO_MERGE_DISARMED:
         engine.check_or_raise(f"merge-request.{operation} --auto-merge-armed")
 
 
@@ -299,6 +300,8 @@ def request_changes(
     """Back to development, approvals removed; also the closest thing to closing.
     Mirrors `kbagent merge-request request-changes`."""
     reason = body.reason if body else None
+    if reason is not None and len(reason) > _REASON_MAX_LENGTH:
+        raise _invalid(f"reason is capped at {_REASON_MAX_LENGTH} characters (got {len(reason)}).")
     return registry.merge_request.request_changes(project, merge_request_id, reason=reason)
 
 

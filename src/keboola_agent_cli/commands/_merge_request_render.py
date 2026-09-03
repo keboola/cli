@@ -292,7 +292,10 @@ def next_step_hints(allowed_actions: list[str] | None) -> list[str]:
     State-derived and feature-blind by Layer 2's decision: on a project where
     the feature was later switched off these recommend writes that end in
     FEATURE_NOT_ENABLED (RFC, Known gaps)."""
-    return [_ACTION_COMMAND[a] for a in (allowed_actions or []) if a in _ACTION_COMMAND]
+    # Unknown names (e.g. a server-serialised camelCase vocabulary once
+    # DMD-1988 lands) fall back to the raw action rather than vanishing -- the
+    # hint line is a per-command guarantee, not best-effort.
+    return [_ACTION_COMMAND.get(a, f"action: {escape(str(a))}") for a in (allowed_actions or [])]
 
 
 # -- conflicts -------------------------------------------------------------------------------

@@ -19,8 +19,10 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 
 import typer
+from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.merge_request_service import AUTO_MERGE_DISARMED
 from ._helpers import (
     check_cli_operation,
     get_service,
@@ -61,8 +63,6 @@ _BRANCH_OPT = typer.Option(
     ),
 )
 
-_AUTO_MERGE_DISARMED = "none"
-
 
 # -- Error handling ---------------------------------------------------------------
 
@@ -84,8 +84,47 @@ def _handle_error(formatter: Any, exc: ConfigError | KeboolaApiError) -> NoRetur
             error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR),
         )
         raise typer.Exit(code=5) from None
-    formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+    formatter.error(
+        message=exc.message,
+        error_code=exc.error_code,
+        retryable=exc.retryable,
+        details=exc.details,
+    )
+    if exc.error_code == ErrorCode.MR_MERGE_CONFLICT:
+        _print_conflicting_configurations(formatter, exc.details)
     raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+
+
+def _print_conflicting_configurations(formatter: Any, details: dict[str, Any]) -> None:
+    """Human render of the conflict list the merge 409 carries.
+
+    ``details.api_error_params.errors`` lists the conflicting configurations
+    -- kept on the error so the caller need not call `conflicts` again. It is
+    BOUNDED (PR #703 review, O003): over a size cap the list is cut to a
+    fixed number of entries, or dropped entirely, and either way
+    ``details.api_error_params_truncated`` is set. A renderer that printed
+    the list and stopped would show 20 conflicts to a user who has 300 --
+    fix 20, merge again, 20 more, never the total. So the line naming the
+    truncation is not optional, and it names no number (the cap is a Layer
+    2 constant that may move). ``--json`` gets nothing extra: the marker is
+    already in the envelope.
+    """
+    if formatter.json_mode:
+        return
+    params = details.get("api_error_params") or {}
+    errors = params.get("errors") if isinstance(params, dict) else None
+    entries = errors if isinstance(errors, list) else []
+    for entry in entries:
+        if isinstance(entry, dict):
+            component = escape(str(entry.get("componentId", "?")))
+            config = escape(str(entry.get("configurationId", "?")))
+            formatter.err_console.print(f"  - {component}/{config}")
+        else:
+            formatter.err_console.print(f"  - {escape(str(entry))}")
+    if details.get("api_error_params_truncated"):
+        formatter.err_console.print(
+            "  … list truncated -- run `merge-request conflicts` for the full set."
+        )
 
 
 def _usage_error(formatter: Any, message: str) -> NoReturn:
@@ -117,12 +156,12 @@ class _Target:
     def auto_merge_strategy(self) -> str:
         """``immediately`` | ``scheduled`` | ``none``; ``none`` when unknown."""
         if not self.row:
-            return _AUTO_MERGE_DISARMED
-        return str(self.row.get("autoMergeStrategy") or _AUTO_MERGE_DISARMED)
+            return AUTO_MERGE_DISARMED
+        return str(self.row.get("autoMergeStrategy") or AUTO_MERGE_DISARMED)
 
     @property
     def armed(self) -> bool:
-        return self.auto_merge_strategy != _AUTO_MERGE_DISARMED
+        return self.auto_merge_strategy != AUTO_MERGE_DISARMED
 
 
 def _branch_from_row(row: dict[str, Any] | None) -> int | None:
@@ -208,9 +247,26 @@ def _stamp_target(result: dict[str, Any], target: _Target) -> dict[str, Any]:
     the target was reached -- so a machine caller can always assert on what was
     actually operated upon. Never overwrites a key the service already set."""
     result.setdefault("merge_request_id", target.merge_request_id)
-    result.setdefault("branch_from_id", target.branch_id)
+    # On the explicit-id path the target may not know the branch (no row was
+    # fetched); most results carry it anyway -- the enriched row's
+    # `branches.branchFromId`, the diff's `branch_id` -- so read it from there
+    # before falling back, and never write a null beside a payload that says
+    # 123 (two keys disagreeing about one fact).
+    branch = target.branch_id
+    if branch is None:
+        branch = _branch_from_row(result)
+    if branch is None and result.get("branch_id") is not None:
+        branch = _coerce_int(result.get("branch_id"))
+    result.setdefault("branch_from_id", branch)
     result.setdefault("resolved_from_branch", target.resolved_from_branch)
     return result
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # -- Destructive-under-json rule and auto-merge escalation ----------------------
@@ -287,17 +343,19 @@ def _escalate_if_armed(
     return target.auto_merge_strategy
 
 
-def _armed_warning(strategy: str, result: dict[str, Any]) -> str:
-    """What an armed MR means right now, phrased from the resulting state:
-    approved -> the backend merges on its next tick; anything else -> it will,
-    the moment the MR is approved. Always names the disarm."""
+def _warn_armed(formatter: Any, strategy: str, result: dict[str, Any]) -> None:
+    """Say what an armed MR means right now -- human mode only, never injected
+    into the payload (Layer 1 does not manufacture data the service did not
+    produce; a --json consumer reads `autoMergeStrategy` off the row). Phrased
+    from the resulting state: approved -> the backend merges on its next tick;
+    anything else -> it will, the moment the MR is approved."""
     state = str(result.get("state") or "")
     when = (
         "the backend will merge it into production on its next tick"
         if state == "approved"
         else "the backend will merge it into production as soon as it is approved"
     )
-    return (
+    formatter.warning(
         f"Auto-merge is armed ({strategy}) -- {when}. Disarm with "
         "`merge-request update --auto-merge-strategy none` if that is not intended."
     )
