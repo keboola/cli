@@ -122,8 +122,11 @@ like a no-op. Documented in `request-changes --help` and `gotchas.md` instead.
    `active_branch_id` from `config.json`.
 3. On that branch, `find_merge_request_for_branch()` → the MR id.
 
-With neither, the house error: *pass `--branch` or run `branch use`*. The chain cannot be
-ambiguous — a branch has **at most one MR, ever**, so step 3 finds one or none. Nothing is
+With neither, the house error: *pass `--branch` or run `branch use`*. With **both**
+`--merge-request-id` and `--branch` given, exit 2 (*pass one or the other*) — they are two
+ways of naming the same target, and silently letting step 1 win would hide a contradiction
+(MR 7 not being *from* branch 123) exactly where a `--json` script would never notice it. The
+chain cannot be ambiguous — a branch has **at most one MR, ever**, so step 3 finds one or none. Nothing is
 cached: `active_branch_id` is persisted because it is a *user decision*, while branch→MR is
 *derivable server state* and caching it would be a cache with no invalidation. Persist
 decisions, derive facts.
@@ -168,6 +171,16 @@ One rule, mechanically checkable, covering `merge` and every auto-merge-escalate
 A human at a terminal keeps the full fallback and gets the prompt instead; a script, which
 received the id in the JSON payload of its previous call, names it. The ergonomic objection to
 ids is an objection about humans, and humans never pass one.
+
+One consequence is deliberate and must not be "fixed": for the **state-derived** escalations
+(`request-review` / `approve` / `resolve` on an armed MR), whether the invocation is
+destructive is only known *after* the target has been resolved and the row fetched — so under
+`--json` such a command without an explicit target resolves the branch, finds the MR, learns it
+is armed, and **then** exits 2. The check cannot move earlier; the information does not exist
+earlier. The error therefore names what it found and why it stopped: *merge request #7 has
+auto-merge armed (`immediately`); under `--json` a destructive operation needs an explicit
+target — pass `--merge-request-id 7`.* One wasted round trip on the rare path is the price of
+a rule with no exceptions.
 
 `--yes` keeps its house meaning everywhere (skip the prompt; `--json` implies it). Inverting it
 for one command was considered and **rejected**: it has zero precedent across 48 commands, and
@@ -216,10 +229,10 @@ FLAG_ESCALATIONS = {
 }
 ```
 
-The mechanism is generic — `permissions.py:557` resolves the category as
+The mechanism is generic — `permissions.py:558` resolves the category as
 `FLAG_ESCALATIONS.get(operation) or OPERATION_REGISTRY.get(operation, "write")`, so a
 state-derived operation string works exactly like a flag-derived one, and `permissions list`
-displays all of them (`list_operations`, `:620`). The dict's name no longer describes its
+displays all of them (`list_operations`, `:621`). The dict's name no longer describes its
 contents; either rename it or document that a key is an operation string, not necessarily a
 flag.
 
@@ -228,9 +241,23 @@ Three details that are easy to get wrong:
 - **`--auto-merge-strategy none` must NOT escalate.** It is the disarm. Escalating it would let
   `--deny-destructive` lock a dangerous setting in place — the safety flag inverting into a
   hazard. Guard on the value, not on the flag's presence.
-- **Detecting "armed" is usually free.** When the target was resolved implicitly,
+- **Detecting "armed" needs the MR row *before* the write — and Layer 2 gains the accessor
+  for it** (decided 2026-09-03; ships with this PR). When the target was resolved implicitly,
   `find_merge_request_for_branch` already returned the enriched row, which carries
-  `autoMergeStrategy`. Only an explicit `--merge-request-id` costs one GET.
+  `autoMergeStrategy` — free. With an explicit `--merge-request-id`, Layer 1 holds only the
+  number, and the only by-id method Layer 2 exposes is `get_merge_request`, which fetches the
+  **detail**: `merge_requests.get()` *plus* `conflicts()` *plus* `verify_token()`
+  (`merge_request_service.py:437-455`). Three round trips for one boolean — and, worse, a
+  dependency: `request-review` would start failing whenever the conflicts endpoint does (a
+  scoped token's 403, say), for a reason unrelated to the command. Layer 3 already has the
+  right call — `client.merge_requests.get(id)` is a single GET returning the record
+  (`client/merge_requests.py:151-164`); Layer 2 simply never exposed it on its own, only as
+  the first step of the detail. So `MergeRequestService.get_merge_request_row(alias,
+  merge_request_id)` = that one GET through `_enrich_row` — the **row tier** the L2 RFC already
+  defines for `list` and `find`, addressed by id instead of by branch. Not a new tier, the
+  missing entry point to an existing one. It also serves `merge`'s confirmation prompt, which
+  must name the source branch before the merge runs, and the `branch_from_id` every `--json`
+  result carries even when the id was explicit.
 - **The escalation is deliberately conservative.** On a project requiring 2 approvals,
   `request-review` lands in `in_review` and merges nothing — but distinguishing that needs the
   required-approvals count, which is **unreadable with a Storage token** (project metadata on
@@ -273,10 +300,27 @@ rather than show a bare empty table; conflicts for open MRs; `activityLog` with
 default, so an MR titled `Fix [bold] parsing` mangles the table and an unbalanced `[/]` raises
 `MarkupError`. Ten command modules already import `escape` for exactly this.
 
+**`warnings[]` is the one and only soft-failure channel** (decided 2026-09-03). Layer 2 today
+returns "the operation succeeded, something secondary did not, exit stays 0" under two names:
+`resolve_conflict` → `warnings[]` (a dropped `--change-description` on the delete tombstone; the
+implicit collapse to delete when the taken side is `isDeleted`) and `merge` →
+`cleanup_warnings[]` (a failed active-branch reset or sync-mapping unlink after a merge that
+did land). Same concept, two keys — and a renderer written against `result.get("warnings")`
+would silently swallow exactly the merge warnings a user must act on (the active branch now
+points at a branch being deleted). `merge` therefore renames `cleanup_warnings` → `warnings`
+(ships with this PR; one word, one test). The specificity the old name carried belongs in the
+warning *text* — which already says "Post-merge active-branch reset failed: …" — not in the
+key: a `--json` consumer wants one place to look for "is there something I should know", not a
+per-command vocabulary. Rule for the whole group: **any result may carry `warnings[]`; the
+renderer prints it in every command, in the same Rich warning shape, after the main output and
+before the hint-next line.**
+
 **Hint-next.** In human mode every command ends with a one-line next step. Rich-only: since
 `_enrich_row` now applies `allowed_actions` to every return, `--json` consumers have the same
 information as data, and Layer 1 never manufactures a payload the service did not produce. No
-`--no-hint-next` flag in v1.
+`--no-hint-next` flag in v1. `allowed_actions` is **state-derived and feature-blind** — see
+*Known gaps* for the one project shape where it recommends a write that cannot succeed; Layer 1
+does not compensate.
 
 ## Conflicts, diff, resolve
 
@@ -286,15 +330,72 @@ information as data, and Layer 1 never manufactures a payload the service did no
 **`diff`** — three sections from the service's per-path `changed_by` classification: **Both
 changed** (the hotspots; rows flagged `agreed` are demoted to the bottom and marked as
 agreement), **Only you changed**, **Only production changed**. Long values elide by default,
-`--format full` prints them whole. Deletions are not paths — they are the top-level
-`ours_deleted` / `theirs_deleted` flags, rendered as a line above the table. The branch is
-derived from the merge request by the service (`get_config_diff(alias, merge_request_id,
-component_id, config_id)`), so `diff` never takes a branch of its own.
+`--format full` prints them whole. The branch is derived from the merge request by the service
+(`get_config_diff(alias, merge_request_id, component_id, config_id)`), so `diff` never takes a
+branch of its own.
 
-`--output PATH` writes the ours-prefilled resolution candidate — the flat body `--resolved`
-expects. Edit, then `resolve --resolved @file`: the git-mergetool loop with a file as the third
-pane. When the ours side is absent or deleted there is nothing to prefill; refuse with a
-pointer to `--take delete` rather than writing a misleading skeleton.
+**Deletions are not paths, and the renderer branches on them first** (decided 2026-09-03).
+Since PR #703's review (finding #4, `175d45b`) `_classify_three_way` returns **no per-path rows
+when either side is null** — it used to fabricate a row per base key reading "that side removed
+it" next to a `*_deleted` flag saying the side does not exist, two signals contradicting each
+other. Side-level facts now live only on the top-level `ours_deleted` / `theirs_deleted` flags,
+and a "production deleted it, dev changed it" conflict — a live conflict shape per the notes
+doc — arrives as `changes: []` plus `theirs_deleted: true`. A table-first renderer would print
+three empty sections and "No changes" for the sharpest conflict there is.
+
+So the renderer checks the flags **before** the table. When either flag is truthy or `None`, the
+table is not drawn; one sentence states what happened and, because this is the one place the
+user faces a binary choice the command already knows, **recommends the resolution**:
+
+- `theirs_deleted: true` → *Production deleted this configuration; your branch changed it.
+  Resolve with `--take delete` (drop it) or `--take ours` (keep your version).*
+- `ours_deleted: true` → the mirror: *Your branch deleted this configuration; production changed
+  it. Resolve with `--take delete` or `--take theirs`.*
+- a `None` flag means the side does not exist at all — which a conflict should never produce
+  (it requires the config on both sides), so this renders defensively as *…is not present on
+  the production/dev side* with no recommendation, and `--json` carries the value as-is.
+
+"No changes" is printed **only** when `changes` is empty **and** both flags are `false` — and
+even then it is worded as *the conflict cleared between `conflicts` and `diff`*, not as
+"nothing changed". `--output` in the deleted case is already covered by `resolution_candidate`
+being `null` (above). The CLI tests pin a `theirs_deleted: true, changes: []` fixture: the
+output contains the recommendation and **none** of the three section headings.
+
+`--output PATH` writes the ours-prefilled resolution candidate. Edit, then
+`resolve --resolved @file`: the git-mergetool loop with a file as the third pane.
+
+**The candidate is composed by Layer 2, not Layer 1** (decided 2026-09-03; ships in the same PR
+as the commands). Rebase *replaces* the whole configuration, so after PR #703's blocking review
+finding `resolve_conflict` requires **all five** replaced-body keys and refuses anything less
+(`merge_request_service.py:1046-1059`):
+
+| key | refused when |
+|---|---|
+| `name`, `rows`, `configuration`, `isDisabled` | absent **or** `null` |
+| `description` | absent only — an explicit `null` is a legitimate "clear it" decision |
+
+A prefill that wrote only the "interesting" keys, or dropped `description` when it is `null`,
+would produce a file that `resolve --resolved` refuses — a file kbagent itself wrote. The
+missing-`isDisabled` case is the worst one: the backend defaults it to `false`, so resolving a
+*disabled* configuration re-enables it and the merge pushes that into production.
+
+So `get_config_diff` gains a `resolution_candidate` field: the ours side's envelope filtered
+through the same `_DIFF_CONTENT_KEYS` the service already uses to compose `--take` bodies
+(`:797`, `:887`) — `name`, `description`, `isDisabled`, `configuration`, `rows`, with
+`description` emitted as an explicit `null` when null and `changeDescription` excluded (it is a
+per-version commit message, not content; the rebase takes its own via `--change-description`).
+`resolution_candidate` is `null` when the ours side is absent or `isDeleted` — there is nothing
+to prefill, and `--output` then refuses with a pointer to `--take delete` rather than writing a
+misleading skeleton. Layer 1 writes the field to disk verbatim and adds nothing.
+
+One constant feeds both the guard and the candidate, so they cannot drift apart. The CLI test
+suite pins the round trip end to end: the file `diff --output` writes must pass
+`resolve --resolved @file` **unmodified**.
+
+A missing key is reported on two different exit paths depending on who is at fault, and the
+renderer must not collapse them: a hole in a `--take` side's envelope is a backend contract
+violation (`VALIDATION_ERROR`, exit 1, "author the resolution manually"); a hole in a
+`--resolved` body is the caller's (`ConfigError`, exit 5, naming the missing keys).
 
 **`resolve` has no `--all`.** Rebase *replaces*, so a bulk `--all --take theirs` is a bulk
 irreversible overwrite of the dev branch behind one keystroke — and conflicts exist to be walked,
@@ -305,7 +406,7 @@ write it over `conflicts --json`.
 ## Merge
 
 - **No `--wait` / `--timeout` in v1.** Layer 3 always awaits the Storage job with
-  `MERGE_JOB_MAX_WAIT` (600 s, `constants.py:162`) and exposes no parameter; threading one
+  `MERGE_JOB_MAX_WAIT` (600 s, `constants.py:207`) and exposes no parameter; threading one
   through would mean re-reviewing two already-reviewed layers, and `--no-wait` would need
   polling that does not exist. The help says the command can block for up to 10 minutes. A
   timeout reports `STORAGE_JOB_TIMEOUT` → exit 4, which scripts can tell apart from a failure.
@@ -314,16 +415,55 @@ write it over `conflicts --json`.
 - **Wording:** the source branch **"is being deleted"**, never "is deleted" — a second async job
   with no handle. The service already words this; the renderer must not upgrade it to a fact.
 - The 409 arrives pre-mapped as `MR_MERGE_CONFLICT` or `MR_NOT_READY_TO_MERGE`, both carrying
-  the next step. Layer 1 prints them as-is.
+  the next step. Layer 1 prints the messages as-is.
+- **The conflict list inside the 409 may be truncated, and the renderer must say so** (decided
+  2026-09-03). `MR_MERGE_CONFLICT` carries the conflicting configurations in
+  `details.api_error_params.errors` — deliberately, so the user need not call `conflicts`
+  again. After PR #703's review (finding O003, `22274dc`) that payload is **bounded**: over
+  `MAX_API_ERROR_PARAMS_LENGTH` every top-level list is cut to `MAX_API_ERROR_PARAMS_LIST_ITEMS`
+  entries; if still over, `params` is dropped entirely; either way
+  `details.api_error_params_truncated: true` is set. A renderer that prints the list and stops
+  would show 20 conflicts to a user who has 300 — they fix 20, merge again, get 20 more, and
+  never learn the total. So the human render of `MR_MERGE_CONFLICT` lists the entries it has
+  and, whenever `api_error_params_truncated` is true — list cut *or* `params` absent — appends
+  one line: *list truncated — run `merge-request conflicts` for the full set* (the conflicts
+  endpoint is unbounded). The line names no number: the cap is a Layer 2 constant that may
+  move, and "truncated" is the fact that matters. `--json` adds nothing — the marker is already
+  in the envelope. Hint-next for this error is `conflicts` in every case; the truncated case
+  merely makes it the *only* way to see the whole set.
 
 ## Errors and exit codes
 
-- **`FeatureNotEnabledError` must not be flattened.** It is a `ConfigError` subclass carrying
+- **`FeatureNotEnabledError` must not be flattened — and it can now surface from every
+  command, reads included.** It is a `ConfigError` subclass carrying
   `error_code = FEATURE_NOT_ENABLED` (`errors.py:219-233`). The common `except ConfigError`
   idiom — and especially the shared `_handle_config_service_error` (`commands/config.py:585`,
   which hardcodes `ErrorCode.CONFIG_ERROR` at `:593`) — would discard it, leaving a `--json`
   consumer unable to tell "merge requests are not enabled on this project" from a bad alias.
   Use `getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)`, as `server/app.py:760` does. Exit 5.
+
+  Since PR #703's review (finding O002, `22274dc`), `find_merge_request_for_branch` runs the
+  feature pre-flight on its no-match path: the ungated list answers `200 + []` on a project
+  without the feature, and the old `NOT_FOUND` prescribed a `create` that was guaranteed to
+  fail — a loop. So the error is no longer a write-path concern: it sits under the resolver
+  behind an omitted `--merge-request-id`, i.e. under `detail`, `conflicts` and `diff` too. The
+  read commands are exactly where an implementer copies `branch.py`'s
+  `except ConfigError → CONFIG_ERROR` idiom, and exactly where it would flatten.
+
+  **Decided 2026-09-03: the group has ONE error handler and no command has its own `except`.**
+  `commands/merge_request.py` defines `_handle_error(formatter, exc)` — `ConfigError` (and
+  subclasses) → `getattr` code, exit 5; `KeboolaApiError` → `map_error_to_exit_code` — and all
+  eleven commands route through it. Eleven inline copies are eleven places to flatten; one
+  function is none. `_handle_config_service_error` is the precedent for the *shape* and the
+  counter-example for the *body*: same signature, corrected code lookup. The CLI tests pin it
+  with one case per command: an omitted target on a feature-less project yields
+  `error.code == "FEATURE_NOT_ENABLED"`, never `CONFIG_ERROR`.
+
+  The error also has **two wordings** (`0257675`): the feature is missing (*enable
+  `branches-merge-requests`*) vs. the project carries only `protected-default-branch` (*SOX;
+  kbagent does not support this flow*). Both are `FEATURE_NOT_ENABLED`, exit 5 — a
+  configuration fact about the project, not a usage error — and `gotchas.md` carries both, so
+  an agent on a SOX project is not told to "enable the feature".
 - **Plain `ConfigError` → exit 5** (`CONFIG_ERROR`). The service raises it for the default-branch
   source, the `--take`/`--resolved` mutual exclusion, and an incomplete resolved body. The
   vocabulary errors are pre-empted in Layer 1 at exit 2 (above), so they never reach this path.
@@ -400,6 +540,22 @@ also **unconditionally resets `active_branch_id`** (`services/branch_service.py:
 `merge-requests-layer2.md` calls "the worse of the two precedents"), so describing it as a
 harmless URL builder would mislead. Its `write` classification does not change.
 
+## Layer 2 changes shipping with this PR
+
+Layer 2 (PR #703) is merged first and this PR retargets to `main`; the three changes below are
+small, each was decided while walking the review findings above, and each exists so that Layer
+1 does not re-derive something the service already knows. They land in this PR, with tests, and
+`merge-requests-layer2.md` is updated in the same commit.
+
+| change | why | where in this RFC |
+|---|---|---|
+| `get_config_diff` returns `resolution_candidate` — the ours envelope through `_DIFF_CONTENT_KEYS`, `description` as explicit `null`, `changeDescription` excluded; `null` when ours is absent/deleted | the five-key replace guard and the `--output` prefill must come from one constant, or the file kbagent writes is a file kbagent refuses | *Conflicts, diff, resolve* |
+| `merge()` renames `cleanup_warnings` → `warnings` | one soft-failure key for the whole group; a renderer reading `warnings` must not silently drop the merge's | *Human rendering* |
+| new `get_merge_request_row(alias, merge_request_id)` — `client.merge_requests.get(id)` through `_enrich_row`, nothing else | the armed check and the merge prompt need the MR row *before* the write, by id, without the detail's `conflicts()` + `verify_token()` | *Auto-merge is a destructive act* |
+
+Nothing else in Layer 2 moves. In particular the feature-blindness of `allowed_actions` stays
+as Layer 2 decided it (see *Known gaps*).
+
 ## Bookkeeping
 
 ### Tests
@@ -466,3 +622,16 @@ No `mcp_parity.py` work — that map was deleted with the MCP passthrough in 0.8
   written at review time and the UI computes its preview client-side with no endpoint behind it.
 - **Required-approvals count is unreadable with a Storage token** (DMD-1969), which is why the
   auto-merge escalation is conservative rather than precise.
+- **On a project where `branches-merge-requests` was later switched off, `allowed_actions` —
+  and therefore hint-next — recommend writes that end in `FEATURE_NOT_ENABLED`.** The MRs
+  survive the feature (they are data; the flag gates endpoints), and `_enrich_row` derives
+  actions from state alone. PR #703's review raised this (finding #2, non-blocking) and Layer 2
+  **declined** it as a documented decision: closing it costs a `verify_token` GET on every
+  non-empty `list` for a rare project shape, and `feature_enabled` is therefore emitted only on
+  the empty list, where that GET is already spent. Layer 1 inherits the gap deliberately
+  (decided 2026-09-03): paying the same GET one layer up would be the same cost under another
+  name, and dropping hint-next would tax every project for one. The consequence is bounded —
+  the user learns the truth on the second step instead of the first, and the error they get is
+  the readable `FEATURE_NOT_ENABLED` (see *Errors*), not a loop. Owner of the real fix:
+  DMD-1988 (server-side `allowedActions`, which knows about the feature). Recorded in
+  `gotchas.md` so it is not re-reported as a Layer 1 bug.
