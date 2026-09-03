@@ -190,6 +190,16 @@ def format_merge_request_detail(console: Console, data: dict[str, Any]) -> None:
     pairs: list[tuple[str, str]] = [
         ("Readiness", _blockers_line(data)),
     ]
+    if data.get("feature_enabled") is False:
+        # The detail tier knows the feature state for free (followups F5);
+        # every write action below would end in FEATURE_NOT_ENABLED.
+        pairs.append(
+            (
+                "Feature",
+                "[red]merge requests are not enabled on this project[/red] -- writes will be "
+                "refused (FEATURE_NOT_ENABLED)",
+            )
+        )
     viewer = _viewer_line(data.get("viewer"))
     if viewer:
         pairs.append(("", viewer))

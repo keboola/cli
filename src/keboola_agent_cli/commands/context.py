@@ -1233,7 +1233,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Empty list on a project without the feature says so (feature_enabled: false).
 
   kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
-    Readiness (mergeable / merge_blockers), viewer flags, allowed_actions, reviewers,
+    Readiness (mergeable / merge_blockers), viewer flags, allowed_actions, feature_enabled, reviewers,
     approvals, change log (EMPTY until sent for review -- by design), live conflicts.
 
   kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]

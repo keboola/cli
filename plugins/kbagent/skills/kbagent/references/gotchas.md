@@ -5065,8 +5065,12 @@ It carries the command name, the outcome, and the duration -- never argument val
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.
-- **`allowed_actions` / the hint-next line are feature-blind**: on a project where the feature
-  was later switched off they recommend writes that fail `FEATURE_NOT_ENABLED` (Layer 2's
-  documented decision; server-side fix is DMD-1988).
+- **`allowed_actions` are feature-blind in `list`, feature-aware in `detail`**: on a project
+  where the feature was later switched off, list rows still recommend writes that fail
+  `FEATURE_NOT_ENABLED` (state-derived; Layer 2 declined the per-list GET). `detail` carries
+  `feature_enabled` and its hint respects it. Server-side fix is DMD-1988.
+- **`cleanup_skipped: true` on a merge result** means the source branch id could not be read and
+  the local active-branch reset / sync unlink did NOT run (`branch_from_id_raw` echoes the value).
+  Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
 - **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
   builds a UI URL and resets the active branch.
