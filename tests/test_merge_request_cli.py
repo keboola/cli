@@ -705,3 +705,621 @@ class TestDiff:
         assert "Long values elided" not in full.output
         # folded, not cropped: every character of the value reaches the terminal
         assert full.output.count("x") >= 200
+
+
+# ---------------------------------------------------------------------------
+# create
+# ---------------------------------------------------------------------------
+
+
+def _created(**extra: Any) -> dict[str, Any]:
+    return {**_row(), "branch_from_id": 123, "branch_into_id": 1, **extra}
+
+
+class TestCreate:
+    def test_create_from_active_branch(self, tmp_path, service) -> None:
+        service.create_merge_request.return_value = _created()
+        result = _run(
+            ["--json", "merge-request", "create", "--project", ALIAS, "--title", "T"],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        kwargs = service.create_merge_request.call_args.kwargs
+        assert kwargs["branch_from_id"] == 123 and kwargs["title"] == "T"
+        assert kwargs["reviewer_ids"] is None  # never [] -- that would clear the set
+        data = _json(result)["data"]
+        assert data["merge_request_id"] == 7 and data["resolved_from_branch"] is True
+
+    def test_reviewer_ids_pass_through_when_given(self, tmp_path, service) -> None:
+        service.create_merge_request.return_value = _created()
+        _run(
+            [
+                "--json",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--reviewer-id",
+                "5",
+                "--reviewer-id",
+                "6",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert service.create_merge_request.call_args.kwargs["reviewer_ids"] == [5, 6]
+
+    def test_no_branch_anywhere_is_exit_5(self, tmp_path, service) -> None:
+        result = _run(
+            ["--json", "merge-request", "create", "--project", ALIAS, "--title", "T"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 5
+        assert "branch use" in _json(result)["error"]["message"]
+        service.create_merge_request.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--auto-merge-strategy", "sometimes"],
+            ["--auto-merge-strategy", "scheduled"],  # missing --auto-merge-at
+            ["--auto-merge-at", "2026-09-04T10:00:00Z"],  # at without scheduled
+            ["--auto-merge-strategy", "immediately", "--auto-merge-at", "2026-09-04T10:00:00Z"],
+        ],
+    )
+    def test_auto_merge_flag_pairing_is_validated(self, tmp_path, service, flags) -> None:
+        result = _run(
+            [
+                "--json",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                *flags,
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 2, result.output
+        service.create_merge_request.assert_not_called()
+
+    def test_arming_is_destructive_under_deny_destructive(self, tmp_path, service) -> None:
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--auto-merge-strategy",
+                "immediately",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 6, result.output
+        service.create_merge_request.assert_not_called()
+
+    def test_disarmed_none_is_NOT_destructive(self, tmp_path, service) -> None:
+        # `none` is the disarm -- escalating it would let --deny-destructive lock
+        # a dangerous setting in place.
+        service.create_merge_request.return_value = _created()
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--auto-merge-strategy",
+                "none",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_arming_under_json_needs_an_explicit_branch(self, tmp_path, service) -> None:
+        result = _run(
+            [
+                "--json",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--auto-merge-strategy",
+                "immediately",
+            ],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 2
+        assert "--branch" in _json(result)["error"]["message"]
+        service.create_merge_request.assert_not_called()
+
+    def test_arming_prompts_in_human_mode_and_warns_after(self, tmp_path, service) -> None:
+        service.create_merge_request.return_value = _created(autoMergeStrategy="immediately")
+        args = [
+            "merge-request",
+            "create",
+            "--project",
+            ALIAS,
+            "--title",
+            "T",
+            "--branch",
+            "123",
+            "--auto-merge-strategy",
+            "immediately",
+        ]
+        store = _store(tmp_path)
+        aborted = _run(args, store, service, input="n\n")
+        assert aborted.exit_code == 0 and "Aborted" in aborted.output
+        service.create_merge_request.assert_not_called()
+        confirmed = _run(args, store, service, input="y\n")
+        assert confirmed.exit_code == 0, confirmed.output
+        assert "Arm auto-merge" in confirmed.output
+        assert "Auto-merge is armed (immediately)" in confirmed.output
+        service.create_merge_request.assert_called_once()
+
+    def test_yes_skips_the_arming_prompt(self, tmp_path, service) -> None:
+        service.create_merge_request.return_value = _created()
+        result = _run(
+            [
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--auto-merge-strategy",
+                "immediately",
+                "--yes",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Continue?" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# update
+# ---------------------------------------------------------------------------
+
+
+class TestUpdate:
+    def test_no_fields_is_exit_2(self, tmp_path, service) -> None:
+        result = _run(
+            ["--json", "merge-request", "update", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 2
+        service.update_merge_request.assert_not_called()
+
+    def test_empty_string_clears_description(self, tmp_path, service) -> None:
+        service.update_merge_request.return_value = _row()
+        result = _run(
+            [
+                "--json",
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--description",
+                "",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        kwargs = service.update_merge_request.call_args.kwargs
+        assert kwargs["description"] == ""
+        assert kwargs["reviewer_ids"] is None and kwargs["title"] is None
+
+    def test_arming_on_update_is_destructive_and_needs_explicit_target_under_json(
+        self, tmp_path, service
+    ) -> None:
+        denied = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--auto-merge-strategy",
+                "immediately",
+            ],
+            _store(tmp_path / "a"),
+            service,
+        )
+        assert denied.exit_code == 6
+        implicit = _run(
+            [
+                "--json",
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--auto-merge-strategy",
+                "immediately",
+            ],
+            _store(tmp_path / "b", active_branch=123),
+            service,
+        )
+        assert implicit.exit_code == 2
+        service.update_merge_request.assert_not_called()
+
+    def test_disarming_needs_neither(self, tmp_path, service) -> None:
+        service.update_merge_request.return_value = _row()
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--auto-merge-strategy",
+                "none",
+            ],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# transitions: request-review / approve / request-changes
+# ---------------------------------------------------------------------------
+
+
+class TestTransitions:
+    def test_request_review_unarmed_is_plain_write(self, tmp_path, service) -> None:
+        service.request_review.return_value = _row(state="approved", derived_state="approved")
+        result = _run(
+            ["--json", "--deny-destructive", "merge-request", "request-review", "--project", ALIAS],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        service.request_review.assert_called_once_with(ALIAS, 7)
+        # implicit path: the row came from find -- no extra fetch
+        service.get_merge_request_row.assert_not_called()
+
+    @pytest.mark.parametrize("command", ["request-review", "approve"])
+    def test_armed_mr_escalates_to_destructive(self, tmp_path, service, command) -> None:
+        service.find_merge_request_for_branch.return_value = _row(autoMergeStrategy="immediately")
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                command,
+                "--project",
+                ALIAS,
+                "--branch",
+                "123",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 6, result.output
+        getattr(service, command.replace("-", "_")).assert_not_called()
+
+    def test_armed_with_explicit_id_fetches_the_row_once(self, tmp_path, service) -> None:
+        service.get_merge_request_row.return_value = _row(autoMergeStrategy="scheduled")
+        service.request_review.return_value = _row(
+            state="approved", derived_state="approved", autoMergeStrategy="scheduled"
+        )
+        result = _run(
+            ["merge-request", "request-review", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        service.get_merge_request_row.assert_called_once_with(ALIAS, 7)
+        service.get_merge_request.assert_not_called()  # never the three-call detail
+        assert "Auto-merge is armed (scheduled)" in result.output
+        assert "on its next tick" in result.output  # state is approved
+
+    def test_armed_implicit_target_under_json_exits_2_after_resolution(
+        self, tmp_path, service
+    ) -> None:
+        # Deliberate: whether the call is destructive is only known from the row.
+        service.find_merge_request_for_branch.return_value = _row(autoMergeStrategy="immediately")
+        result = _run(
+            ["--json", "merge-request", "request-review", "--project", ALIAS],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 2
+        msg = _json(result)["error"]["message"]
+        assert "#7" in msg and "--merge-request-id 7" in msg
+        service.find_merge_request_for_branch.assert_called_once()
+        service.request_review.assert_not_called()
+
+    def test_request_changes_never_escalates_and_caps_reason(self, tmp_path, service) -> None:
+        service.find_merge_request_for_branch.return_value = _row(autoMergeStrategy="immediately")
+        service.request_changes.return_value = _row()
+        ok = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "request-changes",
+                "--project",
+                ALIAS,
+                "--reason",
+                "nope",
+            ],
+            _store(tmp_path / "a", active_branch=123),
+            service,
+        )
+        assert ok.exit_code == 0, ok.output
+        service.request_changes.assert_called_once_with(ALIAS, 7, reason="nope")
+        too_long = _run(
+            [
+                "--json",
+                "merge-request",
+                "request-changes",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--reason",
+                "x" * 1001,
+            ],
+            _store(tmp_path / "b"),
+            service,
+        )
+        assert too_long.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# merge
+# ---------------------------------------------------------------------------
+
+
+def _merged() -> dict[str, Any]:
+    return {
+        "alias": ALIAS,
+        "merge_request_id": 7,
+        "branch_from_id": 123,
+        "was_active": True,
+        "job": {"id": 1},
+        "state": "published",
+        "derived_state": "merged",
+        "message": "Merge request 7 merged into production. Source branch 123 is being deleted.",
+    }
+
+
+class TestMerge:
+    def test_json_without_a_target_is_exit_2_before_any_lookup(self, tmp_path, service) -> None:
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS],
+            _store(tmp_path, active_branch=123),
+            service,
+        )
+        assert result.exit_code == 2
+        assert "explicit target" in _json(result)["error"]["message"]
+        service.find_merge_request_for_branch.assert_not_called()
+        service.merge.assert_not_called()
+
+    def test_json_with_branch_is_an_explicit_target(self, tmp_path, service) -> None:
+        service.merge.return_value = _merged()
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--branch", "123"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        service.merge.assert_called_once_with(ALIAS, 7)
+
+    def test_human_keeps_the_fallback_and_prompts_with_branch_and_title(
+        self, tmp_path, service
+    ) -> None:
+        service.merge.return_value = _merged()
+        store = _store(tmp_path, active_branch=123)
+        aborted = _run(["merge-request", "merge", "--project", ALIAS], store, service, input="n\n")
+        assert aborted.exit_code == 0 and "Aborted" in aborted.output
+        assert (
+            "#7 'Add sales pipeline'" in aborted.output and "branch 123 deleted" in aborted.output
+        )
+        service.merge.assert_not_called()
+        confirmed = _run(
+            ["merge-request", "merge", "--project", ALIAS], store, service, input="y\n"
+        )
+        assert confirmed.exit_code == 0, confirmed.output
+        assert "is being deleted" in confirmed.output
+        service.merge.assert_called_once_with(ALIAS, 7)
+
+    def test_deny_destructive_blocks_merge(self, tmp_path, service) -> None:
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "merge-request",
+                "merge",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 6
+        service.merge.assert_not_called()
+
+    def test_post_merge_warnings_render(self, tmp_path, service) -> None:
+        service.merge.return_value = {
+            **_merged(),
+            "warnings": ["Post-merge active-branch reset failed: disk full"],
+        }
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "disk full" in result.output
+
+    def test_merge_conflict_error_passes_through(self, tmp_path, service) -> None:
+        service.merge.side_effect = KeboolaApiError(
+            message="conflicts",
+            status_code=409,
+            error_code=ErrorCode.MR_MERGE_CONFLICT,
+            retryable=False,
+        )
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 1
+        assert _json(result)["error"]["code"] == ErrorCode.MR_MERGE_CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# resolve
+# ---------------------------------------------------------------------------
+
+
+_RESOLVE = [
+    "merge-request",
+    "resolve",
+    "--project",
+    ALIAS,
+    "--id",
+    "7",
+    "--component-id",
+    "keboola.ex-db",
+    "--config-id",
+    "111",
+]
+
+
+def _resolved(**extra: Any) -> dict[str, Any]:
+    return {
+        "alias": ALIAS,
+        "merge_request_id": 7,
+        "component_id": "keboola.ex-db",
+        "config_id": "111",
+        "branch_id": 123,
+        "resolution": "ours",
+        "onto_version": 9,
+        "configuration": {"id": "111", "version": 10},
+        **extra,
+    }
+
+
+class TestResolve:
+    def test_take_passes_through(self, tmp_path, service) -> None:
+        service.resolve_conflict.return_value = _resolved()
+        result = _run(["--json", *_RESOLVE, "--take", "ours"], _store(tmp_path), service)
+        assert result.exit_code == 0, result.output
+        service.resolve_conflict.assert_called_once_with(
+            ALIAS, 7, "keboola.ex-db", "111", take="ours", resolved=None, change_description=None
+        )
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            [],  # neither
+            ["--take", "ours", "--resolved", "{}"],  # both
+            ["--take", "mine"],  # unknown mode
+            ["--resolved", "[1,2]"],  # not an object
+            ["--resolved", "{not json"],  # malformed
+        ],
+    )
+    def test_argument_shape_errors_are_exit_2(self, tmp_path, service, extra) -> None:
+        result = _run(["--json", *_RESOLVE, *extra], _store(tmp_path), service)
+        assert result.exit_code == 2, result.output
+        service.resolve_conflict.assert_not_called()
+
+    def test_resolved_from_file_round_trips_the_diff_output(self, tmp_path, service) -> None:
+        candidate = {
+            "name": "n",
+            "description": None,
+            "isDisabled": False,
+            "configuration": {"limit": 5},
+            "rows": [],
+        }
+        path = tmp_path / "resolved.json"
+        path.write_text(json.dumps(candidate))
+        service.resolve_conflict.return_value = _resolved(resolution="custom")
+        result = _run(
+            [
+                "--json",
+                *_RESOLVE,
+                "--resolved",
+                f"@{path}",
+                "--change-description",
+                "merged by hand",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        kwargs = service.resolve_conflict.call_args.kwargs
+        assert kwargs["resolved"] == candidate and kwargs["take"] is None
+        assert kwargs["change_description"] == "merged by hand"
+
+    def test_service_warnings_render(self, tmp_path, service) -> None:
+        service.resolve_conflict.return_value = _resolved(
+            resolution="delete",
+            warnings=["--change-description dropped: the delete tombstone cannot carry one"],
+        )
+        result = _run(
+            [*_RESOLVE, "--take", "delete", "--change-description", "x"], _store(tmp_path), service
+        )
+        assert result.exit_code == 0, result.output
+        assert "dropped" in result.output
+
+    def test_resolve_on_an_armed_mr_escalates(self, tmp_path, service) -> None:
+        service.get_merge_request_row.return_value = _row(
+            autoMergeStrategy="immediately", state="approved"
+        )
+        result = _run(
+            ["--json", "--deny-destructive", *_RESOLVE, "--take", "theirs"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 6
+        service.resolve_conflict.assert_not_called()
+
+    def test_feature_not_enabled_from_resolve_keeps_its_code(self, tmp_path, service) -> None:
+        service.resolve_conflict.side_effect = FeatureNotEnabledError("not enabled")
+        result = _run(["--json", *_RESOLVE, "--take", "ours"], _store(tmp_path), service)
+        assert result.exit_code == 5
+        assert _json(result)["error"]["code"] == ErrorCode.FEATURE_NOT_ENABLED
