@@ -129,6 +129,29 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
     "branch.metadata-delete": "destructive",
+    # Merge requests (non-SOX Branches 2.0). Reads are ungated on the server;
+    # `merge` irreversibly deletes the source branch and rewrites production
+    # (the class `branch.delete` occupies). `resolve` stays write despite
+    # replacing config content: a rebase adds a configuration version, it does
+    # not destroy the previous one. Five of the writes escalate to destructive
+    # per invocation via FLAG_ESCALATIONS below -- arming auto-merge IS a
+    # production merge, just a delayed one (docs/merge-requests-layer1.md).
+    "merge-request.list": "read",
+    "merge-request.detail": "read",
+    "merge-request.conflicts": "read",
+    "merge-request.diff": "read",
+    "merge-request.create": "write",
+    "merge-request.update": "write",
+    "merge-request.request-review": "write",
+    "merge-request.approve": "write",
+    "merge-request.request-changes": "write",
+    "merge-request.resolve": "write",
+    "merge-request.merge": "destructive",
+    # Serve-only: `GET /merge-requests/{project}/by-branch/{branch_id}` exposes
+    # the branch->MR resolver that the CLI hides behind an omitted
+    # --merge-request-id (there is no active-branch idiom over HTTP). No CLI
+    # leaf command -- exempted from the dead-key check via SERVE_ONLY_OPERATIONS.
+    "merge-request.by-branch": "read",
     # Workspace lifecycle
     "workspace.create": "write",
     "workspace.list": "read",
@@ -398,6 +421,31 @@ OPERATION_REGISTRY: dict[str, str] = {
 # `auth`.
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
+    # A key here is an OPERATION STRING, not necessarily a literal flag: the
+    # engine looks the string up verbatim (`_matches_pattern`), so a condition
+    # the command derives from state works exactly like one it reads off a
+    # flag. The merge-request entries are the proof:
+    #
+    # `autoMergeStrategy` is not metadata. A backend scheduler runs every
+    # `approved` MR armed with it through the same MergeProcessor the merge
+    # endpoint uses (AutoMergeCandidateRepository.php:44-47,
+    # AutoMergeTickHandler.php:86) -- polling, retrying every tick until it
+    # lands. Arming it on create/update is therefore a production merge, just
+    # a delayed one; and request-review/approve/resolve on an ALREADY-armed MR
+    # are what move it into `approved`, i.e. what cause the merge. Classifying
+    # only `merge` as destructive would let `--deny-destructive` be bypassed by
+    # two write-class commands. `--auto-merge-strategy none` is the disarm and
+    # must NOT escalate (guard on the value, not the flag's presence), or the
+    # safety flag would lock the hazard in place. Deliberately conservative:
+    # on a 2-approval project request-review lands in in_review and merges
+    # nothing, but the required count is unreadable with a Storage token
+    # (DMD-1969), so every armed operation escalates. See
+    # docs/merge-requests-layer1.md, "Auto-merge is a destructive act".
+    "merge-request.create --auto-merge-strategy": "destructive",
+    "merge-request.update --auto-merge-strategy": "destructive",
+    "merge-request.request-review --auto-merge-armed": "destructive",
+    "merge-request.approve --auto-merge-armed": "destructive",
+    "merge-request.resolve --auto-merge-armed": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real
@@ -405,7 +453,7 @@ FLAG_ESCALATIONS: dict[str, str] = {
 # they have no CLI leaf command, so the command-sync gate would otherwise report
 # them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
 # its "key matching no live command" check.
-SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects"})
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects", "merge-request.by-branch"})
 
 
 # The operation namespace that disappeared with the MCP passthrough, and the
