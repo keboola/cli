@@ -16,9 +16,14 @@ from __future__ import annotations
 from typing import Any
 
 import typer
+from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..services.merge_request_service import TAKE_MODES
+from ..services.merge_request_service import (
+    TAKE_MODES,
+    arms_auto_merge,
+    validate_auto_merge_flags,
+)
 from ._helpers import (
     check_cli_operation,
     get_formatter,
@@ -28,11 +33,9 @@ from ._helpers import (
     resolve_project_alias,
 )
 from ._merge_request_common import (
-    _AUTO_MERGE_DISARMED,
     _BRANCH_OPT,
     _MERGE_REQUEST_ID_OPT,
     _PROJECT_OPT,
-    _armed_warning,
     _emit_warnings,
     _escalate_if_armed,
     _handle_error,
@@ -43,12 +46,12 @@ from ._merge_request_common import (
     _resolve_target,
     _stamp_target,
     _usage_error,
+    _warn_armed,
 )
 
 writes_app = typer.Typer()
 
 
-_AUTO_MERGE_STRATEGIES = ("immediately", "scheduled", _AUTO_MERGE_DISARMED)
 _REASON_MAX_LENGTH = 1000  # MergeRequestRejectRequest::REASON_MAX_LENGTH, server-side cap
 
 _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt")
@@ -84,21 +87,12 @@ _EXTERNAL_ID_OPT = typer.Option(
 
 
 def _validate_auto_merge_flags(formatter: Any, strategy: str | None, at: str | None) -> bool:
-    """Exit 2 on a bad strategy or a broken strategy/at pairing; return whether
-    the flags ARM auto-merge (strategy given and not `none`)."""
-    if strategy is not None and strategy not in _AUTO_MERGE_STRATEGIES:
-        _usage_error(
-            formatter,
-            f"Unknown --auto-merge-strategy {strategy!r}: use {', '.join(_AUTO_MERGE_STRATEGIES)}.",
-        )
-    if strategy == "scheduled" and not at:
-        _usage_error(formatter, "--auto-merge-strategy scheduled requires --auto-merge-at.")
-    if at is not None and strategy != "scheduled":
-        _usage_error(
-            formatter,
-            "--auto-merge-at is only meaningful with --auto-merge-strategy scheduled.",
-        )
-    return strategy is not None and strategy != _AUTO_MERGE_DISARMED
+    """Exit 2 on a bad strategy or pairing (the service owns the vocabulary and
+    the rule, so the router and the CLI cannot drift); return whether the flags ARM."""
+    problem = validate_auto_merge_flags(strategy, at)
+    if problem:
+        _usage_error(formatter, problem)
+    return arms_auto_merge(strategy)
 
 
 def _confirm_or_abort(formatter: Any, yes: bool, question: str) -> None:
@@ -196,7 +190,7 @@ def merge_request_create(
     result.setdefault("merge_request_id", result.get("id"))
     result.setdefault("resolved_from_branch", branch is None)
     if arming:
-        result.setdefault("warnings", []).append(_armed_warning(str(auto_merge_strategy), result))
+        _warn_armed(formatter, str(auto_merge_strategy), result)
     _print_row_success(
         formatter,
         result,
@@ -284,7 +278,7 @@ def merge_request_update(
         _handle_error(formatter, exc)
 
     if arming:
-        result.setdefault("warnings", []).append(_armed_warning(str(auto_merge_strategy), result))
+        _warn_armed(formatter, str(auto_merge_strategy), result)
     _print_row_success(formatter, result, f"Updated merge request #{target.merge_request_id}")
     _emit_warnings(formatter, result)
     _hint_from_actions(formatter, result)
@@ -335,7 +329,7 @@ def _transition(
         _handle_error(formatter, exc)
 
     if strategy:
-        result.setdefault("warnings", []).append(_armed_warning(strategy, result))
+        _warn_armed(formatter, strategy, result)
     _print_row_success(formatter, result, headline.format(id=target.merge_request_id))
     _emit_warnings(formatter, result)
     _hint_from_actions(formatter, result)
@@ -452,6 +446,9 @@ def merge_request_merge(
         reason="`merge-request merge` rewrites production and deletes the source branch.",
     )
     service = get_service(ctx, "merge_request_service")
+    # The row is only for the prompt (title + branch); merge()'s own result
+    # already carries branch_from_id. Skip the GET when no prompt will show.
+    will_prompt = not yes and not formatter.json_mode
     try:
         target = _resolve_target(
             ctx,
@@ -459,7 +456,7 @@ def merge_request_merge(
             project=project,
             merge_request_id=merge_request_id,
             branch=branch,
-            need_row=True,
+            need_row=will_prompt,
         )
         title = (target.row or {}).get("title") or ""
         _confirm_or_abort(
@@ -473,7 +470,8 @@ def merge_request_merge(
         _handle_error(formatter, exc)
 
     formatter.output(
-        result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
+        result,
+        lambda c, d: c.print(f"[bold green]Success:[/bold green] {escape(str(d['message']))}"),
     )
     _emit_warnings(formatter, result)
     _hint_next(formatter, "`merge-request list` -- the merged request now shows as merged")
@@ -567,12 +565,13 @@ def merge_request_resolve(
         _handle_error(formatter, exc)
 
     if strategy:
-        result.setdefault("warnings", []).append(_armed_warning(strategy, result))
+        _warn_armed(formatter, strategy, result)
     formatter.output(
         result,
         lambda c, d: c.print(
-            f"[bold green]Success:[/bold green] Resolved {component_id}/{config_id} "
-            f"({d.get('resolution')}) -- rebased onto production version {d.get('onto_version')}"
+            f"[bold green]Success:[/bold green] Resolved {escape(component_id)}/{escape(config_id)} "
+            f"({escape(str(d.get('resolution')))}) -- rebased onto production version "
+            f"{escape(str(d.get('onto_version')))}"
         ),
     )
     _emit_warnings(formatter, result)

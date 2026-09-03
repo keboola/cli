@@ -42,8 +42,9 @@ import json
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.merge_request_service import STATE_FILTER_VOCABULARY
 from ._helpers import check_cli_permission, get_formatter, get_service, resolve_project_alias
 from ._merge_request_common import (
@@ -193,7 +194,7 @@ def merge_request_conflicts(
             project=project,
             merge_request_id=merge_request_id,
             branch=branch,
-            need_row=False,
+            need_row=True,
         )
         result = _stamp_target(
             service.list_conflicts(target.alias, target.merge_request_id), target
@@ -208,9 +209,9 @@ def merge_request_conflicts(
         first = conflicts[0]
         _hint_next(
             formatter,
-            f"`merge-request diff --component-id {first.get('componentId')} "
-            f"--config-id {first.get('configurationId')}` to see what differs, then "
-            "`merge-request resolve --take ours|theirs|delete`",
+            f"`merge-request diff --component-id {escape(str(first.get('componentId')))} "
+            f"--config-id {escape(str(first.get('configurationId')))}` to see what differs, "
+            "then `merge-request resolve --take ours|theirs|delete`",
         )
     else:
         _hint_next(formatter, "`merge-request merge` -- nothing blocks it on the conflict side")
@@ -268,22 +269,35 @@ def merge_request_diff(
     if output is not None:
         candidate = result.get("resolution_candidate")
         if candidate is None:
-            # Nothing to prefill: the configuration is deleted (or absent) in
-            # the branch. A skeleton here would be a misleading file kbagent
-            # then refuses; the resolution for this shape is --take delete.
-            _usage_error(
-                formatter,
-                "--output has nothing to write: the configuration is deleted in your "
-                "branch, so there is no content to edit. Resolve with "
-                "`merge-request resolve --take delete` (or `--take theirs` to keep "
-                "production's version).",
+            # Nothing to prefill. Three shapes, said apart: deleted in the
+            # branch (resolve with --take delete/theirs), absent from the
+            # branch entirely, or a hole in the server envelope (the service
+            # explains in warnings). A skeleton here would be a misleading
+            # file kbagent then refuses.
+            if result.get("ours_deleted") is True:
+                why = (
+                    "the configuration is deleted in your branch, so there is no content "
+                    "to edit. Resolve with `merge-request resolve --take delete` (or "
+                    "`--take theirs` to keep production's version)."
+                )
+            elif result.get("ours_deleted") is None:
+                why = "the configuration does not exist in your branch."
+            else:
+                why = "; ".join(result.get("warnings") or ["no candidate could be composed."])
+            _usage_error(formatter, f"--output has nothing to write: {why}")
+        try:
+            output.write_text(json.dumps(candidate, indent=2, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            formatter.error(
+                message=f"Cannot write --output {output}: {exc}",
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
-        output.write_text(json.dumps(candidate, indent=2, ensure_ascii=False) + "\n")
+            raise typer.Exit(code=2) from None
         result["output_path"] = str(output)
 
     formatter.output(result, lambda c, d: format_config_diff(c, d, full=output_format == "full"))
     _emit_warnings(formatter, result)
-    resolve_cmd = f"merge-request resolve --component-id {component_id} --config-id {config_id}"
+    resolve_cmd = f"merge-request resolve --component-id {escape(component_id)} --config-id {escape(config_id)}"
     if output is not None:
         _hint_next(
             formatter,
