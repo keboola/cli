@@ -29,7 +29,7 @@ from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
-from .base import BaseService, ClientFactory, sanitize_unexpected_error
+from .base import BaseService, ClientFactory, find_default_branch_id, sanitize_unexpected_error
 from .workspace_service import find_storage_workspace_for_sandbox_config
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
@@ -168,10 +168,7 @@ class ConfigService(BaseService):
                 folder_branch_id = effective_branch_id
                 if not folder_branch_id:
                     # Fetch default branch ID from dev-branches endpoint
-                    branches = client.list_dev_branches()
-                    default = next((b for b in branches if b.get("isDefault")), None)
-                    if default:
-                        folder_branch_id = default["id"]
+                    folder_branch_id = find_default_branch_id(client.list_dev_branches())
                 if folder_branch_id:
                     result = client.list_config_folder_metadata(branch_id=folder_branch_id)
                     folder_map = result if isinstance(result, dict) else {}
@@ -1487,9 +1484,9 @@ class ConfigService(BaseService):
                 f"Unexpected error listing branches for metadata route: {exc}. "
                 "Pass --branch explicitly."
             ) from exc
-        default = next((b for b in branches if b.get("isDefault")), None)
-        if default:
-            return int(default["id"])
+        default_branch_id = find_default_branch_id(branches)
+        if default_branch_id is not None:
+            return default_branch_id
         raise ConfigError(
             "Could not determine a branch for config metadata. "
             "Set an active branch with 'kbagent branch use' or pass --branch."

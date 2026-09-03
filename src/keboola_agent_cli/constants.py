@@ -110,6 +110,17 @@ TOKEN_VALIDITY_ERROR_MARKERS: tuple[str, ...] = (
     "sign in",
 )
 
+# Ceiling for the server-supplied `params` context copied into
+# KeboolaApiError.details["api_error_params"] (serialized JSON length).
+# The message above is capped, so this structured sibling must be too --
+# a merge 409's params.errors carries one entry per conflicting config and
+# an agent-consumed --json envelope must not grow unbounded with it. When
+# over the cap, top-level lists are truncated to
+# MAX_API_ERROR_PARAMS_LIST_ITEMS entries; if still over, params is dropped
+# (details carries api_error_params_truncated: true either way).
+MAX_API_ERROR_PARAMS_LENGTH: int = 8192
+MAX_API_ERROR_PARAMS_LIST_ITEMS: int = 20
+
 # --- Developer Portal MFA ---
 # Challenge type sent on the second `/auth/login` step (after the first call
 # returns a `session` token). The apiary spec documents `SOFTWARE_TOKEN_MFA`
@@ -516,12 +527,23 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3
 # (client/merge_requests.py) does no feature check itself -- a missing
-# feature is a 403 identical to a role denial -- so the Part 2 service layer
-# must call has_feature() with this constant before writes and word the error. It
-# also doubles as the SOX fence: server-side, `protected-default-branch`
-# passes the same gate, so checking for this flag specifically keeps SOX
-# projects out of a flow whose approvals semantics kbagent does not cover.
-FEATURE_BRANCHES_MERGE_REQUESTS: str = "branches-merge-requests"
+# feature is a 403 identical to a role denial -- so the service layer calls
+# has_feature() with this constant before writes and words the error. It
+# also doubles as the SOX fence: server-side, the six MR writes accept
+# `protected-default-branch` OR `branches-merge-requests` (only /rebase
+# requires this flag specifically), so checking for this flag keeps SOX
+# projects out of a flow whose approvals semantics kbagent does not cover --
+# but the fence holds ONLY as long as a SOX project never also carries
+# `branches-merge-requests`. The pre-flight is thus deliberately stricter
+# than the server for a project with only `protected-default-branch`.
+BRANCHES_MERGE_REQUESTS_FEATURE: str = "branches-merge-requests"
+
+# The SOX flavour of protected branches. kbagent does NOT support its
+# approvals flow; the constant exists so the merge-request pre-flight can
+# tell "this is a SOX project (unsupported)" from "merge requests are simply
+# not enabled" when wording its refusal -- the features cache is already
+# loaded at that point, so the distinction is free.
+PROTECTED_DEFAULT_BRANCH_FEATURE: str = "protected-default-branch"
 
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``

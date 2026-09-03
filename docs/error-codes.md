@@ -55,6 +55,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `CONFIG_ERROR` | kbagent config problem (e.g. unknown project alias) |
 | `NOT_INITIALIZED` | `.keboola/manifest.json` not found; run `sync init` first |
 | `INIT_ERROR` | Error during `sync init` auto-init path |
+| `FEATURE_NOT_ENABLED` | A client-side pre-flight found the project lacks a required feature flag (e.g. `branches-merge-requests` for `merge-request` writes); the server would answer an opaque 403/404 |
 
 ### Jobs
 
@@ -186,3 +187,10 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Code | Description |
 |---|---|
 | `PAYG_NOT_AVAILABLE` | The project does not have the `pay-as-you-go` feature, so it has no credit balance; the billing host may not even resolve on this stack |
+
+### Merge requests
+
+| Code | Description |
+|---|---|
+| `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
+| `MR_MERGE_CONFLICT` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |

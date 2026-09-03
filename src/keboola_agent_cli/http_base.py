@@ -21,6 +21,8 @@ from .constants import (
     BACKOFF_BASE,
     ENV_CONVERSATION_ID,
     MAX_API_ERROR_LENGTH,
+    MAX_API_ERROR_PARAMS_LENGTH,
+    MAX_API_ERROR_PARAMS_LIST_ITEMS,
     MAX_EXCEPTION_ID_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
@@ -38,6 +40,32 @@ logger = logging.getLogger(__name__)
 # extra log line (CWE-117), control characters -- is dropped before the id is
 # interpolated into an error message.
 _EXCEPTION_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9._:-]+")
+
+
+def _bound_error_params(params: dict) -> tuple[dict | None, bool]:
+    """Cap the server-supplied ``params`` context like the message is capped.
+
+    Returns ``(bounded_params_or_None, truncated)``. Small payloads pass
+    through untouched. Over MAX_API_ERROR_PARAMS_LENGTH (serialized), every
+    top-level list is truncated to MAX_API_ERROR_PARAMS_LIST_ITEMS entries
+    (a merge 409's ``params.errors`` keeps its first N conflicting configs);
+    if the result still exceeds the cap, params is dropped entirely and only
+    the truncation marker survives.
+    """
+    try:
+        if len(json.dumps(params, default=str)) <= MAX_API_ERROR_PARAMS_LENGTH:
+            return params, False
+        slimmed = {
+            key: value[:MAX_API_ERROR_PARAMS_LIST_ITEMS] if isinstance(value, list) else value
+            for key, value in params.items()
+        }
+        if len(json.dumps(slimmed, default=str)) <= MAX_API_ERROR_PARAMS_LENGTH:
+            return slimmed, True
+        return None, True
+    except (TypeError, ValueError):
+        # Unserializable server payload -- drop it rather than crash the
+        # error path itself.
+        return None, True
 
 
 def build_user_agent() -> str:
@@ -437,6 +465,7 @@ class BaseHttpClient:
         url_label = base_url or self._base_url
 
         exception_id = ""
+        details: dict = {}
         try:
             body = response.json()
             # Keboola answers a 5xx with a generic `error` ("Application
@@ -445,6 +474,31 @@ class BaseHttpClient:
             # left the operator with nothing to escalate (issue #599).
             if isinstance(body, dict):
                 exception_id = self._safe_exception_id(body.get("exceptionId"))
+                # Keboola user errors also carry a machine-readable string
+                # `code` (e.g. `storage.mergeRequests.notReadyToMerge`).
+                # Surface it in details so a service can branch on it -- the
+                # message alone holds only the human `error` text (DMD-1899;
+                # the merge 409's two shapes differ exactly by this field).
+                api_error_code = body.get("code")
+                if isinstance(api_error_code, str) and api_error_code:
+                    details["api_error_code"] = api_error_code
+                # A Package HttpException additionally serializes its context
+                # as `params` (ExceptionConverter) -- e.g. the merge-conflict
+                # 409 carries the conflicting configurations in
+                # `params.errors`. Surface it so a caller does not have to
+                # re-fetch data the error already delivered -- BOUNDED, like
+                # the message below: this rides every 4xx/5xx from every
+                # BaseHttpClient subclass into agent-consumed --json output.
+                # Passed through UNMASKED by decision: it is server-authored
+                # error context (ids, names, version identifiers), not
+                # credentials -- the same trust the error message text gets.
+                api_error_params = body.get("params")
+                if isinstance(api_error_params, dict) and api_error_params:
+                    bounded, truncated = _bound_error_params(api_error_params)
+                    if bounded is not None:
+                        details["api_error_params"] = bounded
+                    if truncated:
+                        details["api_error_params_truncated"] = True
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
@@ -499,6 +553,7 @@ class BaseHttpClient:
                     status_code=status,
                     error_code=ErrorCode.INVALID_TOKEN,
                     retryable=False,
+                    details=details,
                 )
             raise KeboolaApiError(
                 message=(
@@ -512,6 +567,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.AUTH_REJECTED,
                 retryable=False,
+                details=details,
             )
 
         if status == 403:
@@ -520,6 +576,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.ACCESS_DENIED,
                 retryable=False,
+                details=details,
             )
 
         if status == 404:
@@ -528,6 +585,7 @@ class BaseHttpClient:
                 status_code=status,
                 error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
+                details=details,
             )
 
         # Appended AFTER the truncation above so they always survive into the
@@ -547,4 +605,5 @@ class BaseHttpClient:
             status_code=status,
             error_code=ErrorCode.API_ERROR,
             retryable=status in RETRYABLE_STATUS_CODES if retryable is None else retryable,
+            details=details,
         )

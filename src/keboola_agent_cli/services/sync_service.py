@@ -110,7 +110,7 @@ from ._sync_writeback import (
     stamp_created_config,
     stamp_updated_config,
 )
-from .base import BaseService
+from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -308,11 +308,7 @@ class SyncService(BaseService):
         if project_id is None:
             raise ConfigError("Token verification returned no project ID; cannot build manifest.")
         api_host = project.stack_url.replace("https://", "").rstrip("/")
-        default_branch_info = next(
-            (b for b in branches if b.get("isDefault")),
-            None,
-        )
-        default_branch_id = default_branch_info["id"] if default_branch_info else None
+        default_branch_id = find_default_branch_id(branches)
         default_branch_name = "main"
 
         # Git branching setup
@@ -339,7 +335,7 @@ class SyncService(BaseService):
                     path=default_branch_name,
                 )
             ]
-            if default_branch_id
+            if default_branch_id is not None
             else [],
             configurations=[],
         )

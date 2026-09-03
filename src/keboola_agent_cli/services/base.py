@@ -118,6 +118,27 @@ def project_error_entry(
     }
 
 
+def find_default_branch_id(branches: list[dict[str, Any]]) -> int | None:
+    """The id of the ``isDefault`` branch in a ``list_dev_branches()`` result.
+
+    The one home for the ``isDefault`` scan shared by the config, sync,
+    workspace and merge-request services. Returns ``None`` when no flagged
+    branch carries a usable (int-coercible) id -- an entry that cannot be
+    coerced is skipped, never raised on, so a degenerate payload cannot
+    crash a caller mid-operation. What ``None`` means (error vs. fallback)
+    stays the caller's decision. ``lib.py`` keeps its own loop deliberately:
+    the SDK facade does not import the services layer.
+    """
+    for branch in branches:
+        if not branch.get("isDefault"):
+            continue
+        try:
+            return int(branch["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
     """Create a KeboolaClient with the given stack URL and token.
 

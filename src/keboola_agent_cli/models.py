@@ -279,6 +279,18 @@ class TokenVerifyResponse(BaseModel):
         default=None,
         description="Organization name parsed from owner.organization (when present)",
     )
+    admin_id: int | None = Field(
+        default=None,
+        description=(
+            "Admin (user) ID behind the token, from the verify response's top-level "
+            "`admin` block. Present only for admin tokens; scoped tokens have no admin "
+            "identity. Used for viewer-relative merge-request derivations (DMD-1899)."
+        ),
+    )
+    admin_name: str | None = Field(
+        default=None,
+        description="Admin (user) display name, when the `admin` block is present",
+    )
 
 
 class ComponentDetail(BaseModel):
