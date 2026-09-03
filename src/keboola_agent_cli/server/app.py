@@ -18,6 +18,7 @@ import contextlib
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -487,7 +488,11 @@ def _build_custom_openapi(app: FastAPI):
 
 
 def _format_error(
-    message: str, error_code: ErrorCode | str, *, http_status: int = 400
+    message: str,
+    error_code: ErrorCode | str,
+    *,
+    http_status: int = 400,
+    details: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """Render a kbagent-style error envelope at the given HTTP status.
 
@@ -497,16 +502,11 @@ def _format_error(
     code is not yet in the enum). The :class:`ErrorCode` mixes in ``str``, so
     both shapes serialise as plain strings in the JSON body.
     """
-    return JSONResponse(
-        status_code=http_status,
-        content={
-            "status": "error",
-            "error": {
-                "code": str(error_code),
-                "message": message,
-            },
-        },
-    )
+    error: dict[str, Any] = {"code": str(error_code), "message": message}
+    if details:
+        # Only when non-empty, matching the CLI envelope's presence contract.
+        error["details"] = details
+    return JSONResponse(status_code=http_status, content={"status": "error", "error": error})
 
 
 # A browser-login session backing a session-registered project is USER-scoped
@@ -529,6 +529,15 @@ _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESS
 # of -- a call reaching an upstream API, so none of them is a gateway fault.
 _CALLER_REFUSAL_CODES = frozenset(
     {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
+)
+
+# The merge-request merge 409s: a statement about the merge request's state
+# (conflicts / lock / another merge running), not about the gateway -- and the
+# conflict list in `details.api_error_params` is the whole point of the
+# remapping, so it must survive into the REST envelope. 502 would drop it and
+# invite a retry of a request that cannot succeed until the conflicts clear.
+_MERGE_REQUEST_CONFLICT_CODES = frozenset(
+    {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
 )
 
 _SESSION_REMEDY_ON_HOST = (
@@ -781,6 +790,8 @@ def create_app(
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
         if code in _CALLER_REFUSAL_CODES:
             return _format_error(msg, code, http_status=400)
+        if code in _MERGE_REQUEST_CONFLICT_CODES:
+            return _format_error(msg, code, http_status=409, details=getattr(exc, "details", None))
         if code == ErrorCode.NOT_FOUND:
             # An upstream 404 is a statement about the requested resource, not
             # about the gateway: reporting it as 502 made callers retry (and
