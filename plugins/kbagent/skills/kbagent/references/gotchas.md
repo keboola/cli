@@ -5014,3 +5014,56 @@ It carries the command name, the outcome, and the duration -- never argument val
   signed out or no session, which the command's own help documents as normal. The event
   reads `type=info`, so a consumer never counts a routine signed-out check as an error. Keep
   this list aligned when another command documents a non-zero exit as an expected result.
+
+## `merge-request` group: arming auto-merge IS a production merge (since vNEXT)
+
+`kbagent merge-request` (alias `mr`) merges a dev branch into production with review
+(non-SOX "Branches 2.0", project feature `branches-merge-requests`). Full playbook:
+`merge-request-workflow.md`. The parts that bite:
+
+- **`--auto-merge-strategy immediately|scheduled` is not metadata.** A backend scheduler runs
+  every `approved` MR armed with it through the same merge processor `merge` uses -- on its own,
+  retrying every tick, `merge` never called, the arming call answering 200 with nothing to say
+  so. kbagent therefore classifies arming (on `create`/`update`) AND `request-review` /
+  `approve` / `resolve` on an already-armed MR as **destructive**: `--deny-destructive` blocks
+  them, `--json` requires an explicit target, human mode prompts at the arming. `none` disarms
+  and never escalates. Deliberately conservative -- the required-approvals count is unreadable
+  with a Storage token (DMD-1969), so every armed operation escalates even where it would not
+  yet merge.
+- **`merge` under `--json` needs `--merge-request-id` or `--branch`.** Every destructive
+  kbagent command either prompts or is told its target; `--json` has no prompt. In human mode
+  the active-branch fallback stays and the prompt names the MR and the branch it will delete.
+- **Targets are implicit everywhere else**: omit the id and the command uses the merge request
+  OF the active branch (`branch use`). Both `--merge-request-id` and `--branch` at once -> exit 2.
+- **`FEATURE_NOT_ENABLED` (exit 5) comes from reads too** -- from any command whose target was
+  resolved implicitly on a project without the feature (the resolver runs the feature check when
+  the branch has no MR). Two wordings: the feature is missing vs. the project is SOX
+  (`protected-default-branch`), which kbagent does not support -- do not tell a SOX project to
+  "enable the feature".
+- **A scoped Storage token gets `ACCESS_DENIED` on everything but `list`** -- the
+  detail/conflicts endpoints require an admin identity.
+- **On a 0-approval project** (the non-SOX default): `merge` works straight from
+  `development`; `request-review` lands directly in `approved`; `approve` answers 422 in every
+  state. Requesting review with no reviewers selected emails EVERY project member.
+- **There is no `close`.** `request-changes` by the creator is the UI's cancel; the MR stays in
+  `development`. The `closed`/`rejected` derived states depend on reviewer status a 0-approval
+  project never populates -- the same blind spot the web UI has (DMD-1988).
+- **The change log is empty until the MR is sent for review** (backend behaviour); "what will
+  this merge" is unavailable in `development`.
+- **`--reviewer-id` REPLACES the reviewer set** (never appends); `--description ""` /
+  `--external-id ""` CLEAR on update; `update` with no fields is exit 2.
+- **`diff --output FILE` writes all five keys** (`name`, `description` as explicit `null`,
+  `isDisabled`, `configuration`, `rows`). Rebase REPLACES: `resolve --resolved` refuses a body
+  missing any of them (a defaulted `isDisabled` would silently re-enable a disabled config).
+  Edit values, never delete keys. A side that deleted the config wholesale is reported as a
+  sentence recommending the `--take`, not as an empty table. No `--all`.
+- **The source branch is deleted asynchronously** after a merge ("is being deleted", never
+  "is deleted"); `merge` itself blocks up to 10 minutes, no `--wait`/`--timeout`.
+- **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
+  `--change-description` on a delete resolution). A truncated conflict list inside
+  `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.
+- **`allowed_actions` / the hint-next line are feature-blind**: on a project where the feature
+  was later switched off they recommend writes that fail `FEATURE_NOT_ENABLED` (Layer 2's
+  documented decision; server-side fix is DMD-1988).
+- **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
+  builds a UI URL and resets the active branch.

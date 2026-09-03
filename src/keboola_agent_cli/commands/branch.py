@@ -21,6 +21,12 @@ from ._metadata_input import resolve_text_input
 
 branch_app = typer.Typer(help="Manage development branches")
 
+_MERGE_DEPRECATION = (
+    "`branch merge` is deprecated: it only builds a UI URL (and resets the active branch). "
+    "If this project has merge requests enabled ('branches-merge-requests'), use "
+    "`kbagent merge-request create` + `kbagent merge-request merge` to merge from the CLI."
+)
+
 
 @branch_app.callback(invoke_without_command=True)
 def _branch_permission_check(ctx: typer.Context) -> None:
@@ -223,17 +229,27 @@ def branch_merge(
         help="Branch ID to merge (uses active branch if not set)",
     ),
 ) -> None:
-    """Get the KBC UI merge URL for a development branch.
+    """[DEPRECATED] Get the KBC UI merge URL for a development branch.
 
-    Does NOT perform the merge via API. Instead, generates the URL
-    to the Keboola UI where you can review and merge safely.
-    After displaying the URL, resets the active branch to main.
+    Does NOT perform the merge via API -- it builds the URL to the Keboola
+    UI and then resets the active branch to main. Deprecated since vNEXT:
+    on a project with merge requests enabled ('branches-merge-requests'),
+    use `kbagent merge-request create` and `kbagent merge-request merge`,
+    which merge from the CLI and delete the source branch. This command
+    keeps working unchanged (it also serves projects without that feature).
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
     try:
         result = service.get_merge_url(alias=project, branch_id=branch)
+        # Deprecate-with-pointer (precedent: the #390 tool-group removal):
+        # the pointer is CONDITIONAL because this command is not a 1:1
+        # replacement -- it works on any project, merge-request needs the
+        # feature. Behaviour is unchanged, including the active-branch reset.
+        result["deprecation"] = _MERGE_DEPRECATION
+        if not formatter.json_mode:
+            formatter.warning(_MERGE_DEPRECATION)
         formatter.output(
             result,
             lambda c, d: (
