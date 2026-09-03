@@ -1267,7 +1267,9 @@ class TestResolve:
         assert result.exit_code == 2, result.output
         service.resolve_conflict.assert_not_called()
 
-    def test_resolved_from_file_round_trips_the_diff_output(self, tmp_path, service) -> None:
+    def test_resolved_from_file_is_parsed_and_forwarded(self, tmp_path, service) -> None:
+        # The real round trip (diff --output -> resolve) is pinned one layer down:
+        # test_merge_request_service.py::TestLayer1RfcWalkFollowUps. Here: argument parsing only.
         candidate = {
             "name": "n",
             "description": None,
@@ -1321,5 +1323,264 @@ class TestResolve:
     def test_feature_not_enabled_from_resolve_keeps_its_code(self, tmp_path, service) -> None:
         service.resolve_conflict.side_effect = FeatureNotEnabledError("not enabled")
         result = _run(["--json", *_RESOLVE, "--take", "ours"], _store(tmp_path), service)
+        assert result.exit_code == 5
+        assert _json(result)["error"]["code"] == ErrorCode.FEATURE_NOT_ENABLED
+
+
+class TestDiffOutputErrors:
+    def test_unwritable_output_path_is_a_readable_exit_2(self, tmp_path, service) -> None:
+        service.get_config_diff.return_value = _diff_result()
+        target = tmp_path / "no-such-dir" / "resolved.json"
+        result = _run(["--json", *_DIFF_ARGS, "--output", str(target)], _store(tmp_path), service)
+        assert result.exit_code == 2, result.output
+        assert "Cannot write --output" in _json(result)["error"]["message"]
+
+
+class TestMergeRowFetch:
+    def test_json_merge_with_explicit_id_does_not_fetch_the_row(self, tmp_path, service) -> None:
+        service.merge.return_value = _merged()
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        service.get_merge_request_row.assert_not_called()
+        assert _json(result)["data"]["branch_from_id"] == 123  # from merge()'s own result
+
+    def test_human_merge_with_explicit_id_fetches_the_row_for_the_prompt(
+        self, tmp_path, service
+    ) -> None:
+        service.merge.return_value = _merged()
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+            input="y\n",
+        )
+        assert result.exit_code == 0, result.output
+        service.get_merge_request_row.assert_called_once_with(ALIAS, 7)
+        assert "'Add sales pipeline'" in result.output
+
+
+class TestMergeConflictDetails:
+    def _conflict_error(self, truncated: bool) -> KeboolaApiError:
+        details: dict[str, Any] = {
+            "api_error_code": "storage.mergeRequests.validation",
+            "api_error_params": {
+                "errors": [
+                    {"componentId": "keboola.ex-db", "configurationId": "111"},
+                    {"componentId": "keboola.wr-db", "configurationId": "[bold]2"},
+                ]
+            },
+        }
+        if truncated:
+            details["api_error_params_truncated"] = True
+        return KeboolaApiError(
+            message="Configurations changed on both branches.",
+            status_code=409,
+            error_code=ErrorCode.MR_MERGE_CONFLICT,
+            retryable=False,
+            details=details,
+        )
+
+    def test_json_carries_details_through(self, tmp_path, service) -> None:
+        service.merge.side_effect = self._conflict_error(truncated=True)
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 1
+        err = _json(result)["error"]
+        assert err["details"]["api_error_params_truncated"] is True
+        assert err["details"]["api_error_params"]["errors"][0]["configurationId"] == "111"
+
+    def test_human_lists_conflicts_and_says_truncated(self, tmp_path, service) -> None:
+        service.merge.side_effect = self._conflict_error(truncated=True)
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 1
+        assert "keboola.ex-db/111" in result.output
+        assert "[bold]2" in result.output  # escaped, not interpreted
+        assert "list truncated" in result.output and "merge-request conflicts" in result.output
+
+    def test_human_untruncated_has_no_truncation_line(self, tmp_path, service) -> None:
+        service.merge.side_effect = self._conflict_error(truncated=False)
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert "keboola.wr-db" in result.output
+        assert "list truncated" not in result.output
+
+
+class TestOpusReviewFollowUps:
+    """Pins for the Phase-5 self-review findings (docs/merge-requests-layer1.md)."""
+
+    def test_explicit_id_detail_carries_branch_from_id_from_the_payload(
+        self, tmp_path, service
+    ) -> None:
+        # M1: never `branch_from_id: null` beside `branches.branchFromId: 123`.
+        service.get_merge_request.return_value = _detail()
+        result = _run(
+            ["--json", "merge-request", "detail", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert _json(result)["data"]["branch_from_id"] == 123
+
+    def test_explicit_id_diff_and_conflicts_carry_branch_from_id(self, tmp_path, service) -> None:
+        service.get_config_diff.return_value = _diff_result()
+        diff = _run(["--json", *_DIFF_ARGS], _store(tmp_path / "a"), service)
+        assert _json(diff)["data"]["branch_from_id"] == 123  # from the diff's branch_id
+        service.list_conflicts.return_value = {
+            "alias": ALIAS,
+            "merge_request_id": 7,
+            "count": 0,
+            "conflicts": [],
+        }
+        conflicts = _run(
+            ["--json", "merge-request", "conflicts", "--project", ALIAS, "--id", "7"],
+            _store(tmp_path / "b"),
+            service,
+        )
+        assert _json(conflicts)["data"]["branch_from_id"] == 123  # via the row tier
+        service.get_merge_request_row.assert_called_once_with(ALIAS, 7)
+
+    def test_armed_warning_is_human_only_and_not_in_the_payload(self, tmp_path, service) -> None:
+        # L4: Layer 1 does not manufacture payload; --json reads autoMergeStrategy off the row.
+        service.create_merge_request.return_value = _created(autoMergeStrategy="immediately")
+        result = _run(
+            [
+                "--json",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--auto-merge-strategy",
+                "immediately",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "warnings" not in _json(result)["data"]
+
+    def test_hint_falls_back_to_the_raw_action_for_unknown_names(self, tmp_path, service) -> None:
+        # M3: a server-serialised vocabulary (DMD-1988) must not make hint-next vanish.
+        service.get_merge_request.return_value = _detail(allowed_actions=["requestReview"])
+        result = _run(
+            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+        )
+        assert "requestReview" in result.output
+
+    def test_output_wording_for_a_backend_envelope_hole(self, tmp_path, service) -> None:
+        # L3/L5: a null candidate on a NON-deleted side is the service's warning, not "deleted in your branch".
+        service.get_config_diff.return_value = _diff_result(
+            resolution_candidate=None,
+            warnings=[
+                "The diff's ours side carries no isDisabled -- no resolution candidate could be prefilled."
+            ],
+        )
+        result = _run(
+            ["--json", *_DIFF_ARGS, "--output", str(tmp_path / "r.json")], _store(tmp_path), service
+        )
+        assert result.exit_code == 2
+        msg = _json(result)["error"]["message"]
+        assert "carries no isDisabled" in msg and "deleted in your branch" not in msg
+
+    def test_resolved_pointing_at_a_directory_is_exit_2_not_a_traceback(
+        self, tmp_path, service
+    ) -> None:
+        # L7: OSError from the file read is a usage error.
+        result = _run(
+            ["--json", *_RESOLVE, "--resolved", f"@{tmp_path}"], _store(tmp_path), service
+        )
+        assert result.exit_code == 2, result.output
+        service.resolve_conflict.assert_not_called()
+
+    def test_markup_in_wire_ids_does_not_crash_the_resolve_success_line(
+        self, tmp_path, service
+    ) -> None:
+        # H2: the operation already landed server-side; a MarkupError afterwards would report failure.
+        service.resolve_conflict.return_value = _resolved(component_id="k", config_id="[/x]")
+        result = _run(
+            [
+                "merge-request",
+                "resolve",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--component-id",
+                "k",
+                "--config-id",
+                "[/x]",
+                "--take",
+                "ours",
+            ],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["merge-request", "update", "--project", ALIAS, "--title", "T"],
+            ["merge-request", "request-review", "--project", ALIAS],
+            ["merge-request", "approve", "--project", ALIAS],
+            ["merge-request", "request-changes", "--project", ALIAS],
+            ["merge-request", "merge", "--project", ALIAS, "--branch", "123"],
+            [
+                "merge-request",
+                "resolve",
+                "--project",
+                ALIAS,
+                "--component-id",
+                "c",
+                "--config-id",
+                "1",
+                "--take",
+                "ours",
+            ],
+        ],
+        ids=lambda a: a[1],
+    )
+    def test_feature_not_enabled_keeps_its_code_on_every_write(
+        self, tmp_path, service, args
+    ) -> None:
+        # L2: one case per command, as the RFC promised.
+        service.find_merge_request_for_branch.side_effect = FeatureNotEnabledError("not enabled")
+        result = _run(["--json", *args], _store(tmp_path, active_branch=123), service)
+        assert result.exit_code == 5, result.output
+        assert _json(result)["error"]["code"] == ErrorCode.FEATURE_NOT_ENABLED
+
+    def test_create_feature_not_enabled_keeps_its_code(self, tmp_path, service) -> None:
+        service.create_merge_request.side_effect = FeatureNotEnabledError("not enabled")
+        result = _run(
+            [
+                "--json",
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+            ],
+            _store(tmp_path),
+            service,
+        )
         assert result.exit_code == 5
         assert _json(result)["error"]["code"] == ErrorCode.FEATURE_NOT_ENABLED

@@ -803,7 +803,7 @@ class TestResolveConflict:
         mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="ours")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.rebase_config.assert_not_called()
 
     def test_take_ours_rebases_dev_content_onto_theirs_version(self, store, client_factory) -> None:
@@ -924,7 +924,7 @@ class TestResolveConflict:
         self._arm(mock)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.other", "999", take="ours")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.rebase_config.assert_not_called()
 
 
@@ -1145,7 +1145,7 @@ class TestLayer1FindingsFollowUps:
         mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.get_config_diff.assert_not_called()
 
 
@@ -1592,3 +1592,38 @@ class TestLayer1RfcWalkFollowUps:
         assert kwargs["configuration"] == {"limit": 500}
         assert kwargs["is_disabled"] is False
         assert kwargs["description"] is None
+
+    def test_envelope_hole_yields_no_candidate_and_a_warning(self, store, client_factory) -> None:
+        # A hole in the server-produced ours envelope is a backend contract
+        # violation; writing it as an explicit null would make the resolve guard
+        # blame the caller for a file kbagent wrote. So: no candidate, and why.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        ours = _side({"limit": 500}, version=4)
+        del ours["diff"]["isDisabled"]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=ours,
+            theirs=_side({"limit": 250}, version=7),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert result["resolution_candidate"] is None
+        assert result["ours_deleted"] is False
+        assert any("isDisabled" in w for w in result["warnings"])
+
+    def test_auto_merge_vocabulary_is_validated_in_one_place(self) -> None:
+        from keboola_agent_cli.services.merge_request_service import (
+            AUTO_MERGE_STRATEGIES,
+            arms_auto_merge,
+            validate_auto_merge_flags,
+        )
+
+        assert set(AUTO_MERGE_STRATEGIES) == {"immediately", "scheduled", "none"}
+        assert validate_auto_merge_flags(None, None) is None
+        assert validate_auto_merge_flags("none", None) is None
+        assert validate_auto_merge_flags("scheduled", "2026-09-04T10:00:00Z") is None
+        assert validate_auto_merge_flags("sometimes", None)
+        assert validate_auto_merge_flags("scheduled", None)
+        assert validate_auto_merge_flags("immediately", "2026-09-04T10:00:00Z")
+        assert arms_auto_merge("immediately") and arms_auto_merge("scheduled")
+        assert not arms_auto_merge("none") and not arms_auto_merge(None)

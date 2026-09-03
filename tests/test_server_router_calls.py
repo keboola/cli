@@ -2871,3 +2871,52 @@ def test_merge_request_reads_pass_under_deny_destructive(tmp_path: Path) -> None
     svc.list_merge_requests.return_value = {"count": 0, "merge_requests": []}
     with _mr_client(tmp_path, svc, deny_destructive=True) as client:
         assert client.get(f"/merge-requests/{PROJECT}", headers=AUTH).status_code == 200
+
+
+def test_merge_request_request_changes_caps_reason_like_the_cli(tmp_path: Path) -> None:
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(
+            f"/merge-requests/{PROJECT}/{MR_ID}/request-changes",
+            json={"reason": "x" * 1001},
+            headers=AUTH,
+        )
+    assert res.status_code == 400, res.text
+    svc.request_changes.assert_not_called()
+
+
+def test_merge_request_merge_conflict_is_409_with_details_over_http(tmp_path: Path) -> None:
+    # The whole point of the MR_MERGE_CONFLICT remapping is the conflict list in
+    # details; a 502 would drop it and invite a retry that cannot succeed.
+    svc = MagicMock()
+    svc.merge.side_effect = KeboolaApiError(
+        message="conflicts",
+        status_code=409,
+        error_code=ErrorCode.MR_MERGE_CONFLICT,
+        retryable=False,
+        details={"api_error_params": {"errors": [{"componentId": "c", "configurationId": "1"}]}},
+    )
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(f"/merge-requests/{PROJECT}/{MR_ID}/merge", headers=AUTH)
+    assert res.status_code == 409, res.text
+    body = res.json()["error"]
+    assert body["code"] == ErrorCode.MR_MERGE_CONFLICT
+    assert body["details"]["api_error_params"]["errors"][0]["configurationId"] == "1"
+
+
+def test_merge_request_caller_mistakes_from_the_service_are_400_over_http(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.get_merge_request_row.return_value = {"id": MR_ID, "autoMergeStrategy": "none"}
+    svc.resolve_conflict.side_effect = KeboolaApiError(
+        message="not in the conflict set",
+        status_code=0,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(
+            f"/merge-requests/{PROJECT}/{MR_ID}/resolve/{COMPONENT}/{CONFIG_ID}",
+            json={"take": "ours"},
+            headers=AUTH,
+        )
+    assert res.status_code == 400, res.text
