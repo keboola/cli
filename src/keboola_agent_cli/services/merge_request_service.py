@@ -416,6 +416,29 @@ class MergeRequestService(BaseService):
             retryable=False,
         )
 
+    def get_merge_request_row(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """The MR's enriched row by id -- one GET, nothing else.
+
+        The row tier ``list_merge_requests`` / ``find_merge_request_for_branch``
+        already return (raw MR + ``derived_state`` + ``allowed_actions``), addressed
+        by id instead of by branch. ``get_merge_request`` is the DETAIL tier and
+        pays for it -- a conflicts GET and a ``verify_token`` GET on top of the
+        record -- so a caller that needs one field before a write (Layer 1's
+        auto-merge escalation check, the merge confirmation prompt, the
+        ``branch_from_id`` every ``--json`` result carries) would otherwise
+        spend three round trips for it AND inherit a dependency on the
+        conflicts endpoint that has nothing to do with the write. Layer 3's
+        ``merge_requests.get()`` was always this single GET; Layer 2 only ever
+        exposed it as the first step of the detail (L1 RFC, DMD-1900).
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            mr = client.merge_requests.get(merge_request_id)
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
     def get_merge_request(
         self,
         alias: str,
@@ -690,14 +713,14 @@ class MergeRequestService(BaseService):
 
         was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
-        cleanup_warnings: list[str] = []
+        warnings: list[str] = []
         if raw_branch_from is not None and branch_from_id is None:
             # "Absent" and "present but not numeric" must not collapse
             # silently: with no usable id the local cleanup below is skipped,
             # leaving active_branch_id and the sync mapping pointing at the
             # branch the merge just doomed -- and the caller must hear that.
             logger.warning("branchFromId %r is not a numeric branch id", raw_branch_from)
-            cleanup_warnings.append(
+            warnings.append(
                 f"branchFromId {raw_branch_from!r} is not a numeric branch id -- local "
                 "cleanup (active-branch reset, sync-mapping unlink) was skipped. If this "
                 "project's active branch pointed at the merged branch, run "
@@ -713,7 +736,7 @@ class MergeRequestService(BaseService):
                 branch_reset_done = True
         except Exception as exc:
             logger.warning("Post-merge active-branch reset failed: %s", exc)
-            cleanup_warnings.append(
+            warnings.append(
                 f"Post-merge active-branch reset failed: {exc}. The active branch "
                 "still points at the deleted branch -- run `kbagent branch reset "
                 f"--project {alias}`."
@@ -723,7 +746,7 @@ class MergeRequestService(BaseService):
                 mapping_cleanup = cleanup_branch_id_from_mapping(branch_from_id)
         except Exception as exc:
             logger.warning("Post-merge sync-mapping cleanup failed: %s", exc)
-            cleanup_warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
+            warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
 
         results = job.get("results")
         mr_after: dict[str, Any] = results if isinstance(results, dict) else {}
@@ -754,8 +777,14 @@ class MergeRequestService(BaseService):
             result["allowed_actions"] = derive_allowed_actions(mr_after)
         if mapping_cleanup:
             result["mapping_cleanup"] = mapping_cleanup
-        if cleanup_warnings:
-            result["cleanup_warnings"] = cleanup_warnings
+        if warnings:
+            # `warnings` is the group's one soft-failure key (resolve_conflict
+            # uses the same name): "the operation landed, something secondary
+            # did not, exit stays 0". A renderer reading `warnings` must not
+            # silently drop the post-merge ones -- they are the ones a user
+            # must act on (an active branch now pointing at a branch being
+            # deleted). The text carries the specificity the key does not.
+            result["warnings"] = warnings
         return result
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
@@ -881,8 +910,31 @@ class MergeRequestService(BaseService):
                 bool(theirs.get("isDeleted")) if diff.get("theirs") is not None else None
             ),
             "changes": self._classify_three_way(diff),
+            "resolution_candidate": self._resolution_candidate(ours),
             "diff": diff,
         }
+
+    def _resolution_candidate(self, ours: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The ours-prefilled body a caller edits and hands back to ``resolve_conflict``.
+
+        Composed HERE, not in Layer 1, so that the prefill and the five-key
+        replace guard in ``resolve_conflict`` are fed by the same constant
+        (``_DIFF_CONTENT_KEYS``) and cannot drift: rebase REPLACES, the guard
+        refuses a body missing any of ``name``/``rows``/``configuration``/
+        ``isDisabled`` (absent or null) or lacking ``description`` -- and a
+        prefill built anywhere else that dropped ``description`` when null, or
+        wrote only the "interesting" keys, would produce a file kbagent itself
+        then refuses. Every key is emitted, ``description`` as an explicit
+        ``null`` when null (an explicit null is a decision the guard accepts;
+        an omission is not). ``changeDescription`` is excluded: it is the
+        version's commit message, not content -- the rebase takes its own.
+        ``None`` when there is nothing to prefill: the ours side is absent or
+        ``isDeleted`` (the resolution there is ``take="delete"``, not a body).
+        """
+        if ours is None or ours.get("isDeleted"):
+            return None
+        envelope = ours.get("diff") or {}
+        return {key: envelope.get(key) for key in self._DIFF_CONTENT_KEYS}
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
