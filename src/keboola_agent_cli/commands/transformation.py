@@ -9,7 +9,6 @@ update_sql_transformation tools). No business logic belongs here.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     map_error_to_exit_code,
+    parse_json_arg,
     resolve_branch,
     resolve_project_alias,
 )
@@ -53,25 +53,6 @@ def _get_transformation_service(ctx: typer.Context) -> TransformationService:
         service = TransformationService(config_store=ctx.obj["config_store"])
         ctx.obj["transformation_service"] = service
     return service
-
-
-def _parse_json_arg(raw: str, *, label: str) -> Any:
-    """Parse a JSON argument: inline JSON, @file, or - for stdin.
-
-    Raises:
-        ValueError: On missing file or malformed JSON (message names the flag).
-    """
-    try:
-        if raw == "-":
-            return json.loads(sys.stdin.read())
-        if raw.startswith("@"):
-            file_path = Path(raw[1:])
-            if not file_path.is_file():
-                raise ValueError(f"{label}: file not found: {file_path}")
-            return json.loads(file_path.read_text(encoding="utf-8"))
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label}: invalid JSON: {exc}") from exc
 
 
 def _render_blocks_human(console: Console, data: dict[str, Any]) -> None:
@@ -365,7 +346,7 @@ def transformation_edit(
     try:
         raw_ops = _collect_ops(op, op_file)
         storage_payload = (
-            _parse_json_arg(storage, label="--storage") if storage is not None else None
+            parse_json_arg(storage, label="--storage") if storage is not None else None
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
@@ -426,12 +407,12 @@ def _collect_ops(op: list[str] | None, op_file: Path | None) -> list[dict[str, A
     """
     raw_ops: list[dict[str, Any]] = []
     if op_file is not None:
-        parsed = _parse_json_arg(f"@{op_file}", label="--op-file")
+        parsed = parse_json_arg(f"@{op_file}", label="--op-file")
         if not isinstance(parsed, list):
             raise ValueError("--op-file must contain a JSON array of operation objects")
         entries = parsed
     else:
-        entries = [_parse_json_arg(item, label="--op") for item in op or []]
+        entries = [parse_json_arg(item, label="--op") for item in op or []]
 
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
