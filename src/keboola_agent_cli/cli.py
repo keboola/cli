@@ -26,6 +26,7 @@ from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
 from .commands.lineage import lineage_app
+from .commands.merge_request import merge_request_app
 from .commands.notification import notification_app
 from .commands.org import org_app
 from .commands.permissions import permissions_app
@@ -71,6 +72,7 @@ from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.member_service import MemberService
+from .services.merge_request_service import MergeRequestService
 from .services.notification_service import NotificationService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
@@ -148,6 +150,8 @@ app.add_typer(notification_app, name="notification", rich_help_panel=_FLOWS)
 # -- Development --
 _DEV = "Development"
 app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
+app.add_typer(merge_request_app, name="merge-request", rich_help_panel=_DEV)
+app.add_typer(merge_request_app, name="mr", rich_help_panel=_DEV, hidden=True)
 app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
@@ -308,6 +312,7 @@ def main(
     member_service = MemberService(config_store=config_store)
     feature_service = FeatureService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
+    merge_request_service = MergeRequestService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
     snapshot_service = SnapshotService(config_store=config_store)
@@ -368,6 +373,7 @@ def main(
     ctx.obj["member_service"] = member_service
     ctx.obj["feature_service"] = feature_service
     ctx.obj["branch_service"] = branch_service
+    ctx.obj["merge_request_service"] = merge_request_service
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service
     ctx.obj["snapshot_service"] = snapshot_service
