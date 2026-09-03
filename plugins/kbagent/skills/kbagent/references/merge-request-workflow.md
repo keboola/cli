@@ -1,4 +1,6 @@
-# Merge Request Workflow -- merging a dev branch into production with review (since vNEXT)
+# Merge Request Workflow -- merging a dev branch into production with review
+
+*(since vNEXT, DMD-1900)*
 
 `kbagent merge-request` (alias `mr`) is the non-SOX "Branches 2.0" lifecycle: open a merge
 request from a development branch, optionally get it reviewed, inspect and resolve conflicts,
