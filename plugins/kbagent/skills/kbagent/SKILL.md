@@ -3,17 +3,16 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, merge requests (branch -> production with review),
-  workspace SQL debugging, GitOps config sync,
-  bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots, data apps,
-  flows and schedules, invitations,
-  feature flags, OTLP data streams, scoped Storage tokens, the semantic
+  lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
+  bucket sharing/linking, encrypting secrets,
+  Storage tables/files/snapshots, data apps,
+  flows/schedules, invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, semantic
   layer, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  merge request, mr, merge branch, auto-merge, review request,
+  merge request,
   data app, streamlit deploy, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,

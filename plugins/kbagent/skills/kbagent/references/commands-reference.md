@@ -243,7 +243,9 @@ Bucket sharing + linking across projects in the same organization. `sharing edge
 - `branch metadata-set --project NAME --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]` -- set a key/value. Useful for `KBC.projectDescription` and similar dashboard-visible fields. Pass exactly one of `--text`, `--file`, or `--stdin`
 - `branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]` -- delete a metadata entry by its numeric ID (from `metadata-list`)
 
-## Merge Requests (since vNEXT)
+## Merge Requests
+*(since vNEXT)*
+
 Non-SOX Branches 2.0: merge a dev branch into production with review. Alias `mr`. Every command except `list`/`create` takes `[--merge-request-id N | --id N] [--branch B]`; omitted, the target is the merge request of the active branch. A branch has at most one MR, ever. Both flags at once -> exit 2. Status is the derived state the web UI shows. See `merge-request-workflow.md`.
 - `merge-request list [--project A] [--state STATE]` -- newest first; `--state` filters client-side (unknown -> exit 2); an empty list on a feature-less project says so (`feature_enabled: false`)
 - `merge-request detail [--merge-request-id N | --branch B] [--activity-log]` -- readiness (`mergeable`/`merge_blockers`), `viewer`, `allowed_actions`, reviewers, approvals, change log (empty until sent for review, by design), live conflicts
