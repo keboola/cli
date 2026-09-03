@@ -9,7 +9,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 """
 
 import logging
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 
 from .constants import AI_SERVICE_TIMEOUT
@@ -43,10 +43,10 @@ class AiServiceClient(BaseHttpClient):
             timeout=AI_SERVICE_TIMEOUT,
         )
 
-    def __enter__(self) -> "AiServiceClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def get_component_detail(self, component_id: str) -> dict[str, Any]:

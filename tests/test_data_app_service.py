@@ -83,23 +83,23 @@ class TestDataAppCreateValidation:
     """The service is the single source of truth for input shape."""
 
     def _create(self, service: DataAppService, **overrides: Any) -> Any:
-        kwargs: dict[str, Any] = dict(
-            alias="prod",
-            name="My App",
-            description="",
-            slug="my-app",
-            git_repo="https://github.com/o/r",
-            git_public=False,
-            git_username="user",
-            git_pat_plaintext="ghp_xxxxxxxxxxxxxxxxxxxx",
-            auth="password",
-            size="tiny",
-            auto_suspend_after_seconds=900,
-            type_="python-js",
-            deploy=False,
-            wait=False,
-            dry_run=True,
-        )
+        kwargs: dict[str, Any] = {
+            "alias": "prod",
+            "name": "My App",
+            "description": "",
+            "slug": "my-app",
+            "git_repo": "https://github.com/o/r",
+            "git_public": False,
+            "git_username": "user",
+            "git_pat_plaintext": "ghp_xxxxxxxxxxxxxxxxxxxx",
+            "auth": "password",
+            "size": "tiny",
+            "auto_suspend_after_seconds": 900,
+            "type_": "python-js",
+            "deploy": False,
+            "wait": False,
+            "dry_run": True,
+        }
         kwargs.update(overrides)
         return service.create_data_app(**kwargs)
 

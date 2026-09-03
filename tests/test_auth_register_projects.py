@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -55,7 +55,7 @@ class _FakeCallbackServer:
         self._expected_state = expected_state
         self.redirect_uri = "http://127.0.0.1:1/callback"
 
-    def __enter__(self) -> _FakeCallbackServer:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> bool:
@@ -90,7 +90,7 @@ class _FakeAuthClient:
         self.exchange_response: CliTokenResponse | None = None
         self.revoke_result = RevokeResult(confirmed=True)
 
-    def __enter__(self) -> _FakeAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> bool:

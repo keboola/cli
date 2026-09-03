@@ -33,7 +33,7 @@ import json
 import logging
 import math
 import time
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Self
 from urllib.parse import urlencode
 
 import httpx
@@ -260,10 +260,10 @@ class AuthClient(BaseHttpClient):
             timeout=timeout,
         )
 
-    def __enter__(self) -> AuthClient:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     # ------------------------------------------------------------------

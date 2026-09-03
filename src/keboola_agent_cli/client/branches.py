@@ -129,7 +129,7 @@ class _BranchesMixin(_CoreClient):
         self,
         key: str,
         branch_id: int | str = "default",
-    ) -> str | None | object:
+    ) -> str | object | None:
         """Return the value for a single metadata key on a branch, or None if absent.
 
         Convenience wrapper around ``list_branch_metadata`` that filters by key.

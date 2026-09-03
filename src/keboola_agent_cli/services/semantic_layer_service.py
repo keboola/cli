@@ -373,9 +373,9 @@ class SemanticLayerService(BaseService):
                         for t in requested
                     }
                     errors: list[Exception] = []
-                    for future in future_to_type:
+                    for future, ftype in future_to_type.items():
                         try:
-                            results[future_to_type[future]] = future.result()
+                            results[ftype] = future.result()
                         # Future.result() re-raises arbitrary worker exceptions
                         # (KeboolaApiError, httpx errors, ...); collect and
                         # surface the first rather than masking the others.
@@ -436,9 +436,9 @@ class SemanticLayerService(BaseService):
         with ThreadPoolExecutor(max_workers=5) as pool:
             future_to_type = {pool.submit(client.list_items, t, model_uuid): t for t in CHILD_TYPES}
             errors: list[Exception] = []
-            for future in future_to_type:
+            for future, ftype in future_to_type.items():
                 try:
-                    results[future_to_type[future]] = future.result()
+                    results[ftype] = future.result()
                 # Future.result() re-raises arbitrary worker exceptions
                 # (KeboolaApiError, httpx errors, etc.); collect and
                 # surface the first one rather than masking the others.

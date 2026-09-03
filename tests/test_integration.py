@@ -258,6 +258,7 @@ class TestCheckErrorCodesGuard:
         result = subprocess.run(
             [sys.executable, "scripts/check_error_codes.py"],
             capture_output=True,
+            check=False,
             text=True,
         )
         assert result.returncode == 0, (

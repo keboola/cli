@@ -72,8 +72,7 @@ def _build_components_payload(
         )
 
     if parents:
-        for parent_comp in parents:
-            result.append(parent_comp)
+        result.extend(parents)
 
     if extra_components:
         result.extend(extra_components)

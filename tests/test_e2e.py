@@ -47,6 +47,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -251,7 +252,7 @@ def _json_ok(result) -> dict[str, Any]:
     return data
 
 
-def _step(num: int | float | str, title: str, detail: str = "") -> None:
+def _step(num: float | str, title: str, detail: str = "") -> None:
     """Print a visible step marker for -s output."""
     suffix = f" — {detail}" if detail else ""
     print(f"\n{_BOLD}{'=' * 60}")
@@ -1682,6 +1683,7 @@ class TestFullE2E:
             env={**os.environ, "KBAGENT_CONFIG_DIR": str(self.config_dir)},
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 2, (
             f"expected exit 2 for --config-id + multi --project, got {result.returncode}"
@@ -3975,7 +3977,7 @@ class TestFullE2E:
                 if bucket.get("name") == guard_bucket_name:
                     self._created_buckets.append(bucket["id"])
         except Exception:
-            pass  # Best-effort cleanup tracking only.
+            logging.getLogger(__name__).debug("best-effort cleanup tracking failed", exc_info=True)
 
         # --- --deny-destructive blocks destructive ops --------------------
         # delete-bucket is destructive; must exit 6 even on a bucket that
@@ -6044,7 +6046,7 @@ class TestE2ENotificationSubscriptions:
                 "need >= 2 to prove --event narrows"
             )
 
-        target = sorted(events)[0]
+        target = min(events)
         expected = sum(1 for row in rows if row["event"] == target)
         filtered = self._payload("notification", "list", "--project", self.alias, "--event", target)
 
@@ -6073,7 +6075,7 @@ class TestE2ENotificationSubscriptions:
         if len(events) < 2:
             pytest.skip("need >= 2 distinct events to observe the API-side filter")
 
-        target = sorted(events)[0]
+        target = min(events)
         raw = self.client.list_project_subscriptions(event=target)
         raw_events = {str(sub.get("event", "")) for sub in raw}
 

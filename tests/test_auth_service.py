@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from unittest.mock import patch
 
 import pytest
@@ -74,7 +74,7 @@ class _FakeAuthClient:
         self.verify_mfa_response: CliTokenResponse | None = None
         self.verify_mfa_side_effect: Exception | None = None
 
-    def __enter__(self) -> _FakeAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> bool:
@@ -145,7 +145,7 @@ class _FakeCallbackServer:
         self._expected_state = expected_state
         self.redirect_uri = "http://127.0.0.1:1/callback"
 
-    def __enter__(self) -> _FakeCallbackServer:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> bool:

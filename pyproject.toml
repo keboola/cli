@@ -126,8 +126,32 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF"]
-ignore = ["E501", "B008"]
+# Base = ruff's broad default (413 rules as of 0.16.0). On top of it we re-add, via
+# extend-select, the categories this repo already enforced before 0.16 – the 0.16
+# default narrowed several of them and dropped ~62 rules we relied on.
+extend-select = [
+    "B",   # flake8-bugbear in full – notably B904 (`raise ... from`) and B905 (`zip(strict=)`)
+    "E",   # pycodestyle-E: `== None`/`== True`, `is not`, lambda-assign, ambiguous names – 0.16 default keeps only E722/E902
+    "F",   # pyflakes in full – 0.16 default dropped the star-import checks (F403/F405/F406/F722)
+    "G",   # flake8-logging-format – no f-strings / str.format in logging calls
+    "I",   # isort in full (0.16 default enables only I001)
+    "RUF", # ruff-specific in full – RUF005/006 and RUF036 (None inside a union)
+    "SIM", # flake8-simplify in full – SIM105/108/110/300 (readability)
+    "UP",  # pyupgrade in full – 0.16 default lacks UP013/UP015/UP042
+    "W",   # pycodestyle-W: tabs, trailing whitespace, doc line length – 0.16 default keeps only W605
+]
+ignore = [
+    "B008",   # Typer/FastAPI idiom: `= typer.Option(...)` as an argument default is intentional
+    "BLE001", # this CLI deliberately catches broad `except Exception` for cross-project error accumulation (convention #11)
+    "E501",   # line length is the formatter's job (line-length = 100)
+    "TRY004", # input validation uses ValueError (CLI maps it to exit 2 = usage error); TypeError would change the exit-code contract
+]
+
+[tool.ruff.lint.per-file-ignores]
+# changelog.py is a data file of hand-wrapped, multi-line narrative strings; ISC004 would
+# demand parenthesizing 274 intentional concatenations for no gain (genuine missing-comma
+# cases in real code are still caught everywhere else).
+"src/keboola_agent_cli/changelog.py" = ["ISC004"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["keboola_agent_cli"]
@@ -144,7 +168,7 @@ dev = [
     # ~8.5 min per interpreter in CI (three such runs per PR, one of them on a
     # 2x-billed Windows runner) purely because nothing ever ran concurrently.
     "pytest-xdist>=3.6",
-    "ruff>=0.8",
+    "ruff>=0.16",
     "ty>=0.0.33",
     "bandit>=1.9.4",
     "pip-audit>=2.10.0",

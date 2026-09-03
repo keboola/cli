@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, Request
 
@@ -53,9 +52,6 @@ from ..services.transformation_service import TransformationService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
 from ..services.workspace_service import WorkspaceService
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass

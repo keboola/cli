@@ -332,8 +332,10 @@ class TestSqlResplitListElements:
                             {
                                 "name": "c",
                                 "script": [
-                                    'CREATE OR REPLACE TABLE "out_x" AS SELECT 1 AS x; '
-                                    "alter session unset week_of_year_policy, week_start;"
+                                    (
+                                        'CREATE OR REPLACE TABLE "out_x" AS SELECT 1 AS x; '
+                                        "alter session unset week_of_year_policy, week_start;"
+                                    )
                                 ],
                             }
                         ],
@@ -365,8 +367,10 @@ class TestSqlResplitListElements:
                             {
                                 "name": "c",
                                 "script": [
-                                    'CREATE OR REPLACE TABLE "out_y" AS SELECT a, b FROM x;\n'
-                                    "SELECT count(*) FROM users_2;"
+                                    (
+                                        'CREATE OR REPLACE TABLE "out_y" AS SELECT a, b FROM x;\n'
+                                        "SELECT count(*) FROM users_2;"
+                                    )
                                 ],
                             }
                         ],
@@ -742,8 +746,10 @@ class TestConfigServiceUpdateNormalizes:
                             {
                                 "name": "c",
                                 "script": [
-                                    'CREATE OR REPLACE TABLE "out_x" AS SELECT 1; '
-                                    "alter session unset week_start;",
+                                    (
+                                        'CREATE OR REPLACE TABLE "out_x" AS SELECT 1; '
+                                        "alter session unset week_start;"
+                                    ),
                                 ],
                             }
                         ],

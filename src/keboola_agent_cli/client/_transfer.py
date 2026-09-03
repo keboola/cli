@@ -618,16 +618,7 @@ def _s3_signed_headers(
 
     payload_hash = hashlib.sha256(payload).hexdigest()
 
-    canonical_request = "\n".join(
-        [
-            method,
-            canonical_uri,
-            canonical_querystring,
-            canonical_headers,
-            signed_headers,
-            payload_hash,
-        ]
-    )
+    canonical_request = f"{method}\n{canonical_uri}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
     # String to sign
     string_to_sign = "\n".join(
