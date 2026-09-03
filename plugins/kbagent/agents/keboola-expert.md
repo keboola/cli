@@ -198,6 +198,15 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
   registered project and ignored the pin (issue #684). gotchas.md.
 
+**Recurring `ext.keboola.cli.` events in a project's own event log (vNEXT+)**
+- kbagent posts one best-effort usage event per command to the acting project's
+  Storage events. An event audit then shows one `ext.keboola.cli.` (CLI/REPL) or
+  `ext.keboola.cli.serve` (serve) row per kbagent command. That is expected
+  background noise, not a stray write. Opt out with `KBAGENT_DISABLE_TELEMETRY=1`
+  or `DO_NOT_TRACK=1`. Session (`auth login`) projects are covered too; telemetry
+  uses the session's current token and never triggers a refresh. `auth status`
+  exit 3 (signed out) is recorded as an expected outcome, not a failure. gotchas.md.
+
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
   logs (`job run` tails only the run it started). `job list --offset/--sort-by/

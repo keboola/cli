@@ -637,6 +637,12 @@ class _UsageTelemetryMiddleware:
 
         try:
             await self.app(scope, receive, _send)
+        except Exception:
+            # An unhandled error is turned into a 500 above this middleware, so
+            # `_send` never sees the response start -- record 500, not the default
+            # 200, or the one request telemetry most wants to catch reads as success.
+            status["code"] = 500
+            raise
         finally:
             # telemetry must never affect the response
             with contextlib.suppress(Exception):

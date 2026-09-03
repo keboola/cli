@@ -4999,3 +4999,12 @@ It carries the command name, the outcome, and the duration -- never argument val
   restricted / air-gapped network, or whenever the extra event is unwanted.
 - It fires only when the invocation resolves a project token and stack. A command with no
   registered project (fresh install, `init`, `auth login`) posts nothing.
+- **A session (`auth login`) project is covered too, but telemetry never refreshes a
+  token.** It posts the event with the session's current access token when that token is
+  already fresh, and skips only the rare moment when the on-disk token is stale and only a
+  refresh would make it usable. That refresh (a network call plus a cross-process lease
+  wait) would run outside the event's short timeout, so telemetry never triggers it.
+- **`auth status` exit 3 is recorded as an expected outcome, not a failure.** Exit 3 means
+  signed out or no session, which the command's own help documents as normal. The event
+  reads `type=info`, so a consumer never counts a routine signed-out check as an error. Keep
+  this list aligned when another command documents a non-zero exit as an expected result.

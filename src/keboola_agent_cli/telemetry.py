@@ -29,7 +29,7 @@ from .constants import (
     TELEMETRY_SERVE_CONFIG_ID,
     TELEMETRY_TIMEOUT,
 )
-from .services.base import make_client_factory
+from .services.base import make_telemetry_client
 from .services.project_service import ProjectService
 
 # Longest error text carried in ``results.error``. Keeps the event well under the
@@ -44,6 +44,12 @@ _CLI_EXCLUDED_COMMANDS = frozenset({"serve", "repl"})
 
 # serve infra / non-operation paths that should never post a usage event.
 SERVE_SKIP_PATHS = frozenset({"/", "/health", "/docs", "/redoc", "/openapi.json", "/ui-config"})
+
+# Non-zero exit codes a command returns as a documented, expected outcome, not a
+# failure. `auth status` returns 3 for a signed-out or missing session -- its own
+# help calls that a normal result an agent polls for -- so telemetry records it as
+# `info`, not `error`. Keep this aligned with the exit codes the commands document.
+_EXPECTED_NONZERO_EXITS: dict[str, frozenset[int]] = {"auth status": frozenset({3})}
 
 # Recorded by the command error path (map_error_to_exit_code) so the entry
 # wrapper can put a real message in ``results.error`` for mapped failures, whose
@@ -162,13 +168,14 @@ def emit_cli_invocation(
         if project is None or not project.stack_url or not project.token:
             return
 
+        expected_nonzero = exit_code in _EXPECTED_NONZERO_EXITS.get(command, frozenset())
         _send_event(
             config_store,
             stack_url=project.stack_url,
             token=project.token,
             command=command,
             project_id=project.project_id,
-            success=exit_code == 0,
+            success=exit_code == 0 or expected_nonzero,
             error=_resolve_error_text(error),
             duration_s=duration_s,
             configuration_id=None,
@@ -247,7 +254,11 @@ def _send_event(
         results["error"] = error
 
     verb = "done" if success else "failed"
-    client = make_client_factory(config_store)(stack_url, token)
+    client = make_telemetry_client(config_store, stack_url, token)
+    if client is None:
+        # A session project whose token would need a refresh to become usable.
+        # Best-effort telemetry never refreshes, so it skips this one event.
+        return
     try:
         client.trigger_event(
             component_id=TELEMETRY_COMPONENT_ID,

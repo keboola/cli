@@ -7,12 +7,17 @@ the event entirely.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from helpers import setup_single_project
 from keboola_agent_cli import telemetry
+from keboola_agent_cli.auth.models import StackSession
+from keboola_agent_cli.auth.sentinel import make_session_token
+from keboola_agent_cli.auth.state_store import AuthStateStore
+from keboola_agent_cli.auth.token_provider import reset_provider_registry
 
 _EVENTS_URL = "https://connection.keboola.com/v2/storage/events"
 
@@ -157,3 +162,98 @@ def test_run_entry_point_reports_the_outcome(monkeypatch: pytest.MonkeyPatch) ->
         cli.run()
 
     assert seen == [(0, None), (5, None), (1, "RuntimeError")]
+
+
+def _seed_fresh_session(config_dir: Path, *, access_token: str) -> None:
+    """Persist a session in auth.json whose access token is well inside the margin."""
+    now = datetime.now(UTC)
+    AuthStateStore(config_dir).put_session(
+        StackSession(
+            stack_url="https://connection.keboola.com",
+            session_id="s1",
+            access_token=access_token,
+            refresh_token="kbc_rt_x",
+            access_expires_at=now + timedelta(hours=1),
+            refresh_expires_at=now + timedelta(days=30),
+            created_at=now,
+        )
+    )
+
+
+def test_session_project_with_a_fresh_token_posts_a_bearer_event(
+    tmp_config_dir: Path, httpx_mock
+) -> None:
+    """A session project is covered too: it posts a Bearer event using the current token.
+
+    The event carries the session's on-disk access token as ``Authorization: Bearer``
+    plus ``X-KBC-ProjectId`` -- never an ``X-StorageApi-Token`` -- and telemetry reads
+    that token WITHOUT a refresh (the fresh session is adopted, no network call).
+    """
+    reset_provider_registry()
+    telemetry.reset()
+    setup_single_project(tmp_config_dir, token=make_session_token(258))
+    _seed_fresh_session(tmp_config_dir, access_token="kbc_at_fresh")
+    httpx_mock.add_response(url=_EVENTS_URL, method="POST", json={"id": "evt-1"})
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", "config", "list", "--config-dir", str(tmp_config_dir)],
+        exit_code=0,
+        error=None,
+        duration_s=0.4,
+    )
+
+    request = httpx_mock.get_requests()[0]
+    assert request.headers["Authorization"] == "Bearer kbc_at_fresh"
+    assert request.headers["X-KBC-ProjectId"] == "258"
+    assert "X-StorageApi-Token" not in request.headers
+    reset_provider_registry()
+
+
+def test_session_project_without_a_usable_token_posts_nothing(
+    tmp_config_dir: Path, httpx_mock
+) -> None:
+    """A session project with no fresh on-disk token skips the event, never refreshing.
+
+    Posting would need a token refresh (a network call plus a cross-process lease wait)
+    that runs outside the event's short timeout, so telemetry skips this one event
+    instead of driving the refresh. httpx_mock records no request.
+    """
+    reset_provider_registry()
+    telemetry.reset()
+    setup_single_project(tmp_config_dir, token=make_session_token(258))
+    # No auth.json session written -> peek finds nothing usable -> skip, no refresh.
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", "config", "list", "--config-dir", str(tmp_config_dir)],
+        exit_code=0,
+        error=None,
+        duration_s=0.4,
+    )
+
+    assert httpx_mock.get_requests() == []
+    reset_provider_registry()
+
+
+def test_auth_status_exit_3_is_recorded_as_expected_not_a_failure(
+    tmp_config_dir: Path, httpx_mock
+) -> None:
+    """``auth status`` exit 3 (signed out) posts ``type=info``, not ``error``.
+
+    Exit 3 is a documented normal outcome an agent polls for, so a telemetry consumer
+    must not count it as a failed command.
+    """
+    telemetry.reset()
+    setup_single_project(tmp_config_dir)
+    httpx_mock.add_response(url=_EVENTS_URL, method="POST", json={"id": "evt-1"})
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", "auth", "status", "--config-dir", str(tmp_config_dir)],
+        exit_code=3,
+        error=None,
+        duration_s=0.2,
+    )
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["params"]["command"] == "auth status"
+    assert body["type"] == "info"
+    assert "error" not in body.get("results", {})

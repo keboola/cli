@@ -59,3 +59,33 @@ def test_serve_requests_log_the_mapped_cli_command(
     assert ("job run", "prod") in got  # mutation, project from path template
     assert ("job list", "prod") in got  # read, project from query
     assert ("config list", "prod") in got
+
+
+def test_unhandled_route_error_is_logged_as_a_failure(
+    tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A route that raises posts status 500, not the middleware's default 200.
+
+    The 500 is synthesized above the telemetry middleware, so the middleware never
+    sees the response start. Without recording the failure it would log the crash as a
+    success -- the one outcome this signal most needs to catch.
+    """
+    captured: list[int] = []
+
+    def fake_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+        captured.append(status_code)
+
+    monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
+
+    app = create_app(config_dir=str(tmp_config_dir), auth_token="tok")
+
+    def _boom(project: str) -> None:
+        raise RuntimeError("boom")
+
+    app.add_api_route("/telemetry-test-boom/{project}", _boom, methods=["POST"], name="boom_route")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/telemetry-test-boom/prod", headers={"Authorization": "Bearer tok"})
+
+    assert response.status_code == 500
+    assert captured == [500]
