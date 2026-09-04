@@ -62,6 +62,18 @@ class DataAppCreate(BaseModel):
     dry_run: bool = False
 
 
+class DataAppUpdate(BaseModel):
+    """Fields changeable on an existing app. ``None`` means "leave unchanged"."""
+
+    workspace: bool | None = None
+    auto_suspend_after_seconds: int | None = None
+    size: str | None = None
+    auth: str | None = None
+    git_branch: str | None = None
+    branch_id: int | None = None
+    dry_run: bool = False
+
+
 class SecretsSet(BaseModel):
     secrets: dict[str, str]
     branch_id: int | None = None
@@ -140,6 +152,27 @@ def create(
         wait=body.wait,
         timeout_seconds=body.timeout_seconds,
         keep_on_failure=body.keep_on_failure,
+        dry_run=body.dry_run,
+    )
+
+
+@router.patch("/{project}/{app_id}", summary="Update data app settings")
+def update(
+    project: str,
+    app_id: str,
+    body: DataAppUpdate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Change settings on an existing data app. Mirrors `kbagent data-app update`."""
+    return registry.data_app.update_data_app(
+        alias=project,
+        app_id=app_id,
+        workspace=body.workspace,
+        auto_suspend_after_seconds=body.auto_suspend_after_seconds,
+        size=body.size,
+        auth=body.auth,
+        git_branch=body.git_branch,
+        branch_id=body.branch_id,
         dry_run=body.dry_run,
     )
 

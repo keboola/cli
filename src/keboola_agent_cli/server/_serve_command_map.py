@@ -147,6 +147,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/workspaces"): "workspace list",
     ("GET", "/workspaces/{project}/{workspace_id}"): "workspace detail",
     ("PATCH", "/agents/{task_id}"): "agent update",
+    ("PATCH", "/data-apps/{project}/{app_id}"): "data-app update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}"): "config update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}/rows/{row_id}"): "config row-update",
     ("PATCH", "/flows/{project}/{config_id}"): "flow update",

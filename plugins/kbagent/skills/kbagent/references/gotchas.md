@@ -4501,6 +4501,52 @@ the web UI.
   loudly when it is off. The REST surface mirrors the flag as
   `"workspace": true` in the `POST /data-apps/{project}` body.
 
+## `data-app update` is the only way to change Storage access after create
+
+*(since vNEXT, #737)*
+
+`data-app create` could set `runtime.workspace.enabled` and
+`parameters.autoSuspendAfterSeconds`; **nothing could change them afterwards.**
+For an app created in the UI, or by an older kbagent, the documented path was
+`sync init` + `sync pull` + hand-editing `_config.yml` + `sync push` -- a heavy,
+schema-aware flow for a two-field change. `data-app update` closes that.
+
+```bash
+kbagent data-app update --project P --app-id 74021026 --workspace
+kbagent data-app deploy  --project P --app-id 74021026 --wait
+```
+
+- **`--workspace` is TRI-STATE, not a boolean.** Omitting
+  `--workspace`/`--no-workspace` leaves Storage access exactly as it is. This
+  matters: a `--auto-suspend` change must never silently revoke Storage access,
+  which a flag defaulting to `False` would do on every invocation.
+- **`--no-workspace` DELETES `runtime.workspace`** rather than writing
+  `enabled: false` -- byte-identical to what `create --no-workspace` produces,
+  so the two paths cannot diverge and `sync diff` sees no phantom drift.
+- **Only the flags you pass are touched.** It is a read-modify-write over the
+  whole config body: `parameters.dataApp.secrets`, the encrypted git
+  `#password`, and the storage input/output mapping all survive bit-identical.
+  The Storage API's `configuration` field is a full-document overwrite, so a
+  hand-built body would silently drop those siblings.
+- **A no-op update writes nothing.** If every requested value already matches,
+  the command returns `changed: []`, `deploy_required: false` and mints **no**
+  config version -- re-running it is free and does not force a redeploy.
+- **`--git-branch` is for EXTERNAL repos only.** A Keboola-managed repo carries
+  no `parameters.dataApp.git` block (the Git Service owns the link), so there is
+  no branch to retarget: the command fails with `DATA_APP_INVALID_GIT` instead
+  of inventing a block.
+- **It never deploys.** Per the redeploy contract the running container keeps
+  its pinned `configVersion` until the next `data-app deploy` -- the result
+  carries `deploy_required: true` and the exact next command.
+- **`data-app detail` finally reports the state.** It now returns
+  `workspace_enabled` (`Storage access: enabled/disabled` in human mode). Before
+  this, `detail` showed size, auto-suspend, git and secrets but not
+  `runtime.workspace`, so the deploys-green-reads-nothing symptom above could
+  not be diagnosed from the CLI at all -- you had to read
+  `config detail` -> `configuration.runtime` by hand.
+- **REST parity:** `PATCH /data-apps/{project}/{app_id}` with the same field
+  names; `null` means "leave unchanged" there too.
+
 ## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.88.0)
 
 `--with-last-used` derives each token's most recent activity so you can tell
