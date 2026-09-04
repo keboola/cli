@@ -807,7 +807,23 @@ kbagent data-app delete --project NAME --app-id ID [--yes]
 kbagent data-app password --project NAME --app-id ID
 kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
 kbagent data-app runs --project NAME --app-id ID [--limit N]
-kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'|'KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+# secrets-set plaintext entries (since vNEXT, #738): the '#' prefix now DECIDES encryption
+#   instead of being mandatory, mirroring the UI's "optional encryption" checkbox.
+#   '#KEY=VALUE' is encrypted under the project KMS (unchanged); 'KEY=VALUE' (no '#') is
+#   written VERBATIM as a plain env var, so `secrets-list` / `config detail` / the UI show
+#   the real value instead of <encrypted>. Use it for non-secret runtime settings (a Storage
+#   Files tag, a feature flag, a log level) -- before vNEXT the only ways were to encrypt a
+#   non-secret (invisible to everyone) or to `sync pull` + hand-edit _config.yml + `sync push`.
+#   Both halves of `parameters.dataApp.secrets` were always readable/removable; only WRITING a
+#   plain key was impossible. A payload with NO '#' key never calls the Encryption API at all,
+#   so an unreachable Encryption API cannot fail a write that needs no encryption. A `KBC::`
+#   value is still rejected under EITHER form (double-encryption / a foreign project's
+#   ciphertext parked where nothing can decrypt it). --allow-plaintext-on-encrypt-failure is
+#   unrelated and unchanged: it covers a '#' key whose encryption FAILED, never a deliberate
+#   plain key. New response keys `encrypted_keys` / `plaintext_keys` (env-var names);
+#   `secrets_set` still lists both. `secrets-list` gains per-entry `encrypted` + `value`
+#   (`value` is null for encrypted entries -- the CLI never decrypts).
 kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID] [--show-fingerprint]
 kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY' [--branch ID]   # '#' optional; plain values return their value, encrypted return metadata only
 kbagent data-app secrets-remove --project ALIAS --app-id ID --key 'KEY' [--key ...] [--branch ID] [--yes] [--dry-run]   # '#' optional

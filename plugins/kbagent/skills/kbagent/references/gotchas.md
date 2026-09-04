@@ -4501,6 +4501,58 @@ the web UI.
   loudly when it is off. The REST surface mirrors the flag as
   `"workspace": true` in the `POST /data-apps/{project}` body.
 
+## `data-app secrets-set` writes plain env vars too -- the `#` decides encryption
+
+*(since vNEXT, #738)*
+
+`parameters.dataApp.secrets` has always held **two** kinds of entry, and the
+Keboola UI offers exactly that choice ("optional encryption"): a `#`-prefixed
+key is encrypted under the project KMS, a bare key is a plain env var whose
+value stays readable. `secrets-list`, `secrets-get` and `secrets-remove`
+handled both since 0.43.9. **Only writing a plain key was impossible** --
+`secrets-set` demanded the `#` and encrypted unconditionally:
+
+```bash
+# before vNEXT
+kbagent data-app secrets-set ... --secret 'SCORING_BACKUP_TAG=ppl-assessment-db'
+# rejected: entries must be '#KEY=VALUE'
+kbagent data-app secrets-set ... --secret '#SCORING_BACKUP_TAG=ppl-assessment-db'
+# accepted -- and the tag is now <encrypted> to everyone, including the operator
+```
+
+The workaround was `sync pull`, hand-editing `_config.yml`, `sync push`. Now:
+
+```bash
+kbagent data-app secrets-set --project P --app-id 74021026 \
+  --secret '#API_KEY=s3cr3t' \
+  --secret 'SCORING_BACKUP_TAG=ppl-assessment-db'
+```
+
+- **The `#` is the switch, not a syntax requirement.** `#KEY=VALUE` encrypts
+  (behaviour unchanged); `KEY=VALUE` writes the value verbatim. Put non-secret
+  runtime configuration -- a Storage Files tag, a feature flag, a log level --
+  in the plain form so `secrets-list`, `config detail` and the UI show the real
+  value instead of `<encrypted>`.
+- **Encrypting a non-secret is not a safe default.** It is write-only: the
+  Encryption API has no decrypt endpoint, so once a tag is encrypted **nobody**
+  -- operator, UI or CLI -- can read back what it was set to.
+- **A payload with no `#` key never calls the Encryption API.** An unreachable
+  Encryption API must not fail a write that needs no encryption.
+- **A `KBC::` value is still rejected under EITHER form.** Under `#` it would
+  double-encrypt; under a bare key it would park a foreign project's ciphertext
+  where nothing can ever decrypt it.
+- **`--allow-plaintext-on-encrypt-failure` is unrelated and unchanged.** It
+  covers a `#` key whose *encryption failed*, and still warns loudly. It has
+  nothing to do with a deliberate plain key, and the response's
+  `plaintext_written` (encryption failures) stays distinct from the new
+  `plaintext_keys` (deliberate plain entries).
+- **New response keys:** `encrypted_keys` and `plaintext_keys` (derived
+  env-var names); `secrets_set` still lists both, so existing parsers are
+  unaffected. `secrets-list` entries gain `encrypted` and `value` -- `value` is
+  `null` for every encrypted entry.
+- **`--secrets-file` follows the same rule**: a JSON object whose `#`-prefixed
+  keys are encrypted and whose bare keys are written in clear.
+
 ## `token list --with-last-used`: `never` and `unknown` are not the same answer (since v0.88.0)
 
 `--with-last-used` derives each token's most recent activity so you can tell
