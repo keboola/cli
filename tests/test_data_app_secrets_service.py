@@ -152,7 +152,10 @@ class TestSetSecretsValidation:
     @pytest.mark.parametrize(
         "bad_key",
         [
-            "BAD",  # no #
+            # "BAD" (no '#') is NOT here: since #738 a bare key is a valid
+            # PLAIN env var. See test_data_app_plain_env_keys.py.
+            "1bad",  # starts with digit
+            "bad key",  # space (plain form)
             "#1bad",  # starts with digit
             "#bad key",  # space
             "#bad\x00null",  # NUL

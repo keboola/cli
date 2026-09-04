@@ -3,7 +3,8 @@
 Split out of ``data_app.py`` to keep that module under the CONTRIBUTING.md
 file-size budget (see "File-size budgets"). These commands manage the
 ``parameters.dataApp.secrets`` block of a data app's Storage config (the
-app-runtime env-var secrets); the business logic stays on ``DataAppService``.
+app-runtime env vars -- ``#``-prefixed keys encrypted, bare keys plain); the
+business logic stays on ``DataAppService``.
 They attach to the existing ``data-app`` Typer sub-app via
 :func:`register_secrets_commands`, called at the bottom of ``data_app.py``, so
 they still surface as ``kbagent data-app secrets-*`` with identical names,
@@ -28,19 +29,22 @@ _REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
 
 
 def _parse_secret_arg(arg: str) -> tuple[str, str]:
-    """Split ``#KEY=VALUE`` into ``(key, value)``.
+    """Split ``#KEY=VALUE`` or ``KEY=VALUE`` into ``(key, value)``.
 
-    The value may contain ``=``; only the FIRST ``=`` is the separator.
+    The ``#`` is kept on the key -- it is what tells the service to encrypt
+    the value rather than write it in clear. The value may contain ``=``;
+    only the FIRST ``=`` is the separator.
     """
     if "=" not in arg:
         raise typer.BadParameter(
-            f"Expected '#KEY=VALUE'; got {arg!r} (no '=' separator).",
+            f"Expected '#KEY=VALUE' (encrypted) or 'KEY=VALUE' (plain); "
+            f"got {arg!r} (no '=' separator).",
             param_hint="--secret",
         )
     key, _, value = arg.partition("=")
     if not key:
         raise typer.BadParameter(
-            f"Empty secret key in {arg!r}; expected '#KEY=VALUE'.",
+            f"Empty key in {arg!r}; expected '#KEY=VALUE' or 'KEY=VALUE'.",
             param_hint="--secret",
         )
     return key, value
@@ -63,7 +67,8 @@ def _read_secrets_file(path: Path) -> dict[str, str]:
         ) from exc
     if not isinstance(parsed, dict):
         raise typer.BadParameter(
-            f"Secrets file {path} must be a JSON object mapping #KEY -> value.",
+            f"Secrets file {path} must be a JSON object mapping key -> value "
+            '("#KEY" is encrypted, a bare "KEY" is written in clear).',
             param_hint="--secrets-file",
         )
     out: dict[str, str] = {}
@@ -90,14 +95,19 @@ def data_app_secrets_set(
         None,
         "--secret",
         help=(
-            "One or more '#KEY=VALUE' plaintext entries. Repeatable. "
+            "One or more entries, repeatable. '#KEY=VALUE' is ENCRYPTED under the "
+            "project KMS; 'KEY=VALUE' (no '#') is written as a PLAIN env var whose "
+            "value stays readable in the config -- use it for non-secret settings. "
             "Mutually exclusive with --secrets-file."
         ),
     ),
     secrets_file: Path | None = typer.Option(
         None,
         "--secrets-file",
-        help="Path to a JSON file mapping '#KEY' -> 'plaintext value'.",
+        help=(
+            "Path to a JSON file mapping key -> value. A '#KEY' is encrypted; "
+            "a bare 'KEY' is written as a plain env var."
+        ),
         exists=True,
         readable=True,
         dir_okay=False,
@@ -126,10 +136,15 @@ def data_app_secrets_set(
         help="Suppress the 'now run kbagent data-app deploy' hint in the output.",
     ),
 ) -> None:
-    """Encrypt and write app-runtime secrets to the linked Storage config.
+    """Write app-runtime env vars to the linked Storage config.
 
-    The '#'-prefix is required on every key (Keboola encryption convention).
-    The runtime exposes each secret as an env var with '#' stripped, '-'
+    The '#'-prefix decides encryption, mirroring the UI's "optional
+    encryption" checkbox: '#KEY=VALUE' is encrypted under the project KMS,
+    'KEY=VALUE' is written in clear so operators (and `secrets-list`,
+    `config detail`, the UI) can read it. Put non-secret settings -- a
+    Storage Files tag, a feature flag, a log level -- in the plain form.
+
+    The runtime exposes each entry as an env var with '#' stripped, '-'
     replaced with '_', and uppercased ('#my-api-key' -> 'MY_API_KEY').
 
     The command never auto-deploys; the running container keeps the old
@@ -150,7 +165,10 @@ def data_app_secrets_set(
 
     if not secret and not secrets_file:
         formatter.error(
-            message=("Provide at least one --secret '#KEY=VALUE' or --secrets-file PATH."),
+            message=(
+                "Provide at least one --secret '#KEY=VALUE' (encrypted) / "
+                "'KEY=VALUE' (plain), or --secrets-file PATH."
+            ),
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2) from None
@@ -250,7 +268,10 @@ def data_app_secrets_list(
 ) -> None:
     """List the keys in parameters.dataApp.secrets, with derived runtime env-var names.
 
-    Never echoes the encrypted ciphertext in full and never decrypts.
+    Each entry is tagged `encrypted`. A PLAIN (unencrypted) entry shows its
+    literal value -- it is already stored in clear and visible via
+    `config detail`. An ENCRYPTED entry shows `<encrypted>`: the ciphertext is
+    never echoed in full and the CLI never decrypts (the API is one-way).
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """
@@ -281,10 +302,10 @@ def data_app_secrets_list(
         return
 
     if not result["secrets"]:
-        formatter.console.print("[dim]No secrets set on this data app.[/dim]")
+        formatter.console.print("[dim]No env-var entries set on this data app.[/dim]")
         return
     formatter.console.print(
-        f"\n[bold]{result['count']} secret(s)[/bold] on data app "
+        f"\n[bold]{result['count']} entr(ies)[/bold] on data app "
         f"[cyan]{result['app_id']}[/cyan] in [magenta]{result['project_alias']}[/magenta]:"
     )
     for entry in result["secrets"]:
@@ -292,6 +313,13 @@ def data_app_secrets_list(
             " [yellow](shadowed by runtime)[/yellow]" if entry.get("shadowed_by_runtime") else ""
         )
         line = f"  [bold]{entry['key']}[/bold] -> env [cyan]{entry['env_var']}[/cyan]{marker}"
+        # A plain value is stored in clear and readable via `config detail`, so
+        # printing it leaks nothing; an encrypted one is never decryptable here.
+        line += (
+            "  = [dim]<encrypted>[/dim]"
+            if entry.get("encrypted", True)
+            else f"  = {entry.get('value', '')}"
+        )
         if "fingerprint" in entry:
             line += f"  [dim]fingerprint={entry['fingerprint']}  prefix={entry.get('encryption_prefix', '')}[/dim]"
         formatter.console.print(line)

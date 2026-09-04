@@ -10,7 +10,10 @@ call sites keep working.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
+
+from ..errors import ErrorCode, KeboolaApiError
 
 # Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
 # ciphertext -- one variant per cloud, and exactly these three exist:
@@ -272,3 +275,55 @@ def _redact_storage_config(storage_config: dict[str, Any]) -> dict[str, Any]:
             configuration["parameters"] = parameters
         redacted["configuration"] = configuration
     return redacted
+
+
+def partition_secret_entries(
+    secrets: dict[str, str],
+    *,
+    validate_key: Callable[[str], None],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split a ``secrets-set`` payload into the encrypted and plaintext halves.
+
+    ``parameters.dataApp.secrets`` holds BOTH kinds and the Keboola UI offers
+    exactly that choice ("optional encryption"): a ``#``-prefixed key is
+    encrypted under the project KMS, a bare key is a plain env var whose value
+    stays readable in the config. Non-secret configuration -- a Storage Files
+    tag, a feature flag, a log level -- belongs in the second group so
+    ``secrets-list`` / ``config detail`` and the UI show the real value instead
+    of ``<encrypted>``.
+
+    ``validate_key`` is the service's own key validator (invoked with the
+    ``#`` made optional); it raises on a malformed key. Values are checked
+    here: a non-string is rejected, and so is a ``KBC::`` value in EITHER
+    group -- for a ``#`` key it would be double-encrypted, and for a plain key
+    it would park a foreign project's ciphertext in the config where nothing
+    can ever decrypt it.
+
+    Returns ``(to_encrypt, plaintext)`` keyed exactly as the caller passed
+    them, so the merge back into the config block preserves the ``#`` prefix.
+    """
+    to_encrypt: dict[str, str] = {}
+    plaintext: dict[str, str] = {}
+    for key, value in secrets.items():
+        validate_key(key)
+        if not isinstance(value, str):
+            raise KeboolaApiError(
+                message=f"Entry '{key}' value must be a string; got {type(value).__name__}.",
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+        if value.startswith("KBC::"):
+            raise KeboolaApiError(
+                message=(
+                    f"Entry '{key}' value starts with 'KBC::', which suggests an "
+                    "already-encrypted ciphertext. --secret expects plaintext; "
+                    "re-encrypt under THIS project's KMS via "
+                    "`kbagent encrypt values --component-id keboola.data-apps`."
+                ),
+                status_code=0,
+                error_code=ErrorCode.DATA_APP_INVALID_SECRET,
+                retryable=False,
+            )
+        (to_encrypt if key.startswith("#") else plaintext)[key] = value
+    return to_encrypt, plaintext
