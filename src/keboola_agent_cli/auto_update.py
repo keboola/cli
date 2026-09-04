@@ -188,7 +188,7 @@ def _is_dev_install() -> bool:
             if data.get("dir_info", {}).get("editable", False):
                 return True
     except Exception:
-        pass
+        logger.debug("editable-install detection failed", exc_info=True)
 
     return False
 
@@ -350,7 +350,7 @@ def show_post_update_changelog() -> None:
         if msg:
             sys.stderr.write(msg)
     except Exception:
-        pass  # Never crash
+        logger.debug("what's-new banner rendering failed", exc_info=True)
 
 
 def report_finished_deferred_update() -> None:

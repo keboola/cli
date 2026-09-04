@@ -32,7 +32,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import filelock
 import httpx
@@ -84,7 +84,7 @@ class _FakeAuthClient(AuthClient):
         self._lock = lock or threading.Lock()
         self._serial = 0
 
-    def __enter__(self) -> _FakeAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -203,7 +203,7 @@ class _RefreshExpiryAuthClient(AuthClient):
         self._refresh_expires_in = refresh_expires_in
         self.calls: list[str] = []
 
-    def __enter__(self) -> _RefreshExpiryAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -326,7 +326,7 @@ class _TimingOutThenOkAuthClient(AuthClient):
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def __enter__(self) -> _TimingOutThenOkAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -446,7 +446,7 @@ class _StalledAuthClient(AuthClient):
         self._released = threading.Event()
         self._late_tokens = late_tokens
 
-    def __enter__(self) -> _StalledAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -591,7 +591,7 @@ class _LockProbingAuthClient(AuthClient):
         self.lock_was_free: bool | None = None
         self.lease_holder_during_call: str | None = None
 
-    def __enter__(self) -> _LockProbingAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -1254,7 +1254,7 @@ class _PidTaggedAuthClient(AuthClient):
         self._call_queue = call_queue
         self._delay = delay
 
-    def __enter__(self) -> _PidTaggedAuthClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:

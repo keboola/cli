@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 
 from .constants import DEFAULT_TIMEOUT
@@ -68,10 +68,10 @@ class DataScienceClient(BaseHttpClient):
             timeout=DEFAULT_TIMEOUT,
         )
 
-    def __enter__(self) -> DataScienceClient:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def list_apps(self) -> list[dict[str, Any]]:

@@ -39,7 +39,7 @@ import base64
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -167,10 +167,10 @@ class GitHubContentsClient:
             follow_redirects=True,
         )
 
-    def __enter__(self) -> GitHubContentsClient:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def close(self) -> None:
@@ -702,8 +702,7 @@ class RepoValidateService(BaseService):
             )
 
         path = (parsed.path or "").strip("/")
-        if path.endswith(".git"):
-            path = path[: -len(".git")]
+        path = path.removesuffix(".git")
         parts = path.split("/")
         if len(parts) < 2 or not parts[0] or not parts[1]:
             raise KeboolaApiError(

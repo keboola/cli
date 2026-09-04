@@ -493,8 +493,10 @@ class TestTransformationEdit:
                 "--op",
                 '{"op": "rename_block", "block_id": "b0", "block_name": "Main Renamed"}',
                 "--op",
-                '{"op": "set_code", "block_id": "b0", "code_id": "b0.c0",'
-                ' "script": "SELECT 100; SELECT 200;"}',
+                (
+                    '{"op": "set_code", "block_id": "b0", "code_id": "b0.c0",'
+                    ' "script": "SELECT 100; SELECT 200;"}'
+                ),
                 "--op",
                 '{"op": "str_replace", "search_for": "200", "replace_with": "300"}',
             ],

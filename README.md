@@ -141,8 +141,8 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
     rows = kbc.query(workspace_id, "SELECT id, name FROM customers")  # list[dict]
 
     meta = kbc.files.upload(b"hello", name="greeting.txt", tags=["demo"])
-    data = kbc.files.read_bytes(meta.id)                              # bytes
-    files = kbc.files.list(tags=["demo"])                             # list[FileEntry]
+    data = kbc.files.read_bytes(meta.id)  # bytes
+    files = kbc.files.list(tags=["demo"])  # list[FileEntry]
 ```
 
 `query()` reads results inline and returns rows keyed by column name; `files` returns a uniform `FileEntry` shape and reads bytes straight into memory; `run_job()` / `config_detail()` / `upload_table()` return typed pydantic models. Everything exported from `keboola_agent_cli` is committed public API (semver). For lower-level endpoints, reach for `Client.raw` (the underlying `KeboolaClient`).

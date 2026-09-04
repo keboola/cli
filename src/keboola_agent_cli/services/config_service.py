@@ -173,7 +173,7 @@ class ConfigService(BaseService):
                     result = client.list_config_folder_metadata(branch_id=folder_branch_id)
                     folder_map = result if isinstance(result, dict) else {}
             except Exception:
-                pass  # graceful fallback if search endpoint unavailable
+                logger.debug("config-folder metadata lookup failed", exc_info=True)
 
             configs: list[dict[str, Any]] = []
             for component in components:

@@ -3148,6 +3148,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   read the directory as a Parquet dataset:
   ```python
   import pyarrow.parquet as pq
+
   t = pq.read_table("./ALIAS/in.c-bucket.table.parquet/")
   ```
 - **Never concatenate Parquet slices.** Each slice is a self-contained Parquet

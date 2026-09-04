@@ -24,7 +24,7 @@ Verified contract (probed 2026-05-14 against e2e-1143):
 
 import logging
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import httpx
 
@@ -97,10 +97,10 @@ class MetastoreClient(BaseHttpClient):
         }
         super().__init__(base_url=base_url, token=token, headers=headers)
 
-    def __enter__(self) -> "MetastoreClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def _do_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:

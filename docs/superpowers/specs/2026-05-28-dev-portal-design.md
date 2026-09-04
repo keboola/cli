@@ -94,8 +94,8 @@ New Pydantic model:
 class DeveloperPortalIdentity(BaseModel):
     username: str
     password: str
-    role_hint: str = "vendor"        # free-text label for `identity list`
-    vendor: str | None = None        # default vendor for this identity
+    role_hint: str = "vendor"  # free-text label for `identity list`
+    vendor: str | None = None  # default vendor for this identity
     portal_url: str = "https://apps-api.keboola.com"
 
     @field_validator("portal_url")
@@ -130,7 +130,7 @@ class DeveloperPortalClient(BaseHttpClient):
 
     # Auth (lazy on first authenticated call)
     def _ensure_authenticated(self) -> None: ...
-    def _prompt_mfa(self, session: str) -> str: ...   # /dev/tty, never stdin
+    def _prompt_mfa(self, session: str) -> str: ...  # /dev/tty, never stdin
 
     # Read
     def list_apps(self, vendor: str) -> list[dict]: ...
@@ -260,7 +260,7 @@ def cmd_patch(ctx, app, data, property_, value, value_file, identity, dry_run):
     require_permission(ctx, "dev-portal.patch")
 
     pending = svc.prepare_patch(alias, vendor, app_id, payload)
-    render_pending(formatter, pending)            # stderr; never stdout
+    render_pending(formatter, pending)  # stderr; never stdout
 
     if dry_run:
         formatter.output({"status": "dry-run", "diff": pending.diff_as_json()})
@@ -268,8 +268,7 @@ def cmd_patch(ctx, app, data, property_, value, value_file, identity, dry_run):
 
     require_random_code_confirmation(action=f"patch {app}")
     result = svc.apply(pending)
-    formatter.output({"status": "ok", "app": app,
-                      "patched_keys": [d.key for d in pending.diff]})
+    formatter.output({"status": "ok", "app": app, "patched_keys": [d.key for d in pending.diff]})
 ```
 
 `require_random_code_confirmation()` lives in `commands/_helpers.py`,

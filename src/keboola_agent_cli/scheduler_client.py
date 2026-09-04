@@ -11,7 +11,7 @@ Inherits shared retry/error logic from BaseHttpClient.
 """
 
 import logging
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 
 from .http_base import BaseHttpClient
@@ -44,10 +44,10 @@ class SchedulerClient(BaseHttpClient):
             headers=headers,
         )
 
-    def __enter__(self) -> "SchedulerClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def activate_schedule(self, configuration_id: str) -> dict[str, Any]:

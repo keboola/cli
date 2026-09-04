@@ -202,8 +202,7 @@ class SharingService(BaseService):
             parts = source_bucket_id.split(".")
             bucket_name = parts[-1] if len(parts) > 1 else source_bucket_id
             # Strip "c-" prefix if present
-            if bucket_name.startswith("c-"):
-                bucket_name = bucket_name[2:]
+            bucket_name = bucket_name.removeprefix("c-")
             name = f"shared-{bucket_name}"
 
         client = self._client_factory(project.stack_url, project.token)

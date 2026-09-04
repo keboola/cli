@@ -356,8 +356,10 @@ def build_waiter_script(
             "try {",
             f"  Wait-Process -Id {pid} -Timeout {max_wait_seconds} -ErrorAction SilentlyContinue",
             f"  $deadline = (Get-Date).AddSeconds({max_wait_seconds})",
-            f"  while ((Get-Process -Name {name_literal} -ErrorAction SilentlyContinue)"
-            " -and ((Get-Date) -lt $deadline)) {",
+            (
+                f"  while ((Get-Process -Name {name_literal} -ErrorAction SilentlyContinue)"
+                " -and ((Get-Date) -lt $deadline)) {"
+            ),
             f"    Start-Sleep -Seconds {poll_seconds}",
             "  }",
             f"  if (Get-Process -Name {name_literal} -ErrorAction SilentlyContinue) {{",
@@ -369,12 +371,16 @@ def build_waiter_script(
             f"  $output = (& {quoted_argv} 2>&1 | Out-String -Width 4096)",
             # Captured before anything else runs, so nothing can clobber it.
             "  $code = $LASTEXITCODE",
-            "  [System.IO.File]::AppendAllText("
-            "$logFile, $output, (New-Object System.Text.UTF8Encoding $false))",
+            (
+                "  [System.IO.File]::AppendAllText("
+                "$logFile, $output, (New-Object System.Text.UTF8Encoding $false))"
+            ),
             "  Set-Content -LiteralPath $exitFile -Value ([string]$code)",
             "} catch {",
-            "  [System.IO.File]::AppendAllText("
-            "$logFile, ($_ | Out-String -Width 4096), (New-Object System.Text.UTF8Encoding $false))",
+            (
+                "  [System.IO.File]::AppendAllText("
+                "$logFile, ($_ | Out-String -Width 4096), (New-Object System.Text.UTF8Encoding $false))"
+            ),
             "  Set-Content -LiteralPath $exitFile -Value 'failed'",
             "}",
         ]

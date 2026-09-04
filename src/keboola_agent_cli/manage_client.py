@@ -7,7 +7,7 @@ Uses a different auth header (X-KBC-ManageApiToken) than the Storage API client.
 Inherits shared retry/error logic from BaseHttpClient.
 """
 
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 
 import httpx
@@ -43,10 +43,10 @@ class ManageClient(BaseHttpClient):
             http_auth=http_auth,
         )
 
-    def __enter__(self) -> "ManageClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def verify_token(self) -> dict[str, Any]:

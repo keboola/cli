@@ -128,7 +128,7 @@ class _CoreClient(BaseHttpClient):
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def _request(

@@ -414,7 +414,7 @@ def main(
                             f"or remove {config_store.config_path.parent}/ to use global config."
                         )
         except Exception:
-            pass  # Don't let warning check crash the CLI
+            logging.getLogger(__name__).debug("startup config-warning check failed", exc_info=True)
 
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
     _top_level_commands = {

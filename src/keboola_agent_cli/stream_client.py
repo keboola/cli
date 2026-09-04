@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -111,10 +111,10 @@ class StreamClient(BaseHttpClient):
             http_auth=http_auth,
         )
 
-    def __enter__(self) -> StreamClient:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     # ------------------------------------------------------------------

@@ -149,6 +149,7 @@ Read the dataset back in one line:
 
 ```python
 import pyarrow.parquet as pq
+
 t = pq.read_table("./ALIAS/in.c-data.users.parquet/")
 ```
 

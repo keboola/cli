@@ -39,7 +39,7 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from .auth.sentinel import require_static_token
 from .client import KeboolaClient, _collect_inline_results
@@ -661,7 +661,7 @@ class Client:
         """Close the underlying HTTP client."""
         self._client.close()
 
-    def __enter__(self) -> Client:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -737,7 +737,7 @@ class JobService(BaseService):
             "run_job: unhandled wait error code=%s; bubbling up unchanged",
             code,
         )
-        raise
+        raise exc
 
     @staticmethod
     def resolve_variable_values_id(

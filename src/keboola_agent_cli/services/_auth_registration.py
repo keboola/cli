@@ -36,8 +36,10 @@ SESSION_UNSUPPORTED_FEATURES: tuple[str, ...] = (
     "kbagent data-app (Data Science Service)",
     "kbagent stream (Data Streams Service)",
     "kbagent sharing, unless a master token is set in the environment",
-    "AI Service paths: kbagent docs query, config examples, config new, "
-    "component detail/search, flow new/update/validate",
+    (
+        "AI Service paths: kbagent docs query, config examples, config new, "
+        "component detail/search, flow new/update/validate"
+    ),
     "Scheduler Service paths: kbagent flow schedule, flow schedule-remove",
     "the importable SDK (keboola_agent_cli.Client)",
 )

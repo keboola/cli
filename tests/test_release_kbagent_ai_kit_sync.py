@@ -192,6 +192,7 @@ def run_bump(repo: Path, version: str) -> BumpResult:
         ["bash", "-c", _bump_script()],
         cwd=repo,
         capture_output=True,
+        check=False,
         text=True,
         env={
             "PATH": os.environ.get("PATH", ""),
