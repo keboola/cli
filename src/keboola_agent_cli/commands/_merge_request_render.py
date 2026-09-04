@@ -196,8 +196,10 @@ def format_merge_request_detail(console: Console, data: dict[str, Any]) -> None:
         pairs.append(
             (
                 "Feature",
-                "[red]merge requests are not enabled on this project[/red] -- writes will be "
-                "refused (FEATURE_NOT_ENABLED)",
+                (
+                    "[red]merge requests are not enabled on this project[/red] -- writes will be "
+                    "refused (FEATURE_NOT_ENABLED)"
+                ),
             )
         )
     viewer = _viewer_line(data.get("viewer"))
@@ -209,8 +211,10 @@ def format_merge_request_detail(console: Console, data: dict[str, Any]) -> None:
         pairs.append(
             (
                 "Auto-merge",
-                f"[red]armed[/red] ({escape(str(strategy))}{when}) -- the backend merges this "
-                "MR on its next tick once it is approved",
+                (
+                    f"[red]armed[/red] ({escape(str(strategy))}{when}) -- the backend merges this "
+                    "MR on its next tick once it is approved"
+                ),
             )
         )
     pairs.append(
