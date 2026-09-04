@@ -77,9 +77,13 @@ what makes the platform provision the app's ephemeral workspace and inject:
 and offered no option to. An app missing it **deploys successfully** --
 `state=running`, `desiredState=running`, health probe green, `setup_sh`
 completed -- and cannot read a row. **The platform emits no diagnostic**, so
-the only reliable check is the config itself:
+the only reliable check is the app's own settings:
 
 ```bash
+# vNEXT+ -- detail reports it directly
+kbagent --json data-app detail --project P --app-id <ID> | jq '.data.workspace_enabled'
+
+# <= 0.91.0 -- detail did not carry the flag; read the raw config instead
 kbagent --json config detail --project P --component-id keboola.data-apps \
   --config-id <cfg> | jq '.data.configuration.runtime'
 ```
@@ -95,12 +99,18 @@ instead, which is at least visible. Silently serving zeros is the dangerous
 outcome, and it is the one you get from the DuckDB-cached read-only dashboard
 pattern -- the `dataapp-developer` skill's default.
 
-**Retrofitting an app created before 0.87.0** (or by any other path):
+**Retrofitting an app created before 0.87.0** (or created in the UI, or by any
+other path):
 
 ```bash
+# vNEXT+ -- the supported one-liner; only this field is touched
+kbagent data-app update --project P --app-id <ID> --workspace
+kbagent data-app deploy --project P --app-id <ID> --wait   # pins the LATEST version
+
+# <= 0.91.0 -- no update command existed; patch the raw config
 kbagent config update --project P --component-id keboola.data-apps \
   --config-id <cfg> --merge --set 'runtime.workspace.enabled=true'
-kbagent data-app deploy --project P --app-id <ID> --wait   # pins the LATEST version
+kbagent data-app deploy --project P --app-id <ID> --wait
 ```
 
 The redeploy is required -- a config change alone does not reach the running
@@ -408,7 +418,8 @@ yours at runtime.
 | Inventory: "what data apps does this project have?" | `data-app list` |
 | Inspect one: "is this app running? what's its URL?" | `data-app detail --app-id N` |
 | Bring a new app online from a git repo | `data-app create` (encrypts + PUTs + deploys; Storage access ON by default since 0.87.0) |
-| Grant Storage access to an app that lacks it | `config update --merge --set 'runtime.workspace.enabled=true'` → `data-app deploy` |
+| Grant Storage access to an app that lacks it | `data-app update --workspace` → `data-app deploy` (vNEXT+; on <= 0.91.0 `config update --merge --set 'runtime.workspace.enabled=true'` → `data-app deploy`) |
+| Change auto-suspend / size / auth on an existing app | `data-app update --auto-suspend N` (vNEXT+; only the flags you pass are touched) → `data-app deploy` |
 | Roll out new code already pushed to git | `data-app deploy --app-id N` |
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |

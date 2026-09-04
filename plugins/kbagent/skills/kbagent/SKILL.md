@@ -153,6 +153,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Change deployment settings on an existing data app | `kbagent data-app update --project PROJECT --app-id APP-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |

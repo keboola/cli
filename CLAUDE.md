@@ -800,6 +800,24 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   deploy pins the LATEST configVersion when a git block is present and omits it for a PURE managed
 #   repo (deploys from managedGitRepoId). Use `data-app runs` to debug a deploy that reverts to
 #   stopped (setup-phase failures produce no container logs).
+kbagent data-app update --project NAME --app-id ID [--workspace/--no-workspace] [--auto-suspend N] [--size tiny|small|medium|large] [--auth password|public] [--git-branch BRANCH] [--branch ID] [--dry-run]
+# data-app update (since vNEXT, #737): the ONLY CLI path that changes Storage access or
+#   auto-suspend on an app that already exists -- `create` could set them, nothing could
+#   change them, so the documented workaround was `sync init` + `sync pull` + hand-editing
+#   _config.yml + `sync push`. Read-modify-write on the linked Storage config: ONLY the
+#   flags you pass are touched; secrets, the encrypted git `#password` and the storage
+#   mapping are preserved bit-identical. --workspace is TRI-STATE -- omitting it leaves
+#   runtime.workspace.enabled alone, it does NOT default to off, so an --auto-suspend
+#   change cannot silently revoke Storage access. --no-workspace DELETES the
+#   runtime.workspace key (byte-identical to what `create --no-workspace` writes) rather
+#   than writing `enabled: false`. A request whose values already match writes NOTHING:
+#   changed=[], deploy_required=false, no config version minted. --git-branch retargets an
+#   EXTERNAL repo; a Keboola-managed repo has no parameters.dataApp.git block and fails
+#   with DATA_APP_INVALID_GIT. Never auto-deploys -- the running container keeps its pinned
+#   configVersion until `data-app deploy`. `data-app detail` gained `workspace_enabled`
+#   ("Storage access: enabled/disabled" in human mode) in the same change: before it,
+#   nothing in the CLI reported whether an app could reach Storage, so the
+#   deploys-but-every-Storage-call-fails symptom was undiagnosable.
 kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
