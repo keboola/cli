@@ -4984,17 +4984,22 @@ single-project command:
 
 ## Usage telemetry: one `ext.keboola.cli.` event per command (opt-out with an env var)
 
-*(since vNEXT)* Every CLI command, REPL line, and `kbagent serve` request posts one
-best-effort usage event to the **acting project's own** Storage events
+*(since vNEXT)* Every CLI command, every REPL line, and every **mutating** `kbagent serve`
+request posts one best-effort usage event to the **acting project's own** Storage events
 (`POST /v2/storage/events`), the same mechanism the original Keboola Go CLI uses.
 Connection stores it as `ext.keboola.cli.` (CLI/REPL) or `ext.keboola.cli.serve` (serve).
 It carries the command name, the outcome, and the duration -- never argument values.
 
 - **It shows up in the project's own event log.** An agent auditing a project's events
   sees one `ext.keboola.cli.` entry per kbagent command. That is expected, not a stray write.
+- **Over `serve`, only mutating requests are logged.** A read (GET) posts nothing -- UI
+  polling would otherwise write hundreds of events an hour into the project's event log.
+  The CLI still logs reads, where volume is one event per invocation.
 - **It is best-effort and bounded.** The POST runs as a single attempt with a short timeout
   and no retry, so a blocked or unreachable events endpoint fails fast. It never changes a
-  command's exit code and never stalls it.
+  command's exit code, and it costs at most that one short timeout, once, never a retry loop.
+- **Local-only commands never post.** `context`, `changelog` and `version` do no Storage work,
+  so they never do a telemetry POST -- an offline `kbagent context` stays instant.
 - **Opt-out**: set `KBAGENT_DISABLE_TELEMETRY=1` or `DO_NOT_TRACK=1`. Advise this for a
   restricted / air-gapped network, or whenever the extra event is unwanted.
 - It fires only when the invocation resolves a project token and stack. A command with no

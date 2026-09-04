@@ -323,7 +323,7 @@ kbagent             init | context | doctor | version | update | changelog
 
 ## Telemetry
 
-kbagent posts one best-effort usage event per invocation to the **acting project's own** Storage events (`POST /v2/storage/events`), the same mechanism the kbc CLI uses. It records the command that ran (`config list`, `storage buckets`, …), whether it succeeded, and how long it took — never argument values. It fires only when a project token and stack are resolved, is stored as `ext.keboola.cli.` (and `ext.keboola.cli.serve` for the `serve` REST API), and can never change a command's exit code or stall it (a blocked events endpoint is ignored after a short timeout).
+kbagent posts one best-effort usage event per invocation to the **acting project's own** Storage events (`POST /v2/storage/events`), the same mechanism the kbc CLI uses. It records the command that ran (`config list`, `storage buckets`, …), whether it succeeded, and how long it took — never argument values. It fires only when a project token and stack are resolved, is stored as `ext.keboola.cli.` (and `ext.keboola.cli.serve` for the `serve` REST API), and never changes a command's exit code. It runs as one attempt with a short timeout and no retry, so a blocked or unreachable events endpoint costs at most that one timeout. The local-only `context`, `changelog` and `version` commands do no Storage work, so they never post at all.
 
 This is usage telemetry, not an audit trail — it stays inside your own project and is voluntary. Turn it off with either:
 

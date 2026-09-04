@@ -202,7 +202,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - kbagent posts one best-effort usage event per command to the acting project's
   Storage events. An event audit then shows one `ext.keboola.cli.` (CLI/REPL) or
   `ext.keboola.cli.serve` (serve) row per kbagent command. That is expected
-  background noise, not a stray write. Opt out with `KBAGENT_DISABLE_TELEMETRY=1`
+  background noise, not a stray write. Over `serve` only mutating requests are
+  logged, so a GET (read) posts nothing. Opt out with `KBAGENT_DISABLE_TELEMETRY=1`
   or `DO_NOT_TRACK=1`. Session (`auth login`) projects are covered too; telemetry
   uses the session's current token and never triggers a refresh. `auth status`
   exit 3 (signed out) is recorded as an expected outcome, not a failure. gotchas.md.

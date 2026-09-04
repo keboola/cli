@@ -161,8 +161,8 @@ class BaseHttpClient:
     ) -> httpx.Response:
         """Execute an HTTP request with retry and exponential backoff.
 
-        Retries on status codes 429, 500, 502, 503, 504 up to MAX_RETRIES times
-        with exponential backoff (1s, 2s, 4s).
+        Retries on status codes 429, 500, 502, 503, 504 up to ``max_attempts``
+        times (default ``MAX_RETRIES``) with exponential backoff (1s, 2s, 4s).
 
         A 5xx (and a read/write timeout) is only repeated on an idempotent
         method -- see ``RETRY_SAFE_METHODS``. Repeating a failed POST/PATCH can
@@ -183,6 +183,10 @@ class BaseHttpClient:
                 canonical case is ``DELETE`` on a component configuration,
                 where a repeat lands on the now-trashed config and purges it
                 permanently. ``None`` (default) keeps the method-based rule.
+            max_attempts: Total attempt budget for this request. ``None``
+                (default) uses ``MAX_RETRIES``. Best-effort callers pass ``1``
+                so a blocked endpoint fails in one bounded attempt with no
+                retry+backoff behind it.
             **kwargs: Additional arguments passed to httpx.Client.request().
 
         Returns:
@@ -236,7 +240,7 @@ class BaseHttpClient:
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (status %d), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         response.status_code,
@@ -269,7 +273,7 @@ class BaseHttpClient:
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         delay,
@@ -293,7 +297,7 @@ class BaseHttpClient:
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (connection error), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         delay,
@@ -317,7 +321,7 @@ class BaseHttpClient:
             )
 
         raise KeboolaApiError(
-            message=f"Request failed after {MAX_RETRIES} retries to {url_label} (token: {self._masked_token})",
+            message=f"Request failed after {attempts} retries to {url_label} (token: {self._masked_token})",
             status_code=0,
             error_code=ErrorCode.RETRY_EXHAUSTED,
             retryable=True,

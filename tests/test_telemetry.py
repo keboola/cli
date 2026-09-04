@@ -7,6 +7,7 @@ the event entirely.
 """
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -257,3 +258,87 @@ def test_auth_status_exit_3_is_recorded_as_expected_not_a_failure(
     assert body["params"]["command"] == "auth status"
     assert body["type"] == "info"
     assert "error" not in body.get("results", {})
+
+
+def test_a_rejected_event_is_recorded_at_debug(tmp_config_dir: Path, httpx_mock, caplog) -> None:
+    """A failed telemetry POST is swallowed, but recorded at debug -- not lost silently.
+
+    Best-effort must not mean unobservable. A rejected event (here a 403) leaves a debug
+    line so a broken telemetry path can be diagnosed with ``--verbose``.
+    """
+    telemetry.reset()
+    setup_single_project(tmp_config_dir)
+    httpx_mock.add_response(url=_EVENTS_URL, method="POST", status_code=403, json={"error": "no"})
+
+    with caplog.at_level(logging.DEBUG, logger="keboola_agent_cli.telemetry"):
+        telemetry.emit_cli_invocation(
+            ["kbagent", "config", "list", "--config-dir", str(tmp_config_dir)],
+            exit_code=0,
+            error=None,
+            duration_s=0.1,
+        )
+
+    messages = [r.getMessage().lower() for r in caplog.records]
+    assert any("usage event" in m for m in messages), messages
+
+
+@pytest.mark.parametrize("command", ["context", "changelog", "version"])
+def test_local_only_commands_post_no_event(tmp_config_dir: Path, httpx_mock, command: str) -> None:
+    """A purely local command (context/changelog/version) does no telemetry POST.
+
+    These do no Storage work, so a usage event would turn a local command into a
+    network-dependent one -- slow (or a needless failure) on an offline machine.
+    """
+    telemetry.reset()
+    setup_single_project(tmp_config_dir)
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", command, "--config-dir", str(tmp_config_dir)],
+        exit_code=0,
+        error=None,
+        duration_s=0.1,
+    )
+
+    assert httpx_mock.get_requests() == []
+
+
+def test_static_token_telemetry_client_is_shared(tmp_config_dir: Path) -> None:
+    """A static-token telemetry client is cached and reused, not rebuilt per event.
+
+    So ``kbagent serve`` does not pay a fresh TCP+TLS handshake for every event.
+    """
+    telemetry.reset()
+    store = setup_single_project(tmp_config_dir)
+    client_a, shared_a = telemetry._telemetry_client(
+        store, "https://connection.keboola.com", "901-x"
+    )
+    client_b, shared_b = telemetry._telemetry_client(
+        store, "https://connection.keboola.com", "901-x"
+    )
+    try:
+        assert shared_a is True
+        assert shared_b is True
+        assert client_a is client_b  # one client reused across events
+    finally:
+        telemetry.close_shared_clients()
+
+
+def test_session_token_telemetry_client_is_never_shared(tmp_config_dir: Path) -> None:
+    """A session-token client is never cached: its peeked access token rotates."""
+    reset_provider_registry()
+    telemetry.reset()
+    store = setup_single_project(tmp_config_dir, token=make_session_token(258))
+    _seed_fresh_session(tmp_config_dir, access_token="kbc_at_fresh")
+    url, token = "https://connection.keboola.com", make_session_token(258)
+
+    client_a, shared_a = telemetry._telemetry_client(store, url, token)
+    client_b, shared_b = telemetry._telemetry_client(store, url, token)
+    try:
+        assert shared_a is False
+        assert shared_b is False
+        assert client_a is not client_b  # a fresh client each time
+    finally:
+        for client in (client_a, client_b):
+            if client is not None:
+                client.close()
+        reset_provider_registry()

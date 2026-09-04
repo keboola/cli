@@ -609,6 +609,16 @@ def _default_permission_engine(
     )
 
 
+# serve posts a usage event only for these methods. A read (GET) is skipped: one
+# event per request would flood the project's event log from UI refresh polling.
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# How long serve shutdown waits for in-flight telemetry POSTs to finish before it
+# cancels them. A blocked endpoint must not hold shutdown open, so the wait is
+# bounded and the leftovers are cancelled.
+_TELEMETRY_DRAIN_TIMEOUT = 5.0
+
+
 class _UsageTelemetryMiddleware:
     """Post one best-effort usage event per serve operation (``ext.keboola.cli.serve``).
 
@@ -618,9 +628,12 @@ class _UsageTelemetryMiddleware:
     event POST runs on a worker thread so the event loop is never stalled.
     """
 
-    def __init__(self, app: Any, config_store: ConfigStore) -> None:
+    def __init__(self, app: Any, config_store: ConfigStore, tasks: set[Any]) -> None:
         self.app = app
         self._config_store = config_store
+        # Detached event tasks, drained at serve shutdown so a POST still in flight
+        # is awaited (not lost) before the process exits.
+        self._tasks = tasks
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -644,17 +657,30 @@ class _UsageTelemetryMiddleware:
             status["code"] = 500
             raise
         finally:
-            # telemetry must never affect the response
-            with contextlib.suppress(Exception):
-                await self._emit(scope, status["code"], time.monotonic() - start)
+            # Never awaited inline: the POST must not add its latency to the request
+            # it instruments. Detach it, and track it so serve shutdown can drain it.
+            task = asyncio.create_task(
+                self._emit_safe(scope, status["code"], time.monotonic() - start)
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _emit_safe(self, scope: Any, status_code: int, duration_s: float) -> None:
+        # telemetry must never affect the response; this runs off the request path.
+        with contextlib.suppress(Exception):
+            await self._emit(scope, status_code, duration_s)
 
     async def _emit(self, scope: Any, status_code: int, duration_s: float) -> None:
         method = scope.get("method", "")
-        if method in ("OPTIONS", "HEAD"):
+        if method not in _MUTATING_METHODS:
             return
         route = scope.get("route")
         path = scope.get("path", "")
         if route is None or isinstance(route, Mount):
+            return
+        # Schema-excluded routes are UI / static (the SPA shell, deep-link fallback),
+        # not operations -- they have no CLI counterpart and must not post an event.
+        if not getattr(route, "include_in_schema", True):
             return
         if path in telemetry.SERVE_SKIP_PATHS or path.startswith("/health"):
             return
@@ -663,7 +689,12 @@ class _UsageTelemetryMiddleware:
         # `command` (only `interface` differs). The map is exhaustive (enforced by a
         # test); an empty value marks a route with no CLI counterpart -- still logged,
         # under a route-derived label.
-        template = getattr(route, "path", "")
+        #
+        # Key on `path_format` (the OpenAPI shape the map was generated from), NOT
+        # `route.path`, which keeps a `{...:path}` converter suffix the map lacks --
+        # reading `route.path` misses every such route and falls back to the function
+        # name (issue: serve and CLI then diverge for the same operation).
+        template = getattr(route, "path_format", None) or getattr(route, "path", "")
         command = SERVE_COMMAND_MAP.get((method, template)) or (
             getattr(route, "name", "") or ""
         ).replace("_", " ")
@@ -749,6 +780,8 @@ def create_app(
         Configured FastAPI app ready for uvicorn.
     """
     resolved_token = auth_token or secrets.token_urlsafe(32)
+    # Detached usage-event tasks (see _UsageTelemetryMiddleware); drained on shutdown.
+    telemetry_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def _lifespan(app_: FastAPI):
@@ -769,6 +802,14 @@ def create_app(
                 scheduler_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await scheduler_task
+            # Drain in-flight usage events so a POST mid-flight is not dropped, then
+            # let go: a blocked endpoint must never hold shutdown open indefinitely.
+            if telemetry_tasks:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait(set(telemetry_tasks), timeout=_TELEMETRY_DRAIN_TIMEOUT)
+            for task in list(telemetry_tasks):
+                task.cancel()
+            telemetry.close_shared_clients()
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
@@ -816,7 +857,7 @@ def create_app(
 
     # Outermost middleware: posts a best-effort per-request usage event
     # (ext.keboola.cli.serve) after the response, off the event loop.
-    app.add_middleware(_UsageTelemetryMiddleware, config_store=config_store)
+    app.add_middleware(_UsageTelemetryMiddleware, config_store=config_store, tasks=telemetry_tasks)
 
     # The engine lives on app.state, NOT on the registry: server tests routinely
     # override `get_registry` with a hand-built mock, and an engine reachable

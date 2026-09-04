@@ -16,11 +16,15 @@ break the command, or stall it (the POST carries a short timeout).
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
+import threading
 from typing import Any
 
 import typer
 
+from .auth.sentinel import is_session_token
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import (
     ENV_DISABLE_TELEMETRY,
@@ -32,6 +36,12 @@ from .constants import (
 from .services.base import make_telemetry_client
 from .services.project_service import ProjectService
 
+# Telemetry is best-effort and swallows every failure, but not silently: each
+# swallow/skip path logs at DEBUG (visible under `kbagent --verbose`), so a
+# permanently broken events path can be diagnosed instead of shipping as a
+# no-op nobody sees.
+logger = logging.getLogger(__name__)
+
 # Longest error text carried in ``results.error``. Keeps the event well under the
 # events API's 200 KB cap and avoids dumping large response/state buffers.
 _MAX_ERROR_LEN = 1000
@@ -41,6 +51,13 @@ _MAX_ERROR_LEN = 1000
 # own loop. The outer invocation of each is excluded so it does not add a second,
 # session-level event on top of the real work it dispatches.
 _CLI_EXCLUDED_COMMANDS = frozenset({"serve", "repl"})
+
+# Local-only commands that do no Storage work: `context` and `changelog` echo
+# bundled text, and `version` is a meta command (its only network call is an
+# optional GitHub update check, never Storage). Posting a usage event for these
+# would turn a local command into a network-dependent one -- slow, or a needless
+# failure, on an offline machine -- for no telemetry worth having.
+_LOCAL_ONLY_COMMANDS = frozenset({"context", "changelog", "version"})
 
 # serve infra / non-operation paths that should never post a usage event.
 SERVE_SKIP_PATHS = frozenset({"/", "/health", "/docs", "/redoc", "/openapi.json", "/ui-config"})
@@ -56,11 +73,29 @@ _EXPECTED_NONZERO_EXITS: dict[str, frozenset[int]] = {"auth status": frozenset({
 # exception never propagates out to the wrapper.
 _last_error: str | None = None
 
+# One reusable client per (stack_url, static token), so `kbagent serve` does not
+# pay a fresh TCP+TLS handshake for every event. Guarded by a lock because serve
+# posts events from worker threads. Session-token clients are never cached: their
+# peeked access token rotates, so a cached one would go stale. Closed at serve
+# shutdown via close_shared_clients (and cleared by reset() between test runs).
+_client_cache: dict[tuple[str, str], Any] = {}
+_client_cache_lock = threading.Lock()
+
+
+def close_shared_clients() -> None:
+    """Close and drop every cached telemetry client (serve shutdown / test reset)."""
+    with _client_cache_lock:
+        for client in _client_cache.values():
+            with contextlib.suppress(Exception):
+                client.close()
+        _client_cache.clear()
+
 
 def reset() -> None:
     """Clear per-invocation state. Called once at the start of each process run."""
     global _last_error
     _last_error = None
+    close_shared_clients()
 
 
 def note_command_error(message: str) -> None:
@@ -150,7 +185,7 @@ def emit_cli_invocation(
         if any(flag in argv for flag in ("--help", "-h", "--version", "-V")):
             return
         command = command_from_argv(argv)
-        if command is None or command in _CLI_EXCLUDED_COMMANDS:
+        if command is None or command in _CLI_EXCLUDED_COMMANDS or command in _LOCAL_ONLY_COMMANDS:
             return
 
         resolved_dir, source = resolve_config_dir(
@@ -162,10 +197,12 @@ def emit_cli_invocation(
         explicit = _option_value(argv, "--project") or _option_value(argv, "-p")
         try:
             alias, _ = ProjectService(config_store).resolve_pinned_alias(explicit=explicit)
-        except Exception:
-            return  # no project context (local command / ambiguous) -> nothing to post
+        except Exception as exc:
+            logger.debug("usage event skipped: no project context (%s)", exc)
+            return  # local command / ambiguous -> nothing to post
         project = config_store.get_project(alias)
         if project is None or not project.stack_url or not project.token:
+            logger.debug("usage event skipped: project %r has no token or stack", alias)
             return
 
         expected_nonzero = exit_code in _EXPECTED_NONZERO_EXITS.get(command, frozenset())
@@ -181,7 +218,8 @@ def emit_cli_invocation(
             configuration_id=None,
             extra_params=None,
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug("usage event failed: %s", exc)
         return  # telemetry must never affect the CLI
 
 
@@ -227,8 +265,28 @@ def send_serve_event(
             configuration_id=TELEMETRY_SERVE_CONFIG_ID,
             extra_params={"path": f"{method} {path}"},
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug("serve usage event failed: %s", exc)
         return
+
+
+def _telemetry_client(config_store: ConfigStore, stack_url: str, token: str) -> tuple[Any, bool]:
+    """Return ``(client, shared)`` for the events POST, or ``(None, False)`` to skip.
+
+    A shared client is cached and reused, so the caller must NOT close it. A static
+    token gets one cached client per (stack, token); a session token is never cached
+    (its peeked access token rotates), so it gets a fresh, caller-closed client.
+    """
+    if is_session_token(token):
+        return make_telemetry_client(config_store, stack_url, token), False
+    key = (stack_url, token)
+    with _client_cache_lock:
+        client = _client_cache.get(key)
+        if client is None:
+            client = make_telemetry_client(config_store, stack_url, token)
+            if client is not None:
+                _client_cache[key] = client
+    return client, True
 
 
 def _send_event(
@@ -254,10 +312,11 @@ def _send_event(
         results["error"] = error
 
     verb = "done" if success else "failed"
-    client = make_telemetry_client(config_store, stack_url, token)
+    client, shared = _telemetry_client(config_store, stack_url, token)
     if client is None:
         # A session project whose token would need a refresh to become usable.
         # Best-effort telemetry never refreshes, so it skips this one event.
+        logger.debug("usage event skipped: session token needs a refresh")
         return
     try:
         client.trigger_event(
@@ -271,7 +330,8 @@ def _send_event(
             timeout=TELEMETRY_TIMEOUT,
         )
     finally:
-        client.close()
+        if not shared:
+            client.close()
 
 
 def _resolve_error_text(error: BaseException | None) -> str | None:
