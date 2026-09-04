@@ -4982,3 +4982,35 @@ single-project command:
   project is not the first row of `project list`.
 - The fix also covers `kbagent serve`: the `/kai/*` routes, `POST /documentation/query`,
   and `GET /components?query=...` resolved the project the same wrong way.
+
+## Usage telemetry: one `ext.keboola.cli.` event per command (opt-out with an env var)
+
+*(since vNEXT)* Every CLI command, every REPL line, and every **mutating** `kbagent serve`
+request posts one best-effort usage event to the **acting project's own** Storage events
+(`POST /v2/storage/events`), the same mechanism the original Keboola Go CLI uses.
+Connection stores it as `ext.keboola.cli.` (CLI/REPL) or `ext.keboola.cli.serve` (serve).
+It carries the command name, the outcome, and the duration -- never argument values.
+
+- **It shows up in the project's own event log.** An agent auditing a project's events
+  sees one `ext.keboola.cli.` entry per kbagent command. That is expected, not a stray write.
+- **Over `serve`, only mutating requests are logged.** A read (GET) posts nothing -- UI
+  polling would otherwise write hundreds of events an hour into the project's event log.
+  The CLI still logs reads, where volume is one event per invocation.
+- **It is best-effort and bounded.** The POST runs as a single attempt with a short timeout
+  and no retry, so a blocked or unreachable events endpoint fails fast. It never changes a
+  command's exit code, and it costs at most that one short timeout, once, never a retry loop.
+- **Local-only commands never post.** `context`, `changelog` and `version` do no Storage work,
+  so they never do a telemetry POST -- an offline `kbagent context` stays instant.
+- **Opt-out**: set `KBAGENT_DISABLE_TELEMETRY=1` or `DO_NOT_TRACK=1`. Advise this for a
+  restricted / air-gapped network, or whenever the extra event is unwanted.
+- It fires only when the invocation resolves a project token and stack. A command with no
+  registered project (fresh install, `init`, `auth login`) posts nothing.
+- **A session (`auth login`) project is covered too, but telemetry never refreshes a
+  token.** It posts the event with the session's current access token when that token is
+  already fresh, and skips only the rare moment when the on-disk token is stale and only a
+  refresh would make it usable. That refresh (a network call plus a cross-process lease
+  wait) would run outside the event's short timeout, so telemetry never triggers it.
+- **`auth status` exit 3 is recorded as an expected outcome, not a failure.** Exit 3 means
+  signed out or no session, which the command's own help documents as normal. The event
+  reads `type=info`, so a consumer never counts a routine signed-out check as an error. Keep
+  this list aligned when another command documents a non-zero exit as an expected result.

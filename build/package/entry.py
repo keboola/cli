@@ -7,8 +7,11 @@ PyInstaller runs the entry script as top-level `__main__`, so the package's own
 
 This launcher uses an absolute import instead. Verified to produce a working
 no-Python binary (`env -i kbagent --version` → `kbagent vX.Y.Z`).
+
+Calls ``run`` (the telemetry-emitting wrapper), not ``app`` directly, so the
+standalone binary posts usage telemetry exactly like the pip/uv console script.
 """
 
-from keboola_agent_cli.cli import app
+from keboola_agent_cli.cli import run
 
-app()
+run()

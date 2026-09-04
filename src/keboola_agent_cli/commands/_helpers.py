@@ -15,6 +15,7 @@ from typing import Any
 
 import typer
 
+from .. import telemetry
 from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
@@ -125,6 +126,8 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     - AUTH_FLOW_TIMEOUT -> 4 (the login flow itself timed out; retryable)
     - Everything else -> 1 (general error)
     """
+    telemetry.note_command_error(str(exc))
+
     if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
         return 3
     if exc.error_code == ErrorCode.AUTH_REJECTED:

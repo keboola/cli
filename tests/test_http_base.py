@@ -1,5 +1,6 @@
 """Tests for BaseHttpClient - retry logic, error sanitization, shared HTTP behavior."""
 
+import logging
 import platform
 from typing import SupportsIndex
 from unittest.mock import patch
@@ -89,6 +90,34 @@ class TestBaseHttpClientRetry:
         finally:
             http_base_module.time.sleep = original_sleep
             client.close()
+
+    def test_retry_logs_use_the_max_attempts_budget(self, httpx_mock, caplog) -> None:
+        """A ``max_attempts`` override drives the retry-count in the log, not MAX_RETRIES.
+
+        The loop bound is ``attempts``, but the retry log statements interpolated the
+        module constant, so a caller passing ``max_attempts=2`` saw ``attempt 1/3`` --
+        a 3-attempt budget the request never had. This asserts the log matches the
+        real budget.
+        """
+        for _ in range(2):
+            httpx_mock.add_response(url=f"{STACK_URL}/test-path", status_code=503, text="busy")
+        client = BaseHttpClient(base_url=STACK_URL, token=TOKEN, headers={})
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with (
+                caplog.at_level(logging.DEBUG, logger="keboola_agent_cli.http_base"),
+                pytest.raises(KeboolaApiError),
+            ):
+                client._do_request("GET", "/test-path", max_attempts=2)
+        finally:
+            http_base_module.time.sleep = original_sleep
+            client.close()
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("attempt 1/2" in m for m in messages), messages
+        assert not any("1/3" in m for m in messages), messages
 
     def test_retry_on_429_rate_limit(self, httpx_mock) -> None:
         """BaseHttpClient retries on 429 and succeeds."""

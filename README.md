@@ -321,6 +321,17 @@ kbagent             init | context | doctor | version | update | changelog
 | [MCP migration](docs/mcp-migration.md) | Migrating off the removed MCP passthrough (v0.85.0): the tool-to-command map, what to do with persisted `mcp_tool` agent tasks, and how to keep `keboola-mcp-server` fresh yourself. |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 
+## Telemetry
+
+kbagent posts one best-effort usage event per invocation to the **acting project's own** Storage events (`POST /v2/storage/events`), the same mechanism the kbc CLI uses. It records the command that ran (`config list`, `storage buckets`, …), whether it succeeded, and how long it took — never argument values. It fires only when a project token and stack are resolved, is stored as `ext.keboola.cli.` (and `ext.keboola.cli.serve` for the `serve` REST API), and never changes a command's exit code. It runs as one attempt with a short timeout and no retry, so a blocked or unreachable events endpoint costs at most that one timeout. The local-only `context`, `changelog` and `version` commands do no Storage work, so they never post at all.
+
+This is usage telemetry, not an audit trail — it stays inside your own project and is voluntary. Turn it off with either:
+
+```bash
+export KBAGENT_DISABLE_TELEMETRY=1   # kbagent-specific kill switch
+export DO_NOT_TRACK=1                # honored too (the cross-tool convention)
+```
+
 ## Development
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first -- it covers the 3-layer architecture, coding conventions, security principles, and the full checklist for adding new commands.

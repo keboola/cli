@@ -184,8 +184,14 @@ class _CoreClient(BaseHttpClient):
 
     def _encrypt_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Execute an Encryption API request with retry."""
+        # Start from the main client's headers so User-Agent (and X-Conversation-ID)
+        # reach the encryption service too -- passing a bare {"Content-Type": ...}
+        # here used to REPLACE them, leaving this the one Keboola endpoint the
+        # central User-Agent never signed.
+        headers = dict(self._client._headers)
+        headers["Content-Type"] = "application/json"
         client = self._get_or_create_sub_client(
-            "_encrypt_client", self._encrypt_base_url, headers={"Content-Type": "application/json"}
+            "_encrypt_client", self._encrypt_base_url, headers=headers
         )
         return self._do_request(
             method, path, client=client, base_url=self._encrypt_base_url, **kwargs

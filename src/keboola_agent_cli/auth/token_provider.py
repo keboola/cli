@@ -182,6 +182,24 @@ class SessionTokenProvider:
             self._cached_expires_at = None
             return self._refresh_locked(rejected_token=rejected_token)
 
+    def peek_access_token(self) -> str | None:
+        """Return a currently-fresh access token WITHOUT ever refreshing.
+
+        Best-effort callers (usage telemetry) use this so they never trigger the
+        network refresh or the cross-process lease wait that `get_access_token`
+        can. It reads only the in-memory cache and, failing that, the persisted
+        session under the brief local file lock -- never the network, never the
+        refresh lease. Returns None when only a refresh would produce a usable
+        token, so the caller skips its work rather than block.
+        """
+        if self._cache_is_fresh():
+            return self._cached_token
+        with self._state_store.transaction():
+            session = self._state_store.get_session(self._stack_url)
+        if session is not None and session.access_token_fresh():
+            return session.access_token
+        return None
+
     def introspect(self) -> IntrospectResponse:
         """Introspect the session using a guaranteed-live access token.
 
@@ -460,6 +478,26 @@ class BearerAuth(httpx.Auth):
         request.headers["Authorization"] = f"Bearer {token}"
         if self._project_id is not None:
             request.headers["X-KBC-ProjectId"] = str(self._project_id)
+
+
+class StaticBearerAuth(httpx.Auth):
+    """Stamp a fixed bearer token and project id, and never refresh.
+
+    Best-effort callers (usage telemetry) use this instead of `BearerAuth` so a
+    401 can never trigger the network force-refresh `BearerAuth` runs on a
+    rejected token. A fire-and-forget event that gets a 401 simply fails, which
+    is the correct outcome -- it must not make the command wait on the network.
+    """
+
+    def __init__(self, token: str, project_id: int | None = None) -> None:
+        self._token = token
+        self._project_id = project_id
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        if self._project_id is not None:
+            request.headers["X-KBC-ProjectId"] = str(self._project_id)
+        yield request
 
 
 def get_session_token_provider(stack_url: str, state_store: AuthStateStore) -> SessionTokenProvider:

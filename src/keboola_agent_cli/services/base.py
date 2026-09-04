@@ -196,6 +196,38 @@ def make_client_factory(config_store: ConfigStore) -> ClientFactory:
     return _factory
 
 
+def make_telemetry_client(
+    config_store: ConfigStore, stack_url: str, token: str
+) -> KeboolaClient | None:
+    """Build a client for a best-effort usage event that never triggers a refresh.
+
+    For a static token this mirrors `make_client_factory`. For a `kbc-session://`
+    sentinel it reads a currently-fresh access token WITHOUT refreshing and stamps
+    it with a non-refreshing bearer, so a stale on-disk token or a 401 can never
+    make telemetry wait on the network or the cross-process refresh lease. Returns
+    None when only a refresh would produce a usable token -- the caller then skips
+    the event. Session projects stay covered whenever their token is already fresh.
+    """
+    if not is_session_token(token):
+        return KeboolaClient(stack_url=stack_url, token=token)
+
+    project_id = parse_session_project_id(token)
+    if project_id is None:
+        return None
+
+    from ..auth.state_store import AuthStateStore
+    from ..auth.token_provider import StaticBearerAuth, get_session_token_provider
+
+    state_store = AuthStateStore.from_config_store(config_store)
+    provider = get_session_token_provider(stack_url, state_store)
+    access = provider.peek_access_token()
+    if not access:
+        return None
+    return KeboolaClient(
+        stack_url=stack_url, token="", http_auth=StaticBearerAuth(access, project_id)
+    )
+
+
 class BaseService:
     """Shared base for services that operate across multiple projects.
 
