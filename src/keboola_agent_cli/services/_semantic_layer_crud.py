@@ -23,7 +23,19 @@ from typing import TYPE_CHECKING, Any
 from ..errors import ErrorCode, KeboolaApiError
 
 if TYPE_CHECKING:
-    from ..metastore_client import MetastoreClient, SemanticType
+    from ..metastore_client import MetastoreClient, ObjectScope, SemanticType
+
+
+def _item_scope(item: dict[str, Any]) -> tuple[ObjectScope, list[int] | None]:
+    """Extract ``(scope, target_project_ids)`` from a raw item's ``meta`` block.
+
+    Defaults to ``("project", None)`` for an item predating PSGO-140 (no
+    ``meta.scope`` key) so the edit path is a no-op change for anything
+    already project-scoped.
+    """
+    meta = item.get("meta") or {}
+    return meta.get("scope", "project"), meta.get("targetProjectIds")
+
 
 # Kinds accepted by `remove_item` / `preview_remove`. Relationship and
 # glossary were added in iter-4 (NB-5) -- neither is referenced by
@@ -54,8 +66,17 @@ def delete_then_post(
     original_attrs: dict[str, Any],
     new_name: str,
     new_attrs: dict[str, Any],
+    scope: ObjectScope = "project",
+    target_project_ids: list[int] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run a safe DELETE+POST, rolling back to ``original_attrs`` on POST failure.
+
+    ``scope``/``target_project_ids`` are the ORIGINAL item's values (read
+    from its ``meta`` block by the caller) and are re-applied on both the
+    primary POST and the rollback POST -- ``post_item`` defaults to
+    ``scope="project"``, and without passing these through explicitly, every
+    edit of an organization/targeted-scope object would silently downgrade
+    it back to project-only visibility on every save.
 
     Returns ``(new_item, rollback)`` where ``rollback`` is None on
     success. On POST failure we re-POST the original payload; the
@@ -65,7 +86,13 @@ def delete_then_post(
     """
     client.delete_item(item_type, old_id)
     try:
-        new_item = client.post_item(item_type, name=new_name, data=new_attrs)
+        new_item = client.post_item(
+            item_type,
+            name=new_name,
+            data=new_attrs,
+            scope=scope,
+            target_project_ids=target_project_ids,
+        )
     except KeboolaApiError as exc:
         rollback_status: dict[str, Any] = {
             "attempted": True,
@@ -74,7 +101,13 @@ def delete_then_post(
         }
         try:
             old_name = original_attrs.get("name") or original_attrs.get("term", "")
-            restored = client.post_item(item_type, name=old_name, data=original_attrs)
+            restored = client.post_item(
+                item_type,
+                name=old_name,
+                data=original_attrs,
+                scope=scope,
+                target_project_ids=target_project_ids,
+            )
             rollback_status["status"] = "succeeded"
             rollback_status["restored_id"] = restored.get("id", "")
         except KeboolaApiError as rollback_exc:
@@ -124,6 +157,7 @@ def edit_metric_with_cascade(
         )
     original_attrs = dict(target.get("attributes") or {})
     old_id = target["id"]
+    target_scope, target_project_ids = _item_scope(target)
 
     effective_new_name = new_name if new_name is not None else current_name
     cascade_required: list[dict[str, Any]] = []
@@ -174,6 +208,8 @@ def edit_metric_with_cascade(
         original_attrs=original_attrs,
         new_name=effective_new_name,
         new_attrs=new_attrs,
+        scope=target_scope,
+        target_project_ids=target_project_ids,
     )
 
     # Cascade constraints individually (each is independent --
@@ -185,6 +221,7 @@ def edit_metric_with_cascade(
         cmetrics = [effective_new_name if x == current_name else x for x in cmetrics]
         cattrs["metrics"] = cmetrics
         cname = cattrs.get("name", "")
+        c_scope, c_target_project_ids = _item_scope(c)
         try:
             cascaded_item, _ = delete_then_post(
                 client,
@@ -193,6 +230,8 @@ def edit_metric_with_cascade(
                 original_attrs=c.get("attributes") or {},
                 new_name=cname,
                 new_attrs=cattrs,
+                scope=c_scope,
+                target_project_ids=c_target_project_ids,
             )
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
@@ -340,6 +379,7 @@ def edit_simple(
         if v is not None:
             new_attrs[k] = v
     effective_new = new_attrs.get(id_key) or current_key
+    target_scope, target_project_ids = _item_scope(target)
     new_item, rollback = delete_then_post(
         client,
         item_type,
@@ -347,6 +387,8 @@ def edit_simple(
         original_attrs=original_attrs,
         new_name=effective_new,
         new_attrs=new_attrs,
+        scope=target_scope,
+        target_project_ids=target_project_ids,
     )
     return {
         "updated": new_item,

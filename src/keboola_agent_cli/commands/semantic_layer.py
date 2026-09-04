@@ -24,8 +24,9 @@ from ._helpers import (
     get_service,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
-from ._semantic_layer_helpers import _handle_service_call
+from ._semantic_layer_helpers import _handle_service_call, resolve_scope_targets
 from ._semantic_layer_reference_data import reference_data_app
+from ._semantic_layer_scope import scope_app
 
 semantic_layer_app = typer.Typer(
     name="semantic-layer",
@@ -112,10 +113,30 @@ def model_create(
     sql_dialect: str = typer.Option(
         "Snowflake", "--sql-dialect", help="SQL dialect (default: Snowflake)"
     ),
+    scope: str = typer.Option(
+        "project",
+        "--scope",
+        help=(
+            "Visibility: 'project' (default, owner only), 'organization' "
+            "(every project in the org), or 'targeted' (owner + explicit "
+            "--target-project grants)."
+        ),
+    ),
+    target_project: list[str] = typer.Option(
+        [],
+        "--target-project",
+        help="Project alias to grant visibility to (repeatable; --scope targeted only).",
+    ),
 ) -> None:
     """Create a new semantic-layer model."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.create_model,
@@ -123,6 +144,8 @@ def model_create(
         name=name,
         description=description,
         sql_dialect=sql_dialect,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(
         result,
@@ -143,6 +166,7 @@ semantic_layer_app.add_typer(add_app, name="add")
 semantic_layer_app.add_typer(edit_app, name="edit")
 semantic_layer_app.add_typer(remove_app, name="remove")
 semantic_layer_app.add_typer(reference_data_app, name="reference-data")
+semantic_layer_app.add_typer(scope_app, name="scope")
 
 
 @model_app.command("delete")

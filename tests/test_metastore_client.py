@@ -149,10 +149,11 @@ class TestPostItem:
         body = json.loads(request.content)
         assert body["name"] == "rev"
         assert body["branch"] == "main"
-        assert body["schemaVersion"] == "1.0.0"
+        assert body["schemaVersion"] == "1.1.0"
         assert body["scope"] == "project"
         assert body["data"]["sql"] == "SUM(x)"
         assert body["data"]["modelUUID"] == "u"
+        assert "targetProjectIds" not in body
 
 
 @pytest.fixture
@@ -283,8 +284,8 @@ class TestPutItem:
         body = json.loads(request.content)
         assert body["name"] == "chart_of_accounts"
         assert body["branch"] == "main"
-        assert body["schemaVersion"] == "1.0.0"
-        assert body["scope"] == "project"
+        assert body["schemaVersion"] == "1.1.0"
+        assert "scope" not in body
         assert body["data"]["dimensionName"] == "chart_of_accounts"
         assert body["data"]["members"] == []
 
@@ -322,12 +323,15 @@ class TestSemanticTypes:
 
 
 class TestProjectScope401Reclassification:
-    """The metastore's master-token gate 401 becomes MISSING_MASTER_TOKEN.
+    """The metastore's project-admin gate 401 becomes MISSING_MASTER_TOKEN.
 
-    The metastore auth middleware collapses every project-scope resolution
-    failure into a 401 ``"Failed to create project scope"``; for a valid
-    non-master token that IS the master-token gate firing (issue #711).
-    The client funnels every verb through the reclassification.
+    Pre-PSGO-282, the metastore auth middleware collapsed every project-scope
+    resolution failure into a 401 ``"Failed to create project scope"``,
+    including plain reads from a valid non-master token (issue #711). Since
+    PSGO-282 (go-monorepo#596) a fixed metastore only emits this 401 for a
+    WRITE against a token that is not a project admin -- reads succeed for
+    any valid token. The client still funnels every verb through the
+    reclassification as a safety net for a not-yet-upgraded deployment.
     """
 
     _SCOPE_401_BODY: ClassVar[dict] = {
@@ -420,3 +424,166 @@ class TestProjectScope401Reclassification:
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.MISSING_MASTER_TOKEN
+
+
+class TestPostItemScopeValidation:
+    """post_item validates scope/target_project_ids client-side (PSGO-140)."""
+
+    def test_rejects_unknown_scope(self, metastore_client) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item("semantic-metric", name="x", data={}, scope="bogus")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_rejects_target_project_ids_without_targeted_scope(self, metastore_client) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item(
+                "semantic-metric", name="x", data={}, scope="project", target_project_ids=[1]
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_targeted_scope_sends_target_project_ids(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            json={"data": {"type": "semantic-metric", "id": "new-id", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item(
+            "semantic-metric",
+            name="x",
+            data={},
+            scope="targeted",
+            target_project_ids=[123, 456],
+        )
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "targeted"
+        assert body["targetProjectIds"] == [123, 456]
+
+    def test_organization_scope_omits_target_project_ids_key(
+        self, httpx_mock, metastore_client
+    ) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            json={"data": {"type": "semantic-metric", "id": "new-id", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item("semantic-metric", name="x", data={}, scope="organization")
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "organization"
+        assert "targetProjectIds" not in body
+
+
+class TestElevateToOrganization:
+    """PATCH /{type}/{id} with {"scope": "organization"} only."""
+
+    def test_sends_scope_only_patch(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PATCH",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc",
+            json={
+                "data": {
+                    "type": "semantic-dataset",
+                    "id": "abc",
+                    "attributes": {},
+                    "meta": {"scope": "organization"},
+                }
+            },
+            status_code=200,
+        )
+        result = metastore_client.elevate_to_organization("semantic-dataset", "abc")
+        assert result["meta"]["scope"] == "organization"
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PATCH"
+        assert json.loads(request.content) == {"scope": "organization"}
+
+    def test_403_maps_to_access_denied(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PATCH",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc",
+            status_code=403,
+            json={"error": "Insufficient permissions"},
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.elevate_to_organization("semantic-dataset", "abc")
+        assert excinfo.value.error_code == ErrorCode.ACCESS_DENIED
+
+
+class TestPutTargetProjects:
+    """PUT /{type}/{id}/target-projects replaces the whole grant set; 204 no body."""
+
+    def test_replaces_target_projects(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc/target-projects",
+            status_code=204,
+        )
+        assert metastore_client.put_target_projects("semantic-dataset", "abc", [1, 2]) is None
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.content) == {"targetProjectIds": [1, 2]}
+
+    def test_clears_with_empty_list(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc/target-projects",
+            status_code=204,
+        )
+        metastore_client.put_target_projects("semantic-dataset", "abc", [])
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.content) == {"targetProjectIds": []}
+
+
+class TestScopeElevationRequest:
+    """PUT/DELETE .../scope-elevation-request: empty body, 200 with the updated item."""
+
+    def test_request_elevation(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc/scope-elevation-request",
+            json={
+                "data": {
+                    "type": "semantic-dataset",
+                    "id": "abc",
+                    "attributes": {},
+                    "meta": {"scopeElevationRequestedAt": "2026-08-28T00:00:00Z"},
+                }
+            },
+            status_code=200,
+        )
+        result = metastore_client.request_scope_elevation("semantic-dataset", "abc")
+        assert result["meta"]["scopeElevationRequestedAt"]
+
+    def test_withdraw_elevation(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="DELETE",
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/abc/scope-elevation-request",
+            json={"data": {"type": "semantic-dataset", "id": "abc", "attributes": {}, "meta": {}}},
+            status_code=200,
+        )
+        result = metastore_client.withdraw_scope_elevation("semantic-dataset", "abc")
+        assert result["id"] == "abc"
+
+
+class TestListOrganizationItems:
+    """GET /{type}/organization with the generic filter/limit/offset query language."""
+
+    def test_pending_elevation_filter_and_pagination(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            url=(
+                f"{METASTORE_URL_US}/api/v1/repository/semantic-dataset/organization"
+                "?scope_elevation_requested_at%5Bnot%5D%5Bnull%5D=true&limit=5&offset=10"
+            ),
+            json={"data": [{"type": "semantic-dataset", "id": "a", "attributes": {}}]},
+            status_code=200,
+        )
+        result = metastore_client.list_organization_items(
+            "semantic-dataset", pending_elevation_only=True, limit=5, offset=10
+        )
+        assert len(result) == 1
+        assert result[0]["id"] == "a"
+
+    def test_no_filters_sends_bare_request(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-model/organization",
+            json={"data": []},
+            status_code=200,
+        )
+        assert metastore_client.list_organization_items("semantic-model") == []

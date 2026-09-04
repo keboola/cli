@@ -18,7 +18,13 @@ from ._helpers import (
     get_formatter,
     get_service,
 )
-from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty
+from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty, resolve_scope_targets
+
+_SCOPE_HELP = (
+    "Visibility: 'project' (default, owner only), 'organization' (every "
+    "project in the org), or 'targeted' (owner + explicit --target-project grants)."
+)
+_TARGET_PROJECT_HELP = "Project alias to grant visibility to (repeatable; --scope targeted only)."
 
 # ---------------------------------------------------------------------------
 # semantic-layer add -- one sub-subcommand per entity type
@@ -68,10 +74,18 @@ def add_metric(
     dataset: str = typer.Option(..., "--dataset", help="Dataset tableId this metric belongs to"),
     description: str = typer.Option("", "--description", help="Optional description"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the dataset-mismatch warning"),
+    scope: str = typer.Option("project", "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a metric to a semantic-layer model."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.add_metric,
@@ -84,6 +98,8 @@ def add_metric(
         assume_yes=yes,
         is_tty=_is_stdin_tty(),
         confirm_cb=typer.confirm,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(result, _print_item_added("metric"))
 
@@ -107,10 +123,18 @@ def add_dataset(
         "--deep-fields",
         help="Fetch storage schema and synthesise fields[] with role heuristics.",
     ),
+    scope: str = typer.Option("project", "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a dataset (FQN derived from tableId)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.add_dataset,
@@ -122,6 +146,8 @@ def add_dataset(
         grain=grain,
         primary_key=primary_key,
         deep_fields=deep_fields,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(result, _print_item_added("dataset"))
 
@@ -136,10 +162,18 @@ def add_relationship(
     to: str = typer.Option(..., "--to", help="Target dataset tableId"),
     on: str = typer.Option(..., "--on", help="Join condition"),
     type_: str = typer.Option("left", "--type", help="Join type: 'left' or 'inner'."),
+    scope: str = typer.Option("project", "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a relationship between two datasets."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.add_relationship,
@@ -150,6 +184,8 @@ def add_relationship(
         to=to,
         on=on,
         type_=type_,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(result, _print_item_added("relationship"))
 
@@ -185,6 +221,8 @@ def add_constraint(
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
     ),
+    scope: str = typer.Option("project", "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a constraint."""
     formatter = get_formatter(ctx)
@@ -196,6 +234,12 @@ def add_constraint(
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.add_constraint,
@@ -206,6 +250,8 @@ def add_constraint(
         rule=rule,
         metrics=metrics_list,
         severity=severity,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(result, _print_item_added("constraint"))
 
@@ -217,10 +263,18 @@ def add_glossary(
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Glossary term"),
     definition: str = typer.Option("", "--definition", help="Optional definition"),
+    scope: str = typer.Option("project", "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a glossary term."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_aliases = resolve_scope_targets(
+        ctx, scope=scope, target_project=target_project, owner_alias=project
+    )
+    target_project_ids = (
+        service.resolve_target_project_ids(target_aliases) if target_aliases else None
+    )
     result = _handle_service_call(
         ctx,
         service.add_glossary,
@@ -228,6 +282,8 @@ def add_glossary(
         model_name_or_uuid=model,
         term=term,
         definition=definition,
+        scope=scope,
+        target_project_ids=target_project_ids,
     )
     formatter.output(result, _print_item_added("glossary"))
 
