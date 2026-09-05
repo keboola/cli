@@ -1203,7 +1203,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete branch (async). Auto-resets to main if it was active.
 
   kbagent branch merge --project ALIAS [--branch ID]
-    Get KBC UI merge URL (does NOT merge via API). Resets active branch.
+    DEPRECATED (since vNEXT): builds a KBC UI merge URL (does NOT merge via API) and
+    resets the active branch. On a project with merge requests enabled use
+    `merge-request create` + `merge-request merge` below.
 
   kbagent branch metadata-list --project NAME [--branch ID|default]
     List all metadata entries on a branch (id, key, value, provider, timestamp).
@@ -1217,6 +1219,64 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
     Delete a metadata entry by its numeric ID (from metadata-list).
+
+### Merge Requests (Branches 2.0, non-SOX)
+
+  Merge a dev branch into production with review. Hidden alias: `mr`. Every command
+  except list/create takes [--merge-request-id N | --id N] [--branch B]; omitted, the
+  target is the merge request OF the active branch (`branch use`). A branch has at most
+  one merge request, ever. Both flags at once -> exit 2. Status is the DERIVED state the
+  web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected).
+
+  kbagent merge-request list [--project A] [--state STATE]
+    List merge requests, newest first. --state filters client-side (unknown value -> exit 2).
+    Empty list on a project without the feature says so (feature_enabled: false).
+
+  kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
+    Readiness (mergeable / merge_blockers), viewer flags, allowed_actions, feature_enabled, reviewers,
+    approvals, change log (EMPTY until sent for review -- by design), live conflicts.
+
+  kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]
+    Open a merge request from --branch (or the active branch) into production.
+
+  kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy S] [--auto-merge-at TS] [--external-id X] [--yes]
+    Omitted fields stay; "" clears description/external-id; --reviewer-id REPLACES the set.
+    No fields -> exit 2.
+
+  kbagent merge-request request-review [--project A] [--merge-request-id N | --branch B]
+    On a 0-approval project lands directly in `approved`; `merge` works without it.
+    With no reviewers selected the email goes to EVERY project member.
+
+  kbagent merge-request approve [--project A] [--merge-request-id N | --branch B]
+    Only from in_review -- 422 on a 0-approval project (in_review is unreachable there).
+
+  kbagent merge-request request-changes [--project A] [--merge-request-id N | --branch B] [--reason TEXT]
+    Back to development, approvals removed. Also the closest thing to "close" (no cancel
+    endpoint; the MR stays in development). --reason max 1000 chars.
+
+  kbagent merge-request merge [--project A] [--merge-request-id N | --branch B] [--yes]
+    DESTRUCTIVE: merges into production and deletes the source branch. Blocks up to 10 min.
+    Under --json an explicit target (--merge-request-id or --branch) is REQUIRED.
+
+  kbagent merge-request conflicts [--project A] [--merge-request-id N | --branch B]
+    Configurations changed on both sides (live). isDeleted = the DEV branch side's flag.
+
+  kbagent merge-request diff --component-id C --config-id I [--project A] [--merge-request-id N | --branch B] [--format short|full] [--output PATH]
+    Per-path classification: both changed / only you / only production. A side deleted
+    wholesale is reported with the --take to pick. --output writes resolution_candidate
+    (your content, all five keys) to edit and hand back with `resolve --resolved @PATH`.
+
+  kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [--project A] [--merge-request-id N | --branch B] [--change-description TEXT]
+    Rebase one conflicting config onto production's version. Rebase REPLACES: a --resolved
+    body must carry name, description, isDisabled, configuration, rows. No --all.
+
+  AUTO-MERGE IS DESTRUCTIVE: arming (--auto-merge-strategy immediately|scheduled) makes the
+  backend merge the MR on its own once approved -- `merge` is never called. create/update
+  that arm, and request-review/approve/resolve on an already-armed MR, are blocked by
+  --deny-destructive and need an explicit target under --json. `none` disarms.
+  Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
+  on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
+  a scoped token 403s on everything but list. Every result may carry warnings[].
 
 ### Workspaces (SQL Debugging)
 

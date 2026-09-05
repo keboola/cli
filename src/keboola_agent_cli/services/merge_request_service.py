@@ -86,6 +86,44 @@ STATE_FILTER_VOCABULARY: frozenset[str] = (
 # The resolve_conflict take modes. Public for the same reason.
 TAKE_MODES: tuple[str, ...] = ("ours", "theirs", "delete")
 
+# The content keys a diff side's envelope must carry for the side to be
+# classifiable / composable (`description` is nullable and may be absent on a
+# take side -- see resolve_conflict; it is not required here).
+_REQUIRED_CONTENT_KEYS: tuple[str, ...] = ("name", "rows", "configuration", "isDisabled")
+
+
+def _envelope_holes(side: dict[str, Any]) -> list[str]:
+    """Required content keys ABSENT from a (non-null, non-deleted) side's envelope.
+    An empty envelope reports all of them."""
+    envelope = side.get("diff") or {}
+    return [key for key in _REQUIRED_CONTENT_KEYS if key not in envelope]
+
+
+# The auto-merge vocabulary (AutoMergeStrategy enum, wire-exact). Public and
+# validated HERE so the CLI and the serve router cannot drift from each other:
+# an arming value one surface recognises and the other does not is a safety
+# divergence (--deny-destructive would stop escalating on one of them).
+AUTO_MERGE_DISARMED = "none"
+AUTO_MERGE_STRATEGIES: tuple[str, ...] = ("immediately", "scheduled", AUTO_MERGE_DISARMED)
+
+
+def validate_auto_merge_flags(strategy: str | None, at: str | None) -> str | None:
+    """Return the usage-error message for a bad strategy / strategy-at pairing, or
+    None when the pair is acceptable. Pure: the caller decides how to fail
+    (exit 2 on the CLI, 400 over REST)."""
+    if strategy is not None and strategy not in AUTO_MERGE_STRATEGIES:
+        return f"Unknown auto-merge strategy {strategy!r}: use {', '.join(AUTO_MERGE_STRATEGIES)}."
+    if strategy == "scheduled" and not at:
+        return "Auto-merge strategy 'scheduled' requires an auto-merge time (auto_merge_at)."
+    if at is not None and strategy != "scheduled":
+        return "An auto-merge time is only meaningful with the 'scheduled' strategy."
+    return None
+
+
+def arms_auto_merge(strategy: str | None) -> bool:
+    """True when the value ARMS auto-merge (anything but absent or the disarm)."""
+    return strategy is not None and strategy != AUTO_MERGE_DISARMED
+
 
 def _same_id(a: Any, b: Any) -> bool:
     """Compare two ids that may arrive as int or str (approverId is a string
@@ -127,7 +165,8 @@ def derive_state(mr: dict[str, Any]) -> str:
     - otherwise the raw state mapped through ``_DERIVED_STATE_BY_RAW``
       (an unknown raw state passes through unchanged, defensively).
 
-    Reliability caveat (verified against Connection): ``reviewers[].status`` is populated only within a review
+    Reliability caveat (verified against Connection): ``reviewers[].status`` is
+    populated only within a review
     round anchored by an actual ``request_review`` event, and a non-reviewer's
     decision (the creator's included -- the creator can never BE a reviewer)
     is dropped whenever explicit reviewers exist. ``skip_review`` writes no
@@ -416,6 +455,29 @@ class MergeRequestService(BaseService):
             retryable=False,
         )
 
+    def get_merge_request_row(self, alias: str, merge_request_id: int) -> dict[str, Any]:
+        """The MR's enriched row by id -- one GET, nothing else.
+
+        The row tier ``list_merge_requests`` / ``find_merge_request_for_branch``
+        already return (raw MR + ``derived_state`` + ``allowed_actions``), addressed
+        by id instead of by branch. ``get_merge_request`` is the DETAIL tier and
+        pays for it -- a conflicts GET and a ``verify_token`` GET on top of the
+        record -- so a caller that needs one field before a write (Layer 1's
+        auto-merge escalation check, the merge confirmation prompt, the
+        ``branch_from_id`` every ``--json`` result carries) would otherwise
+        spend three round trips for it AND inherit a dependency on the
+        conflicts endpoint that has nothing to do with the write. Layer 3's
+        ``merge_requests.get()`` was always this single GET; Layer 2 only ever
+        exposed it as the first step of the detail (L1 RFC, DMD-1900).
+        """
+        project = self._project(alias)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            mr = client.merge_requests.get(merge_request_id)
+        finally:
+            client.close()
+        return {"alias": alias, **_enrich_row(mr)}
+
     def get_merge_request(
         self,
         alias: str,
@@ -453,6 +515,12 @@ class MergeRequestService(BaseService):
             admin_id: int | None = None
             if _server_viewer(mr) is None:
                 admin_id = client.verify_token().admin_id
+            # The detail tier already pays verify_token (above) in the common
+            # case, so the features cache is warm and this is free -- which is
+            # what the list tier could not afford (followups F5). A project that
+            # lost the feature keeps its MRs; the state-derived actions would
+            # advertise writes the pre-flight refuses.
+            feature_enabled = client.has_feature(BRANCHES_MERGE_REQUESTS_FEATURE)
         finally:
             client.close()
 
@@ -465,6 +533,7 @@ class MergeRequestService(BaseService):
             "mergeable": not blockers and conflicts is not None,
             "allowed_actions": derive_allowed_actions(mr),
             "viewer": derive_viewer(mr, admin_id),
+            "feature_enabled": feature_enabled,
         }
         if conflicts is not None:
             detail["conflicts"] = conflicts
@@ -690,14 +759,18 @@ class MergeRequestService(BaseService):
 
         was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
-        cleanup_warnings: list[str] = []
-        if raw_branch_from is not None and branch_from_id is None:
+        warnings: list[str] = []
+        cleanup_skipped = raw_branch_from is not None and branch_from_id is None
+        if cleanup_skipped:
             # "Absent" and "present but not numeric" must not collapse
             # silently: with no usable id the local cleanup below is skipped,
             # leaving active_branch_id and the sync mapping pointing at the
             # branch the merge just doomed -- and the caller must hear that.
+            # Recorded STRUCTURALLY too (`cleanup_skipped`, `branch_from_id_raw`,
+            # followups F3): the prose alone left this result byte-identical
+            # to the legitimate published-MR null for a --json consumer.
             logger.warning("branchFromId %r is not a numeric branch id", raw_branch_from)
-            cleanup_warnings.append(
+            warnings.append(
                 f"branchFromId {raw_branch_from!r} is not a numeric branch id -- local "
                 "cleanup (active-branch reset, sync-mapping unlink) was skipped. If this "
                 "project's active branch pointed at the merged branch, run "
@@ -713,7 +786,7 @@ class MergeRequestService(BaseService):
                 branch_reset_done = True
         except Exception as exc:
             logger.warning("Post-merge active-branch reset failed: %s", exc)
-            cleanup_warnings.append(
+            warnings.append(
                 f"Post-merge active-branch reset failed: {exc}. The active branch "
                 "still points at the deleted branch -- run `kbagent branch reset "
                 f"--project {alias}`."
@@ -723,7 +796,7 @@ class MergeRequestService(BaseService):
                 mapping_cleanup = cleanup_branch_id_from_mapping(branch_from_id)
         except Exception as exc:
             logger.warning("Post-merge sync-mapping cleanup failed: %s", exc)
-            cleanup_warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
+            warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
 
         results = job.get("results")
         mr_after: dict[str, Any] = results if isinstance(results, dict) else {}
@@ -734,6 +807,8 @@ class MergeRequestService(BaseService):
                 f"Source branch {branch_from_id} is being deleted (a separate async "
                 "job -- it may still briefly exist)."
             )
+        elif cleanup_skipped:
+            message_parts.append("Source branch id could not be read; see warnings.")
         if branch_reset_done:
             message_parts.append("Active branch reset to main.")
         if mapping_cleanup:
@@ -754,8 +829,17 @@ class MergeRequestService(BaseService):
             result["allowed_actions"] = derive_allowed_actions(mr_after)
         if mapping_cleanup:
             result["mapping_cleanup"] = mapping_cleanup
-        if cleanup_warnings:
-            result["cleanup_warnings"] = cleanup_warnings
+        if cleanup_skipped:
+            result["cleanup_skipped"] = True
+            result["branch_from_id_raw"] = raw_branch_from
+        if warnings:
+            # `warnings` is the group's one soft-failure key (resolve_conflict
+            # uses the same name): "the operation landed, something secondary
+            # did not, exit stays 0". A renderer reading `warnings` must not
+            # silently drop the post-merge ones -- they are the ones a user
+            # must act on (an active branch now pointing at a branch being
+            # deleted). The text carries the specificity the key does not.
+            result["warnings"] = warnings
         return result
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
@@ -869,7 +953,7 @@ class MergeRequestService(BaseService):
             client.close()
         theirs = diff.get("theirs") or {}
         ours = diff.get("ours")
-        return {
+        result: dict[str, Any] = {
             "alias": alias,
             "merge_request_id": merge_request_id,
             "component_id": component_id,
@@ -881,25 +965,101 @@ class MergeRequestService(BaseService):
                 bool(theirs.get("isDeleted")) if diff.get("theirs") is not None else None
             ),
             "changes": self._classify_three_way(diff),
+            "resolution_candidate": self._resolution_candidate(ours),
             "diff": diff,
         }
+        diff_warnings = self._diff_warnings(diff)
+        if diff_warnings:
+            result["warnings"] = diff_warnings
+        return result
+
+    def _resolution_candidate(self, ours: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The ours-prefilled body a caller edits and hands back to ``resolve_conflict``.
+
+        Composed HERE, not in Layer 1, so that the prefill and the five-key
+        replace guard in ``resolve_conflict`` are fed by the same constant
+        (``_DIFF_CONTENT_KEYS``) and cannot drift: rebase REPLACES, the guard
+        refuses a body missing any of ``name``/``rows``/``configuration``/
+        ``isDisabled`` (absent or null) or lacking ``description`` -- and a
+        prefill built anywhere else that dropped ``description`` when null, or
+        wrote only the "interesting" keys, would produce a file kbagent itself
+        then refuses. Every key is emitted, ``description`` as an explicit
+        ``null`` when null (an explicit null is a decision the guard accepts;
+        an omission is not). ``changeDescription`` is excluded: it is the
+        version's commit message, not content -- the rebase takes its own.
+        ``None`` when there is nothing to prefill: the ours side is absent or
+        ``isDeleted`` (the resolution there is ``take="delete"``, not a body).
+        """
+        if ours is None or ours.get("isDeleted"):
+            return None
+        # A hole in the server-produced envelope is a backend contract
+        # violation (the schema marks every content key required). Writing it
+        # as an explicit null would make `resolve --resolved @file` blame the
+        # CALLER for a file kbagent wrote -- so there is no candidate, and the
+        # caller learns why from `warnings` (the same message the --take path
+        # raises as VALIDATION_ERROR).
+        if _envelope_holes(ours):
+            return None
+        envelope = ours.get("diff") or {}
+        return {key: envelope.get(key) for key in self._DIFF_CONTENT_KEYS}
+
+    def _diff_warnings(self, diff: dict[str, Any]) -> list[str]:
+        """Say why a side yielded no classification / no candidate.
+
+        Both shapes are backend contract violations (the OA schema marks every
+        content key required): an EMPTY envelope, or a HOLED one missing a
+        required key, on EITHER side. The classifier emits no rows for such a
+        side -- fabricating them would report the hole as a real removal --
+        and a renderer must not read "no rows" as "the conflict cleared". On
+        the ours side the same hole also means no resolution candidate.
+        """
+        warnings: list[str] = []
+        for label in ("ours", "theirs"):
+            side = diff.get(label)
+            if side is None or side.get("isDeleted"):
+                continue
+            holes = _envelope_holes(side)
+            if not holes:
+                continue
+            if holes == list(_REQUIRED_CONTENT_KEYS):
+                what = "has an empty content envelope"
+            else:
+                what = f"carries no {', '.join(holes)}"
+            tail = (
+                " -- no per-path classification is possible, and no resolution candidate "
+                "could be prefilled; author the resolution manually"
+                if label == "ours"
+                else " -- no per-path classification is possible"
+            )
+            warnings.append(f"The diff's {label} side {what}{tail} (backend envelope hole).")
+        return warnings
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
         """Intersect the two pairwise diffs (base->ours, base->theirs) per path.
 
         Only meaningful when BOTH sides carry comparable content. A null
         side (the config never existed there), a tombstoned one
-        (``isDeleted`` -- the criterion ``resolve_conflict`` already treats
-        as "no content to take") and an empty envelope are all side-level
-        facts carried by the ``ours_deleted`` / ``theirs_deleted`` flags;
-        fabricating per-path rows against an empty stand-in would emit
-        contradictions -- every base key rendered as "that side removed it"
-        next to a flag saying the side does not exist. Any of them yields no
-        ``changes`` at all.
+        (``isDeleted``) and an empty envelope (``diff: {}``) all yield no
+        ``changes`` at all: fabricating per-path rows against an empty
+        stand-in would emit contradictions -- every base key rendered as
+        "that side removed it" next to a flag saying the side does not exist.
+
+        The classifier is deliberately STRICTER than ``resolve_conflict``:
+        the resolver shares the ``isDeleted`` criterion but treats an empty
+        envelope on a take side as a VALIDATION_ERROR (missing content keys),
+        never as "nothing to take" -- collapsing it to the delete resolution
+        would destroy a configuration, so refusing is the safe direction
+        there, while here silence is (followups F2). The side-level facts a
+        renderer needs live on ``ours_deleted`` / ``theirs_deleted`` and, for
+        the empty-envelope case, in ``warnings``.
         """
 
         def classifiable(side: dict[str, Any] | None) -> bool:
-            return side is not None and not side.get("isDeleted") and bool(side.get("diff"))
+            # A side with a HOLED envelope (a required content key absent) is as
+            # unclassifiable as an empty one: `content()` would omit the key and
+            # the intersection would then report it as a real removal by that
+            # side. Same criterion `_diff_warnings` reports on.
+            return side is not None and not side.get("isDeleted") and not _envelope_holes(side)
 
         if not classifiable(diff.get("ours")) or not classifiable(diff.get("theirs")):
             return []
@@ -1185,7 +1345,14 @@ class MergeRequestService(BaseService):
             raise KeboolaApiError(
                 message=message,
                 status_code=0,
-                error_code=ErrorCode.VALIDATION_ERROR,
+                # The two faults blame different parties, and the code carries
+                # that over `serve`: an absent id means the caller is resolving
+                # a finished MR -> INVALID_ARGUMENT (HTTP 400); a present but
+                # non-numeric id is the server's payload -> VALIDATION_ERROR
+                # (a gateway-side fault, not something to fix in the request).
+                error_code=(
+                    ErrorCode.INVALID_ARGUMENT if raw is None else ErrorCode.VALIDATION_ERROR
+                ),
                 retryable=False,
             )
         return branch_from_id
@@ -1206,6 +1373,7 @@ class MergeRequestService(BaseService):
                 "See `kbagent merge-request conflicts` for the current set."
             ),
             status_code=0,
-            error_code=ErrorCode.VALIDATION_ERROR,
+            # Caller mistake -> INVALID_ARGUMENT (HTTP 400 over `serve`, see above).
+            error_code=ErrorCode.INVALID_ARGUMENT,
             retryable=False,
         )

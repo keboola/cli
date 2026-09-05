@@ -541,7 +541,7 @@ class TestMerge:
             "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping", boom
         )
         result = _svc(store, factory).merge(ALIAS, 7)  # must NOT raise
-        assert any("disk full" in w for w in result["cleanup_warnings"])
+        assert any("disk full" in w for w in result["warnings"])
 
     def test_409_with_code_maps_to_not_ready_retryable(self, store, client_factory) -> None:
         factory, mock = client_factory
@@ -803,7 +803,7 @@ class TestResolveConflict:
         mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", take="ours")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.rebase_config.assert_not_called()
 
     def test_take_ours_rebases_dev_content_onto_theirs_version(self, store, client_factory) -> None:
@@ -924,7 +924,7 @@ class TestResolveConflict:
         self._arm(mock)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).resolve_conflict(ALIAS, 7, "keboola.other", "999", take="ours")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.rebase_config.assert_not_called()
 
 
@@ -1145,7 +1145,7 @@ class TestLayer1FindingsFollowUps:
         mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
-        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock.get_config_diff.assert_not_called()
 
 
@@ -1331,7 +1331,7 @@ class TestZajcaSecondReviewFollowUps:
         assert called == []
         # The degradation is RECORDED: cleanup was skipped, the caller hears
         # it and gets the manual recovery steps.
-        assert any("not-a-number" in w and "branch reset" in w for w in result["cleanup_warnings"])
+        assert any("not-a-number" in w and "branch reset" in w for w in result["warnings"])
 
     def test_failed_branch_reset_does_not_skip_mapping_cleanup(
         self, store, client_factory, monkeypatch
@@ -1353,8 +1353,7 @@ class TestZajcaSecondReviewFollowUps:
         )
         result = _svc(store, factory).merge(ALIAS, 7)
         assert any(
-            "active-branch reset failed" in w and "branch reset" in w
-            for w in result["cleanup_warnings"]
+            "active-branch reset failed" in w and "branch reset" in w for w in result["warnings"]
         )
         # The message reports the OUTCOME, not the precondition: no claim of
         # a reset that did not happen.
@@ -1492,3 +1491,254 @@ class TestFindDefaultBranchId:
 
         assert find_default_branch_id([]) is None
         assert find_default_branch_id([{"isDefault": False, "id": 1}]) is None
+
+
+class TestLayer1RfcWalkFollowUps:
+    """The three Layer 2 additions decided while walking PR #703's review findings
+    into the Layer 1 RFC (docs/merge-requests-layer1.md, "Layer 2 changes shipping
+    with this PR", 2026-09-03)."""
+
+    # -- get_merge_request_row -------------------------------------------------
+
+    def test_row_by_id_is_one_get_and_nothing_else(self, store, client_factory) -> None:
+        # The detail tier pays for conflicts + verify_token; the row tier must
+        # not -- it is what Layer 1 reads BEFORE a write (armed check, merge
+        # prompt) and must not inherit a dependency on the conflicts endpoint.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(
+            7, "development", branch_from=123, autoMergeStrategy="immediately"
+        )
+        result = _svc(store, factory).get_merge_request_row(ALIAS, 7)
+        mock.merge_requests.get.assert_called_once_with(7)
+        mock.merge_requests.conflicts.assert_not_called()
+        mock.verify_token.assert_not_called()
+        # Same enrichment as a list/find row: raw + derived_state + allowed_actions.
+        assert result["alias"] == ALIAS
+        assert result["id"] == 7
+        assert result["autoMergeStrategy"] == "immediately"
+        assert result["derived_state"] == "in_development"
+        assert "merge" in result["allowed_actions"]
+        assert "merge_blockers" not in result  # detail-tier only
+        assert "viewer" not in result
+
+    # -- merge(): warnings is the one soft-failure key ------------------------
+
+    def test_merge_soft_failures_land_under_warnings(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        store.set_project_branch(ALIAS, 123)
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved", branch_from=123)
+        mock.merge_requests.merge.return_value = {"id": 1, "status": "success", "results": {}}
+        broken_store = MagicMock(wraps=store)
+        broken_store.set_project_branch.side_effect = OSError("disk full")
+        result = MergeRequestService(broken_store, client_factory=factory).merge(ALIAS, 7)
+        assert "cleanup_warnings" not in result
+        assert any("disk full" in w for w in result["warnings"])
+
+    # -- resolution_candidate ---------------------------------------------------
+
+    def test_candidate_carries_all_five_keys_with_explicit_null_description(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        candidate = result["resolution_candidate"]
+        assert set(candidate) == {"name", "description", "isDisabled", "configuration", "rows"}
+        assert "description" in candidate and candidate["description"] is None
+        assert "changeDescription" not in candidate
+        assert candidate["configuration"] == {"limit": 500}
+        assert candidate["isDisabled"] is False
+
+    def test_candidate_is_null_when_ours_is_deleted_or_absent(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        svc = _svc(store, factory)
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4, is_deleted=True),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        assert svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")["resolution_candidate"] is None
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=None,
+            theirs=_side({"limit": 250}, version=7),
+        )
+        assert svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")["resolution_candidate"] is None
+
+    def test_candidate_round_trips_through_resolve_unmodified(self, store, client_factory) -> None:
+        # THE pin: the file `diff --output` writes must pass `resolve --resolved`
+        # as-is. Guard and candidate are fed by one constant; this test is what
+        # fails if anyone ever splits them.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = [CONFLICT_ENTRY]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=_side({"limit": 250}, version=7),
+        )
+        mock.rebase_config.return_value = {"id": "111", "version": 8}
+        svc = _svc(store, factory)
+        candidate = svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")["resolution_candidate"]
+        result = svc.resolve_conflict(ALIAS, 7, "keboola.ex-db", "111", resolved=candidate)
+        assert result["resolution"] == "custom"
+        kwargs = mock.rebase_config.call_args.kwargs
+        assert kwargs["configuration"] == {"limit": 500}
+        assert kwargs["is_disabled"] is False
+        assert kwargs["description"] is None
+
+    def test_envelope_hole_yields_no_candidate_and_a_warning(self, store, client_factory) -> None:
+        # A hole in the server-produced ours envelope is a backend contract
+        # violation; writing it as an explicit null would make the resolve guard
+        # blame the caller for a file kbagent wrote. So: no candidate, and why.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        ours = _side({"limit": 500}, version=4)
+        del ours["diff"]["isDisabled"]
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=ours,
+            theirs=_side({"limit": 250}, version=7),
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert result["resolution_candidate"] is None
+        assert result["ours_deleted"] is False
+        assert any("isDisabled" in w for w in result["warnings"])
+
+    def test_auto_merge_vocabulary_is_validated_in_one_place(self) -> None:
+        from keboola_agent_cli.services.merge_request_service import (
+            AUTO_MERGE_STRATEGIES,
+            arms_auto_merge,
+            validate_auto_merge_flags,
+        )
+
+        assert set(AUTO_MERGE_STRATEGIES) == {"immediately", "scheduled", "none"}
+        assert validate_auto_merge_flags(None, None) is None
+        assert validate_auto_merge_flags("none", None) is None
+        assert validate_auto_merge_flags("scheduled", "2026-09-04T10:00:00Z") is None
+        assert validate_auto_merge_flags("sometimes", None)
+        assert validate_auto_merge_flags("scheduled", None)
+        assert validate_auto_merge_flags("immediately", "2026-09-04T10:00:00Z")
+        assert arms_auto_merge("immediately") and arms_auto_merge("scheduled")
+        assert not arms_auto_merge("none") and not arms_auto_merge(None)
+
+    def test_branch_from_id_faults_blame_the_right_party(self, store, client_factory) -> None:
+        # absent id = the caller is resolving a finished MR (INVALID_ARGUMENT -> 400 over serve);
+        # a non-numeric id = the server's payload (VALIDATION_ERROR).
+        factory, mock = client_factory
+        svc = _svc(store, factory)
+        mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)
+        with pytest.raises(KeboolaApiError) as absent:
+            svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert absent.value.error_code == ErrorCode.INVALID_ARGUMENT
+        garbage_row = _wire_mr(7, "development")
+        garbage_row["branches"]["branchFromId"] = "main"  # a non-numeric wire id
+        mock.merge_requests.get.return_value = garbage_row
+        with pytest.raises(KeboolaApiError) as garbage:
+            svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert garbage.value.error_code == ErrorCode.VALIDATION_ERROR
+
+
+class TestLayer2FollowupsInheritedByLayer1:
+    """docs/merge-requests-layer2-followups.md -- the non-blocking leftovers of PR #703
+    that go through the Layer 1 PR (F2, F3, F4, F5, F7)."""
+
+    def _arm_merge(self, mock: MagicMock, branch_from: Any) -> None:
+        row = _wire_mr(7, "approved")
+        row["branches"]["branchFromId"] = branch_from
+        mock.merge_requests.get.return_value = row
+        mock.merge_requests.merge.return_value = {"id": 1, "status": "success", "results": {}}
+
+    # F2 -- the empty-envelope half of the classifier had no test
+    def test_empty_envelope_side_yields_no_rows_and_a_warning(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs={"version": 7, "isDeleted": False, "diff": {}},
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        assert result["changes"] == []
+        assert result["theirs_deleted"] is False and result["ours_deleted"] is False
+        # ...and the renderer must not read that as "cleared": the reason is recorded.
+        assert any("theirs side has an empty content envelope" in w for w in result["warnings"])
+        # the ours side is intact, so the candidate is still composed
+        assert result["resolution_candidate"]["configuration"] == {"limit": 500}
+
+    # F3 -- the branch-id degradation is recorded structurally, not in prose only
+    def test_non_numeric_branch_from_id_is_recorded_structurally(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock, "0123x")
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["cleanup_skipped"] is True
+        assert result["branch_from_id_raw"] == "0123x"
+        assert result["branch_from_id"] is None
+        assert "Source branch id could not be read; see warnings." in result["message"]
+        assert "is being deleted" not in result["message"]
+
+    def test_legitimate_null_branch_carries_no_degradation_flag(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        self._arm_merge(mock, None)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert "cleanup_skipped" not in result and "branch_from_id_raw" not in result
+
+    # F7 -- the positive assertion for the outcome-gated sentence
+    def test_successful_reset_says_so(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        store.set_project_branch(ALIAS, 123)
+        self._arm_merge(mock, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["was_active"] is True
+        assert "Active branch reset to main." in result["message"]
+        assert store.get_project(ALIAS).active_branch_id is None
+
+    # F5 -- the detail tier is feature-aware for free
+    def test_detail_carries_feature_enabled(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        mock.merge_requests.conflicts.return_value = []
+        mock.has_feature.return_value = False
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["feature_enabled"] is False
+        # state-derived actions stay as they are -- the CONSUMER gates on the flag
+        assert "merge" in detail["allowed_actions"]
+
+    # F4 -- the shared helper logs the skip instead of folding it into None silently
+    def test_find_default_branch_id_logs_the_skipped_entry(self, caplog) -> None:
+        import logging
+
+        from keboola_agent_cli.services.base import find_default_branch_id
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.services.base"):
+            assert find_default_branch_id([{"isDefault": True, "id": "main"}]) is None
+        assert any("non-numeric id 'main'" in r.getMessage() for r in caplog.records)
+
+    # Copilot (Balanced) on #736: a HOLED envelope must not classify either
+    def test_holed_theirs_envelope_yields_no_rows_and_a_warning(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        theirs = _side({"limit": 250}, version=7)
+        del theirs["diff"]["configuration"]  # a partial envelope, not an empty one
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=theirs,
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        # before the fix: a fabricated "theirs removed configuration.limit" row
+        assert result["changes"] == []
+        assert any("theirs side carries no configuration" in w for w in result["warnings"])
+        assert result["resolution_candidate"]["configuration"] == {"limit": 500}  # ours intact

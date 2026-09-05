@@ -737,6 +737,63 @@ kbagent branch metadata-list --project NAME [--branch ID|default]
 kbagent branch metadata-get --project NAME --key KEY [--branch ID|default]
 kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
+# branch merge is DEPRECATED (since vNEXT): it only builds a UI URL and resets the active branch. On a
+#   project with `branches-merge-requests` use the merge-request group below; the command keeps working
+#   (it also serves projects without the feature) and now carries `deprecation` in --json.
+
+# merge-request (since vNEXT, DMD-1900): the non-SOX Branches 2.0 lifecycle. Hidden alias `mr`. Every
+#   command except list/create takes `[--merge-request-id N | --id N] [--branch B]`: omitted, the target is
+#   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
+#   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI
+#   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
+kbagent merge-request list [--project A] [--state STATE]   # derived (in_development|in_review|approved|in_merge|merged|closed|rejected) or raw (development|published|canceled) states; `--help` lists them
+kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
+kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]
+kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy S] [--auto-merge-at TS] [--external-id X] [--yes]
+kbagent merge-request request-review [--project A] [--merge-request-id N | --branch B]
+kbagent merge-request approve [--project A] [--merge-request-id N | --branch B]
+kbagent merge-request request-changes [--project A] [--merge-request-id N | --branch B] [--reason TEXT]
+kbagent merge-request merge [--project A] [--merge-request-id N | --branch B] [--yes]
+kbagent merge-request conflicts [--project A] [--merge-request-id N | --branch B]
+kbagent merge-request diff --component-id C --config-id I [--project A] [--merge-request-id N | --branch B] [--format short|full] [--output PATH]
+kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [--project A] [--merge-request-id N | --branch B] [--change-description TEXT]
+# WHAT MAY HAPPEN WITHOUT A HUMAN SAYING SO -- read before automating this group:
+#   `merge` is DESTRUCTIVE (deletes the source branch, rewrites production). Under --json it REQUIRES an
+#   explicit target (--merge-request-id or --branch): every destructive kbagent command either prompts or is
+#   told its target, and --json has no prompt. In human mode the active-branch fallback stays and a prompt
+#   names the MR and the branch (--yes skips it).
+#   ARMING AUTO-MERGE IS A PRODUCTION MERGE, just delayed: a backend scheduler runs every `approved` MR whose
+#   autoMergeStrategy is immediately/scheduled through the same MergeProcessor, on its own, retrying every
+#   tick until it lands -- `merge` is never called. So `create`/`update --auto-merge-strategy immediately|
+#   scheduled` escalate to destructive (blocked by --deny-destructive; explicit target under --json; prompt
+#   in human mode), and `request-review` / `approve` / `resolve` on an ALREADY-armed MR escalate too --
+#   they are what moves it into `approved`. `--auto-merge-strategy none` is the disarm and never escalates.
+#   The escalation is deliberately conservative (the required-approvals count is unreadable with a Storage
+#   token, DMD-1969). An agent under --deny-destructive can run the whole flow and cannot complete a
+#   merge by any route.
+#   On a non-SOX project with the default 0 required approvals: `merge` works straight from `development`;
+#   `request-review` lands directly in `approved` (in_review is unreachable); `approve` answers 422 in every
+#   state. There is NO `close`: `request-changes` by the creator is the UI's cancel and leaves the MR in
+#   `development` (the `closed`/`rejected` derivations depend on reviewer status a 0-approval project never
+#   populates -- same blind spot as the web UI, DMD-1988). Requesting review with no reviewers selected
+#   emails EVERY project member.
+#   Conflicts: `conflicts` lists what changed on both sides (isDeleted = the DEV side's flag); `diff`
+#   classifies per path (both / only you / only production) and, when a side deleted the config wholesale,
+#   recommends the --take; `diff --output FILE` writes `resolution_candidate` (your branch's content, all
+#   five keys: name/description/isDisabled/configuration/rows -- rebase REPLACES, a missing key wipes data,
+#   the service refuses a partial body) to edit and hand back via `resolve --resolved @FILE`. No `--all`.
+#   Errors: a project without the feature answers FEATURE_NOT_ENABLED (exit 5) from every command whose
+#   target was resolved implicitly, reads included -- two wordings, missing feature vs SOX project. A
+#   scoped Storage token 403s (ACCESS_DENIED) on everything but `list`. `MR_MERGE_CONFLICT` /
+#   `MR_NOT_READY_TO_MERGE` (exit 1; the latter retryable) come from the merge 409; a truncated conflict
+#   list in the error carries `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
+#   `merge` blocks for up to 10 minutes (no --wait/--timeout). Every result may carry `warnings[]`
+#   (post-merge cleanup failures, a dropped --change-description on a delete resolution). A merge whose
+#   source branch id could not be read carries `cleanup_skipped: true` + `branch_from_id_raw` (the local
+#   active-branch reset / sync unlink did NOT run -- key on the flag, not on warning text). On a project
+#   where the feature was later switched OFF, `list` rows' `allowed_actions` still recommend writes that
+#   will fail FEATURE_NOT_ENABLED (state-derived, feature-blind); `detail` carries `feature_enabled` and
+#   its hint-next respects it.
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
 kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]

@@ -3,15 +3,16 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, workspace SQL debugging, GitOps config sync,
-  bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots, data apps,
-  flows and schedules, invitations,
-  feature flags, OTLP data streams, scoped Storage tokens, the semantic
+  lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
+  bucket sharing/linking, encrypting secrets,
+  Storage tables/files/snapshots, data apps,
+  flows/schedules, invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, semantic
   layer, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
+  merge request,
   data app, streamlit deploy, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
@@ -238,11 +239,33 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
+| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
 | Delete a branch metadata entry by its numeric ID | `kbagent branch metadata-delete --project PROJECT --metadata-id METADATA-ID` |
+| List the project's merge requests, newest first | `kbagent merge-request list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
+| Change a merge request's title, description, reviewers, auto-merge or external id | `kbagent merge-request update` |
+| Send the merge request for review | `kbagent merge-request request-review` |
+| Add your approval to a merge request under review | `kbagent merge-request approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
+| Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
+| Resolve one conflicting configuration by rebasing it onto production's version | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent mr list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
+| Change a merge request's title, description, reviewers, auto-merge or external id | `kbagent mr update` |
+| Send the merge request for review | `kbagent mr request-review` |
+| Add your approval to a merge request under review | `kbagent mr approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
+| Merge the merge request into production and delete its source branch | `kbagent mr merge` |
+| Resolve one conflicting configuration by rebasing it onto production's version | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -411,6 +434,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
