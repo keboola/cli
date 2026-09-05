@@ -86,6 +86,19 @@ STATE_FILTER_VOCABULARY: frozenset[str] = (
 # The resolve_conflict take modes. Public for the same reason.
 TAKE_MODES: tuple[str, ...] = ("ours", "theirs", "delete")
 
+# The content keys a diff side's envelope must carry for the side to be
+# classifiable / composable (`description` is nullable and may be absent on a
+# take side -- see resolve_conflict; it is not required here).
+_REQUIRED_CONTENT_KEYS: tuple[str, ...] = ("name", "rows", "configuration", "isDisabled")
+
+
+def _envelope_holes(side: dict[str, Any]) -> list[str]:
+    """Required content keys ABSENT from a (non-null, non-deleted) side's envelope.
+    An empty envelope reports all of them."""
+    envelope = side.get("diff") or {}
+    return [key for key in _REQUIRED_CONTENT_KEYS if key not in envelope]
+
+
 # The auto-merge vocabulary (AutoMergeStrategy enum, wire-exact). Public and
 # validated HERE so the CLI and the serve router cannot drift from each other:
 # an arming value one surface recognises and the other does not is a safety
@@ -979,54 +992,46 @@ class MergeRequestService(BaseService):
         """
         if ours is None or ours.get("isDeleted"):
             return None
-        envelope = ours.get("diff") or {}
         # A hole in the server-produced envelope is a backend contract
         # violation (the schema marks every content key required). Writing it
         # as an explicit null would make `resolve --resolved @file` blame the
         # CALLER for a file kbagent wrote -- so there is no candidate, and the
         # caller learns why from `warnings` (the same message the --take path
         # raises as VALIDATION_ERROR).
-        missing = [
-            key for key in ("name", "rows", "configuration", "isDisabled") if key not in envelope
-        ]
-        if missing:
+        if _envelope_holes(ours):
             return None
+        envelope = ours.get("diff") or {}
         return {key: envelope.get(key) for key in self._DIFF_CONTENT_KEYS}
 
     def _diff_warnings(self, diff: dict[str, Any]) -> list[str]:
         """Say why a side yielded no classification / no candidate.
 
-        Two shapes, both backend contract violations (the OA schema marks
-        every content key required): an EMPTY envelope on either side -- the
-        classifier then emits no rows and a renderer must not read that as
-        "the conflict cleared" -- and a HOLED ours envelope, which yields no
-        resolution candidate rather than an explicit-null file the resolve
-        guard would blame the caller for.
+        Both shapes are backend contract violations (the OA schema marks every
+        content key required): an EMPTY envelope, or a HOLED one missing a
+        required key, on EITHER side. The classifier emits no rows for such a
+        side -- fabricating them would report the hole as a real removal --
+        and a renderer must not read "no rows" as "the conflict cleared". On
+        the ours side the same hole also means no resolution candidate.
         """
         warnings: list[str] = []
         for label in ("ours", "theirs"):
             side = diff.get(label)
             if side is None or side.get("isDeleted"):
                 continue
-            envelope = side.get("diff") or {}
-            if not envelope:
-                warnings.append(
-                    f"The diff's {label} side has an empty content envelope -- no per-path "
-                    "classification is possible (backend envelope hole)."
-                )
+            holes = _envelope_holes(side)
+            if not holes:
                 continue
-            if label == "ours":
-                missing = [
-                    key
-                    for key in ("name", "rows", "configuration", "isDisabled")
-                    if key not in envelope
-                ]
-                if missing:
-                    warnings.append(
-                        f"The diff's ours side carries no {', '.join(missing)} -- no resolution "
-                        "candidate could be prefilled (backend envelope hole). Author the "
-                        "resolution manually."
-                    )
+            if holes == list(_REQUIRED_CONTENT_KEYS):
+                what = "has an empty content envelope"
+            else:
+                what = f"carries no {', '.join(holes)}"
+            tail = (
+                " -- no per-path classification is possible, and no resolution candidate "
+                "could be prefilled; author the resolution manually"
+                if label == "ours"
+                else " -- no per-path classification is possible"
+            )
+            warnings.append(f"The diff's {label} side {what}{tail} (backend envelope hole).")
         return warnings
 
     def _classify_three_way(self, diff: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1050,7 +1055,11 @@ class MergeRequestService(BaseService):
         """
 
         def classifiable(side: dict[str, Any] | None) -> bool:
-            return side is not None and not side.get("isDeleted") and bool(side.get("diff"))
+            # A side with a HOLED envelope (a required content key absent) is as
+            # unclassifiable as an empty one: `content()` would omit the key and
+            # the intersection would then report it as a real removal by that
+            # side. Same criterion `_diff_warnings` reports on.
+            return side is not None and not side.get("isDeleted") and not _envelope_holes(side)
 
         if not classifiable(diff.get("ours")) or not classifiable(diff.get("theirs")):
             return []

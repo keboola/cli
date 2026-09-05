@@ -368,7 +368,9 @@ def _emit_warnings(formatter: Any, result: dict[str, Any]) -> None:
     """Render ``warnings[]`` -- the group's one soft-failure key -- in human mode.
     In ``--json`` the key is in the payload; ``formatter.warning`` is human-only."""
     for warning in result.get("warnings") or []:
-        formatter.warning(str(warning))
+        # Backend / exception text rides in here; an unbalanced `[/x]` would
+        # raise MarkupError AFTER the irreversible operation succeeded.
+        formatter.warning(escape(str(warning)))
 
 
 def _hint_next(formatter: Any, text: str) -> None:
