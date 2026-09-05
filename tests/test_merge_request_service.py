@@ -1723,3 +1723,22 @@ class TestLayer2FollowupsInheritedByLayer1:
         with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.services.base"):
             assert find_default_branch_id([{"isDefault": True, "id": "main"}]) is None
         assert any("non-numeric id 'main'" in r.getMessage() for r in caplog.records)
+
+    # Copilot (Balanced) on #736: a HOLED envelope must not classify either
+    def test_holed_theirs_envelope_yields_no_rows_and_a_warning(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        theirs = _side({"limit": 250}, version=7)
+        del theirs["diff"]["configuration"]  # a partial envelope, not an empty one
+        mock.get_config_diff.return_value = _diff(
+            base=_side({"limit": 100}, version=3),
+            ours=_side({"limit": 500}, version=4),
+            theirs=theirs,
+        )
+        result = _svc(store, factory).get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+        # before the fix: a fabricated "theirs removed configuration.limit" row
+        assert result["changes"] == []
+        assert any("theirs side carries no configuration" in w for w in result["warnings"])
+        assert result["resolution_candidate"]["configuration"] == {"limit": 500}  # ours intact
