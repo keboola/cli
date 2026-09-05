@@ -295,7 +295,9 @@ def merge_request_diff(
                 why = "; ".join(result.get("warnings") or ["no candidate could be composed."])
             _usage_error(formatter, f"--output has nothing to write: {why}")
         try:
-            output.write_text(json.dumps(candidate, indent=2, ensure_ascii=False) + "\n")
+            output.write_text(
+                json.dumps(candidate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
         except OSError as exc:
             formatter.error(
                 message=f"Cannot write --output {output}: {exc}",
@@ -308,10 +310,8 @@ def merge_request_diff(
     _emit_warnings(formatter, result)
     resolve_cmd = f"merge-request resolve --component-id {escape(component_id)} --config-id {escape(config_id)}"
     if output is not None:
-        _hint_next(
-            formatter,
-            f"edit {output}, then `{resolve_cmd} --resolved @{output}`",
-        )
+        shown = escape(str(output))
+        _hint_next(formatter, f"edit {shown}, then `{resolve_cmd} --resolved @{shown}`")
     elif result.get("ours_deleted") or result.get("theirs_deleted"):
         _hint_next(formatter, f"`{resolve_cmd} --take delete|ours|theirs` as recommended above")
     else:

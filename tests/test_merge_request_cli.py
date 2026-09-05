@@ -1642,3 +1642,33 @@ class TestLayer2Followups:
             ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
         )
         assert "merge-request merge" in result.output
+
+
+class TestCopilotBalancedFollowUps:
+    def test_warning_text_with_markup_does_not_crash(self, tmp_path, service) -> None:
+        service.merge.return_value = {
+            **_merged(),
+            "warnings": ["Post-merge cleanup failed: [/x] bad tag"],
+        }
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "[/x] bad tag" in result.output
+
+    def test_output_is_utf8_and_a_bracketed_path_does_not_crash(self, tmp_path, service) -> None:
+        candidate = {
+            "name": "Příliš žluťoučký kůň",
+            "description": None,
+            "isDisabled": False,
+            "configuration": {},
+            "rows": [],
+        }
+        service.get_config_diff.return_value = _diff_result(resolution_candidate=candidate)
+        target = tmp_path / "[x] resolved.json"
+        result = _run([*_DIFF_ARGS, "--output", str(target)], _store(tmp_path), service)
+        assert result.exit_code == 0, result.output
+        assert json.loads(target.read_bytes().decode("utf-8")) == candidate
+        assert "[x] resolved.json" in result.output
