@@ -190,7 +190,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   config in the project instead.
 
 **A command without `--project` refused with CONFIG_ERROR (or picked a project)**
-- On **vNEXT+** the `kai` group, `docs query`, `component detail`, `component
+- On **0.93.0+** the `kai` group, `docs query`, `component detail`, `component
   list --query`, `config examples`, and `config new` (scaffold mode) resolve an
   omitted `--project` through the pin cascade: `--project` > `KBAGENT_PROJECT`
   env > `project use` pin > sole project. Several projects and no pin -> exit 5
@@ -198,7 +198,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
   registered project and ignored the pin (issue #684). gotchas.md.
 
-**Recurring `ext.keboola.cli.` events in a project's own event log (vNEXT+)**
+**Recurring `ext.keboola.cli.` events in a project's own event log (0.93.0+)**
 - kbagent posts one best-effort usage event per command to the acting project's
   Storage events. An event audit then shows one `ext.keboola.cli.` (CLI/REPL) or
   `ext.keboola.cli.serve` (serve) row per kbagent command. That is expected

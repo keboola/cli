@@ -24,6 +24,26 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.93.0": [
+        "New (#731): kbagent now posts a best-effort usage event per command, so its usage is "
+        "visible in Keboola telemetry like the original Go CLI. Connection stores it as "
+        "`ext.keboola.cli.` (CLI and REPL) or `ext.keboola.cli.serve` (serve). It records the "
+        "command name, the outcome and the duration, never argument values, and never changes a "
+        "command's exit code. Turn it off with `KBAGENT_DISABLE_TELEMETRY=1` or `DO_NOT_TRACK=1`. "
+        "The local-only `context`, `changelog` and `version` commands never post, `serve` logs "
+        "only mutating requests, and a session (`auth login`) project is covered without ever "
+        "triggering a token refresh.",
+        "Fix (#700): the commands that resolve a default project now honor the `project use` pin "
+        "when `--project` is omitted, not the first registered project. This covers the `kai` "
+        "group, `docs query`, `component detail`, `component list --query`, `config examples` and "
+        "`config new` (scaffold). The cascade is `--project`, then `KBAGENT_PROJECT`, then the "
+        "`project use` pin, then the sole project. With several registered projects and no pin "
+        "these now exit 5 (`CONFIG_ERROR`) asking for `--project` instead of guessing. The same "
+        "fix applies over `kbagent serve`.",
+        "Note (#703, #724, #739): housekeeping with no user-facing change. Internal groundwork for "
+        "merge requests (the Layer 2 service, no commands yet), an agent-docs cleanup, and the "
+        "move to ruff 0.16 as the linter.",
+    ],
     "0.92.0": [
         "New (#719): `kbagent flow triggers --project P --flow-id ID` answers what actually "
         "starts a flow -- cron schedules AND table triggers in one call. A table trigger is a "

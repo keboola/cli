@@ -4703,8 +4703,8 @@ fallback (`config examples` already resolved it correctly).
   `component detail`'s `project_alias` reports the alias actually used (never
   `None`). With NO projects configured at all, the failure is an actionable
   `CONFIG_ERROR: No projects configured. Use 'kbagent project add' ...`.
-  Since vNEXT the fallback is the `project use` pin, not the first project --
-  see the vNEXT gotcha on the `project use` pin (issue #684).
+  Since 0.93.0 the fallback is the `project use` pin, not the first project --
+  see the gotcha on the `project use` pin (issue #684).
 - **<= 0.89.x**: pass `--project` explicitly to these two commands -- the help
   text's "first available" promise does not work there.
 - `component sync-action` is unaffected: its `--project` is genuinely required
@@ -4960,9 +4960,9 @@ volatile components without waiting for an upstream kbagent release.
 
 ## `kai` / `docs query` / `component` / `config new` now honor the `project use` pin
 
-*(since vNEXT, closes #684)* These commands take an optional `--project`: the whole `kai` group,
+*(since 0.93.0, closes #684)* These commands take an optional `--project`: the whole `kai` group,
 `docs query`, `component detail`, `component list --query`, `config examples`,
-and `config new` (scaffold mode). Before vNEXT, they resolved an omitted
+and `config new` (scaffold mode). Before 0.93.0, they resolved an omitted
 `--project` to the **first registered project**. They ignored the pin from
 `kbagent project use`. With two or more projects registered, the command acted
 on the wrong project and reported no warning.
@@ -4985,7 +4985,7 @@ single-project command:
 
 ## Usage telemetry: one `ext.keboola.cli.` event per command (opt-out with an env var)
 
-*(since vNEXT)* Every CLI command, every REPL line, and every **mutating** `kbagent serve`
+*(since 0.93.0)* Every CLI command, every REPL line, and every **mutating** `kbagent serve`
 request posts one best-effort usage event to the **acting project's own** Storage events
 (`POST /v2/storage/events`), the same mechanism the original Keboola Go CLI uses.
 Connection stores it as `ext.keboola.cli.` (CLI/REPL) or `ext.keboola.cli.serve` (serve).
