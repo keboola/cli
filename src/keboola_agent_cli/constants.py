@@ -328,7 +328,7 @@ ENV_KBC_LOGIN_PASSWORD: str = "KBC_LOGIN_PASSWORD"
 ENV_KBC_LOGIN_TOTP_SECRET: str = "KBC_LOGIN_TOTP_SECRET"
 ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 
-# --- Command telemetry (since vNEXT) ---
+# --- Command telemetry (since 0.93.0) ---
 # Per-invocation usage event posted best-effort to the project's own Storage
 # events (POST /v2/storage/events), the same mechanism the kbc CLI uses. It is
 # NOT the audit trail: mutations are recorded server-side by Connection
