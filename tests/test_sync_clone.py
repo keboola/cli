@@ -85,6 +85,19 @@ class TestCopyAndRepoint:
         repoint_manifest_project(m, project_id=999, api_host="other.keboola.com")
         assert m.project.id == 999
         assert m.project.api_host == "other.keboola.com"
+        # without a target default branch id the branch id is left as-is
+        assert [b.id for b in m.branches] == [0]
+
+    def test_repoint_manifest_project_remaps_default_branch(self) -> None:
+        # CLI-5: given the target's default branch id, the production branch
+        # (the fallback branch _resolve_branch_id uses) is re-pointed too, not
+        # left on the source project's id.
+        m = _manifest([])  # branches = [ManifestBranch(id=0, path="main")]
+        repoint_manifest_project(
+            m, project_id=999, api_host="other.keboola.com", default_branch_id=52099
+        )
+        assert m.project.id == 999
+        assert [b.id for b in m.branches] == [52099]
 
 
 class TestBucketMap:
@@ -447,6 +460,43 @@ class TestCloneProjectOrchestration:
 
         assert load_manifest(target_dir).project.id == 4242
         push_mock.assert_called_once()
+
+    def test_clone_repoints_branch_to_target_default(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # CLI-5: a fresh clone re-points the manifest branch onto the target's
+        # own default branch (from list_dev_branches), so a later diff/push with
+        # no --branch does not resolve the source project's branch id -- which
+        # does not exist in the target.
+        source = tmp_path / "golden"
+        _golden_source(source)  # source manifest branch id = 0
+        target_dir = tmp_path / "clone"
+
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 52099, "isDefault": True}]
+        svc = _service(tmp_config_dir, client)
+        monkeypatch.setattr(
+            svc,
+            "diff",
+            MagicMock(
+                return_value={
+                    "changes": [{"change_type": "added", "component_id": "keboola.ex-db"}]
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            svc,
+            "push",
+            MagicMock(
+                return_value={"status": "pushed", "created": 1, "flow_task_remaps": 0, "errors": []}
+            ),
+        )
+
+        svc.clone_project(source=source, target_alias="target", target_dir=target_dir)
+
+        from keboola_agent_cli.sync.manifest import load_manifest
+
+        assert [b.id for b in load_manifest(target_dir).branches] == [52099]
 
     def test_fresh_target_guard_rejects_collision(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
