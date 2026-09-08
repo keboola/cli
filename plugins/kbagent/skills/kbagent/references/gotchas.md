@@ -3858,6 +3858,20 @@ things to internalise:
   the offending key and its actual type. Older versions silently stringified
   it (`str(dict)` → `"{'new': 'in.c-new'}"`) and pushed that as a "bucket ID".
 
+### `sync clone` defaults to the target's production branch
+
+A fresh `sync clone` re-points the manifest onto the target project's own
+default (production) branch. It resolves that branch from the API the same way
+`sync init` does (since vNEXT). So `--branch` is optional on a fresh clone. Pass
+`--branch <id>` only to clone into a specific dev branch of the target.
+
+Before this fix, `repoint_manifest_project` left `manifest.branches` on the
+SOURCE project's id. `_resolve_branch_id` then took `manifest.branches[0].id`,
+the source branch. A clone with no `--branch` resolved that branch. The target
+did not have that branch, so the clone failed with
+`Branch id "..." does not exists`. On an older install that shows this error,
+upgrade or pass `--branch` with the target's production branch id.
+
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
 `kbagent search --regex` opts into the Storage API `mode=regex` global-search

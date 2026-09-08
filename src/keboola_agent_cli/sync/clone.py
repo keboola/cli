@@ -63,10 +63,27 @@ def copy_reference_tree(source_dir: Path, target_dir: Path) -> None:
     shutil.copytree(source_dir, target_dir)
 
 
-def repoint_manifest_project(manifest: Any, *, project_id: int, api_host: str) -> None:
-    """Re-point the manifest's project block at the clone's target project."""
+def repoint_manifest_project(
+    manifest: Any,
+    *,
+    project_id: int,
+    api_host: str,
+    default_branch_id: int | None = None,
+) -> None:
+    """Re-point the manifest's project block at the clone's target project.
+
+    When ``default_branch_id`` is given, the production branch id (the first
+    manifest branch, which ``_resolve_branch_id`` uses as its fallback) is
+    re-pointed onto the target project's default branch too. The copied
+    manifest otherwise keeps the SOURCE project's branch id, which does not
+    exist in the target; a fresh clone with no explicit ``--branch`` then
+    resolves that stale id and diff/push fail with
+    ``Branch id "..." does not exists`` (CLI-5).
+    """
     manifest.project.id = project_id
     manifest.project.api_host = api_host
+    if default_branch_id is not None and manifest.branches:
+        manifest.branches[0].id = default_branch_id
 
 
 def _config_dir(target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str) -> Path:

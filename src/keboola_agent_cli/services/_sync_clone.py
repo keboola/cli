@@ -22,9 +22,22 @@ from ..sync.clone import (
     repoint_manifest_project,
 )
 from ..sync.manifest import load_manifest, save_manifest
+from .base import find_default_branch_id
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
+
+
+def _target_default_branch_id(service: SyncService, target_project: Any) -> int | None:
+    """Return the target project's default branch id from the API.
+
+    Mirrors ``sync init`` so a fresh clone re-points the manifest onto the
+    target's own production branch instead of reusing the source's (CLI-5).
+    """
+    client = service._client_factory(target_project.stack_url, target_project.token)
+    with client:
+        branches = client.list_dev_branches()
+    return find_default_branch_id(branches)
 
 
 def clone_project(
@@ -106,10 +119,17 @@ def clone_project(
     if not already_cloned:
         copy_reference_tree(source_dir, target_path)
         manifest = load_manifest(target_path)
+        # _resolve_branch_id prefers an explicit --branch, so resolve the
+        # target's default branch only when branch_override is None (#744).
         repoint_manifest_project(
             manifest,
             project_id=target_project.project_id or 0,
             api_host=urlparse(target_project.stack_url).netloc,
+            default_branch_id=(
+                _target_default_branch_id(service, target_project)
+                if branch_override is None
+                else None
+            ),
         )
         bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)
         variable_overrides = apply_variable_values(target_path, manifest, variable_values)
