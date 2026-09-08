@@ -24,6 +24,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.93.1": [
+        "Fix (#744): `sync clone` into a fresh (empty) target project now defaults to the "
+        "target's production branch, so `--branch` is optional (CLI-5). Before, "
+        "`repoint_manifest_project` re-pointed only the project id and left the copied manifest "
+        "on the SOURCE project's branch id. `_resolve_branch_id` then used that id, so a clone "
+        'with no `--branch` failed with `Branch id "..." does not exists`. The clone path now '
+        "resolves the target's default branch from the API (`list_dev_branches` + "
+        "`find_default_branch_id`, the same way `sync init` does) and re-points the production "
+        "branch onto it. It resolves the branch only when the caller passes no explicit "
+        "`--branch`, so an explicit-branch clone makes no extra `list_dev_branches` call. "
+        "`--branch` stays an override for a dev branch.",
+    ],
     "0.93.0": [
         "New (#731): kbagent now posts a best-effort usage event per command, so its usage is "
         "visible in Keboola telemetry like the original Go CLI. Connection stores it as "
