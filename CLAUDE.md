@@ -858,6 +858,18 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# Partial failures now change the exit code (#745): `sync push`, `sync clone`,
+#   `sync pull/push/diff --all-projects`, `org setup` and `project invite --from-csv`
+#   collect per-item failures and keep going -- but a run with at least one failure now
+#   exits 1 instead of 0, and the human headline states the failed count instead of
+#   printing a green `Success:`. `--json` is unchanged: the full payload (with the
+#   per-item `errors` / `projects_failed` / `failed`) is emitted BEFORE the non-zero
+#   exit, so parse it and then branch on the exit code. Read-only multi-project
+#   fan-outs (`billing credits`, `job list`, `schedule list`, `notification list`) are
+#   deliberately NOT included -- they document per-project degradation as intended and
+#   still exit 0. Version gate for this entry lives in gotchas.md -- the placeholder
+#   cannot be written on these `# ` comment lines (check_version_gates.py parses them
+#   as ATX markdown headings).
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent

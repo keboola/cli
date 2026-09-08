@@ -26,6 +26,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._helpers import (
     check_cli_permission,
+    exit_on_item_failures,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -1025,6 +1026,9 @@ def project_invite(
             )
             payload = result.model_dump()
             formatter.output(payload, _format_bulk_invite_result)
+            # A CSV where every row failed still printed "failed=N" and exit 0,
+            # so a CI step could not tell a clean run from a total one (#745).
+            exit_on_item_failures(payload.get("failed", 0))
             return
 
         result = service.invite(

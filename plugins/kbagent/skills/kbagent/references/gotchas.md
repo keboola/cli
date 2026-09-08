@@ -5028,3 +5028,40 @@ It carries the command name, the outcome, and the duration -- never argument val
   signed out or no session, which the command's own help documents as normal. The event
   reads `type=info`, so a consumer never counts a routine signed-out check as an error. Keep
   this list aligned when another command documents a non-zero exit as an expected result.
+
+## A partial failure is no longer reported as success
+
+*(since vNEXT, closes #745)* Commands that survive a per-item failure used to print a fixed
+green `Success:` line and exit **0** regardless. The failures were listed
+underneath as warnings. A `sync clone` where **every** config failed reported
+`Success ... 0 created` and exit 0; a `sync push` where half the configs failed
+reported success too. Nothing in the exit code distinguished a clean run from a
+total failure, so no script could branch on it -- a person had to read the
+`created` count and count the warning lines.
+
+Now, whenever at least one item failed:
+
+- the exit code is **1** (the convention `storage delete-table`,
+  `storage file-tag` and `storage describe-migrate` already used);
+- the human headline states the failure instead of claiming success --
+  `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed` -- so the failed
+  count is in the main line, not only in the warnings below it;
+- `--json` output is **unchanged**: the full payload, including the per-item
+  `errors` array, is emitted first and the non-zero exit is raised after it.
+  Parse the payload, then check the exit code -- never treat exit 1 here as
+  "no output".
+
+Commands changed: `sync push`, `sync clone`, `sync pull/push/diff
+--all-projects` (a project in the fan-out that errored), `org setup`
+(`projects_failed`), `project invite --from-csv` (`failed`).
+
+- **A clean run is untouched**: no failures still means the green success line
+  and exit 0. `no_changes` and `--dry-run` results are not failures.
+- **Read-only fan-outs are deliberately NOT included.** `billing credits`,
+  `job list`, `schedule list`, `notification list` and the other multi-project
+  reads document per-project degradation as intended behavior -- one
+  unreachable project must not fail the whole read. They still exit 0 and
+  report the per-project error in `errors`. Check that array, not the exit code.
+- **On 0.93.0 and older**: do not trust exit 0 from these commands. Parse
+  `--json` and assert `errors == []` (or `projects_failed` / `failed` == 0)
+  before reporting the operation as successful.

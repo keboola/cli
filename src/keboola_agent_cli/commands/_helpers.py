@@ -165,6 +165,26 @@ def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
         formatter.warning(f"Project '{alias}': {message}")
 
 
+def exit_on_item_failures(count: int) -> None:
+    """Exit non-zero when a multi-item operation had per-item failures.
+
+    Commands that keep going after one item fails (a config in ``sync push``,
+    a project in ``org setup``, a row in ``project invite --from-csv``) used to
+    collect those failures into the result and still exit 0 -- so a run where
+    every item failed was indistinguishable from a clean one by exit code
+    alone, and a script could not tell success from total failure (issue #745).
+
+    ``count`` is the number of failed items; 0 returns without raising. The
+    exit code follows the convention already used by the bulk storage
+    commands (``storage delete-table``, ``file-tag``, ``describe-migrate``):
+    any per-item failure is a general error, exit 1. Call this AFTER the
+    result has been emitted so JSON callers still receive the full payload,
+    including the per-item error detail.
+    """
+    if count:
+        raise typer.Exit(code=1)
+
+
 def _is_help_request(ctx: typer.Context) -> bool:
     """Check if the current invocation is a --help request.
 

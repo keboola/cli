@@ -2136,6 +2136,18 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 When you receive a non-zero exit code, use --json to get structured error details.
 
+Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
+item fails -- sync push, sync clone, sync pull/push/diff --all-projects, org
+setup, project invite --from-csv, and the bulk storage commands -- exit 1 when
+at least one item failed, and their human headline states the failed count
+instead of printing a green "Success:". The --json payload is still emitted in
+full (with the per-item errors / projects_failed / failed), BEFORE the non-zero
+exit, so parse it and then branch on the exit code -- exit 1 here never means
+"no output". Read-only multi-project fan-outs (billing credits, job list,
+schedule list, notification list) are the deliberate exception: a per-project
+failure there degrades that project only and still exits 0, so check their
+errors array rather than the exit code.
+
 ## Claude Code Plugin
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:
