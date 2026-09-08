@@ -12,6 +12,7 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    exit_on_item_failures,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -279,6 +280,10 @@ def org_setup(
                 return
 
     formatter.output(result, _format_setup_result)
+
+    # Per-project failures are accumulated so one bad project does not abort the
+    # run -- but the run itself is not a success, and exit 0 hid that (#745).
+    exit_on_item_failures(len(result.get("projects_failed", [])))
 
 
 def _handle_api_error(formatter, exc: KeboolaApiError) -> None:
