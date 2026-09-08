@@ -567,7 +567,7 @@ stranger's config. Use a new/empty target project.
 
 **Target branch:** a fresh clone re-points the manifest onto the target
 project's default (production) branch. It resolves that branch from the API the
-same way `sync init` does (since vNEXT). So `--branch` is optional. Pass
+same way `sync init` does (since v0.93.1). So `--branch` is optional. Pass
 `--branch <id>` only to clone into a specific dev branch of the target. Before
 this fix the copied manifest kept the source project's branch id. A clone with
 no `--branch` then failed with `Branch id "<source-branch>" does not exists`

@@ -3862,7 +3862,7 @@ things to internalise:
 
 A fresh `sync clone` re-points the manifest onto the target project's own
 default (production) branch. It resolves that branch from the API the same way
-`sync init` does (since vNEXT). So `--branch` is optional on a fresh clone. Pass
+`sync init` does (since v0.93.1). So `--branch` is optional on a fresh clone. Pass
 `--branch <id>` only to clone into a specific dev branch of the target.
 
 Before this fix, `repoint_manifest_project` left `manifest.branches` on the
