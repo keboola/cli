@@ -498,6 +498,41 @@ class TestCloneProjectOrchestration:
 
         assert [b.id for b in load_manifest(target_dir).branches] == [52099]
 
+    def test_clone_with_explicit_branch_skips_default_branch_fetch(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #744: an explicit --branch wins in _resolve_branch_id, so clone must
+        # not spend a list_dev_branches call resolving the target's default.
+        source = tmp_path / "golden"
+        _golden_source(source)
+        client = MagicMock()
+        svc = _service(tmp_config_dir, client)
+        monkeypatch.setattr(
+            svc,
+            "diff",
+            MagicMock(
+                return_value={
+                    "changes": [{"change_type": "added", "component_id": "keboola.ex-db"}]
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            svc,
+            "push",
+            MagicMock(
+                return_value={"status": "pushed", "created": 1, "flow_task_remaps": 0, "errors": []}
+            ),
+        )
+
+        svc.clone_project(
+            source=source,
+            target_alias="target",
+            target_dir=tmp_path / "clone",
+            branch_override=52099,
+        )
+
+        client.list_dev_branches.assert_not_called()
+
     def test_fresh_target_guard_rejects_collision(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

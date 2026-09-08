@@ -565,12 +565,13 @@ overrides and just pushes, so a completed clone reports `no_changes` /
 project already contains the reference's configs — it will not UPDATE a
 stranger's config. Use a new/empty target project.
 
-**Target branch (since vNEXT):** a fresh clone re-points the manifest onto the
-target project's own default (production) branch, resolved from the API the same
-way `sync init` does — so `--branch` is optional. Pass `--branch <id>` only to
-clone into a specific dev branch of the target. Before this fix the copied
-manifest kept the source project's branch id, so a clone with no `--branch`
-failed with `Branch id "<source-branch>" does not exists` (CLI-5).
+**Target branch:** a fresh clone re-points the manifest onto the target
+project's default (production) branch. It resolves that branch from the API the
+same way `sync init` does (since vNEXT). So `--branch` is optional. Pass
+`--branch <id>` only to clone into a specific dev branch of the target. Before
+this fix the copied manifest kept the source project's branch id. A clone with
+no `--branch` then failed with `Branch id "<source-branch>" does not exists`
+(CLI-5).
 
 **In-process SDK:** `SyncService.clone_project(source, target_alias, target_dir,
 overrides={...})` returns a typed `CloneResult` (exported from
