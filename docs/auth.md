@@ -20,7 +20,7 @@ token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 > hand the plain command to the user's own terminal instead.
 >
 > For CI, containers, cron, or any other unattended context, you have two
-> options: a **static Storage token** (`kbagent project add --token ...`, or
+> options: a **static Storage token** (`kbagent project add --token-env NAME`, or
 > the token-only `KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` +
 > `KBC_STORAGE_API_URL` path -- unaffected by anything on this page), or
 > **`kbagent auth login-password`** (since v0.84.0) if you specifically need a
@@ -370,8 +370,14 @@ somewhere sessions do not reach — a scheduled agent, a CI step, the importable
 SDK. Give that project a static token explicitly:
 
 ```bash
-kbagent project edit --project my-project-9840 --token YOUR_STATIC_TOKEN
+kbagent project edit --project my-project-9840 --token-stdin
 ```
+
+`--token-stdin` shows a hidden prompt on a terminal, and reads a pipe
+otherwise, so the token never reaches your shell history. The other ways in
+are `--token-file PATH` (kbagent deletes the file once the edit succeeds) and
+`--token-env NAME` for CI. `--token VALUE` still works, but it puts the token
+in your shell history and in a process listing.
 
 This is allowed and it warns while doing it: the project becomes a
 static-token project, so `kbagent auth logout --remove-projects` will no longer

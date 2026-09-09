@@ -31,7 +31,7 @@ Versioning convention:
   `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
   exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
   the message. Fix: check `kbagent project info` -> `is_master_token`, and
-  register a master token (`kbagent project edit --token ...`). Do NOT
+  register a master token (`kbagent project edit --token-stdin`). Do NOT
   escalate this one to support -- it is by design.
 - **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
   authentication-class failures; only the diagnosis differs. A script
@@ -195,7 +195,7 @@ Versioning convention:
   the Scheduler Service paths (`flow schedule`, `flow schedule-remove`);
   and the importable SDK
   (`lib.Client`). If a task needs one of those, register the same project again
-  with a static Storage token (`project add --project <alias2> --token ...`)
+  with a static Storage token (`project add --project <alias2> --token-stdin`)
   instead of fighting the guard.
 - **Two surfaces people wrongly expect on that list.** `dev-portal` is
   unaffected -- it authenticates with its own Developer Portal identity
@@ -230,13 +230,32 @@ Versioning convention:
   credential lives in `auth.json` and its access token rotates on its own. The
   project appears under `skipped` with that reason instead of raising or being
   silently converted. A deliberate single-project conversion to a static token
-  is `project edit --token` (next bullet).
-- **`project edit --token` on a session project is allowed, warns, and
-  converts.** The project becomes a static-token project, which means
+  is `project edit --token-stdin` (next bullet).
+- **A new token on a session project is allowed, warns, and converts.** The project becomes a static-token project, which means
   `auth logout --remove-projects` will no longer clean that alias up -- use
   `project remove` when done with it. The warning text is identical in
   `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
   array, so a consumer must not assume the key is absent.
+- **`--token VALUE` puts a Storage token in the user's shell history; use
+  `--token-stdin` instead** (since vNEXT). `project add` and `project edit`
+  both take four mutually exclusive sources (a second one is exit 2):
+  `--token-stdin` (hidden prompt on a TTY, reads a pipe otherwise),
+  `--token-file PATH`, `--token-env NAME`, and `--token VALUE`. Never hand a
+  person a `--token VALUE` command. If they can run it themselves, give them
+  `--token-stdin`. If you must run it, ask them to write the token to a file
+  and pass `--token-file`. In CI use `--token-env`. `--token VALUE` warns on a
+  terminal that the token is now in the history.
+- **`--token-file` deletes the file it read** (since vNEXT). Only after the
+  command succeeds -- never on `--dry-run`, never after a failure, so a bad
+  token does not cost the user the file. `--keep-token-file` turns the delete
+  off for a read-only mount. A delete that fails is a warning, not an error.
+  Note that this unlinks the file; it does not scrub the bytes off the disk.
+- **`project edit` ignores `KBC_TOKEN`; `project add` reads it** (since
+  vNEXT). Not an oversight. A new token rewrites the alias's `project_id` and
+  `project_name` from whatever it verifies as, and nothing checks that the
+  token belongs to the same project, so an exported `KBC_TOKEN` could silently
+  repoint an alias at a different project during a plain `--new-alias`. Name
+  the variable with `--token-env KBC_TOKEN` if you do want it read there.
 - **`auth logout --remove-projects` needs the `admin` permission class, the
   bare `auth logout` only `write`** (since v0.80.0). The flag deletes
   `config.json` entries, the same observable effect as `project remove`, so a

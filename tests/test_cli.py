@@ -3,6 +3,8 @@
 import json
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -5688,8 +5690,9 @@ class TestProjectAddTokenSecurity:
     def test_project_add_token_interactive(self, tmp_path: Path) -> None:
         """Interactive hidden prompt works for project add when no env var.
 
-        We mock _resolve_token to simulate the interactive prompt returning a token,
-        since CliRunner does not have a real TTY and sys.stdin.isatty() is False.
+        We mock resolve_storage_token_input to simulate the interactive prompt
+        returning a token, since CliRunner does not have a real TTY and
+        sys.stdin.isatty() is False.
         """
         mock_client = make_mock_client(project_name="PromptProject", project_id=888)
         config_dir = tmp_path / "config"
@@ -5699,7 +5702,7 @@ class TestProjectAddTokenSecurity:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockService,
             patch(
-                "keboola_agent_cli.commands.project._resolve_token",
+                "keboola_agent_cli.commands.project.resolve_storage_token_input",
                 return_value=TEST_TOKEN,
             ),
         ):
@@ -5729,6 +5732,129 @@ class TestProjectAddTokenSecurity:
         output = json.loads(result.output)
         assert output["status"] == "ok"
         assert output["data"]["alias"] == "prompttest"
+
+    @staticmethod
+    @contextmanager
+    def _patched_add(tmp_path: Path, mock_client: MagicMock) -> Iterator[None]:
+        """The `project add` wiring the token-source tests all need."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+            yield
+
+    def test_project_add_token_from_file_deletes_the_file(self, tmp_path: Path) -> None:
+        """The file carries the token in; it must not stay behind holding it."""
+        token_file = tmp_path / "token.txt"
+        token_file.write_text(f"{TEST_TOKEN}\n", encoding="utf-8")
+        token_file.chmod(0o600)
+
+        with self._patched_add(tmp_path, make_mock_client(project_name="FileProject")):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--project",
+                    "filetest",
+                    "--token-file",
+                    str(token_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert json.loads(result.stdout)["data"]["alias"] == "filetest"
+        assert not token_file.exists()
+        assert TEST_TOKEN not in result.output
+
+    def test_project_add_keep_token_file_leaves_the_file(self, tmp_path: Path) -> None:
+        token_file = tmp_path / "token.txt"
+        token_file.write_text(TEST_TOKEN, encoding="utf-8")
+        token_file.chmod(0o600)
+
+        with self._patched_add(tmp_path, make_mock_client()):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--project",
+                    "keeptest",
+                    "--token-file",
+                    str(token_file),
+                    "--keep-token-file",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert token_file.exists()
+        assert "still holds the token" in result.stderr
+
+    def test_project_add_token_from_stdin(self, tmp_path: Path) -> None:
+        with self._patched_add(tmp_path, make_mock_client(project_name="StdinProject")):
+            result = runner.invoke(
+                app,
+                ["--json", "project", "add", "--project", "stdintest", "--token-stdin"],
+                input=f"{TEST_TOKEN}\n",
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert json.loads(result.stdout)["data"]["project_name"] == "StdinProject"
+        assert TEST_TOKEN not in result.output
+
+    def test_project_add_token_from_named_env_var(self, tmp_path: Path) -> None:
+        """--token-env names the variable, so nothing is read implicitly."""
+        with (
+            self._patched_add(tmp_path, make_mock_client(project_name="NamedEnvProject")),
+            patch.dict(os.environ, {"CI_KBC_TOKEN": TEST_TOKEN}),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--project",
+                    "namedenvtest",
+                    "--token-env",
+                    "CI_KBC_TOKEN",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert json.loads(result.stdout)["data"]["project_name"] == "NamedEnvProject"
+
+    def test_project_add_rejects_two_token_sources(self, tmp_path: Path) -> None:
+        token_file = tmp_path / "token.txt"
+        token_file.write_text(TEST_TOKEN, encoding="utf-8")
+
+        with self._patched_add(tmp_path, make_mock_client()):
+            result = runner.invoke(
+                app,
+                [
+                    "project",
+                    "add",
+                    "--project",
+                    "conflicttest",
+                    "--token",
+                    TEST_TOKEN,
+                    "--token-file",
+                    str(token_file),
+                ],
+            )
+
+        assert result.exit_code == 2
+        assert token_file.exists(), "a rejected command must not delete the file"
 
     def test_project_add_rejects_http_url(self, tmp_path: Path) -> None:
         """http:// URL rejected with error at project add time."""

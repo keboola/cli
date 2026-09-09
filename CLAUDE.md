@@ -447,10 +447,10 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
 #   See docs/web-server.md.
 
-kbagent project add --project NAME --url URL --token TOKEN
+kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
 kbagent project list
 kbagent project remove --project NAME
-kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
+kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN] [--new-alias NEW]
 kbagent project status [--project NAME]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
