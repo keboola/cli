@@ -2504,6 +2504,12 @@ type inventory and examples.
 - Validates `project_id` from the manifest against the token via `verify_token`. Mismatch exits 5 (`CONFIG_ERROR`) with guidance -- never silently adopts someone else's checkout.
 - If no manifest exists, `--adopt-existing` falls through to the normal init path (no error).
 
+## `sync pull` auto-inits: no separate `sync init` needed
+
+- If the target directory has no `.keboola/manifest.json`, `sync pull` runs `init_sync` first, then pulls. `sync pull --project X -d ./dir` on an empty directory writes the manifest and fetches the configs in one step.
+- A first checkout of a project is a single command. You do not run `sync init` before `sync pull`.
+- `sync init` stays useful on its own when you want the manifest without fetching configs (for example a `--git-branching` or `--adopt-existing` setup).
+
 ## Token handling
 
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
