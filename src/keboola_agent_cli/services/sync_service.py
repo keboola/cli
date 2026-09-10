@@ -4,6 +4,7 @@ Handles downloading Keboola project configurations to the local filesystem
 in a dev-friendly format (YAML configs), and tracking local changes.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -14,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from ..config_store import ConfigStore
 from ..constants import (
     ALWAYS_IGNORED_COMPONENTS,
     BRANCH_MAPPING_FILENAME,
@@ -110,7 +112,12 @@ from ._sync_writeback import (
     stamp_created_config,
     stamp_updated_config,
 )
-from .base import BaseService, find_default_branch_id
+from .base import BaseService, ClientFactory, find_default_branch_id
+from .data_app_service import (
+    DATA_APP_COMPONENT_ID,
+    DataScienceClientFactory,
+    _default_ds_client_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +256,18 @@ class SyncService(BaseService):
     Single-project operations only. Uses dependency injection for
     config_store and client_factory following the BaseService pattern.
     """
+
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        client_factory: ClientFactory | None = None,
+        ds_client_factory: DataScienceClientFactory | None = None,
+    ) -> None:
+        # ``ds_client_factory`` builds a Data Science client. It is used only
+        # for ``keboola.data-apps`` configs, whose runtime type lives on the DS
+        # ``/apps`` record and would otherwise be lost by pull/clone (CLI-8).
+        super().__init__(config_store=config_store, client_factory=client_factory)
+        self._ds_client_factory = ds_client_factory or _default_ds_client_factory
 
     # ------------------------------------------------------------------
     # init
@@ -555,6 +574,35 @@ class SyncService(BaseService):
             if with_samples and tables_data:
                 samples_data = fetch_samples(client, tables_data, sample_limit, max_samples)
 
+        # Data-app runtime types (CLI-8). The type (python-js / streamlit / ...)
+        # lives only on the Data Science /apps record, never in the Storage
+        # config, so it is fetched here and stamped into each data-app's
+        # _config.yml. One list call covers the project; skipped entirely when
+        # the tree holds no data apps. A DS failure degrades to no type (the
+        # pre-fix behavior), never an aborted pull.
+        #
+        # /apps also returns sandbox/workspace records (componentId of the
+        # parent component, e.g. keboola.ex-db-mysql, and a backend `type` such
+        # as `snowflake`), so the map is restricted to real data-app records --
+        # otherwise a workspace's type would land on an unrelated config that
+        # happens to share the id.
+        data_app_types: dict[str, str] = {}
+        if any(comp.get("id") == DATA_APP_COMPONENT_ID for comp in components):
+            try:
+                ds_client = self._ds_client_factory(project.stack_url, project.token)
+                with ds_client:
+                    data_app_types = {
+                        str(app.get("configId")): str(app.get("type"))
+                        for app in ds_client.list_apps()
+                        if app.get("componentId") == DATA_APP_COMPONENT_ID
+                        and app.get("configId")
+                        and app.get("type")
+                    }
+            except Exception:
+                logger.warning(
+                    "Failed to fetch data-app types from Data Science API", exc_info=True
+                )
+
         # Determine branch directory name
         branch_dir_name = self._find_branch_path(manifest, branch_id)
 
@@ -711,7 +759,16 @@ class SyncService(BaseService):
                 _ensure_within_branch(branch_dir, config_dir, component_id, config_id)
 
                 # Convert API format to local _config.yml
-                local_data = api_config_to_local(component_id, cfg, config_id)
+                local_data = api_config_to_local(
+                    component_id,
+                    cfg,
+                    config_id,
+                    data_app_type=(
+                        data_app_types.get(config_id)
+                        if component_id == DATA_APP_COMPONENT_ID
+                        else None
+                    ),
+                )
 
                 # Hash of API-converted data.  Stored as pull_config_hash so
                 # diff can compare it directly with fresh remote data without
@@ -1612,7 +1669,28 @@ class SyncService(BaseService):
         pushed_details: list[dict[str, str]] = []
         manifest_dirty = False
 
-        with client:
+        # A data-app CREATE needs a Data Science client so its runtime type
+        # travels into the target (CLI-8). Built only when the changeset
+        # actually creates a data app, and entered alongside ``client`` so its
+        # close() runs on every exit from the push block, a mid-push raise
+        # included.
+        ds_client = None
+        if any(
+            c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
+            for c in changes
+            if not bool(c.get("is_row"))
+        ):
+            ds_client = self._ds_client_factory(project.stack_url, project.token)
+        ds_context = ds_client if ds_client is not None else contextlib.nullcontext()
+
+        # POST /apps wants branchId=null for the default (production) branch and
+        # a numeric id only for a dev branch. The sync engine carries production
+        # as the manifest's default branch id, so map it back to None for the DS
+        # create (data-app create does the same). Live-verified against 4214.
+        default_branch_id = manifest.branches[0].id if manifest.branches else None
+        ds_branch_id = None if branch_id == default_branch_id else branch_id
+
+        with client, ds_context:
             self._ensure_branch_registered(manifest, branch_id, client)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
 
@@ -1649,6 +1727,8 @@ class SyncService(BaseService):
                             branch_id,
                             allow_plaintext_fallback=allow_plaintext_fallback,
                             warnings=warnings,
+                            ds_client=ds_client,
+                            ds_branch_id=ds_branch_id,
                         )
                         if result:
                             new_id = str(result.get("id", ""))
