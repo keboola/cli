@@ -24,6 +24,7 @@ from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import encrypt_secrets_in_config
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
+from .data_app_service import DATA_APP_COMPONENT_ID, create_synced_data_app
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -385,11 +386,20 @@ def push_create(
     *,
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
+    ds_client: Any = None,
 ) -> dict[str, Any] | None:
     """Create a new config from a local _config.yml file.
 
     ``warnings`` accumulates the ``script[]`` normalization records of
     :func:`guard_script_shape` for the push envelope.
+
+    ``ds_client`` is a Data Science client, passed only when the tree holds
+    ``keboola.data-apps`` configs. A data app carries its runtime type on the
+    DS ``/apps`` record, not in the Storage config, so a plain
+    ``create_config`` would drop it and the cloned app would deploy under the
+    platform default (CLI-8). When a data-apps config records its type in the
+    ``_keboola`` footer, creation is routed through the DS client so the type
+    travels; otherwise the plain Storage path is unchanged.
     """
     branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     config_dir = project_root / branch_path / config_path_str
@@ -421,14 +431,28 @@ def push_create(
         allow_plaintext_fallback=allow_plaintext_fallback,
     )
 
-    result = client.create_config(
-        component_id=component_id,
-        name=name,
-        configuration=configuration,
-        description=description,
-        branch_id=branch_id,
-        is_disabled=bool(local_data.get("is_disabled", False)),
-    )
+    data_app_type = (local_data.get("_keboola") or {}).get("data_app_type")
+    if component_id == DATA_APP_COMPONENT_ID and data_app_type and ds_client is not None:
+        # Carry the DS runtime type into the target (CLI-8): create the DS
+        # /apps record with the type, then fill the Storage config body.
+        result = create_synced_data_app(
+            client,
+            ds_client,
+            name=name,
+            description=description,
+            type_=data_app_type,
+            configuration=configuration,
+            branch_id=branch_id,
+        )
+    else:
+        result = client.create_config(
+            component_id=component_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            branch_id=branch_id,
+            is_disabled=bool(local_data.get("is_disabled", False)),
+        )
     new_config_id = result.get("id", "")
     logger.info("Created config %s/%s (ID: %s)", component_id, name, new_config_id)
 
