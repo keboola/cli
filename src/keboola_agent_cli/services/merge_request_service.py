@@ -26,7 +26,12 @@ import logging
 from typing import Any
 
 from ..client import KeboolaClient
-from ..constants import BRANCHES_MERGE_REQUESTS_FEATURE, PROTECTED_DEFAULT_BRANCH_FEATURE
+from ..constants import (
+    BRANCHES_MERGE_REQUESTS_FEATURE,
+    MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH,
+    MERGE_REQUEST_REASON_MAX_LENGTH,
+    PROTECTED_DEFAULT_BRANCH_FEATURE,
+)
 from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
@@ -118,6 +123,19 @@ def validate_auto_merge_flags(strategy: str | None, at: str | None) -> str | Non
     if at is not None and strategy != "scheduled":
         return "An auto-merge time is only meaningful with the 'scheduled' strategy."
     return None
+
+
+def _too_long(label: str, value: str | None, cap: int) -> None:
+    """Refuse a field over its server-side cap with INVALID_ARGUMENT -- the code
+    app.py maps to HTTP 400 and the CLI pre-checks to exit 2 (one constant, one
+    rule, two surfaces mapping the result)."""
+    if value is not None and len(value) > cap:
+        raise KeboolaApiError(
+            message=f"{label} is capped at {cap} characters (got {len(value)}).",
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
 
 
 def arms_auto_merge(strategy: str | None) -> bool:
@@ -473,7 +491,17 @@ class MergeRequestService(BaseService):
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
-            mr = client.merge_requests.get(merge_request_id)
+            try:
+                mr = client.merge_requests.get(merge_request_id)
+            except KeboolaApiError as exc:
+                # A 403 here is byte-identical for "role denied" and "feature
+                # missing"; only the pre-flight can word the latter. Run it
+                # LAZILY -- only on the 403 -- so the happy path stays one GET
+                # (the same treatment find_merge_request_for_branch gives its
+                # no-match path). If the feature IS there, the 403 was real.
+                if exc.status_code == 403:
+                    self._require_merge_requests_feature(client)
+                raise
         finally:
             client.close()
         return {"alias": alias, **_enrich_row(mr)}
@@ -570,6 +598,7 @@ class MergeRequestService(BaseService):
         create+submit alone can end in a production merge and the source
         branch's deletion. See the notes doc, *Auto-merge*.
         """
+        _too_long("external_id", external_id, MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH)
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -620,6 +649,7 @@ class MergeRequestService(BaseService):
         enough for the backend's auto-merge tick to merge it -- no ``merge()``
         call involved (see the notes doc, *Auto-merge*). Not just metadata.
         """
+        _too_long("external_id", external_id, MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH)
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -675,6 +705,7 @@ class MergeRequestService(BaseService):
         creator on their own MR (rendered as Closed; derived_state mirrors
         that). ``reason`` is capped at 1000 characters server-side.
         """
+        _too_long("reason", reason, MERGE_REQUEST_REASON_MAX_LENGTH)
         project = self._project(alias)
         client = self._client_factory(project.stack_url, project.token)
         try:

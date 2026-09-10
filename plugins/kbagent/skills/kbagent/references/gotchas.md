@@ -5024,18 +5024,26 @@ It carries the command name, the outcome, and the duration -- never argument val
 (non-SOX "Branches 2.0", project feature `branches-merge-requests`). Full playbook:
 `merge-request-workflow.md`. The parts that bite:
 
-- **`--auto-merge-strategy immediately|scheduled` is not metadata.** A backend scheduler runs
-  every `approved` MR armed with it through the same merge processor `merge` uses -- on its own,
-  retrying every tick, `merge` never called, the arming call answering 200 with nothing to say
-  so. kbagent therefore classifies arming (on `create`/`update`) AND `request-review` /
-  `approve` / `resolve` on an already-armed MR as **destructive**: `--deny-destructive` blocks
-  them, `--json` requires an explicit target, human mode prompts at the arming. `none` disarms
-  and never escalates. Deliberately conservative -- the required-approvals count is unreadable
-  with a Storage token (DMD-1969), so every armed operation escalates even where it would not
-  yet merge.
-- **`merge` under `--json` needs `--merge-request-id` or `--branch`.** Every destructive
-  kbagent command either prompts or is told its target; `--json` has no prompt. In human mode
-  the active-branch fallback stays and the prompt names the MR and the branch it will delete.
+- **Destructive is a property of the COMMAND -- never of a flag or of the MR's state.**
+  `request-review`, `approve`, `resolve`, `merge` and `auto-merge` are always destructive: each
+  moves a merge request toward or into production (on the non-SOX default of 0 approvals,
+  `request-review` lands the MR directly in `approved`; the last `approve` is what a merge waits
+  for; `resolve` removes a merge blocker). `create`, `update`, `request-changes` are writes. So a
+  policy is evaluated from the command name alone, before any network call, and
+  `--deny-destructive` yields an agent that can observe and shape merge requests but never move
+  one. Nothing about `--deny-destructive` depends on whether an MR happens to be armed.
+- **Auto-merge is its own command, not a flag.** `merge-request auto-merge --strategy
+  immediately|scheduled` arms a backend scheduler that runs every `approved` MR through the same
+  merge processor `merge` uses -- on its own, retrying every tick, `merge` never called, the
+  arming call answering 200 with nothing to say so. A delayed production merge, hence destructive
+  and a consciously separate step (prompts in human mode). `--strategy none` disarms and rides
+  the same command, same class -- a caller who could not arm never needs to disarm. `create` and
+  `update` no longer take `--auto-merge-strategy`; a Typer "no such option" is the answer.
+- **Every destructive command under `--json` needs `--merge-request-id` or `--branch`**, checked
+  before anything is resolved. Every destructive kbagent command either prompts or is told its
+  target; `--json` has no prompt. In human mode the active-branch fallback stays; `merge` and
+  arming prompt, the other destructive commands do not (they warn afterwards when the MR turns
+  out to be armed, read off the write's own result).
 - **Targets are implicit everywhere else**: omit the id and the command uses the merge request
   OF the active branch (`branch use`). Both `--merge-request-id` and `--branch` at once -> exit 2.
 - **`FEATURE_NOT_ENABLED` (exit 5) comes from reads too** -- from any command whose target was
@@ -5061,7 +5069,12 @@ It carries the command name, the outcome, and the duration -- never argument val
   Edit values, never delete keys. A side that deleted the config wholesale is reported as a
   sentence recommending the `--take`, not as an empty table. No `--all`.
 - **The source branch is deleted asynchronously** after a merge ("is being deleted", never
-  "is deleted"); `merge` itself blocks up to 10 minutes, no `--wait`/`--timeout`.
+  "is deleted"); `merge` itself blocks up to 10 minutes, no `--wait`/`--timeout`. A timeout
+  (`STORAGE_JOB_TIMEOUT`, exit 4) or `MR_NOT_READY_TO_MERGE` is reported **retryable** even
+  though a merge is not idempotent -- accepted on purpose: the merge job keeps running
+  server-side and the project-wide merge lock makes a premature retry answer
+  `MR_NOT_READY_TO_MERGE` rather than start a second merge, so the retry is harmless. Wait
+  and re-check with `merge-request detail` (state `in_merge` -> `merged`) before retrying.
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.

@@ -282,6 +282,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("PUT", "/branches/{project}/metadata/{key}"): "branch metadata-set",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/metadata/{key}"): "config set-metadata",
     ("PUT", "/merge-requests/{project}/{merge_request_id}"): "merge-request update",
+    ("PUT", "/merge-requests/{project}/{merge_request_id}/auto-merge"): "merge-request auto-merge",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/state"): "config state-set",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/variables"): "config variables-set",
     ("PUT", "/data-apps/{project}/{app_id}/secrets"): "data-app secrets-set",

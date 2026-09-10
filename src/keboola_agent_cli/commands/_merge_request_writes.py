@@ -1,12 +1,25 @@
 """Write commands of the ``kbagent merge-request`` group.
 
 ``create`` / ``update`` / ``request-review`` / ``approve`` / ``request-changes`` /
-``merge`` / ``resolve`` -- split out of ``merge_request.py`` when the group
-crossed the 800-code-line soft ceiling. Mounted flat onto the group's Typer app
-via :func:`register`, so permission keys stay in the ``merge-request.*``
-namespace and ``--help`` lists them with the reads (precedent:
-``_storage_describe.register``). Shared machinery -- target resolution, the one
-error handler, the destructive-under-json rule, the auto-merge escalation --
+``merge`` / ``resolve`` / ``auto-merge`` -- split out of ``merge_request.py`` when
+the group crossed the 800-code-line soft ceiling. Mounted flat onto the group's
+Typer app via :func:`register`, so permission keys stay in the ``merge-request.*``
+namespace and ``--help`` lists them with the reads. Registration goes through
+Typer's public ``app.command(name)(fn)``; ``_storage_describe.register`` reaches
+the same flat mount by declaring its commands inside ``register`` -- either way,
+no Typer internals.
+
+Every command here is in one of two static classes and behaves accordingly:
+
+- **write** (``create``, ``update``, ``request-changes``): resolve the target,
+  call the service, report. No prompt, no target rule.
+- **destructive** (``request-review``, ``approve``, ``resolve``, ``merge``,
+  ``auto-merge``): the ``--json`` explicit-target rule runs FIRST, before any
+  network call, because the class is known from the command name alone; the
+  two that a human must consciously choose (``merge``, arming ``auto-merge``)
+  additionally prompt in human mode.
+
+Shared machinery -- target resolution, the one error handler, the target rule --
 lives in ``_merge_request_common.py``; this module only decides what each write
 asks, confirms, and says afterwards. Design record: ``docs/merge-requests-layer1.md``.
 """
@@ -18,14 +31,16 @@ from typing import Any
 import typer
 from rich.markup import escape
 
+from ..constants import MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH, MERGE_REQUEST_REASON_MAX_LENGTH
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.merge_request_service import (
+    AUTO_MERGE_DISARMED,
+    AUTO_MERGE_STRATEGIES,
     TAKE_MODES,
     arms_auto_merge,
     validate_auto_merge_flags,
 )
 from ._helpers import (
-    check_cli_operation,
     get_formatter,
     get_service,
     parse_json_arg,
@@ -37,7 +52,6 @@ from ._merge_request_common import (
     _MERGE_REQUEST_ID_OPT,
     _PROJECT_OPT,
     _emit_warnings,
-    _escalate_if_armed,
     _handle_error,
     _hint_from_actions,
     _hint_next,
@@ -46,13 +60,7 @@ from ._merge_request_common import (
     _resolve_target,
     _stamp_target,
     _usage_error,
-    _warn_armed,
 )
-
-writes_app = typer.Typer()
-
-
-_REASON_MAX_LENGTH = 1000  # MergeRequestRejectRequest::REASON_MAX_LENGTH, server-side cap
 
 _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt")
 _TITLE_OPT = typer.Option(None, "--title", help="Merge request title")
@@ -67,32 +75,11 @@ _REVIEWER_OPT = typer.Option(
         "given set REPLACES the current reviewers -- it never appends"
     ),
 )
-_AUTO_MERGE_STRATEGY_OPT = typer.Option(
-    None,
-    "--auto-merge-strategy",
-    help=(
-        "immediately | scheduled | none. ARMING (immediately/scheduled) is a destructive "
-        "operation: once the merge request is approved, the backend merges it into "
-        "production on its own -- no `merge` call involved. `none` disarms"
-    ),
-)
-_AUTO_MERGE_AT_OPT = typer.Option(
-    None,
-    "--auto-merge-at",
-    help="When to auto-merge (ISO 8601); required with --auto-merge-strategy scheduled",
-)
 _EXTERNAL_ID_OPT = typer.Option(
-    None, "--external-id", help="Free-form correlation id, e.g. a ticket (max 255 chars)"
+    None,
+    "--external-id",
+    help=f"Free-form correlation id, e.g. a ticket (max {MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH} chars)",
 )
-
-
-def _validate_auto_merge_flags(formatter: Any, strategy: str | None, at: str | None) -> bool:
-    """Exit 2 on a bad strategy or pairing (the service owns the vocabulary and
-    the rule, so the router and the CLI cannot drift); return whether the flags ARM."""
-    problem = validate_auto_merge_flags(strategy, at)
-    if problem:
-        _usage_error(formatter, problem)
-    return arms_auto_merge(strategy)
 
 
 def _confirm_or_abort(formatter: Any, yes: bool, question: str) -> None:
@@ -105,15 +92,31 @@ def _confirm_or_abort(formatter: Any, yes: bool, question: str) -> None:
         raise typer.Exit(code=0)
 
 
-def _arming_question(strategy: str, at: str | None, *, subject: str) -> str:
-    when = f" at {at}" if at else ""
-    return (
-        f"Arm auto-merge ({strategy}{when}) on {subject}? Once it is approved, the backend "
-        "will merge it into production automatically -- without a `merge` call. Continue?"
+def _warn_if_armed(formatter: Any, result: dict[str, Any]) -> None:
+    """After a destructive transition: if the MR is armed for auto-merge, say what
+    that means right now. Read off the RESULT the service returned (the enriched
+    row carries ``autoMergeStrategy``) -- no extra GET, no payload injection;
+    a --json consumer reads the same field. Phrased from the resulting state:
+    approved -> the backend merges on its next tick; anything else -> it will,
+    the moment the MR is approved."""
+    strategy = result.get("autoMergeStrategy")
+    if not arms_auto_merge(strategy):
+        return
+    state = str(result.get("state") or "")
+    when = (
+        "the backend will merge it into production on its next tick"
+        if state == "approved"
+        else "the backend will merge it into production as soon as it is approved"
+    )
+    formatter.warning(
+        f"Auto-merge is armed ({strategy}) -- {when}. Disarm with "
+        f"`merge-request auto-merge --strategy {AUTO_MERGE_DISARMED}` if that is not intended."
     )
 
 
-@writes_app.command("create")
+# -- Writes: shape the MR without moving it -------------------------------------------
+
+
 def merge_request_create(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
@@ -125,31 +128,17 @@ def merge_request_create(
     ),
     description: str | None = _DESCRIPTION_OPT,
     reviewer_id: list[int] | None = _REVIEWER_OPT,
-    auto_merge_strategy: str | None = _AUTO_MERGE_STRATEGY_OPT,
-    auto_merge_at: str | None = _AUTO_MERGE_AT_OPT,
     external_id: str | None = _EXTERNAL_ID_OPT,
-    yes: bool = _YES_OPT,
 ) -> None:
     """Open a merge request from a development branch into production.
 
     The target is always the default branch; the source is --branch or the
     active branch. A branch can have one merge request, ever. On a non-SOX
     project with 0 required approvals you can `merge` straight from here --
-    no `request-review` needed.
+    no `request-review` needed. Auto-merge is a separate, destructive step:
+    `merge-request auto-merge`.
     """
     formatter = get_formatter(ctx)
-    arming = _validate_auto_merge_flags(formatter, auto_merge_strategy, auto_merge_at)
-    if arming:
-        # Arming IS a (delayed) production merge: destructive, and under
-        # --json it must name its target -- here the source branch.
-        check_cli_operation(ctx, "merge-request.create --auto-merge-strategy")
-        _require_explicit_target_under_json(
-            formatter,
-            merge_request_id=None,
-            branch=branch,
-            reason="--auto-merge-strategy arms an automatic production merge.",
-            hint="--branch",
-        )
     service = get_service(ctx, "merge_request_service")
     try:
         alias = resolve_project_alias(ctx, formatter, project)
@@ -164,24 +153,12 @@ def merge_request_create(
                 error_code=ErrorCode.CONFIG_ERROR,
             )
             raise typer.Exit(code=5)
-        if arming:
-            _confirm_or_abort(
-                formatter,
-                yes,
-                _arming_question(
-                    str(auto_merge_strategy),
-                    auto_merge_at,
-                    subject=f"the new merge request from branch {branch_id}",
-                ),
-            )
         result = service.create_merge_request(
             alias,
             branch_from_id=branch_id,
             title=title,
             description=description,
             reviewer_ids=reviewer_id or None,  # never [] -- that REPLACES the set with nothing
-            auto_merge_strategy=auto_merge_strategy,
-            auto_merge_at=auto_merge_at,
             external_id=external_id,
         )
     except (ConfigError, KeboolaApiError) as exc:
@@ -189,8 +166,6 @@ def merge_request_create(
 
     result.setdefault("merge_request_id", result.get("id"))
     result.setdefault("resolved_from_branch", branch is None)
-    if arming:
-        _warn_armed(formatter, str(auto_merge_strategy), result)
     _print_row_success(
         formatter,
         result,
@@ -200,7 +175,6 @@ def merge_request_create(
     _hint_from_actions(formatter, result)
 
 
-@writes_app.command("update")
 def merge_request_update(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
@@ -209,37 +183,75 @@ def merge_request_update(
     title: str | None = _TITLE_OPT,
     description: str | None = _DESCRIPTION_OPT,
     reviewer_id: list[int] | None = _REVIEWER_OPT,
-    auto_merge_strategy: str | None = _AUTO_MERGE_STRATEGY_OPT,
-    auto_merge_at: str | None = _AUTO_MERGE_AT_OPT,
     external_id: str | None = _EXTERNAL_ID_OPT,
-    yes: bool = _YES_OPT,
 ) -> None:
-    """Change a merge request's title, description, reviewers, auto-merge or external id.
+    """Change a merge request's title, description, reviewers or external id.
 
     Omitted fields stay as they are; an empty string clears --description /
-    --external-id. --reviewer-id replaces the whole reviewer set.
+    --external-id. --reviewer-id replaces the whole reviewer set. Auto-merge
+    is not a field here -- it is the destructive `merge-request auto-merge`.
     """
     formatter = get_formatter(ctx)
-    fields = (
-        title,
-        description,
-        reviewer_id or None,
-        auto_merge_strategy,
-        auto_merge_at,
-        external_id,
-    )
-    if all(f is None for f in fields):
+    if all(f is None for f in (title, description, reviewer_id or None, external_id)):
         # PUT {} is a server-side no-op that answers 200 -- refuse instead of
         # reporting success having changed nothing.
         _usage_error(formatter, "Nothing to update: pass at least one field flag.")
-    arming = _validate_auto_merge_flags(formatter, auto_merge_strategy, auto_merge_at)
-    if arming:
-        check_cli_operation(ctx, "merge-request.update --auto-merge-strategy")
+    service = get_service(ctx, "merge_request_service")
+    try:
+        target = _resolve_target(
+            ctx,
+            formatter,
+            project=project,
+            merge_request_id=merge_request_id,
+            branch=branch,
+            need_row=False,
+        )
+        result = _stamp_target(
+            service.update_merge_request(
+                target.alias,
+                target.merge_request_id,
+                title=title,
+                description=description,
+                reviewer_ids=reviewer_id or None,
+                external_id=external_id,
+            ),
+            target,
+        )
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_error(formatter, exc)
+
+    _print_row_success(formatter, result, f"Updated merge request #{target.merge_request_id}")
+    _emit_warnings(formatter, result)
+    _hint_from_actions(formatter, result)
+
+
+# -- Transitions ----------------------------------------------------------------------------
+
+
+def _transition(
+    ctx: typer.Context,
+    *,
+    destructive_reason: str | None,
+    project: str | None,
+    merge_request_id: int | None,
+    branch: int | None,
+    call: Any,
+    headline: str,
+) -> None:
+    """Shared body of request-review / approve / request-changes.
+
+    ``destructive_reason`` is set for the two that move an MR toward
+    ``approved`` -- they are in the destructive class, so under ``--json`` the
+    target must be explicit, checked here BEFORE any network call.
+    request-changes moves the MR away from approved and is a plain write.
+    """
+    formatter = get_formatter(ctx)
+    if destructive_reason:
         _require_explicit_target_under_json(
             formatter,
             merge_request_id=merge_request_id,
             branch=branch,
-            reason="--auto-merge-strategy arms an automatic production merge.",
+            reason=destructive_reason,
         )
     service = get_service(ctx, "merge_request_service")
     try:
@@ -251,151 +263,81 @@ def merge_request_update(
             branch=branch,
             need_row=False,
         )
-        if arming:
-            _confirm_or_abort(
-                formatter,
-                yes,
-                _arming_question(
-                    str(auto_merge_strategy),
-                    auto_merge_at,
-                    subject=f"merge request #{target.merge_request_id}",
-                ),
-            )
-        result = _stamp_target(
-            service.update_merge_request(
-                target.alias,
-                target.merge_request_id,
-                title=title,
-                description=description,
-                reviewer_ids=reviewer_id or None,
-                auto_merge_strategy=auto_merge_strategy,
-                auto_merge_at=auto_merge_at,
-                external_id=external_id,
-            ),
-            target,
-        )
-    except (ConfigError, KeboolaApiError) as exc:
-        _handle_error(formatter, exc)
-
-    if arming:
-        _warn_armed(formatter, str(auto_merge_strategy), result)
-    _print_row_success(formatter, result, f"Updated merge request #{target.merge_request_id}")
-    _emit_warnings(formatter, result)
-    _hint_from_actions(formatter, result)
-
-
-def _transition(
-    ctx: typer.Context,
-    *,
-    operation: str,
-    project: str | None,
-    merge_request_id: int | None,
-    branch: int | None,
-    escalate_when_armed: bool,
-    call: Any,
-    headline: str,
-) -> None:
-    """Shared body of request-review / approve / request-changes.
-
-    ``escalate_when_armed`` is True for the two that move an MR toward
-    ``approved`` (what an armed auto-merge waits for); request-changes moves
-    it AWAY and deletes approvals, so it never escalates.
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "merge_request_service")
-    try:
-        target = _resolve_target(
-            ctx,
-            formatter,
-            project=project,
-            merge_request_id=merge_request_id,
-            branch=branch,
-            need_row=escalate_when_armed,
-        )
-        strategy = (
-            _escalate_if_armed(
-                ctx,
-                formatter,
-                target,
-                operation=operation,
-                merge_request_id=merge_request_id,
-                branch=branch,
-            )
-            if escalate_when_armed
-            else None
-        )
         result = _stamp_target(call(service, target), target)
     except (ConfigError, KeboolaApiError) as exc:
         _handle_error(formatter, exc)
 
-    if strategy:
-        _warn_armed(formatter, strategy, result)
     _print_row_success(formatter, result, headline.format(id=target.merge_request_id))
+    if destructive_reason:
+        _warn_if_armed(formatter, result)
     _emit_warnings(formatter, result)
     _hint_from_actions(formatter, result)
 
 
-@writes_app.command("request-review")
 def merge_request_request_review(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
     merge_request_id: int | None = _MERGE_REQUEST_ID_OPT,
     branch: int | None = _BRANCH_OPT,
 ) -> None:
-    """Send the merge request for review.
+    """Send the merge request for review (destructive: it moves the MR toward production).
 
     On a non-SOX project with 0 required approvals (the default) the backend
     finishes the review itself and the merge request lands directly in
-    `approved` -- so `merge` works straight from `development` and this step
-    is optional. Note: with no reviewers selected, the review-requested email
-    goes to every project member.
+    `approved` -- where an armed auto-merge fires, and `merge` needs nothing
+    more. `merge` works straight from `development` there, so this step is
+    optional. Note: with no reviewers selected, the review-requested email
+    goes to every project member. Under --json the target must be explicit.
     """
     _transition(
         ctx,
-        operation="request-review",
+        destructive_reason=(
+            "`merge-request request-review` moves the merge request toward production "
+            "(on a 0-approval project it lands directly in `approved`)."
+        ),
         project=project,
         merge_request_id=merge_request_id,
         branch=branch,
-        escalate_when_armed=True,
         call=lambda s, t: s.request_review(t.alias, t.merge_request_id),
         headline="Review requested for merge request #{id}",
     )
 
 
-@writes_app.command("approve")
 def merge_request_approve(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
     merge_request_id: int | None = _MERGE_REQUEST_ID_OPT,
     branch: int | None = _BRANCH_OPT,
 ) -> None:
-    """Add your approval to a merge request under review.
+    """Add your approval (destructive: the last approval is what a merge waits for).
 
     Only possible while the merge request is `in_review`. On a non-SOX project
     with 0 required approvals (the default) that state is never reached --
     `request-review` jumps straight to `approved` -- so this command answers
-    422 there. It exists for projects that require approvals.
+    422 there. It exists for projects that require approvals. Under --json the
+    target must be explicit.
     """
     _transition(
         ctx,
-        operation="approve",
+        destructive_reason=(
+            "`merge-request approve` moves the merge request toward production "
+            "(the last approval is what a merge -- or an armed auto-merge -- waits for)."
+        ),
         project=project,
         merge_request_id=merge_request_id,
         branch=branch,
-        escalate_when_armed=True,
         call=lambda s, t: s.approve(t.alias, t.merge_request_id),
         headline="Approved merge request #{id}",
     )
 
 
-@writes_app.command("request-changes")
 def merge_request_request_changes(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
     merge_request_id: int | None = _MERGE_REQUEST_ID_OPT,
     branch: int | None = _BRANCH_OPT,
     reason: str | None = typer.Option(
-        None, "--reason", help=f"Why (max {_REASON_MAX_LENGTH} characters)"
+        None, "--reason", help=f"Why (max {MERGE_REQUEST_REASON_MAX_LENGTH} characters)"
     ),
 ) -> None:
     """Send the merge request back to development; existing approvals are removed.
@@ -406,23 +348,111 @@ def merge_request_request_changes(
     resubmitted; deleting the branch is the terminal outcome.
     """
     formatter = get_formatter(ctx)
-    if reason is not None and len(reason) > _REASON_MAX_LENGTH:
+    # The service validates the cap (one constant, one rule); this pre-check
+    # exists only so the flag error carries exit 2 like every other bad flag.
+    if reason is not None and len(reason) > MERGE_REQUEST_REASON_MAX_LENGTH:
         _usage_error(
-            formatter, f"--reason is capped at {_REASON_MAX_LENGTH} characters (got {len(reason)})."
+            formatter,
+            f"--reason is capped at {MERGE_REQUEST_REASON_MAX_LENGTH} characters (got {len(reason)}).",
         )
     _transition(
         ctx,
-        operation="request-changes",
+        destructive_reason=None,
         project=project,
         merge_request_id=merge_request_id,
         branch=branch,
-        escalate_when_armed=False,
         call=lambda s, t: s.request_changes(t.alias, t.merge_request_id, reason=reason),
         headline="Changes requested on merge request #{id}",
     )
 
 
-@writes_app.command("merge")
+# -- Auto-merge ------------------------------------------------------------------------------
+
+
+def merge_request_auto_merge(
+    ctx: typer.Context,
+    project: str | None = _PROJECT_OPT,
+    merge_request_id: int | None = _MERGE_REQUEST_ID_OPT,
+    branch: int | None = _BRANCH_OPT,
+    strategy: str = typer.Option(
+        ...,
+        "--strategy",
+        help=(
+            f"{' | '.join(AUTO_MERGE_STRATEGIES)}. `immediately` and `scheduled` ARM: once "
+            "the merge request is approved, the backend merges it into production on its own "
+            f"-- no `merge` call involved. `{AUTO_MERGE_DISARMED}` disarms"
+        ),
+    ),
+    at: str | None = typer.Option(
+        None, "--at", help="When to auto-merge (ISO 8601); required with --strategy scheduled"
+    ),
+    yes: bool = _YES_OPT,
+) -> None:
+    """Arm or disarm automatic merging of this merge request (destructive).
+
+    A backend scheduler runs every `approved` merge request whose strategy is
+    `immediately` (or `scheduled` and due) through the same merge processor
+    `merge` uses -- on its own, retrying until it lands, with `merge` never
+    called. Arming is therefore a delayed production merge and its own,
+    consciously taken step: it is not a flag on `create` or `update`. Under
+    --json the target must be explicit.
+    """
+    formatter = get_formatter(ctx)
+    problem = validate_auto_merge_flags(strategy, at)
+    if problem:
+        _usage_error(formatter, problem)
+    _require_explicit_target_under_json(
+        formatter,
+        merge_request_id=merge_request_id,
+        branch=branch,
+        reason="`merge-request auto-merge` arms (or disarms) an automatic production merge.",
+    )
+    service = get_service(ctx, "merge_request_service")
+    try:
+        target = _resolve_target(
+            ctx,
+            formatter,
+            project=project,
+            merge_request_id=merge_request_id,
+            branch=branch,
+            need_row=False,
+        )
+        if arms_auto_merge(strategy):
+            when = f" at {at}" if at else ""
+            _confirm_or_abort(
+                formatter,
+                yes,
+                f"Arm auto-merge ({strategy}{when}) on merge request #{target.merge_request_id}? "
+                "Once it is approved, the backend will merge it into production automatically "
+                "-- without a `merge` call. Continue?",
+            )
+        result = _stamp_target(
+            service.update_merge_request(
+                target.alias,
+                target.merge_request_id,
+                auto_merge_strategy=strategy,
+                auto_merge_at=at,
+            ),
+            target,
+        )
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_error(formatter, exc)
+
+    verb = "Armed" if arms_auto_merge(strategy) else "Disarmed"
+    _print_row_success(
+        formatter,
+        result,
+        f"{verb} auto-merge ({strategy}) on merge request #{target.merge_request_id}",
+    )
+    if arms_auto_merge(strategy):
+        _warn_if_armed(formatter, result)
+    _emit_warnings(formatter, result)
+    _hint_from_actions(formatter, result)
+
+
+# -- Merge ------------------------------------------------------------------------------------
+
+
 def merge_request_merge(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
@@ -438,7 +468,6 @@ def merge_request_merge(
     explicit: pass --merge-request-id or --branch.
     """
     formatter = get_formatter(ctx)
-    # Statically destructive: the explicit-target rule applies before any lookup.
     _require_explicit_target_under_json(
         formatter,
         merge_request_id=merge_request_id,
@@ -484,9 +513,9 @@ def merge_request_merge(
 def _render_merge_result(console: Any, data: dict[str, Any]) -> None:
     console.print(f"[bold green]Success:[/bold green] {escape(str(data['message']))}")
     if data.get("cleanup_skipped"):
-        # Keyed on the structured flag (followups F3), never on warning text:
-        # the local cleanup did NOT run, so active_branch_id and the sync
-        # mapping may still point at the branch the merge just doomed.
+        # Keyed on the structured flag, never on warning text: the local
+        # cleanup did NOT run, so active_branch_id and the sync mapping may
+        # still point at the branch the merge just doomed.
         console.print(
             "[yellow]Local cleanup skipped[/yellow]: the source branch id could not be read "
             f"({escape(str(data.get('branch_from_id_raw')))}); active branch and sync mapping "
@@ -494,7 +523,9 @@ def _render_merge_result(console: Any, data: dict[str, Any]) -> None:
         )
 
 
-@writes_app.command("resolve")
+# -- Resolve --------------------------------------------------------------------------------
+
+
 def merge_request_resolve(
     ctx: typer.Context,
     project: str | None = _PROJECT_OPT,
@@ -523,12 +554,14 @@ def merge_request_resolve(
         None, "--change-description", help="Version message for the rebased configuration"
     ),
 ) -> None:
-    """Resolve one conflicting configuration by rebasing it onto production's version.
+    """Resolve one conflicting configuration (destructive: it removes a merge blocker).
 
     Every mode replaces the configuration in your branch; the previous content
     stays in its version history. Rebasing each listed conflict makes the merge
-    request mergeable -- there is no re-validate step. There is deliberately no
-    --all: conflicts are meant to be walked, not waved away.
+    request mergeable -- there is no re-validate step, and on an armed MR the
+    last resolution is what lets the backend merge. There is deliberately no
+    --all: conflicts are meant to be walked, not waved away. Under --json the
+    target must be explicit.
     """
     formatter = get_formatter(ctx)
     if (take is None) == (resolved is None):
@@ -546,6 +579,12 @@ def merge_request_resolve(
                 formatter, "--resolved must be a JSON object (the replaced configuration body)."
             )
         body = parsed
+    _require_explicit_target_under_json(
+        formatter,
+        merge_request_id=merge_request_id,
+        branch=branch,
+        reason="`merge-request resolve` removes a blocker the merge is waiting on.",
+    )
     service = get_service(ctx, "merge_request_service")
     try:
         target = _resolve_target(
@@ -554,17 +593,7 @@ def merge_request_resolve(
             project=project,
             merge_request_id=merge_request_id,
             branch=branch,
-            need_row=True,
-        )
-        # Resolving the last conflict on an armed, approved MR unblocks the
-        # scheduler's retry loop -- it causes the merge as surely as approve does.
-        strategy = _escalate_if_armed(
-            ctx,
-            formatter,
-            target,
-            operation="resolve",
-            merge_request_id=merge_request_id,
-            branch=branch,
+            need_row=False,
         )
         result = _stamp_target(
             service.resolve_conflict(
@@ -581,8 +610,6 @@ def merge_request_resolve(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_error(formatter, exc)
 
-    if strategy:
-        _warn_armed(formatter, strategy, result)
     formatter.output(
         result,
         lambda c, d: c.print(
@@ -599,5 +626,16 @@ def merge_request_resolve(
 
 
 def register(app: typer.Typer) -> None:
-    """Mount the write commands flat onto the group's app (same namespace, same --help)."""
-    app.registered_commands.extend(writes_app.registered_commands)
+    """Mount the write commands flat onto the group's app -- same permission
+    namespace, same --help. Through Typer's PUBLIC API: ``app.command(name)`` is
+    a decorator factory, applied here to already-defined functions, so no
+    module-level Typer instance and no private attribute is involved.
+    """
+    app.command("create")(merge_request_create)
+    app.command("update")(merge_request_update)
+    app.command("request-review")(merge_request_request_review)
+    app.command("approve")(merge_request_approve)
+    app.command("request-changes")(merge_request_request_changes)
+    app.command("auto-merge")(merge_request_auto_merge)
+    app.command("merge")(merge_request_merge)
+    app.command("resolve")(merge_request_resolve)

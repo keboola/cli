@@ -205,6 +205,11 @@ STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
+# Server-side caps on merge-request fields (MergeRequestRejectRequest::REASON_MAX_LENGTH,
+# Assert\Length(max: 255) on externalId in the create/update DTOs). Validated ONCE, in
+# MergeRequestService, so the CLI and the serve router cannot drift on the number.
+MERGE_REQUEST_REASON_MAX_LENGTH = 1000
+MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH = 255
 
 # --- Workspace Table Loading ---
 # A workspace load is NOT fire-and-forget: when the local poller gives up, the

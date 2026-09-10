@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**247 operations** across **215 paths** and **31 routers**.
+**248 operations** across **216 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -353,7 +353,7 @@ Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata
 | `PUT` | `/branches/{project}/metadata/{key}` | Set a branch metadata value |
 | `DELETE` | `/branches/{project}/metadata/{metadata_id}` | Delete a branch metadata entry |
 
-### `merge-requests` (12 operations)
+### `merge-requests` (13 operations)
 
 Merge requests (Branches 2.0, non-SOX): list / detail / create / update / review transitions / merge, plus conflict inspection and resolution. Every route enforces the permission policy; `merge` and any operation that arms or completes an auto-merge are destructive. `POST .../merge` is synchronous and may block up to 600 s. Mirrors `kbagent merge-request *`.
 
@@ -366,6 +366,7 @@ Merge requests (Branches 2.0, non-SOX): list / detail / create / update / review
 | `PUT` | `/merge-requests/{project}/{merge_request_id}` | Update a merge request |
 | `GET` | `/merge-requests/{project}/{merge_request_id}/conflicts` | List conflicts |
 | `GET` | `/merge-requests/{project}/{merge_request_id}/diff/{component_id}/{config_id}` | Three-way diff of one conflicting configuration |
+| `PUT` | `/merge-requests/{project}/{merge_request_id}/auto-merge` | Arm or disarm auto-merge |
 | `POST` | `/merge-requests/{project}/{merge_request_id}/request-review` | Send for review |
 | `POST` | `/merge-requests/{project}/{merge_request_id}/approve` | Approve |
 | `POST` | `/merge-requests/{project}/{merge_request_id}/request-changes` | Request changes |

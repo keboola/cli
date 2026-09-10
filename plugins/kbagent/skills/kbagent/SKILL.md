@@ -249,23 +249,25 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
 | Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
-| Change a merge request's title, description, reviewers, auto-merge or external id | `kbagent merge-request update` |
-| Send the merge request for review | `kbagent merge-request request-review` |
-| Add your approval to a merge request under review | `kbagent merge-request approve` |
+| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve` |
 | Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --strategy STRATEGY` |
 | Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
-| Resolve one conflicting configuration by rebasing it onto production's version | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List the project's merge requests, newest first | `kbagent mr list` |
 | Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
 | List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
 | Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
-| Change a merge request's title, description, reviewers, auto-merge or external id | `kbagent mr update` |
-| Send the merge request for review | `kbagent mr request-review` |
-| Add your approval to a merge request under review | `kbagent mr approve` |
+| Change a merge request's title, description, reviewers or external id | `kbagent mr update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve` |
 | Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --strategy STRATEGY` |
 | Merge the merge request into production and delete its source branch | `kbagent mr merge` |
-| Resolve one conflicting configuration by rebasing it onto production's version | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |

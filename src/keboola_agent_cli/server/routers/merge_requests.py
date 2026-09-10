@@ -10,13 +10,12 @@ PATH`` writes to the host's disk; ``GET .../diff`` returns the same payload
 
 **Every route enforces the permission policy** (``Depends(require_permission)``),
 which most routers do not yet do. Here it is not optional: the CLI classifies
-``merge`` as destructive and escalates arming auto-merge and the transitions
-on an armed MR to destructive too (``permissions.FLAG_ESCALATIONS``); without
-the same checks over HTTP that whole analysis would be decorative for
-``serve`` callers. The static class is a route dependency; the state/flag-
-derived escalations are evaluated in the route body, where the request body
-(and, via one row GET, the MR's ``autoMergeStrategy``) is known. Design
-record: ``docs/merge-requests-layer1.md``.
+``merge``, ``request-review``, ``approve``, ``resolve`` and ``auto-merge`` as
+destructive -- statically, by command, never by flag or MR state -- and
+without the same checks over HTTP that classification would be decorative
+for ``serve`` callers. Because the class is static, the route dependency is
+the whole check; nothing is evaluated from the request body or a prior GET.
+Design record: ``docs/merge-requests-layer1.md``.
 """
 
 from __future__ import annotations
@@ -27,19 +26,14 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ...errors import ErrorCode, KeboolaApiError
-from ...permissions import PermissionEngine
 from ...services.merge_request_service import (
-    AUTO_MERGE_DISARMED,
     STATE_FILTER_VOCABULARY,
     TAKE_MODES,
-    arms_auto_merge,
     validate_auto_merge_flags,
 )
-from ..dependencies import ServiceRegistry, get_permission_engine, get_registry, require_permission
+from ..dependencies import ServiceRegistry, get_registry, require_permission
 
 router = APIRouter(prefix="/merge-requests", tags=["merge-requests"])
-
-_REASON_MAX_LENGTH = 1000  # MergeRequestRejectRequest::REASON_MAX_LENGTH, same cap as the CLI
 
 
 def _perm(operation: str) -> Any:
@@ -54,30 +48,6 @@ def _invalid(message: str) -> KeboolaApiError:
     )
 
 
-def _arming(strategy: str | None, at: str | None) -> bool:
-    """400 on a bad strategy / pairing (the service owns the rule, so the CLI and
-    this router cannot drift); return whether the body ARMS auto-merge."""
-    problem = validate_auto_merge_flags(strategy, at)
-    if problem:
-        raise _invalid(problem)
-    return arms_auto_merge(strategy)
-
-
-def _escalate_if_armed(
-    registry: ServiceRegistry,
-    engine: PermissionEngine,
-    project: str,
-    merge_request_id: int,
-    operation: str,
-) -> None:
-    """request-review / approve / resolve on an MR armed for auto-merge cause a
-    production merge; apply the same state-derived escalation the CLI does.
-    One row GET, never the three-call detail."""
-    row = registry.merge_request.get_merge_request_row(project, merge_request_id)
-    if (row.get("autoMergeStrategy") or AUTO_MERGE_DISARMED) != AUTO_MERGE_DISARMED:
-        engine.check_or_raise(f"merge-request.{operation} --auto-merge-armed")
-
-
 # -- Bodies ------------------------------------------------------------------------------------
 
 
@@ -86,8 +56,6 @@ class MergeRequestCreate(BaseModel):
     title: str
     description: str | None = None
     reviewer_ids: list[int] | None = None
-    auto_merge_strategy: str | None = None
-    auto_merge_at: str | None = None
     external_id: str | None = None
 
 
@@ -95,9 +63,12 @@ class MergeRequestUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     reviewer_ids: list[int] | None = None
-    auto_merge_strategy: str | None = None
-    auto_merge_at: str | None = None
     external_id: str | None = None
+
+
+class AutoMerge(BaseModel):
+    strategy: str
+    at: str | None = None
 
 
 class RequestChanges(BaseModel):
@@ -196,20 +167,15 @@ def create_merge_request(
     project: str,
     body: MergeRequestCreate,
     registry: ServiceRegistry = Depends(get_registry),
-    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
-    """Open a merge request from a dev branch into production. Arming auto-merge
-    is destructive (a delayed production merge). Mirrors `kbagent merge-request create`."""
-    if _arming(body.auto_merge_strategy, body.auto_merge_at):
-        engine.check_or_raise("merge-request.create --auto-merge-strategy")
+    """Open a merge request from a dev branch into production. Auto-merge is a
+    separate, destructive route (PUT .../auto-merge). Mirrors `kbagent merge-request create`."""
     return registry.merge_request.create_merge_request(
         project,
         branch_from_id=body.branch_from_id,
         title=body.title,
         description=body.description,
         reviewer_ids=body.reviewer_ids,
-        auto_merge_strategy=body.auto_merge_strategy,
-        auto_merge_at=body.auto_merge_at,
         external_id=body.external_id,
     )
 
@@ -224,33 +190,41 @@ def update_merge_request(
     merge_request_id: int,
     body: MergeRequestUpdate,
     registry: ServiceRegistry = Depends(get_registry),
-    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Omitted fields stay; an empty string clears description/external_id;
-    reviewer_ids replaces the set. Mirrors `kbagent merge-request update`."""
-    if all(
-        v is None
-        for v in (
-            body.title,
-            body.description,
-            body.reviewer_ids,
-            body.auto_merge_strategy,
-            body.auto_merge_at,
-            body.external_id,
-        )
-    ):
+    reviewer_ids replaces the set. Auto-merge is not a field here (PUT
+    .../auto-merge). Mirrors `kbagent merge-request update`."""
+    if all(v is None for v in (body.title, body.description, body.reviewer_ids, body.external_id)):
         raise _invalid("Nothing to update: pass at least one field.")
-    if _arming(body.auto_merge_strategy, body.auto_merge_at):
-        engine.check_or_raise("merge-request.update --auto-merge-strategy")
     return registry.merge_request.update_merge_request(
         project,
         merge_request_id,
         title=body.title,
         description=body.description,
         reviewer_ids=body.reviewer_ids,
-        auto_merge_strategy=body.auto_merge_strategy,
-        auto_merge_at=body.auto_merge_at,
         external_id=body.external_id,
+    )
+
+
+@router.put(
+    "/{project}/{merge_request_id}/auto-merge",
+    summary="Arm or disarm auto-merge",
+    dependencies=[_perm("auto-merge")],
+)
+def set_auto_merge(
+    project: str,
+    merge_request_id: int,
+    body: AutoMerge,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """DESTRUCTIVE: `immediately`/`scheduled` arm a backend scheduler that merges the
+    MR into production on its own once approved -- a delayed production merge.
+    `none` disarms (same route, same class). Mirrors `kbagent merge-request auto-merge`."""
+    problem = validate_auto_merge_flags(body.strategy, body.at)
+    if problem:
+        raise _invalid(problem)
+    return registry.merge_request.update_merge_request(
+        project, merge_request_id, auto_merge_strategy=body.strategy, auto_merge_at=body.at
     )
 
 
@@ -263,11 +237,9 @@ def request_review(
     project: str,
     merge_request_id: int,
     registry: ServiceRegistry = Depends(get_registry),
-    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
-    """On a 0-approval project this lands directly in `approved`. Destructive
-    when the MR is armed for auto-merge. Mirrors `kbagent merge-request request-review`."""
-    _escalate_if_armed(registry, engine, project, merge_request_id, "request-review")
+    """DESTRUCTIVE: moves the MR toward production -- on a 0-approval project it
+    lands directly in `approved`. Mirrors `kbagent merge-request request-review`."""
     return registry.merge_request.request_review(project, merge_request_id)
 
 
@@ -278,11 +250,9 @@ def approve(
     project: str,
     merge_request_id: int,
     registry: ServiceRegistry = Depends(get_registry),
-    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
-    """Only from `in_review`; 422 on a 0-approval project. Destructive when the
-    MR is armed for auto-merge. Mirrors `kbagent merge-request approve`."""
-    _escalate_if_armed(registry, engine, project, merge_request_id, "approve")
+    """DESTRUCTIVE: the last approval is what a merge waits for. Only from
+    `in_review`; 422 on a 0-approval project. Mirrors `kbagent merge-request approve`."""
     return registry.merge_request.approve(project, merge_request_id)
 
 
@@ -299,9 +269,8 @@ def request_changes(
 ) -> dict[str, Any]:
     """Back to development, approvals removed; also the closest thing to closing.
     Mirrors `kbagent merge-request request-changes`."""
+    # The cap is validated in the service (one constant, one rule); INVALID_ARGUMENT -> 400.
     reason = body.reason if body else None
-    if reason is not None and len(reason) > _REASON_MAX_LENGTH:
-        raise _invalid(f"reason is capped at {_REASON_MAX_LENGTH} characters (got {len(reason)}).")
     return registry.merge_request.request_changes(project, merge_request_id, reason=reason)
 
 
@@ -331,16 +300,14 @@ def resolve_conflict(
     config_id: str,
     body: ResolveConflict,
     registry: ServiceRegistry = Depends(get_registry),
-    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
-    """Exactly one of `take` (ours|theirs|delete) or `resolved` (the full replaced
-    body -- start from the diff's `resolution_candidate`). Destructive when the
-    MR is armed for auto-merge. Mirrors `kbagent merge-request resolve`."""
+    """DESTRUCTIVE: removes a blocker the merge is waiting on. Exactly one of `take`
+    (ours|theirs|delete) or `resolved` (the full replaced body -- start from the
+    diff's `resolution_candidate`). Mirrors `kbagent merge-request resolve`."""
     if (body.take is None) == (body.resolved is None):
         raise _invalid("Pass exactly one of take (ours|theirs|delete) or resolved.")
     if body.take is not None and body.take not in TAKE_MODES:
         raise _invalid(f"Unknown take {body.take!r}: use {', '.join(TAKE_MODES)}.")
-    _escalate_if_armed(registry, engine, project, merge_request_id, "resolve")
     return registry.merge_request.resolve_conflict(
         project,
         merge_request_id,

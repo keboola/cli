@@ -1236,23 +1236,31 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Readiness (mergeable / merge_blockers), viewer flags, allowed_actions, feature_enabled, reviewers,
     approvals, change log (EMPTY until sent for review -- by design), live conflicts.
 
-  kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]
-    Open a merge request from --branch (or the active branch) into production.
+  kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--external-id X]
+    Open a merge request from --branch (or the active branch) into production. Write.
 
-  kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy S] [--auto-merge-at TS] [--external-id X] [--yes]
+  kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--external-id X]
     Omitted fields stay; "" clears description/external-id; --reviewer-id REPLACES the set.
-    No fields -> exit 2.
+    No fields -> exit 2. Write; auto-merge is NOT a field here (see auto-merge).
 
   kbagent merge-request request-review [--project A] [--merge-request-id N | --branch B]
-    On a 0-approval project lands directly in `approved`; `merge` works without it.
-    With no reviewers selected the email goes to EVERY project member.
+    DESTRUCTIVE (moves the MR toward production): on a 0-approval project it lands directly
+    in `approved`, where an armed auto-merge fires. `merge` works without it. With no
+    reviewers selected the email goes to EVERY project member. --json needs an explicit target.
 
   kbagent merge-request approve [--project A] [--merge-request-id N | --branch B]
-    Only from in_review -- 422 on a 0-approval project (in_review is unreachable there).
+    DESTRUCTIVE (the last approval is what a merge waits for). Only from in_review -- 422 on
+    a 0-approval project (in_review is unreachable there). --json needs an explicit target.
 
   kbagent merge-request request-changes [--project A] [--merge-request-id N | --branch B] [--reason TEXT]
     Back to development, approvals removed. Also the closest thing to "close" (no cancel
-    endpoint; the MR stays in development). --reason max 1000 chars.
+    endpoint; the MR stays in development). --reason max 1000 chars. Write.
+
+  kbagent merge-request auto-merge --strategy immediately|scheduled|none [--at TS] [--project A] [--merge-request-id N | --branch B] [--yes]
+    DESTRUCTIVE: immediately/scheduled ARM a backend scheduler that merges the MR into
+    production on its own once approved -- a delayed production merge, `merge` never called.
+    `none` disarms (same command, same class). Prompts in human mode when arming; --json needs
+    an explicit target. Not a flag on create/update -- arming is its own conscious step.
 
   kbagent merge-request merge [--project A] [--merge-request-id N | --branch B] [--yes]
     DESTRUCTIVE: merges into production and deletes the source branch. Blocks up to 10 min.
@@ -1267,13 +1275,16 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (your content, all five keys) to edit and hand back with `resolve --resolved @PATH`.
 
   kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [--project A] [--merge-request-id N | --branch B] [--change-description TEXT]
-    Rebase one conflicting config onto production's version. Rebase REPLACES: a --resolved
-    body must carry name, description, isDisabled, configuration, rows. No --all.
+    DESTRUCTIVE (removes a blocker the merge waits on). Rebase one conflicting config onto
+    production's version. Rebase REPLACES: a --resolved body must carry name, description,
+    isDisabled, configuration, rows. No --all. --json needs an explicit target.
 
-  AUTO-MERGE IS DESTRUCTIVE: arming (--auto-merge-strategy immediately|scheduled) makes the
-  backend merge the MR on its own once approved -- `merge` is never called. create/update
-  that arm, and request-review/approve/resolve on an already-armed MR, are blocked by
-  --deny-destructive and need an explicit target under --json. `none` disarms.
+  DESTRUCTIVE IS A PROPERTY OF THE COMMAND -- never of a flag or of the MR's state -- so a
+  policy is evaluated from the command name alone, before any network call. Destructive:
+  request-review, approve, resolve, merge, auto-merge (anything that moves an MR toward or
+  into production). Write: create, update, request-changes. --deny-destructive = an agent
+  that can observe and shape merge requests but never move one. Under --json every
+  destructive command requires an explicit target (--merge-request-id or --branch).
   Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
   on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
   a scoped token 403s on everything but list. Every result may carry warnings[].

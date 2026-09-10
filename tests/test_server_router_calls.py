@@ -2684,10 +2684,6 @@ def _mr_client(tmp_path: Path, svc: MagicMock, **app_kwargs: Any) -> TestClient:
     return TestClient(app)
 
 
-def _armed_row(strategy: str = "immediately") -> dict[str, Any]:
-    return {"id": MR_ID, "state": "development", "autoMergeStrategy": strategy}
-
-
 def test_merge_request_list_forwards_state_kwarg(tmp_path: Path) -> None:
     svc = MagicMock()
     svc.list_merge_requests.return_value = {"count": 0, "merge_requests": []}
@@ -2760,8 +2756,6 @@ def test_merge_request_create_forwards_every_kwarg(tmp_path: Path) -> None:
         title="T",
         description=None,
         reviewer_ids=[5],
-        auto_merge_strategy=None,
-        auto_merge_at=None,
         external_id="TCK-1",
     )
 
@@ -2836,36 +2830,6 @@ def test_merge_request_merge_is_destructive_over_http(tmp_path: Path) -> None:
     svc.merge.assert_not_called()
 
 
-def test_merge_request_arming_auto_merge_is_destructive_over_http(tmp_path: Path) -> None:
-    svc = MagicMock()
-    svc.create_merge_request.return_value = {"id": MR_ID}
-    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
-        armed = client.post(
-            f"/merge-requests/{PROJECT}",
-            json={"branch_from_id": 123, "title": "T", "auto_merge_strategy": "immediately"},
-            headers=AUTH,
-        )
-        disarmed = client.post(
-            f"/merge-requests/{PROJECT}",
-            json={"branch_from_id": 123, "title": "T", "auto_merge_strategy": "none"},
-            headers=AUTH,
-        )
-    assert armed.status_code == 403, armed.text
-    assert disarmed.status_code == 200, disarmed.text  # `none` is the disarm, never escalates
-    svc.create_merge_request.assert_called_once()
-
-
-def test_merge_request_transition_on_armed_mr_is_destructive_over_http(tmp_path: Path) -> None:
-    svc = MagicMock()
-    svc.get_merge_request_row.return_value = _armed_row()
-    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
-        res = client.post(f"/merge-requests/{PROJECT}/{MR_ID}/request-review", headers=AUTH)
-    assert res.status_code == 403, res.text
-    svc.get_merge_request_row.assert_called_once_with(PROJECT, MR_ID)  # the row tier, one GET
-    svc.get_merge_request.assert_not_called()
-    svc.request_review.assert_not_called()
-
-
 def test_merge_request_reads_pass_under_deny_destructive(tmp_path: Path) -> None:
     svc = MagicMock()
     svc.list_merge_requests.return_value = {"count": 0, "merge_requests": []}
@@ -2873,8 +2837,15 @@ def test_merge_request_reads_pass_under_deny_destructive(tmp_path: Path) -> None
         assert client.get(f"/merge-requests/{PROJECT}", headers=AUTH).status_code == 200
 
 
-def test_merge_request_request_changes_caps_reason_like_the_cli(tmp_path: Path) -> None:
+def test_merge_request_request_changes_cap_comes_from_the_service(tmp_path: Path) -> None:
+    # One constant, validated once in the service; the router only maps INVALID_ARGUMENT -> 400.
     svc = MagicMock()
+    svc.request_changes.side_effect = KeboolaApiError(
+        message="reason is capped at 1000 characters (got 1001).",
+        status_code=400,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
     with _mr_client(tmp_path, svc) as client:
         res = client.post(
             f"/merge-requests/{PROJECT}/{MR_ID}/request-changes",
@@ -2882,7 +2853,7 @@ def test_merge_request_request_changes_caps_reason_like_the_cli(tmp_path: Path) 
             headers=AUTH,
         )
     assert res.status_code == 400, res.text
-    svc.request_changes.assert_not_called()
+    svc.request_changes.assert_called_once_with(PROJECT, MR_ID, reason="x" * 1001)
 
 
 def test_merge_request_merge_conflict_is_409_with_details_over_http(tmp_path: Path) -> None:
@@ -2920,3 +2891,115 @@ def test_merge_request_caller_mistakes_from_the_service_are_400_over_http(tmp_pa
             headers=AUTH,
         )
     assert res.status_code == 400, res.text
+
+
+# -- route-level escalation coverage for the shared helpers (approve / resolve / update) --
+
+
+# -- Static destructive class over HTTP: the route dependency IS the whole check --
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_method"),
+    [
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/request-review", None, "request_review"),
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/approve", None, "approve"),
+        (
+            "POST",
+            f"/merge-requests/{PROJECT}/{MR_ID}/resolve/{COMPONENT}/{CONFIG_ID}",
+            {"take": "ours"},
+            "resolve_conflict",
+        ),
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/merge", None, "merge"),
+        (
+            "PUT",
+            f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge",
+            {"strategy": "immediately"},
+            "update_merge_request",
+        ),
+        (
+            "PUT",
+            f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge",
+            {"strategy": "none"},
+            "update_merge_request",
+        ),
+    ],
+    ids=["request-review", "approve", "resolve", "merge", "auto-merge arm", "auto-merge disarm"],
+)
+def test_merge_request_destructive_routes_are_403_under_deny_destructive(
+    tmp_path: Path, method: str, path: str, body: dict[str, Any] | None, service_method: str
+) -> None:
+    # Statically destructive: no row GET, no body inspection -- denied before
+    # the handler body runs. The disarm rides the same class on purpose (a
+    # caller who could not arm never needs to disarm).
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        res = client.request(method, path, json=body, headers=AUTH)
+    assert res.status_code == 403, res.text
+    getattr(svc, service_method).assert_not_called()
+    svc.get_merge_request_row.assert_not_called()
+
+
+def test_merge_request_write_routes_pass_under_deny_destructive(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.create_merge_request.return_value = {"id": MR_ID}
+    svc.update_merge_request.return_value = {"id": MR_ID}
+    svc.request_changes.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        assert (
+            client.post(
+                f"/merge-requests/{PROJECT}",
+                json={"branch_from_id": 123, "title": "T"},
+                headers=AUTH,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/merge-requests/{PROJECT}/{MR_ID}", json={"title": "T2"}, headers=AUTH
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/merge-requests/{PROJECT}/{MR_ID}/request-changes", json={}, headers=AUTH
+            ).status_code
+            == 200
+        )
+
+
+def test_merge_request_auto_merge_route_forwards_and_validates(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.update_merge_request.return_value = {"id": MR_ID, "autoMergeStrategy": "scheduled"}
+    url = f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge"
+    with _mr_client(tmp_path, svc) as client:
+        assert client.put(url, json={"strategy": "sometimes"}, headers=AUTH).status_code == 400
+        assert client.put(url, json={"strategy": "scheduled"}, headers=AUTH).status_code == 400
+        res = client.put(
+            url, json={"strategy": "scheduled", "at": "2026-09-30T10:00:00Z"}, headers=AUTH
+        )
+    assert res.status_code == 200, res.text
+    svc.update_merge_request.assert_called_once_with(
+        PROJECT, MR_ID, auto_merge_strategy="scheduled", auto_merge_at="2026-09-30T10:00:00Z"
+    )
+
+
+def test_merge_request_create_and_update_bodies_have_no_auto_merge_field(tmp_path: Path) -> None:
+    # Pydantic ignores unknown fields by default -- so an old-style body must NOT
+    # silently arm anything: the service call carries no auto-merge kwargs.
+    svc = MagicMock()
+    svc.create_merge_request.return_value = {"id": MR_ID}
+    svc.update_merge_request.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        client.post(
+            f"/merge-requests/{PROJECT}",
+            json={"branch_from_id": 123, "title": "T", "auto_merge_strategy": "immediately"},
+            headers=AUTH,
+        )
+        client.put(
+            f"/merge-requests/{PROJECT}/{MR_ID}",
+            json={"title": "T", "auto_merge_strategy": "immediately"},
+            headers=AUTH,
+        )
+    assert "auto_merge_strategy" not in svc.create_merge_request.call_args.kwargs
+    assert "auto_merge_strategy" not in svc.update_merge_request.call_args.kwargs
