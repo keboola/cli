@@ -30,7 +30,7 @@ from keboola_agent_cli.services._sync_storage import (
     write_storage_metadata,
 )
 from keboola_agent_cli.services.sync_service import SyncService
-from keboola_agent_cli.sync.manifest import ManifestConfiguration
+from keboola_agent_cli.sync.manifest import ManifestConfiguration, load_manifest
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -1452,3 +1452,127 @@ class TestPullJobsFallback:
         # call_args_list, not call_count: see the thread-safety note in
         # test_falls_back_to_per_config_when_limit_insufficient.
         assert len(pull_client.list_jobs.call_args_list) == 101
+
+
+# ===================================================================
+# 6. Config folder (KBC.configuration.folderName) capture on pull (CLI-9)
+# ===================================================================
+
+
+class TestPullConfigFolder:
+    """pull() must keep each config's UI folder in the manifest (CLI-9).
+
+    The folder is config metadata (``KBC.configuration.folderName``) from a
+    separate branch-only search endpoint, not from ``list_components_with_configs``.
+    Before the fix pull never fetched it, so every pulled or cloned config lost
+    its folder. The push create path already forwards ``KBC.*`` manifest
+    metadata (see the ``test_propagate_kbc_metadata_*`` tests in
+    test_sync_service.py), so capturing it on pull closes the round-trip.
+    """
+
+    def test_pull_captures_config_folder_into_manifest(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A config with a folder lands with KBC.configuration.folderName set."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_SIMPLE,
+        )
+        # Only cfg-001 has a folder; cfg-002 has none.
+        pull_client.list_config_folder_metadata.return_value = {
+            "keboola.ex-http/cfg-001": "Extractors",
+        }
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root)
+
+        manifest = load_manifest(project_root)
+        by_id = {c.id: c for c in manifest.configurations}
+        assert by_id["cfg-001"].metadata.get("KBC.configuration.folderName") == "Extractors"
+        # A config with no folder must NOT get the key (round-trip would
+        # otherwise create a bogus folder on push).
+        assert "KBC.configuration.folderName" not in by_id["cfg-002"].metadata
+
+    def test_pull_folder_lookup_uses_resolved_branch(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """The folder search runs against the branch the pull resolved."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_SIMPLE,
+        )
+        pull_client.list_config_folder_metadata.return_value = {}
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root)
+
+        # SAMPLE_BRANCHES default id is 12345 -> manifest fallback branch id.
+        pull_client.list_config_folder_metadata.assert_called_once_with(branch_id=12345)
+
+
+class TestFetchConfigFolders:
+    """Unit tests for SyncService._fetch_config_folders."""
+
+    def test_uses_given_branch_without_dev_branch_lookup(self) -> None:
+        """A resolved branch id is used directly; no default-branch lookup."""
+        client = MagicMock()
+        client.list_config_folder_metadata.return_value = {"comp/1": "Folder A"}
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result == {"comp/1": "Folder A"}
+        client.list_config_folder_metadata.assert_called_once_with(branch_id=42)
+        client.list_dev_branches.assert_not_called()
+
+    def test_resolves_default_branch_for_production(self) -> None:
+        """branch_id=None (production) resolves the default branch first."""
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 777, "isDefault": True}]
+        client.list_config_folder_metadata.return_value = {"comp/1": "Prod Folder"}
+
+        result = SyncService._fetch_config_folders(client, None)
+
+        assert result == {"comp/1": "Prod Folder"}
+        client.list_config_folder_metadata.assert_called_once_with(branch_id=777)
+
+    def test_empty_when_no_default_branch(self) -> None:
+        """No resolvable branch -> empty map, endpoint never called."""
+        client = MagicMock()
+        client.list_dev_branches.return_value = []
+
+        result = SyncService._fetch_config_folders(client, None)
+
+        assert result == {}
+        client.list_config_folder_metadata.assert_not_called()
+
+    def test_degrades_to_empty_on_api_error(self) -> None:
+        """A folder-lookup failure must not abort the pull."""
+        client = MagicMock()
+        client.list_config_folder_metadata.side_effect = RuntimeError("boom")
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result == {}
+
+    def test_non_dict_response_becomes_empty(self) -> None:
+        """A non-dict response degrades to an empty map."""
+        client = MagicMock()
+        client.list_config_folder_metadata.return_value = ["unexpected"]
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result == {}
