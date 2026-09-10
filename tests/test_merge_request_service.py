@@ -1802,3 +1802,23 @@ class TestFieldCapsAndRowTierFeatureGate:
         _svc(store, factory).get_merge_request_row(ALIAS, 7)
         mock.has_feature.assert_not_called()
         mock.verify_token.assert_not_called()
+
+    def test_null_or_blank_name_in_the_envelope_is_a_hole(self, store, client_factory) -> None:
+        # The candidate criterion must equal the resolve guard's: an envelope with
+        # "name": null used to produce a candidate the guard then refused -- a file
+        # kbagent wrote and blamed the caller for.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
+        svc = _svc(store, factory)
+        for bad_name in (None, "   "):
+            ours = _side({"limit": 500}, version=4)
+            ours["diff"]["name"] = bad_name
+            mock.get_config_diff.return_value = _diff(
+                base=_side({"limit": 100}, version=3),
+                ours=ours,
+                theirs=_side({"limit": 250}, version=7),
+            )
+            result = svc.get_config_diff(ALIAS, 7, "keboola.ex-db", "111")
+            assert result["resolution_candidate"] is None, bad_name
+            assert result["changes"] == [], bad_name
+            assert any("carries no name" in w for w in result["warnings"]), bad_name

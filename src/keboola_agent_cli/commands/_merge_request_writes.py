@@ -82,6 +82,20 @@ _EXTERNAL_ID_OPT = typer.Option(
 )
 
 
+def _check_external_id(formatter: Any, external_id: str | None) -> None:
+    """Exit 2 on an over-cap --external-id. The service validates the cap (one
+    constant, one rule); this pre-check exists only so the flag error carries
+    exit 2 like every other bad flag -- a service-raised INVALID_ARGUMENT maps
+    to exit 1 on the CLI (PR #736 review), and the sibling --reason cap
+    already exits 2."""
+    if external_id is not None and len(external_id) > MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH:
+        _usage_error(
+            formatter,
+            f"--external-id is capped at {MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH} characters "
+            f"(got {len(external_id)}).",
+        )
+
+
 def _confirm_or_abort(formatter: Any, yes: bool, question: str) -> None:
     """The house prompt shape: skipped by --yes and in --json (where consent is
     implied and the explicit-target rule stands in for it)."""
@@ -139,6 +153,7 @@ def merge_request_create(
     `merge-request auto-merge`.
     """
     formatter = get_formatter(ctx)
+    _check_external_id(formatter, external_id)
     service = get_service(ctx, "merge_request_service")
     try:
         alias = resolve_project_alias(ctx, formatter, project)
@@ -196,6 +211,7 @@ def merge_request_update(
         # PUT {} is a server-side no-op that answers 200 -- refuse instead of
         # reporting success having changed nothing.
         _usage_error(formatter, "Nothing to update: pass at least one field flag.")
+    _check_external_id(formatter, external_id)
     service = get_service(ctx, "merge_request_service")
     try:
         target = _resolve_target(
