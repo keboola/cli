@@ -1683,6 +1683,13 @@ class SyncService(BaseService):
             ds_client = self._ds_client_factory(project.stack_url, project.token)
         ds_context = ds_client if ds_client is not None else contextlib.nullcontext()
 
+        # POST /apps wants branchId=null for the default (production) branch and
+        # a numeric id only for a dev branch. The sync engine carries production
+        # as the manifest's default branch id, so map it back to None for the DS
+        # create (data-app create does the same). Live-verified against 4214.
+        default_branch_id = manifest.branches[0].id if manifest.branches else None
+        ds_branch_id = None if branch_id == default_branch_id else branch_id
+
         with client, ds_context:
             self._ensure_branch_registered(manifest, branch_id, client)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
@@ -1721,6 +1728,7 @@ class SyncService(BaseService):
                             allow_plaintext_fallback=allow_plaintext_fallback,
                             warnings=warnings,
                             ds_client=ds_client,
+                            ds_branch_id=ds_branch_id,
                         )
                         if result:
                             new_id = str(result.get("id", ""))

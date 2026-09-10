@@ -72,7 +72,9 @@ class FakeDs:
         branch_id: int | None = None,
         use_managed_git_repo: bool = False,
     ) -> dict[str, Any]:
-        self.create_app_calls.append({"type_": type_, "name": name, "config": config})
+        self.create_app_calls.append(
+            {"type_": type_, "name": name, "config": config, "branch_id": branch_id}
+        )
         new_config_id = "cfg-da-new"
         new_app_id = "77777"
         record = {"id": new_config_id, "name": name, "configuration": config, "rows": []}
@@ -245,6 +247,8 @@ def test_push_create_data_app_sends_type(tmp_config_dir: Path, tmp_path: Path) -
     # The type reached the DS record -- the fix.
     assert len(ds.create_app_calls) == 1
     assert ds.create_app_calls[0]["type_"] == "python-js"
+    # A production push maps to branchId=null for POST /apps.
+    assert ds.create_app_calls[0]["branch_id"] is None
     # The Storage body was filled and the stale back-pointer repointed at the
     # newly assigned app id.
     da_updates = [c for c in api.update_calls if c["component_id"] == DATA_APP_COMPONENT]
@@ -317,8 +321,14 @@ class TestCreateSyncedDataApp:
         # The caller's writeback keys off result["id"] == the new config ULID.
         assert result["id"] == "01NEWULID"
 
-    def test_create_omits_stale_id_and_update_writes_the_new_one(self) -> None:
-        """create_app never sees the source app id; update_config writes the new one."""
+    def test_create_uses_minimal_shell_update_writes_full_body(self) -> None:
+        """create_app gets the shell shape POST /apps accepts; update_config gets
+        the full body with the new app id.
+
+        POST /apps rejects the full Storage body with HTTP 422 (it wants
+        parameters.size, not runtime.backend.size), and it must never see the
+        source project's app id. Live-verified against project 4214.
+        """
         ds = MagicMock()
         ds.create_app.return_value = {"id": "77777", "configId": "01NEWULID"}
         storage = MagicMock()
@@ -335,7 +345,10 @@ class TestCreateSyncedDataApp:
         )
 
         create_body = ds.create_app.call_args.kwargs["config"]
-        assert "id" not in create_body["parameters"]
+        assert create_body["parameters"]["dataApp"]["slug"] == "api-test"
+        assert create_body["parameters"]["size"] == "tiny"  # from runtime.backend.size
+        assert "runtime" not in create_body  # the full-body shape POST /apps rejects
+        assert "id" not in create_body["parameters"]  # never the source app id
         put_body = storage.update_config.call_args.kwargs["configuration"]
         assert put_body["parameters"]["id"] == "77777"
 

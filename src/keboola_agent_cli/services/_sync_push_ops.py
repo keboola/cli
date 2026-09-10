@@ -388,6 +388,7 @@ def push_create(
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
     ds_client: Any = None,
+    ds_branch_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Create a new config from a local _config.yml file.
 
@@ -436,6 +437,8 @@ def push_create(
     if component_id == DATA_APP_COMPONENT_ID and data_app_type and ds_client is not None:
         # Carry the DS runtime type into the target (CLI-8): create the DS
         # /apps record with the type, then fill the Storage config body.
+        # ds_branch_id is None for a production push (POST /apps wants
+        # branchId=null there), the dev branch id otherwise.
         result = create_synced_data_app(
             client,
             ds_client,
@@ -443,7 +446,7 @@ def push_create(
             description=description,
             type_=data_app_type,
             configuration=configuration,
-            branch_id=branch_id,
+            branch_id=ds_branch_id,
             is_disabled=bool(local_data.get("is_disabled", False)),
         )
     else:

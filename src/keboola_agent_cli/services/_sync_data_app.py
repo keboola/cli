@@ -10,7 +10,6 @@ not grow past its file-size budget.
 
 from __future__ import annotations
 
-import copy
 import logging
 from typing import Any
 
@@ -46,9 +45,13 @@ def create_synced_data_app(
 
     This routes creation through ``create_app`` (which creates BOTH the DS
     record with ``type_`` and its Storage config), then fills the full body
-    via ``update_config``. The cloned body still points ``parameters.id`` at
-    the SOURCE project's app, so the create call drops that id and the update
-    call writes the new app's id.
+    via ``update_config``. ``POST /apps`` validates its ``config``: it wants
+    the create-shell shape (``parameters.size`` / ``autoSuspendAfterSeconds``
+    / ``dataApp.slug`` + ``authorization``), not the full Storage body, which
+    carries ``runtime.backend.size`` instead of ``parameters.size``. So the
+    create call sends the minimal shell (the same shape as
+    ``DataAppService.create``) and the update call sends the full body with the
+    new app's ``parameters.id``.
 
     If ``update_config`` fails after ``create_app`` already created the record,
     the record is deleted, so a failed sync create leaves no orphan app in the
@@ -58,18 +61,26 @@ def create_synced_data_app(
     the new config ULID) so the caller's manifest writeback is identical to the
     ``create_config`` path.
     """
-    # The cloned body still points parameters.id at the source project's app.
-    # Drop that stale id on create; the update call writes the correct one.
-    create_body = copy.deepcopy(configuration)
-    create_params = create_body.get("parameters")
-    if isinstance(create_params, dict):
-        create_params.pop("id", None)
+    # Build the minimal shell POST /apps accepts (see docstring). The full
+    # Storage body -- runtime.backend.size, the git block, the source app id --
+    # goes on the update_config call below, not here.
+    params = configuration.get("parameters") or {}
+    data_app = params.get("dataApp") or {}
+    backend = (configuration.get("runtime") or {}).get("backend") or {}
+    initial_parameters: dict[str, Any] = {"dataApp": {"slug": data_app.get("slug", "")}}
+    if "size" in backend:
+        initial_parameters["size"] = backend["size"]
+    if "autoSuspendAfterSeconds" in params:
+        initial_parameters["autoSuspendAfterSeconds"] = params["autoSuspendAfterSeconds"]
+    initial_config: dict[str, Any] = {"parameters": initial_parameters}
+    if "authorization" in configuration:
+        initial_config["authorization"] = configuration["authorization"]
 
     shell = ds_client.create_app(
         type_=type_,
         name=name,
         description="",  # full description goes onto the Storage config below
-        config=create_body,
+        config=initial_config,
         branch_id=branch_id,
     )
     app_id = str(shell.get("id", ""))
@@ -82,9 +93,9 @@ def create_synced_data_app(
             retryable=False,
         )
 
-    params = configuration.setdefault("parameters", {})
-    if isinstance(params, dict):
-        params["id"] = app_id
+    target_params = configuration.setdefault("parameters", {})
+    if isinstance(target_params, dict):
+        target_params["id"] = app_id
 
     try:
         return storage_client.update_config(
