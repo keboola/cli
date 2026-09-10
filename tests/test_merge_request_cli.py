@@ -1612,3 +1612,52 @@ class TestAutoMerge:
             and "on its next tick" in result.output
         )
         service.get_merge_request_row.assert_not_called()
+
+
+class TestFieldCaps:
+    """Both caps exit 2 on the CLI -- a service-raised INVALID_ARGUMENT maps to exit 1,
+    so the flag pre-checks are what keep the two sibling caps consistent."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            [
+                "merge-request",
+                "create",
+                "--project",
+                ALIAS,
+                "--title",
+                "T",
+                "--branch",
+                "123",
+                "--external-id",
+                "x" * 256,
+            ],
+            [
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--external-id",
+                "x" * 256,
+            ],
+            [
+                "merge-request",
+                "request-changes",
+                "--project",
+                ALIAS,
+                "--id",
+                "7",
+                "--reason",
+                "x" * 1001,
+            ],
+        ],
+        ids=["create external-id", "update external-id", "request-changes reason"],
+    )
+    def test_over_cap_field_is_exit_2_before_any_call(self, tmp_path, service, args) -> None:
+        result = _run(["--json", *args], _store(tmp_path), service)
+        assert result.exit_code == 2, result.output
+        assert _json(result)["error"]["code"] == ErrorCode.INVALID_ARGUMENT
+        assert not [c for c in service.method_calls if not str(c).startswith("call.__")]

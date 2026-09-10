@@ -98,10 +98,22 @@ _REQUIRED_CONTENT_KEYS: tuple[str, ...] = ("name", "rows", "configuration", "isD
 
 
 def _envelope_holes(side: dict[str, Any]) -> list[str]:
-    """Required content keys ABSENT from a (non-null, non-deleted) side's envelope.
-    An empty envelope reports all of them."""
+    """Required content keys a (non-null, non-deleted) side's envelope does not
+    USABLY carry -- absent, or present but ``None``, or a blank ``name``.
+
+    This is the SAME criterion ``resolve_conflict``'s replace guard applies to a
+    caller-authored body (``key not in body or body[key] is None``, plus the
+    non-empty ``name``). It must be: the candidate ``get_config_diff`` composes
+    is what the guard later receives, so a key this function accepts and the
+    guard refuses is a file kbagent writes and then blames the caller for
+    (PR #736 review: an envelope with ``"name": null`` passed here and
+    failed there). An empty envelope reports all four.
+    """
     envelope = side.get("diff") or {}
-    return [key for key in _REQUIRED_CONTENT_KEYS if key not in envelope]
+    holes = [key for key in _REQUIRED_CONTENT_KEYS if envelope.get(key) is None]
+    if "name" not in holes and not str(envelope.get("name") or "").strip():
+        holes.insert(0, "name")
+    return holes
 
 
 # The auto-merge vocabulary (AutoMergeStrategy enum, wire-exact). Public and
