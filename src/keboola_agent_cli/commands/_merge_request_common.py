@@ -22,9 +22,7 @@ import typer
 from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..services.merge_request_service import AUTO_MERGE_DISARMED
 from ._helpers import (
-    check_cli_operation,
     get_service,
     map_error_to_exit_code,
     resolve_branch,
@@ -143,7 +141,10 @@ class _Target:
     ``allowed_actions``). It is always present when the target was resolved
     from a branch (``find_merge_request_for_branch`` returns it for free) and
     fetched on demand (``need_row``) when the id was explicit -- one GET via
-    ``get_merge_request_row``, never the three-call detail.
+    ``get_merge_request_row``, never the three-call detail. Callers ask for
+    it only when they render something from it (the merge prompt's title, the
+    ``branch_from_id`` a result would otherwise lack) -- never to decide
+    permissions, which are static.
     """
 
     alias: str
@@ -151,17 +152,6 @@ class _Target:
     row: dict[str, Any] | None
     branch_id: int | None
     resolved_from_branch: bool
-
-    @property
-    def auto_merge_strategy(self) -> str:
-        """``immediately`` | ``scheduled`` | ``none``; ``none`` when unknown."""
-        if not self.row:
-            return AUTO_MERGE_DISARMED
-        return str(self.row.get("autoMergeStrategy") or AUTO_MERGE_DISARMED)
-
-    @property
-    def armed(self) -> bool:
-        return self.auto_merge_strategy != AUTO_MERGE_DISARMED
 
 
 def _branch_from_row(row: dict[str, Any] | None) -> int | None:
@@ -269,7 +259,7 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
-# -- Destructive-under-json rule and auto-merge escalation ----------------------
+# -- Destructive-under-json rule ---------------------------------------------------
 
 
 def _require_explicit_target_under_json(
@@ -281,8 +271,7 @@ def _require_explicit_target_under_json(
     suggested_id: int | None = None,
     hint: str | None = None,
 ) -> None:
-    """When an invocation resolves to the destructive class, ``--json`` requires
-    an explicit target.
+    """A destructive command under ``--json`` requires an explicit target.
 
     Every destructive command in kbagent either prompts or is told its target;
     none relies on the prompt for machine safety (``--json`` implies consent
@@ -291,6 +280,10 @@ def _require_explicit_target_under_json(
     line identifies what gets destroyed. Humans keep the active-branch
     fallback and get the prompt; a script, which received the id in its
     previous call's payload, names it.
+
+    Which commands are destructive is a STATIC fact (OPERATION_REGISTRY), so
+    this runs before any network call -- it never depends on a flag's value
+    or on the MR's state.
     """
     if not formatter.json_mode or merge_request_id is not None or branch is not None:
         return
@@ -303,61 +296,6 @@ def _require_explicit_target_under_json(
     _usage_error(
         formatter,
         f"{reason} Under --json a destructive operation needs an explicit target: pass {hint}.",
-    )
-
-
-def _escalate_if_armed(
-    ctx: typer.Context,
-    formatter: Any,
-    target: _Target,
-    *,
-    operation: str,
-    merge_request_id: int | None,
-    branch: int | None,
-) -> str | None:
-    """Apply the state-derived destructive escalation for an armed MR.
-
-    Returns the strategy (``immediately`` / ``scheduled``) when the MR is armed
-    so the caller can say so in its output, or ``None``. Order matters: the
-    policy check comes first (a denial is the stronger statement -- telling a
-    denied caller to "pass --merge-request-id" would not help), then the
-    ``--json`` explicit-target rule. That rule can only fire AFTER resolution
-    here -- whether the invocation is destructive is only known from the
-    fetched row; the check cannot move earlier because the information does
-    not exist earlier. One wasted round trip on the rare path is the price of
-    a rule with no exceptions.
-    """
-    if not target.armed:
-        return None
-    check_cli_operation(ctx, f"merge-request.{operation} --auto-merge-armed")
-    _require_explicit_target_under_json(
-        formatter,
-        merge_request_id=merge_request_id,
-        branch=branch,
-        reason=(
-            f"Merge request #{target.merge_request_id} has auto-merge armed "
-            f"({target.auto_merge_strategy}), so `{operation}` will cause a production merge."
-        ),
-        suggested_id=target.merge_request_id,
-    )
-    return target.auto_merge_strategy
-
-
-def _warn_armed(formatter: Any, strategy: str, result: dict[str, Any]) -> None:
-    """Say what an armed MR means right now -- human mode only, never injected
-    into the payload (Layer 1 does not manufacture data the service did not
-    produce; a --json consumer reads `autoMergeStrategy` off the row). Phrased
-    from the resulting state: approved -> the backend merges on its next tick;
-    anything else -> it will, the moment the MR is approved."""
-    state = str(result.get("state") or "")
-    when = (
-        "the backend will merge it into production on its next tick"
-        if state == "approved"
-        else "the backend will merge it into production as soon as it is approved"
-    )
-    formatter.warning(
-        f"Auto-merge is armed ({strategy}) -- {when}. Disarm with "
-        "`merge-request update --auto-merge-strategy none` if that is not intended."
     )
 
 
@@ -388,7 +326,9 @@ def _hint_from_actions(formatter: Any, result: dict[str, Any]) -> None:
 
 def _print_row_success(formatter: Any, result: dict[str, Any], headline: str) -> None:
     def render(c: Any, d: dict[str, Any]) -> None:
-        state = str(d.get("derived_state") or d.get("state") or "").replace("_", " ")
+        # derived_state is wire-controlled once DMD-1988 serialises it (derive_state
+        # returns the server field verbatim) -- escape like every other wire string.
+        state = escape(str(d.get("derived_state") or d.get("state") or "").replace("_", " "))
         c.print(f"[bold green]Success:[/bold green] {headline} -- state: {state}")
 
     formatter.output(result, render)

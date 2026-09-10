@@ -1493,10 +1493,9 @@ class TestFindDefaultBranchId:
         assert find_default_branch_id([{"isDefault": False, "id": 1}]) is None
 
 
-class TestLayer1RfcWalkFollowUps:
-    """The three Layer 2 additions decided while walking PR #703's review findings
-    into the Layer 1 RFC (docs/merge-requests-layer1.md, "Layer 2 changes shipping
-    with this PR", 2026-09-03)."""
+class TestRowTierAndResolutionCandidate:
+    """get_merge_request_row (the row tier by id), merge()'s `warnings` key, and the
+    resolution candidate `get_config_diff` composes for `diff --output`."""
 
     # -- get_merge_request_row -------------------------------------------------
 
@@ -1645,9 +1644,9 @@ class TestLayer1RfcWalkFollowUps:
         assert garbage.value.error_code == ErrorCode.VALIDATION_ERROR
 
 
-class TestLayer2FollowupsInheritedByLayer1:
-    """docs/merge-requests-layer2-followups.md -- the non-blocking leftovers of PR #703
-    that go through the Layer 1 PR (F2, F3, F4, F5, F7)."""
+class TestDegradationRecordingAndFeatureAwareDetail:
+    """Envelope holes reported (not silently unclassified), merge()'s structured
+    degradation flag, the default-branch skip log, and the detail's feature flag."""
 
     def _arm_merge(self, mock: MagicMock, branch_from: Any) -> None:
         row = _wire_mr(7, "approved")
@@ -1655,7 +1654,7 @@ class TestLayer2FollowupsInheritedByLayer1:
         mock.merge_requests.get.return_value = row
         mock.merge_requests.merge.return_value = {"id": 1, "status": "success", "results": {}}
 
-    # F2 -- the empty-envelope half of the classifier had no test
+    # the empty-envelope half of the classifier had no test
     def test_empty_envelope_side_yields_no_rows_and_a_warning(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
@@ -1672,7 +1671,7 @@ class TestLayer2FollowupsInheritedByLayer1:
         # the ours side is intact, so the candidate is still composed
         assert result["resolution_candidate"]["configuration"] == {"limit": 500}
 
-    # F3 -- the branch-id degradation is recorded structurally, not in prose only
+    # the branch-id degradation is recorded structurally, not in prose only
     def test_non_numeric_branch_from_id_is_recorded_structurally(
         self, store, client_factory
     ) -> None:
@@ -1693,7 +1692,7 @@ class TestLayer2FollowupsInheritedByLayer1:
         result = _svc(store, factory).merge(ALIAS, 7)
         assert "cleanup_skipped" not in result and "branch_from_id_raw" not in result
 
-    # F7 -- the positive assertion for the outcome-gated sentence
+    # the positive assertion for the outcome-gated sentence
     def test_successful_reset_says_so(self, store, client_factory) -> None:
         factory, mock = client_factory
         store.set_project_branch(ALIAS, 123)
@@ -1703,7 +1702,7 @@ class TestLayer2FollowupsInheritedByLayer1:
         assert "Active branch reset to main." in result["message"]
         assert store.get_project(ALIAS).active_branch_id is None
 
-    # F5 -- the detail tier is feature-aware for free
+    # the detail tier is feature-aware for free
     def test_detail_carries_feature_enabled(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.merge_requests.get.return_value = _wire_mr(7, "development", branch_from=123)
@@ -1714,7 +1713,7 @@ class TestLayer2FollowupsInheritedByLayer1:
         # state-derived actions stay as they are -- the CONSUMER gates on the flag
         assert "merge" in detail["allowed_actions"]
 
-    # F4 -- the shared helper logs the skip instead of folding it into None silently
+    # the shared helper logs the skip instead of folding it into None silently
     def test_find_default_branch_id_logs_the_skipped_entry(self, caplog) -> None:
         import logging
 
@@ -1724,7 +1723,7 @@ class TestLayer2FollowupsInheritedByLayer1:
             assert find_default_branch_id([{"isDefault": True, "id": "main"}]) is None
         assert any("non-numeric id 'main'" in r.getMessage() for r in caplog.records)
 
-    # Copilot (Balanced) on #736: a HOLED envelope must not classify either
+    # a HOLED envelope must not classify either
     def test_holed_theirs_envelope_yields_no_rows_and_a_warning(
         self, store, client_factory
     ) -> None:
@@ -1742,3 +1741,64 @@ class TestLayer2FollowupsInheritedByLayer1:
         assert result["changes"] == []
         assert any("theirs side carries no configuration" in w for w in result["warnings"])
         assert result["resolution_candidate"]["configuration"] == {"limit": 500}  # ours intact
+
+
+class TestFieldCapsAndRowTierFeatureGate:
+    """Server-side caps validated once in the service; the row tier's lazy feature pre-flight."""
+
+    def test_reason_over_cap_is_refused_before_any_call(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).request_changes(ALIAS, 7, reason="x" * 1001)
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.merge_requests.request_changes.assert_not_called()
+
+    def test_external_id_over_cap_is_refused_on_create_and_update(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        svc = _svc(store, factory)
+        with pytest.raises(KeboolaApiError) as create_exc:
+            svc.create_merge_request(ALIAS, branch_from_id=123, title="t", external_id="x" * 256)
+        assert create_exc.value.error_code == ErrorCode.INVALID_ARGUMENT
+        with pytest.raises(KeboolaApiError) as update_exc:
+            svc.update_merge_request(ALIAS, 7, external_id="x" * 256)
+        assert update_exc.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.merge_requests.create.assert_not_called()
+        mock.merge_requests.update.assert_not_called()
+
+    def test_row_403_on_a_featureless_project_becomes_feature_not_enabled(
+        self, store, client_factory
+    ) -> None:
+        # The explicit --merge-request-id path is the one --json callers are
+        # steered onto; it must not hand them a bare role-denial 403.
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = KeboolaApiError(
+            message="Access denied",
+            status_code=403,
+            error_code=ErrorCode.ACCESS_DENIED,
+            retryable=False,
+        )
+        mock.has_feature.return_value = False
+        with pytest.raises(FeatureNotEnabledError):
+            _svc(store, factory).get_merge_request_row(ALIAS, 7)
+
+    def test_row_403_with_the_feature_present_is_a_real_denial(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = KeboolaApiError(
+            message="Access denied",
+            status_code=403,
+            error_code=ErrorCode.ACCESS_DENIED,
+            retryable=False,
+        )
+        mock.has_feature.return_value = True
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).get_merge_request_row(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.ACCESS_DENIED
+
+    def test_row_happy_path_spends_no_feature_call(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "development")
+        _svc(store, factory).get_merge_request_row(ALIAS, 7)
+        mock.has_feature.assert_not_called()
+        mock.verify_token.assert_not_called()

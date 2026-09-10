@@ -748,29 +748,33 @@ kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|defa
 #   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
 kbagent merge-request list [--project A] [--state STATE]   # derived (in_development|in_review|approved|in_merge|merged|closed|rejected) or raw (development|published|canceled) states; `--help` lists them
 kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
-kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy immediately|scheduled|none] [--auto-merge-at TS] [--external-id X] [--yes]
-kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--auto-merge-strategy S] [--auto-merge-at TS] [--external-id X] [--yes]
+kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--external-id X]
+kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--external-id X]
 kbagent merge-request request-review [--project A] [--merge-request-id N | --branch B]
 kbagent merge-request approve [--project A] [--merge-request-id N | --branch B]
 kbagent merge-request request-changes [--project A] [--merge-request-id N | --branch B] [--reason TEXT]
+kbagent merge-request auto-merge --strategy immediately|scheduled|none [--at TS] [--project A] [--merge-request-id N | --branch B] [--yes]
 kbagent merge-request merge [--project A] [--merge-request-id N | --branch B] [--yes]
 kbagent merge-request conflicts [--project A] [--merge-request-id N | --branch B]
 kbagent merge-request diff --component-id C --config-id I [--project A] [--merge-request-id N | --branch B] [--format short|full] [--output PATH]
 kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [--project A] [--merge-request-id N | --branch B] [--change-description TEXT]
-# WHAT MAY HAPPEN WITHOUT A HUMAN SAYING SO -- read before automating this group:
-#   `merge` is DESTRUCTIVE (deletes the source branch, rewrites production). Under --json it REQUIRES an
-#   explicit target (--merge-request-id or --branch): every destructive kbagent command either prompts or is
-#   told its target, and --json has no prompt. In human mode the active-branch fallback stays and a prompt
-#   names the MR and the branch (--yes skips it).
-#   ARMING AUTO-MERGE IS A PRODUCTION MERGE, just delayed: a backend scheduler runs every `approved` MR whose
-#   autoMergeStrategy is immediately/scheduled through the same MergeProcessor, on its own, retrying every
-#   tick until it lands -- `merge` is never called. So `create`/`update --auto-merge-strategy immediately|
-#   scheduled` escalate to destructive (blocked by --deny-destructive; explicit target under --json; prompt
-#   in human mode), and `request-review` / `approve` / `resolve` on an ALREADY-armed MR escalate too --
-#   they are what moves it into `approved`. `--auto-merge-strategy none` is the disarm and never escalates.
-#   The escalation is deliberately conservative (the required-approvals count is unreadable with a Storage
-#   token, DMD-1969). An agent under --deny-destructive can run the whole flow and cannot complete a
-#   merge by any route.
+# WHAT IS DESTRUCTIVE -- a property of the COMMAND, never of a flag or of the MR's state, so a policy is
+#   evaluated from the command name alone, before any network call. Destructive = anything that moves a
+#   merge request toward or into production: `merge` (deletes the source branch, rewrites production),
+#   `request-review` (on the non-SOX default of 0 approvals it lands the MR directly in `approved`),
+#   `approve` (the last approval is what a merge waits for), `resolve` (removes the blocker a merge waits
+#   on) and `auto-merge` (arms a backend scheduler that runs every `approved` MR whose strategy is
+#   immediately/scheduled through the same MergeProcessor, on its own, retrying every tick -- a DELAYED
+#   PRODUCTION MERGE with `merge` never called; `--strategy none` disarms and rides the same command, same
+#   class). Write = shapes the MR without moving it: `create`, `update` (title/description/reviewers/
+#   external id -- auto-merge is NOT a field here), `request-changes` (moves it AWAY from approved).
+#   So `--deny-destructive` yields an agent that can observe and shape merge requests but never move one.
+#   Under --json every destructive command REQUIRES an explicit target (--merge-request-id or --branch),
+#   checked before anything is resolved: every destructive kbagent command either prompts or is told its
+#   target, and --json has no prompt. In human mode the active-branch fallback stays; `merge` and arming
+#   `auto-merge` prompt (--yes skips), the other destructive commands do not. After request-review/
+#   approve/resolve on an MR that IS armed, human mode warns that the backend will now merge (read off the
+#   write's own result, no extra GET).
 #   On a non-SOX project with the default 0 required approvals: `merge` works straight from `development`;
 #   `request-review` lands directly in `approved` (in_review is unreachable); `approve` answers 422 in every
 #   state. There is NO `close`: `request-changes` by the creator is the UI's cancel and leaves the MR in

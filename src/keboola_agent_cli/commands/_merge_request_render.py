@@ -359,6 +359,18 @@ def _deleted_side_message(data: dict[str, Any]) -> str | None:
     This is the one place the user faces a binary choice the command already
     knows, so the sentence recommends the resolution."""
     ours, theirs = data.get("ours_deleted"), data.get("theirs_deleted")
+    # `None` means the side does not exist at all -- which a conflict should
+    # never produce (it requires the config on both sides). It must be checked
+    # FIRST: `theirs is True and not ours` is also true for ours=None, and
+    # would then claim "your branch changed it" and recommend `--take ours`
+    # -- which resolve_conflict collapses into the DELETE resolution on a
+    # missing side. Defensive wording, no recommendation, for both.
+    if ours is None and theirs is None:
+        return "This configuration is not present on either side."
+    if ours is None:
+        return "This configuration is not present in the development branch."
+    if theirs is None:
+        return "This configuration is not present on the production side."
     if theirs is True and not ours:
         return (
             "[red]Production deleted this configuration; your branch changed it.[/red]\n"
@@ -373,13 +385,6 @@ def _deleted_side_message(data: dict[str, Any]) -> str | None:
         )
     if ours is True and theirs is True:
         return "Both sides deleted this configuration -- there is nothing to reconcile."
-    # A None flag means the side does not exist at all, which a conflict should
-    # never produce (it requires the config on both sides): render defensively,
-    # no recommendation.
-    if theirs is None:
-        return "This configuration is not present on the production side."
-    if ours is None:
-        return "This configuration is not present in the development branch."
     return None
 
 

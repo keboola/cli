@@ -129,24 +129,33 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
     "branch.metadata-delete": "destructive",
-    # Merge requests (non-SOX Branches 2.0). Reads are ungated on the server;
-    # `merge` irreversibly deletes the source branch and rewrites production
-    # (the class `branch.delete` occupies). `resolve` stays write despite
-    # replacing config content: a rebase adds a configuration version, it does
-    # not destroy the previous one. Five of the writes escalate to destructive
-    # per invocation via FLAG_ESCALATIONS below -- arming auto-merge IS a
-    # production merge, just a delayed one (docs/merge-requests-layer1.md).
+    # Merge requests (non-SOX Branches 2.0). Classification is STATIC -- a
+    # property of the command, never of a flag or of the MR's state -- so a
+    # policy can be evaluated from the command name alone, before any network
+    # call (docs/merge-requests-layer1.md, "What is destructive").
+    # Destructive = moves a merge request toward, or into, production:
+    # `merge` (deletes the source branch, rewrites production); `request-review`
+    # (on the non-SOX default of 0 approvals it lands the MR directly in
+    # `approved`, where an armed auto-merge fires); `approve` (the last approval
+    # is what an armed auto-merge waits for); `resolve` (removes the blocker a
+    # merge is waiting on); `auto-merge` (arms the backend scheduler that merges
+    # on its own -- a delayed production merge, and the disarm rides the same
+    # command). Write = shapes the MR without moving it: `create`, `update`
+    # (title/description/reviewers/external id -- auto-merge is NOT a field
+    # here), `request-changes` (moves it AWAY from approved). Reads are
+    # ungated on the server.
     "merge-request.list": "read",
     "merge-request.detail": "read",
     "merge-request.conflicts": "read",
     "merge-request.diff": "read",
     "merge-request.create": "write",
     "merge-request.update": "write",
-    "merge-request.request-review": "write",
-    "merge-request.approve": "write",
     "merge-request.request-changes": "write",
-    "merge-request.resolve": "write",
+    "merge-request.request-review": "destructive",
+    "merge-request.approve": "destructive",
+    "merge-request.resolve": "destructive",
     "merge-request.merge": "destructive",
+    "merge-request.auto-merge": "destructive",
     # Serve-only: `GET /merge-requests/{project}/by-branch/{branch_id}` exposes
     # the branch->MR resolver that the CLI hides behind an omitted
     # --merge-request-id (there is no active-branch idiom over HTTP). No CLI
@@ -421,31 +430,6 @@ OPERATION_REGISTRY: dict[str, str] = {
 # `auth`.
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
-    # A key here is an OPERATION STRING, not necessarily a literal flag: the
-    # engine looks the string up verbatim (`_matches_pattern`), so a condition
-    # the command derives from state works exactly like one it reads off a
-    # flag. The merge-request entries are the proof:
-    #
-    # `autoMergeStrategy` is not metadata. A backend scheduler runs every
-    # `approved` MR armed with it through the same MergeProcessor the merge
-    # endpoint uses (AutoMergeCandidateRepository.php:44-47,
-    # AutoMergeTickHandler.php:86) -- polling, retrying every tick until it
-    # lands. Arming it on create/update is therefore a production merge, just
-    # a delayed one; and request-review/approve/resolve on an ALREADY-armed MR
-    # are what move it into `approved`, i.e. what cause the merge. Classifying
-    # only `merge` as destructive would let `--deny-destructive` be bypassed by
-    # two write-class commands. `--auto-merge-strategy none` is the disarm and
-    # must NOT escalate (guard on the value, not the flag's presence), or the
-    # safety flag would lock the hazard in place. Deliberately conservative:
-    # on a 2-approval project request-review lands in in_review and merges
-    # nothing, but the required count is unreadable with a Storage token
-    # (DMD-1969), so every armed operation escalates. See
-    # docs/merge-requests-layer1.md, "Auto-merge is a destructive act".
-    "merge-request.create --auto-merge-strategy": "destructive",
-    "merge-request.update --auto-merge-strategy": "destructive",
-    "merge-request.request-review --auto-merge-armed": "destructive",
-    "merge-request.approve --auto-merge-armed": "destructive",
-    "merge-request.resolve --auto-merge-armed": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

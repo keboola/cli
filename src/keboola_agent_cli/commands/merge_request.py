@@ -12,16 +12,19 @@ What this module decides that the service leaves to the caller:
   (``--branch`` -> ``active_branch_id``) and the service maps it to its MR. A
   branch has at most one MR ever, so this cannot be ambiguous. See
   :func:`_resolve_target`.
-- **Nothing irreversible happens without a human saying so.** ``merge`` is
-  destructive; arming auto-merge IS a merge (a backend scheduler runs every
-  approved MR armed with it through the same MergeProcessor), so arming
-  escalates ``create``/``update`` to destructive, and ``request-review`` /
-  ``approve`` / ``resolve`` on an already-armed MR escalate too -- they are
-  what moves it into ``approved``. Confirmation sits where a human CHOOSES the
-  outcome (``merge``, arming); escalation wherever one is CAUSED. Under
-  ``--json`` a destructive invocation must name its target explicitly -- the
-  prompt is gone there, and no other destructive command in kbagent lets the
-  command line identify nothing (see :func:`_require_explicit_target_under_json`).
+- **Destructive is a property of the command, never of a flag or of the MR's
+  state.** Anything that moves a merge request toward or into production is
+  destructive, always: ``merge``, ``request-review`` (on the 0-approval default
+  it lands directly in ``approved``), ``approve``, ``resolve`` (removes a merge
+  blocker) and ``auto-merge`` (arms the backend scheduler that merges on its
+  own -- a delayed production merge; the disarm rides the same command). So a
+  policy is evaluated from the command name alone, before any network call,
+  and ``--deny-destructive`` yields an agent that can observe and shape merge
+  requests (``list``/``detail``/``conflicts``/``diff``/``create``/``update``/
+  ``request-changes``) but never move one. Under ``--json`` a destructive
+  command must name its target explicitly -- the prompt is gone there, and no
+  other destructive command in kbagent lets the command line identify nothing
+  (see :func:`_require_explicit_target_under_json`).
 - **One error handler** (:func:`_handle_error`). ``FeatureNotEnabledError`` is a
   ``ConfigError`` with its own code and surfaces from the resolver behind every
   omitted id -- reads included -- exactly where a copied ``except ConfigError ->
@@ -299,6 +302,9 @@ def merge_request_diff(
                 json.dumps(candidate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
             )
         except OSError as exc:
+            # The diff itself succeeded and may carry warnings (an envelope
+            # hole) -- surface them before failing on the file write.
+            _emit_warnings(formatter, result)
             formatter.error(
                 message=f"Cannot write --output {output}: {exc}",
                 error_code=ErrorCode.INVALID_ARGUMENT,
