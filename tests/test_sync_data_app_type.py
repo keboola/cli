@@ -13,11 +13,15 @@ CREATE through the DS ``create_app`` so the type travels.
 
 from pathlib import Path
 from typing import Any, Self
+from unittest.mock import MagicMock
 
+import pytest
 import yaml
 
 from helpers import setup_single_project
 from keboola_agent_cli.constants import CONFIG_FILENAME
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.services._sync_data_app import create_synced_data_app
 from keboola_agent_cli.services.sync_service import SyncService
 from test_sync_baseline_stamping import (
     FakeApi,
@@ -48,6 +52,8 @@ class FakeDs:
         return self
 
     def __exit__(self, *args: object) -> bool:
+        # Mirror DataScienceClient.__exit__, which closes on context exit.
+        self.close()
         return False
 
     def close(self) -> None:
@@ -270,3 +276,123 @@ def test_push_create_data_app_without_type_falls_back(tmp_config_dir: Path, tmp_
         for c in comp["configurations"]
     )
     assert created["id"] == "cfg-new"
+
+
+# ===================================================================
+# create_synced_data_app -- the DS-aware create the push path delegates to
+# ===================================================================
+
+
+def _cloned_body() -> dict[str, Any]:
+    # parameters.id still points at the SOURCE project's app.
+    return {
+        "parameters": {"id": "99999", "dataApp": {"slug": "api-test"}},
+        "runtime": {"backend": {"size": "tiny"}},
+    }
+
+
+class TestCreateSyncedDataApp:
+    """The helper that carries a data app's runtime type into the target."""
+
+    def test_creates_ds_record_with_type(self) -> None:
+        ds = MagicMock()
+        ds.create_app.return_value = {"id": "77777", "configId": "01NEWULID"}
+        storage = MagicMock()
+        storage.update_config.return_value = {"id": "01NEWULID", "version": "2"}
+
+        result = create_synced_data_app(
+            storage,
+            ds,
+            name="api-test",
+            description="desc",
+            type_="python-js",
+            configuration=_cloned_body(),
+            branch_id=None,
+        )
+
+        # The type reaches the DS record -- the whole point of the fix.
+        assert ds.create_app.call_args.kwargs["type_"] == "python-js"
+        # The Storage body is filled at the SERVER-assigned config id.
+        assert storage.update_config.call_args.kwargs["config_id"] == "01NEWULID"
+        # The caller's writeback keys off result["id"] == the new config ULID.
+        assert result["id"] == "01NEWULID"
+
+    def test_create_omits_stale_id_and_update_writes_the_new_one(self) -> None:
+        """create_app never sees the source app id; update_config writes the new one."""
+        ds = MagicMock()
+        ds.create_app.return_value = {"id": "77777", "configId": "01NEWULID"}
+        storage = MagicMock()
+        storage.update_config.return_value = {"id": "01NEWULID"}
+
+        create_synced_data_app(
+            storage,
+            ds,
+            name="api-test",
+            description="",
+            type_="streamlit",
+            configuration=_cloned_body(),
+            branch_id=None,
+        )
+
+        create_body = ds.create_app.call_args.kwargs["config"]
+        assert "id" not in create_body["parameters"]
+        put_body = storage.update_config.call_args.kwargs["configuration"]
+        assert put_body["parameters"]["id"] == "77777"
+
+    def test_forwards_is_disabled(self) -> None:
+        ds = MagicMock()
+        ds.create_app.return_value = {"id": "77777", "configId": "01NEWULID"}
+        storage = MagicMock()
+        storage.update_config.return_value = {"id": "01NEWULID"}
+
+        create_synced_data_app(
+            storage,
+            ds,
+            name="api-test",
+            description="",
+            type_="python-js",
+            configuration=_cloned_body(),
+            branch_id=None,
+            is_disabled=True,
+        )
+
+        assert storage.update_config.call_args.kwargs["is_disabled"] is True
+
+    def test_deletes_orphan_when_update_fails(self) -> None:
+        """A create_app that succeeds then an update_config that fails must not
+        leave an orphan app in the target."""
+        ds = MagicMock()
+        ds.create_app.return_value = {"id": "77777", "configId": "01NEWULID"}
+        storage = MagicMock()
+        storage.update_config.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            create_synced_data_app(
+                storage,
+                ds,
+                name="api-test",
+                description="",
+                type_="python-js",
+                configuration=_cloned_body(),
+                branch_id=None,
+            )
+
+        ds.delete_app.assert_called_once_with("77777")
+
+    def test_missing_config_id_raises(self) -> None:
+        ds = MagicMock()
+        ds.create_app.return_value = {"id": "77777"}  # no configId
+        storage = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc:
+            create_synced_data_app(
+                storage,
+                ds,
+                name="api-test",
+                description="",
+                type_="python-js",
+                configuration=_cloned_body(),
+                branch_id=None,
+            )
+        assert exc.value.error_code == ErrorCode.API_ERROR
+        storage.update_config.assert_not_called()

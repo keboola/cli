@@ -4,6 +4,7 @@ Handles downloading Keboola project configurations to the local filesystem
 in a dev-friendly format (YAML configs), and tracking local changes.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -1668,7 +1669,21 @@ class SyncService(BaseService):
         pushed_details: list[dict[str, str]] = []
         manifest_dirty = False
 
-        with client:
+        # A data-app CREATE needs a Data Science client so its runtime type
+        # travels into the target (CLI-8). Built only when the changeset
+        # actually creates a data app, and entered alongside ``client`` so its
+        # close() runs on every exit from the push block, a mid-push raise
+        # included.
+        ds_client = None
+        if any(
+            c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
+            for c in changes
+            if not bool(c.get("is_row"))
+        ):
+            ds_client = self._ds_client_factory(project.stack_url, project.token)
+        ds_context = ds_client if ds_client is not None else contextlib.nullcontext()
+
+        with client, ds_context:
             self._ensure_branch_registered(manifest, branch_id, client)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
 
@@ -1685,16 +1700,6 @@ class SyncService(BaseService):
             # before the manifest writeback overwrites the placeholder in place.
             created_id_map: dict[tuple[str, str], str] = {}
             created_configs: list[CreatedConfig] = []
-
-            # A data-app CREATE needs a Data Science client so its runtime type
-            # travels into the target (CLI-8). Built only when the changeset
-            # actually creates a data app; closed after Phase A.
-            ds_client = None
-            if any(
-                c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
-                for c in config_changes
-            ):
-                ds_client = self._ds_client_factory(project.stack_url, project.token)
 
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
@@ -1831,9 +1836,6 @@ class SyncService(BaseService):
                     ):
                         raise
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
-
-            if ds_client is not None:
-                ds_client.close()
 
             # ---- Phase B: row creates / updates / deletes ----------------
             # row placeholder id -> ULID; ULID parent -> rows created under it.

@@ -23,8 +23,9 @@ from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import encrypt_secrets_in_config
 from ._sync_baseline import apply_stamp, row_baseline
+from ._sync_data_app import create_synced_data_app
 from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
-from .data_app_service import DATA_APP_COMPONENT_ID, create_synced_data_app
+from .data_app_service import DATA_APP_COMPONENT_ID
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -443,6 +444,7 @@ def push_create(
             type_=data_app_type,
             configuration=configuration,
             branch_id=branch_id,
+            is_disabled=bool(local_data.get("is_disabled", False)),
         )
     else:
         result = client.create_config(

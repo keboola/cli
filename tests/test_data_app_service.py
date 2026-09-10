@@ -25,7 +25,6 @@ from keboola_agent_cli.services.data_app_service import (
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
-    create_synced_data_app,
 )
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -1905,86 +1904,3 @@ class TestTailAppLogsClient:
             text = client.tail_app_logs("42")
 
         assert text == "full buffer\n"
-
-
-# ---------------------------------------------------------------------------
-# create_synced_data_app -- the sync/clone create path (CLI-8)
-# ---------------------------------------------------------------------------
-
-
-class TestCreateSyncedDataApp:
-    """The helper sync push uses to carry a data app's runtime type.
-
-    A ``keboola.data-apps`` config created through the Storage API alone loses
-    its runtime type, since the type lives only on the Data Science ``/apps``
-    record. This helper creates that record with the type, then fills the
-    Storage body.
-    """
-
-    def _body(self) -> dict[str, Any]:
-        # A cloned body: parameters.id still points at the SOURCE project's app.
-        return {
-            "parameters": {"id": "99999", "dataApp": {"slug": "api-test"}},
-            "runtime": {"backend": {"size": "tiny"}},
-        }
-
-    def test_creates_ds_record_with_type(self) -> None:
-        ds = MagicMock()
-        ds.create_app.return_value = {"id": "43683849", "configId": "01NEWULID"}
-        storage = MagicMock()
-        storage.update_config.return_value = {"id": "01NEWULID", "version": "2"}
-
-        result = create_synced_data_app(
-            storage,
-            ds,
-            name="api-test",
-            description="desc",
-            type_="python-js",
-            configuration=self._body(),
-            branch_id=None,
-        )
-
-        # The type is sent to the DS record -- the whole point of the fix.
-        assert ds.create_app.call_args.kwargs["type_"] == "python-js"
-        # Storage config filled at the SERVER-assigned config id, not a client guess.
-        assert storage.update_config.call_args.kwargs["config_id"] == "01NEWULID"
-        # Caller's writeback keys off result["id"] == the new config ULID.
-        assert result["id"] == "01NEWULID"
-
-    def test_repoints_stale_back_pointer(self) -> None:
-        """parameters.id is rewritten from the source app id to the new one."""
-        ds = MagicMock()
-        ds.create_app.return_value = {"id": "43683849", "configId": "01NEWULID"}
-        storage = MagicMock()
-        storage.update_config.return_value = {"id": "01NEWULID"}
-
-        create_synced_data_app(
-            storage,
-            ds,
-            name="api-test",
-            description="",
-            type_="streamlit",
-            configuration=self._body(),
-            branch_id=None,
-        )
-
-        put_body = storage.update_config.call_args.kwargs["configuration"]
-        assert put_body["parameters"]["id"] == "43683849"
-
-    def test_missing_config_id_raises(self) -> None:
-        ds = MagicMock()
-        ds.create_app.return_value = {"id": "43683849"}  # no configId
-        storage = MagicMock()
-
-        with pytest.raises(KeboolaApiError) as exc:
-            create_synced_data_app(
-                storage,
-                ds,
-                name="api-test",
-                description="",
-                type_="python-js",
-                configuration=self._body(),
-                branch_id=None,
-            )
-        assert exc.value.error_code == ErrorCode.API_ERROR
-        storage.update_config.assert_not_called()
