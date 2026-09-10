@@ -135,6 +135,12 @@ def find_default_branch_id(branches: list[dict[str, Any]]) -> int | None:
         try:
             return int(branch["id"])
         except (KeyError, TypeError, ValueError):
+            # Skipping is the right recovery, but not a silent one: the
+            # callers then word "no default branch" for a project that DID
+            # report one (followups F4). The log line is where the truth goes.
+            logger.warning(
+                "isDefault branch carries a non-numeric id %r -- skipped", branch.get("id")
+            )
             continue
     return None
 

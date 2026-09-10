@@ -8,9 +8,11 @@ Provides common patterns used by all CLI commands:
 """
 
 import getpass
+import json
 import os
 import secrets
 import sys
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -72,6 +74,36 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
         err=True,
     )
     raise typer.Exit(code=2)
+
+
+def parse_json_arg(raw: str, *, label: str) -> Any:
+    """Parse a ``JSON|@file|-`` argument: inline JSON, ``@path``, or ``-`` for stdin.
+
+    The house input contract for structured flags (``config update
+    --configuration``, ``transformation edit --op``, ``merge-request resolve
+    --resolved``). Hoisted from ``transformation.py``'s private copy so the
+    merge-request group did not add another; ``config.py`` still carries an
+    older dict-only variant (``_parse_json_input``) -- folding it in is a
+    follow-up, not this PR.
+
+    Raises:
+        ValueError: On a missing/unreadable file or malformed JSON -- the message
+            names ``label`` (the flag) so the caller can print it at exit 2 as-is.
+    """
+    try:
+        if raw == "-":
+            return json.loads(sys.stdin.read())
+        if raw.startswith("@"):
+            file_path = Path(raw[1:])
+            if not file_path.is_file():
+                raise ValueError(f"{label}: file not found: {file_path}")
+            return json.loads(file_path.read_text(encoding="utf-8"))
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label}: invalid JSON: {exc}") from exc
+    except OSError as exc:
+        # a directory, a permission problem -- a usage error, not a crash
+        raise ValueError(f"{label}: cannot read file: {exc}") from exc
 
 
 def read_password_stdin() -> str:

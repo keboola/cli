@@ -237,11 +237,30 @@ Bucket sharing + linking across projects in the same organization. `sharing edge
 - `branch use --project ALIAS --branch ID` -- switch active branch
 - `branch reset --project ALIAS` -- reset to main/production
 - `branch delete --project ALIAS --branch ID` -- delete branch (resets if active)
-- `branch merge --project ALIAS [--branch ID]` -- get merge URL (does NOT merge via API)
+- `branch merge --project ALIAS [--branch ID]` -- DEPRECATED (since vNEXT): get merge URL (does NOT merge via API), resets the active branch. Prefer `merge-request` on projects with the feature
 - `branch metadata-list --project NAME [--branch ID|default]` -- list all metadata entries on a branch (id, key, value, provider, timestamp). `--branch` defaults to `default` (main branch)
 - `branch metadata-get --project NAME --key KEY [--branch ID|default]` -- read a single metadata value by key. Exits with `NOT_FOUND` (exit 1) if absent
 - `branch metadata-set --project NAME --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]` -- set a key/value. Useful for `KBC.projectDescription` and similar dashboard-visible fields. Pass exactly one of `--text`, `--file`, or `--stdin`
 - `branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]` -- delete a metadata entry by its numeric ID (from `metadata-list`)
+
+## Merge Requests
+*(since vNEXT)*
+
+Non-SOX Branches 2.0: merge a dev branch into production with review. Alias `mr`. Every command except `list`/`create` takes `[--merge-request-id N | --id N] [--branch B]`; omitted, the target is the merge request of the active branch. A branch has at most one MR, ever. Both flags at once -> exit 2. Status is the derived state the web UI shows. See `merge-request-workflow.md`.
+- `merge-request list [--project A] [--state STATE]` -- newest first; `--state` filters client-side (unknown -> exit 2); an empty list on a feature-less project says so (`feature_enabled: false`)
+- `merge-request detail [--merge-request-id N | --branch B] [--activity-log]` -- readiness (`mergeable`/`merge_blockers`), `viewer`, `allowed_actions`, `feature_enabled`, reviewers, approvals, change log (empty until sent for review, by design), live conflicts
+- `merge-request create --title T [--branch B] [--description D] [--reviewer-id ID ...] [--external-id X]` -- from `--branch` or the active branch into production (write)
+- `merge-request update [--merge-request-id N | --branch B] [--title] [--description] [--reviewer-id ...] [--external-id]` -- omitted fields stay; `""` clears description/external-id; `--reviewer-id` REPLACES the set; no fields -> exit 2 (write; auto-merge is not a field here)
+- `merge-request request-review [...]` -- DESTRUCTIVE (moves the MR toward production): on a 0-approval project lands directly in `approved` (`merge` works without it); no reviewers selected = email to every project member; `--json` needs an explicit target
+- `merge-request approve [...]` -- DESTRUCTIVE (the last approval is what a merge waits for); only from `in_review`; 422 on a 0-approval project; `--json` needs an explicit target
+- `merge-request auto-merge --strategy immediately|scheduled|none [--at TS] [...] [--yes]` -- DESTRUCTIVE: `immediately`/`scheduled` arm a backend scheduler that merges the MR on its own once approved (a delayed production merge, `merge` never called); `none` disarms, same class; prompts in human mode when arming; `--json` needs an explicit target
+- `merge-request request-changes [...] [--reason TEXT]` -- back to development, approvals removed; the closest thing to "close" (no cancel endpoint)
+- `merge-request merge [...] [--yes]` -- DESTRUCTIVE: merges into production, deletes the source branch, blocks up to 10 min; under `--json` an explicit target is REQUIRED
+- `merge-request conflicts [...]` -- configs changed on both sides (live); `isDeleted` is the dev side's flag
+- `merge-request diff --component-id C --config-id I [...] [--format short|full] [--output PATH]` -- per-path both/only-you/only-production; a wholesale-deleted side is reported with the `--take` to pick; `--output` writes `resolution_candidate` (all five keys) for `resolve --resolved @PATH`
+- `merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [...] [--change-description TEXT]` -- DESTRUCTIVE (removes a merge blocker); rebase onto production's version; rebase REPLACES, a `--resolved` body needs name/description/isDisabled/configuration/rows; no `--all`; `--json` needs an explicit target
+- **Destructive is a property of the command**, never of a flag or of the MR's state: `request-review`, `approve`, `resolve`, `merge`, `auto-merge` are always destructive (they move an MR toward or into production); `create`, `update`, `request-changes` are writes. `--deny-destructive` = observe and shape, never move. A policy is evaluated from the command name alone, before any network call
+- Errors: `FEATURE_NOT_ENABLED` (exit 5, two wordings: feature missing vs SOX) from any command whose target resolved implicitly; `MR_MERGE_CONFLICT` / `MR_NOT_READY_TO_MERGE` from merge (a truncated conflict list carries `details.api_error_params_truncated`); scoped token 403s on everything but `list`. Every result may carry `warnings[]`
 
 ## Workspaces (SQL Debugging)
 - `workspace create --project ALIAS [--name NAME] [--ui] [--read-only]` -- create workspace (headless ~1s, `--ui` ~15s). Since v0.47.1: Snowflake headless workspaces return a `private_key` PEM field; `password` is empty. BigQuery workspaces keep the default password credential shape.
