@@ -518,6 +518,7 @@ class SyncService(BaseService):
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
             self._ensure_branch_registered(manifest, branch_id, client)
+            folder_map = self._fetch_config_folders(client, branch_id)
 
             if not no_storage:
                 try:
@@ -979,6 +980,14 @@ class SyncService(BaseService):
                         # shape version is stamped alongside it (issue #686).
                         CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
                     }
+                # Keep the UI folder (KBC.configuration.folderName) with the
+                # config. Pull dropped it before, so every pulled or cloned
+                # config landed in the root (CLI-9). The push create path
+                # already forwards KBC.* manifest metadata through
+                # propagate_kbc_metadata, so storing it here closes the loop.
+                folder_name = folder_map.get(lookup_key)
+                if folder_name:
+                    cfg_metadata["KBC.configuration.folderName"] = folder_name
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -2041,6 +2050,27 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch_config_folders(client: Any, branch_id: int | None) -> dict[str, str]:
+        """Map ``{component_id}/{config_id}`` to its UI folder name.
+
+        The folder is config metadata (``KBC.configuration.folderName``), not a
+        field in the ``list_components_with_configs`` body, so pull must fetch it
+        separately. The search endpoint that serves it is branch-only, so a
+        production pull (``branch_id`` is ``None``) resolves the default branch
+        id first -- the same fallback ``ConfigService`` uses. A lookup failure
+        degrades to an empty map: a missing folder must never abort the pull.
+        """
+        try:
+            folder_branch_id = branch_id or find_default_branch_id(client.list_dev_branches())
+            if not folder_branch_id:
+                return {}
+            result = client.list_config_folder_metadata(branch_id=folder_branch_id)
+            return result if isinstance(result, dict) else {}
+        except Exception:
+            logger.debug("config-folder metadata lookup failed", exc_info=True)
+            return {}
 
     @staticmethod
     def _resolve_branch_id(
