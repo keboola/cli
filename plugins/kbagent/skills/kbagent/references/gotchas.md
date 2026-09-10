@@ -750,6 +750,27 @@ Useful for targeting a freshly-created dev branch without running `branch use` o
 to the manifest or to the config store, so subsequent commands without `--branch`
 fall back to the normal priority chain.
 
+## `sync pull` / `sync clone` now keep the config folder (`KBC.configuration.folderName`)
+
+*(since vNEXT)*
+
+A config's UI folder is config metadata under `KBC.configuration.folderName`. It
+comes from a branch-only `search/component-configurations` call, not from the
+`list_components_with_configs` body that pull reads for config data. Before vNEXT
+`sync pull` never fetched it, so `sync pull` and `sync clone` silently dropped the
+folder and every config landed in the tree root. Nothing warned about it. On a
+pre-vNEXT kbagent a golden-reference `sync clone` still produces a folder-less
+clone -- check the version, or verify the folders came across after a clone.
+
+Since vNEXT pull fetches the folder for each config and stores
+`KBC.configuration.folderName` in the manifest entry's `metadata`. The push create
+path already forwards `KBC.*` manifest metadata (see "`sync push` fresh-CREATE
+writeback now updates placeholders in place" above), so a clone recreates the
+folder in the target with no push-side change. Only the CREATE path carries it:
+changing a folder on an existing config through a plain `sync push` still does not
+propagate (`propagate_kbc_metadata` runs only on create) -- use
+`config set-folder`.
+
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 
 Opt-in flag (default `False`, so existing callers are unaffected). When set,

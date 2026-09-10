@@ -1462,12 +1462,12 @@ class TestPullJobsFallback:
 class TestPullConfigFolder:
     """pull() must keep each config's UI folder in the manifest (CLI-9).
 
-    The folder is config metadata (``KBC.configuration.folderName``), served by
-    a separate branch-only search endpoint, not by ``list_components_with_configs``.
+    The folder is config metadata (``KBC.configuration.folderName``) from a
+    separate branch-only search endpoint, not from ``list_components_with_configs``.
     Before the fix pull never fetched it, so every pulled or cloned config lost
     its folder. The push create path already forwards ``KBC.*`` manifest
-    metadata (see ``TestPropagateKbcMetadata`` in test_sync_service.py), so
-    capturing it on pull closes the round-trip.
+    metadata (see the ``test_propagate_kbc_metadata_*`` tests in
+    test_sync_service.py), so capturing it on pull closes the round-trip.
     """
 
     def test_pull_captures_config_folder_into_manifest(
