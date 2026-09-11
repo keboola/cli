@@ -708,6 +708,15 @@ class _UsageTelemetryMiddleware:
             values = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("project")
             project_alias = values[0] if values else None
 
+        # The caller's X-Conversation-ID (set by kbagent's own clients) rides into
+        # params.cliContext so the telemetry reader tells an agent request from a
+        # human one; a web-UI request sends no such header and stays unmarked (CLI-12).
+        conversation_id: str | None = None
+        for key, value in scope.get("headers") or []:
+            if key == b"x-conversation-id":
+                conversation_id = value.decode("latin-1") or None
+                break
+
         await asyncio.to_thread(
             telemetry.send_serve_event,
             self._config_store,
@@ -717,6 +726,7 @@ class _UsageTelemetryMiddleware:
             status_code=status_code,
             duration_s=duration_s,
             project_alias=project_alias,
+            conversation_id=conversation_id,
         )
 
 

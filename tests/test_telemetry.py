@@ -23,9 +23,15 @@ from keboola_agent_cli.auth.token_provider import reset_provider_registry
 _EVENTS_URL = "https://connection.keboola.com/v2/storage/events"
 
 
-def test_success_posts_expected_cli_event(tmp_config_dir: Path, httpx_mock) -> None:
+def test_success_posts_expected_cli_event(
+    tmp_config_dir: Path, httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A successful command posts one ``ext.keboola.cli.`` event with the command path."""
     telemetry.reset()
+    # This test asserts the no-conversation-id branch, so it must own that env var:
+    # cli.py sets KBAGENT_CONVERSATION_ID directly on os.environ for --conversation-id,
+    # which can leak across tests in one xdist worker.
+    monkeypatch.delenv("KBAGENT_CONVERSATION_ID", raising=False)
     setup_single_project(tmp_config_dir)  # sole project -> resolves without --project
     httpx_mock.add_response(url=_EVENTS_URL, method="POST", json={"id": "evt-1"})
 
@@ -42,12 +48,42 @@ def test_success_posts_expected_cli_event(tmp_config_dir: Path, httpx_mock) -> N
     assert body["component"] == "keboola.cli"
     assert "configurationId" not in body  # CLI -> ext.keboola.cli. (serve adds "serve")
     assert body["type"] == "info"
-    assert body["params"] == {"command": "config list"}
+    assert body["params"]["command"] == "config list"
+    # cliContext carries the version (via the User-Agent) into the event body,
+    # since the events store keeps the body, not the server-stamped envelope (CLI-12).
+    assert body["params"]["cliContext"]["userAgent"].startswith(
+        ("keboola-cli/", "keboola-agent-cli/")
+    )
+    # No KBAGENT_CONVERSATION_ID set -> no agent marker (a human invocation).
+    assert "conversationId" not in body["params"]["cliContext"]
     assert body["results"]["projectId"] == 258
     assert body["duration"] == 1  # ceil(0.4s)
     # The acting client identifies kbagent to Connection by its User-Agent, which
     # is what makes the server-side audit event attributable to kbagent too.
     assert requests[0].headers["User-Agent"].startswith(("keboola-cli/", "keboola-agent-cli/"))
+
+
+def test_conversation_id_marks_an_agent_run(
+    tmp_config_dir: Path, httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A set KBAGENT_CONVERSATION_ID lands in params.cliContext.conversationId.
+
+    Presence of the id is the agent-vs-human marker KIDS reads off the event (CLI-12).
+    """
+    telemetry.reset()
+    setup_single_project(tmp_config_dir)
+    monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "conv-abc123")
+    httpx_mock.add_response(url=_EVENTS_URL, method="POST", json={"id": "evt-1"})
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", "config", "list", "--config-dir", str(tmp_config_dir)],
+        exit_code=0,
+        error=None,
+        duration_s=0.4,
+    )
+
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["params"]["cliContext"]["conversationId"] == "conv-abc123"
 
 
 def test_failed_command_reports_error_and_is_best_effort(tmp_config_dir: Path, httpx_mock) -> None:
