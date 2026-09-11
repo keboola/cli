@@ -739,6 +739,14 @@ kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH |
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
+# workspace create (#755): a failed create -- headless or --ui -- moves the keboola.sandboxes
+#   config it created to the trash and says so (--json error.details: sandbox_config_id,
+#   sandbox_config_rolled_back, branch_id, job_id for --ui); the --ui job is queued on the branch
+#   the config lives in (was: default branch -> Queue 400 on a pinned dev branch). --ui itself
+#   still ends in WORKSPACE_NOT_FOUND on current SaaS stacks: the keboola.sandboxes `create` task
+#   dropped Snowflake/BigQuery provisioning in 2026-03 (the UI uses SQL Editor sessions), so the
+#   green job attaches no Storage workspace. Not a race -- do not retry; use headless. Version
+#   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
