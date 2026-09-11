@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Explicit Stream HTTP auth must not compete with a Storage header
+
+*(since vNEXT)*
+
+Low-level `StreamClient(..., http_auth=...)` and the `KeboolaClient` Stream sub-client
+omit `X-StorageApi-Token` entirely when an auth hook is supplied. Previously they
+sent that header too, even for an empty token or session sentinel; it could defeat
+valid bearer authentication and return HTTP 401 while Storage worked. Static-token
+calls are unchanged. This does **not** broaden CLI session support or the public
+`Client` facade's static-token contract; their existing guards still apply.
+
 ## An HTTP 401 is not automatically a bad token
 
 *(since 0.92.0, #711)*

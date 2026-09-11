@@ -99,10 +99,9 @@ class StreamClient(BaseHttpClient):
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         stream_base_url = self._derive_service_url(self._stack_url, "stream")
-        headers = {
-            "X-StorageApi-Token": token,
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
         super().__init__(
             base_url=stream_base_url,
             token=token,
