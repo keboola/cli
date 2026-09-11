@@ -149,13 +149,22 @@ any workspace via the `KBC_<STACK>_<PROJECT>` shared database.
 reach for `workspace load` only when the data must actually live inside
 the workspace.
 
-## Option C: UI-visible workspace
+## Option C: UI-visible workspace (`--ui`) -- currently NOT working for SQL backends
 
-Use `--ui` when the workspace should appear in the Keboola UI Workspaces tab (slower, ~15s):
+`--ui` was meant to make the workspace appear in the Keboola UI Workspaces tab (slower, ~15s):
 
 ```bash
 kbagent --json workspace create --project ALIAS --name "shared-debug" --ui
 ```
+
+**On current SaaS stacks this fails with `WORKSPACE_NOT_FOUND`** (issue #755,
+since vNEXT the error explains why and the attempt leaves nothing behind): the
+`keboola.sandboxes` `create` job no longer provisions Snowflake/BigQuery
+workspaces -- the UI creates them through SQL Editor sessions, which kbagent
+does not drive. Do not retry; it is not a race. Use the headless default
+(Option A/B) and create a UI-visible one in the Keboola UI when the team needs
+it there. See gotchas.md "`workspace create --ui` cannot produce a UI-visible
+SQL workspace".
 
 ## SQL from file
 

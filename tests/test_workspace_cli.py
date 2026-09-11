@@ -175,6 +175,49 @@ class TestWorkspaceCreate:
         assert output["data"]["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
         assert output["data"]["backend"] == "snowflake"
 
+    def test_workspace_create_ui_failure_json_carries_rollback_details(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed --ui create surfaces the service's rollback context in --json (issue #755).
+
+        The envelope stays the stable {status, error{code, message, ...}}; the
+        structured details tell an agent whether the sandbox config was
+        cleaned up without parsing the prose.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.create_workspace.side_effect = KeboolaApiError(
+            message="Sandbox job 1019482 completed but no Storage workspace is attached",
+            status_code=500,
+            error_code=ErrorCode.WORKSPACE_NOT_FOUND,
+            retryable=False,
+            details={
+                "job_id": "1019482",
+                "sandbox_config_id": "cfg-orphan",
+                "branch_id": 123,
+                "sandbox_config_rolled_back": True,
+            },
+        )
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                ["--json", "workspace", "create", "--project", "prod", "--ui"],
+            )
+
+        assert result.exit_code == 1, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "WORKSPACE_NOT_FOUND"
+        assert output["error"]["details"]["sandbox_config_rolled_back"] is True
+        assert output["error"]["details"]["sandbox_config_id"] == "cfg-orphan"
+        assert output["error"]["details"]["job_id"] == "1019482"
+        mock_ws.create_workspace.assert_called_once()
+        assert mock_ws.create_workspace.call_args.kwargs["ui_mode"] is True
+
     def test_workspace_create_human_outputs_private_key_when_present(self, tmp_path: Path) -> None:
         """workspace create human output shows the generated private key when returned."""
         config_dir = tmp_path / "config"
