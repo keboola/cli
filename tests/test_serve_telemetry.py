@@ -45,7 +45,17 @@ def test_serve_logs_a_mutation_with_the_mapped_command(
     """
     captured: list[tuple[str, str | None]] = []
 
-    def fake_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+    def fake_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
         captured.append((operation, project_alias))
 
     monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
@@ -68,7 +78,17 @@ def test_unhandled_route_error_is_logged_as_a_failure(
     """
     captured: list[int] = []
 
-    def fake_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+    def fake_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
         captured.append(status_code)
 
     monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
@@ -100,7 +120,17 @@ def test_serve_maps_a_path_converter_route(
     """
     captured: list[str] = []
 
-    def fake_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+    def fake_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
         captured.append(operation)
 
     monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
@@ -125,7 +155,17 @@ def test_serve_skips_read_requests(tmp_config_dir: Path, monkeypatch: pytest.Mon
     """
     captured: list[tuple[str, str]] = []
 
-    def fake_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+    def fake_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
         captured.append((method, operation))
 
     monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
@@ -152,7 +192,17 @@ def test_serve_does_not_wait_for_the_telemetry_post(
     """
     posted = threading.Event()
 
-    def slow_send(config_store, *, method, path, operation, status_code, duration_s, project_alias):
+    def slow_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
         time.sleep(0.3)
         posted.set()
 
@@ -164,3 +214,36 @@ def test_serve_does_not_wait_for_the_telemetry_post(
         assert not posted.is_set()
         # ...but the event still fires, off the request path.
         assert posted.wait(2.0)
+
+
+def test_serve_passes_the_request_conversation_id(
+    tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The request's X-Conversation-ID reaches send_serve_event; its absence sends None.
+
+    That header is the agent-vs-human marker for serve (CLI-12): an agent-driven
+    request carries it, a human web-UI request does not.
+    """
+    captured: list[str | None] = []
+
+    def fake_send(
+        config_store,
+        *,
+        method,
+        path,
+        operation,
+        status_code,
+        duration_s,
+        project_alias,
+        conversation_id=None,
+    ):
+        captured.append(conversation_id)
+
+    monkeypatch.setattr(telemetry, "send_serve_event", fake_send)
+    app = create_app(config_dir=str(tmp_config_dir), auth_token="tok")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        headers = {"Authorization": "Bearer tok"}
+        client.post("/jobs/prod/run", headers={**headers, "X-Conversation-ID": "conv-xyz"}, json={})
+        client.post("/jobs/prod/run", headers=headers, json={})
+
+    assert captured == ["conv-xyz", None]

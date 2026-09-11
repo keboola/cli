@@ -5,6 +5,11 @@ events (``POST /v2/storage/events``), the same mechanism the kbc CLI uses. The
 event is stored as ``ext.keboola.cli.`` (CLI) or ``ext.keboola.cli.serve``
 (serve REST API) and stamped server-side with the caller's token + user agent.
 
+The event body also carries ``params.cliContext``: the kbagent User-Agent
+(version + OS/arch/Python) and, when set, the conversation id. The events store
+keeps the request body, not the server-stamped envelope, so a downstream reader
+reads the version and an agent-vs-human marker off the event itself (CLI-12).
+
 This is telemetry, NOT an audit trail: it is voluntary (the two env vars below
 disable it) and best-effort (a failed or blocked events endpoint never affects
 the command). Mutating operations are recorded server-side by Connection as
@@ -27,12 +32,14 @@ import typer
 from .auth.sentinel import is_session_token
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import (
+    ENV_CONVERSATION_ID,
     ENV_DISABLE_TELEMETRY,
     ENV_DO_NOT_TRACK,
     TELEMETRY_COMPONENT_ID,
     TELEMETRY_SERVE_CONFIG_ID,
     TELEMETRY_TIMEOUT,
 )
+from .http_base import build_user_agent
 from .services.base import make_telemetry_client
 from .services.project_service import ProjectService
 
@@ -217,6 +224,7 @@ def emit_cli_invocation(
             duration_s=duration_s,
             configuration_id=None,
             extra_params=None,
+            conversation_id=os.environ.get(ENV_CONVERSATION_ID) or None,
         )
     except Exception as exc:
         logger.debug("usage event failed: %s", exc)
@@ -232,11 +240,14 @@ def send_serve_event(
     status_code: int,
     duration_s: float,
     project_alias: str | None,
+    conversation_id: str | None = None,
 ) -> None:
     """Post a usage event for one serve REST request. Never raises.
 
     Blocking (builds a sync client + posts), so serve calls this off the event
-    loop via a worker thread.
+    loop via a worker thread. ``conversation_id`` is the request's own
+    ``X-Conversation-ID`` (read by the middleware), so an agent-driven request is
+    marked and a human web-UI request -- which sends no such header -- is not.
     """
     try:
         if telemetry_disabled():
@@ -264,6 +275,7 @@ def send_serve_event(
             duration_s=duration_s,
             configuration_id=TELEMETRY_SERVE_CONFIG_ID,
             extra_params={"path": f"{method} {path}"},
+            conversation_id=conversation_id,
         )
     except Exception as exc:
         logger.debug("serve usage event failed: %s", exc)
@@ -301,10 +313,17 @@ def _send_event(
     duration_s: float,
     configuration_id: str | None,
     extra_params: dict[str, Any] | None,
+    conversation_id: str | None,
 ) -> None:
     params: dict[str, Any] = {"command": command}
     if extra_params:
         params.update(extra_params)
+    # KIDS reads the CLI version (auto-update adoption) and an agent-vs-human
+    # marker off the stored event body, so both ride in params.cliContext (CLI-12).
+    cli_context: dict[str, Any] = {"userAgent": build_user_agent()}
+    if conversation_id:
+        cli_context["conversationId"] = conversation_id
+    params["cliContext"] = cli_context
     results: dict[str, Any] = {}
     if project_id is not None:
         results["projectId"] = project_id
