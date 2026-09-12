@@ -273,19 +273,35 @@ class TestSessionAuthFeatureGuard:
         with StreamClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()):
             pass
 
-    def test_stream_sub_client_inherits_the_bearer_hook(self, httpx_mock) -> None:
-        """``client/stream.py`` builds a ``StreamClient`` from the main client.
-
-        Without propagating ``http_auth`` it would send an empty
-        ``X-StorageApi-Token`` in session mode and draw an opaque 401.
-        """
+    @pytest.mark.parametrize("token", ["", SENTINEL_TOKEN, STATIC_TOKEN])
+    def test_stream_sub_client_inherits_the_bearer_hook(self, httpx_mock, token: str) -> None:
+        """The stream sub-client must not add a competing static auth header."""
         httpx_mock.add_response(
             url="https://stream.keboola.com/v1/branches/default/sources",
             json={"sources": []},
         )
-        with KeboolaClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()) as client:
-            client._get_stream_client().list_sources("default")
+        auth = _StubBearerAuth(project_id=3044)
+        with KeboolaClient(stack_url=STACK_URL, token=token, http_auth=auth) as client:
+            assert client.list_stream_sources() == []
 
         request = httpx_mock.get_requests()[0]
         assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
-        assert not request.headers.get("X-StorageApi-Token")
+        assert request.headers["X-KBC-ProjectId"] == "3044"
+        assert "X-StorageApi-Token" not in request.headers
+
+    @pytest.mark.parametrize("token", ["", SENTINEL_TOKEN, STATIC_TOKEN])
+    def test_direct_stream_client_omits_static_header_with_auth(
+        self, httpx_mock, token: str
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://stream.keboola.com/v1/branches/default/sources",
+            json={"sources": []},
+        )
+        auth = _StubBearerAuth(project_id=3044)
+        with StreamClient(stack_url=STACK_URL, token=token, http_auth=auth) as client:
+            assert client.list_sources("default") == {"sources": []}
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
+        assert request.headers["X-KBC-ProjectId"] == "3044"
+        assert "X-StorageApi-Token" not in request.headers

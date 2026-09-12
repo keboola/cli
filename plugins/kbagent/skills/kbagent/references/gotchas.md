@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Explicit Stream HTTP auth must not compete with a Storage header
+
+*(since vNEXT)*
+
+Low-level `StreamClient(..., http_auth=...)` and the `KeboolaClient` Stream sub-client
+omit `X-StorageApi-Token` entirely when an auth hook is supplied. Previously they
+sent that header too, even for an empty token or session sentinel; it could defeat
+valid bearer authentication and return HTTP 401 while Storage worked. Static-token
+calls are unchanged. This does **not** broaden CLI session support or the public
+`Client` facade's static-token contract; their existing guards still apply.
+
 ## An HTTP 401 is not automatically a bad token
 
 *(since 0.92.0, #711)*
@@ -472,15 +483,25 @@ Versioning convention:
   its `in.c-otlp-<source_id>` sink bucket, then `token create --bucket-write
   in.c-otlp-<source_id> --expires-in 3600` mints exactly the token the device holds.
 
-## `stream create-source` uses a NORMAL Storage token — there is NO master-token gate
+## Stream writes require an Admin user's personal Storage master token
 
-- Creating a Data Streams source (`kbagent stream create-source` /
-  `Client.create_stream_source`) authenticates with the ordinary project Storage
-  token — **NOT** a master token. There is **no `stream.api.masterTokenRequired`
-  error code**; do not code against one or tell a user they need a master token.
-- The documented create-time errors are `stream.api.sourceAlreadyExists` (HTTP 409
-  — use `stream create-source --if-not-exists` to make it idempotent) and
-  `stream.api.resourceLimitReached` (HTTP 422 — the project hit its source quota).
+- `stream create-source` / `Client.create_stream_source` use the Storage header
+  `X-StorageApi-Token`, **not** a Manage/super-admin token. However, the
+  [Data Streams tutorial](https://help.keboola.com/storage/data-streams/tutorial/)
+  requires the **master token of a project user with the Admin role** for writes
+  and documents `403 only admin token can do write operations on streams`.
+- `isMasterToken=true`, `canManageBuckets=true` and `canManageTokens=true` are
+  insufficient: a master token bound to `admin.role=share` was rejected while
+  reads worked. Check the actual project user role, not just capability flags.
+  Use **Users & Settings → API Tokens → your own token** for an Admin user;
+  never promote a user or switch credentials automatically to bypass a denial.
+- The CLI currently forwards writes without a project-role preflight, so a403
+  can come from the service. Do not invent a `stream.api.masterTokenRequired`
+  error code. Other documented create errors include `stream.api.sourceAlreadyExists`
+  (409) and `stream.api.resourceLimitReached` (422). `--if-not-exists` may reconcile
+  existing sinks; use it only when touching those resources is explicitly in scope.
+- Explicit `sourceId`/`sinkId` are documented optional API fields; omitting them
+  generates IDs from names. Do not assume changing these fields changes authority.
 
 ## `sync status` + `doctor` flag plaintext `#`-secrets in synced configs (since v0.55.0)
 
