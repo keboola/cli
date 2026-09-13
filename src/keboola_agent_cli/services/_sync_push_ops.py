@@ -449,6 +449,14 @@ def push_create(
             branch_id=ds_branch_id,
             is_disabled=bool(local_data.get("is_disabled", False)),
         )
+        # create_synced_data_app set parameters.id on `configuration` to the new
+        # app id. Persist it locally too, or the next push (an update) would send
+        # the stale source id and revert the remote back-pointer.
+        new_app_id = (configuration.get("parameters") or {}).get("id")
+        if new_app_id:
+            pristine_params = pristine_data.setdefault("parameters", {})
+            if isinstance(pristine_params, dict):
+                pristine_params["id"] = new_app_id
     else:
         result = client.create_config(
             component_id=component_id,

@@ -228,6 +228,44 @@ def test_pull_without_data_apps_never_calls_ds(tmp_config_dir: Path, tmp_path: P
     service.pull(alias="prod", project_root=project_root, no_storage=True, no_jobs=True)
 
 
+def test_pull_preserves_type_when_ds_lookup_fails(tmp_config_dir: Path, tmp_path: Path) -> None:
+    """A DS outage during pull must not strip an already-recorded data_app_type.
+
+    config_hash ignores _keboola, so a strip would be invisible to sync diff --
+    a later clone would then deploy under the platform default.
+    """
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    api = FakeApi(_mixed_components("cfg-da"))
+    store = setup_single_project(tmp_config_dir)
+
+    # First pull with a working DS records the type.
+    working_ds = FakeDs(
+        api,
+        list_result=[
+            {"configId": "cfg-da", "componentId": DATA_APP_COMPONENT, "type": "python-js"}
+        ],
+    )
+    service = _service(store, api, working_ds)
+    service.init_sync(alias="prod", project_root=project_root)
+    service.pull(alias="prod", project_root=project_root, no_storage=True, no_jobs=True)
+    assert (
+        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]["data_app_type"] == "python-js"
+    )
+
+    # Second pull with a failing DS must keep the type on disk, not strip it.
+    class ExplodingDs(FakeDs):
+        def list_apps(self) -> list[dict[str, Any]]:
+            raise RuntimeError("DS outage")
+
+    _service(store, api, ExplodingDs(api)).pull(
+        alias="prod", project_root=project_root, no_storage=True, no_jobs=True
+    )
+    assert (
+        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]["data_app_type"] == "python-js"
+    )
+
+
 # ===================================================================
 # push: a data-app CREATE routes through the DS client with the type
 # ===================================================================
@@ -255,6 +293,9 @@ def test_push_create_data_app_sends_type(tmp_config_dir: Path, tmp_path: Path) -
     assert da_updates, "expected an update_config for the data-app"
     assert da_updates[-1]["configuration"]["parameters"]["id"] == "77777"
     assert ds.closed is True
+    # The new app id is persisted to the LOCAL file too, so a later push does
+    # not revert the remote back-pointer to the source id.
+    assert _find_config(project_root, DATA_APP_COMPONENT)["parameters"]["id"] == "77777"
 
 
 def test_push_create_data_app_without_type_falls_back(tmp_config_dir: Path, tmp_path: Path) -> None:
@@ -392,7 +433,9 @@ class TestCreateSyncedDataApp:
 
         ds.delete_app.assert_called_once_with("77777")
 
-    def test_missing_config_id_raises(self) -> None:
+    def test_missing_config_id_raises_and_cleans_up(self) -> None:
+        """An id without a configId leaves a shell behind -- it must be deleted,
+        so a failed create leaves no orphan app (docstring promise)."""
         ds = MagicMock()
         ds.create_app.return_value = {"id": "77777"}  # no configId
         storage = MagicMock()
@@ -409,3 +452,4 @@ class TestCreateSyncedDataApp:
             )
         assert exc.value.error_code == ErrorCode.API_ERROR
         storage.update_config.assert_not_called()
+        ds.delete_app.assert_called_once_with("77777")

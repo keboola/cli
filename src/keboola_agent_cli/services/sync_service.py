@@ -587,6 +587,7 @@ class SyncService(BaseService):
         # otherwise a workspace's type would land on an unrelated config that
         # happens to share the id.
         data_app_types: dict[str, str] = {}
+        ds_types_available = False
         if any(comp.get("id") == DATA_APP_COMPONENT_ID for comp in components):
             try:
                 ds_client = self._ds_client_factory(project.stack_url, project.token)
@@ -598,6 +599,7 @@ class SyncService(BaseService):
                         and app.get("configId")
                         and app.get("type")
                     }
+                ds_types_available = True
             except Exception:
                 logger.warning(
                     "Failed to fetch data-app types from Data Science API", exc_info=True
@@ -758,16 +760,23 @@ class SyncService(BaseService):
                 # future regression in the sanitizer or template parsing.
                 _ensure_within_branch(branch_dir, config_dir, component_id, config_id)
 
-                # Convert API format to local _config.yml
+                # Convert API format to local _config.yml. For a data app the
+                # runtime type comes from the DS /apps list. If that lookup
+                # failed, keep the type already on disk instead of stripping it
+                # -- config_hash ignores _keboola, so a strip would be invisible.
+                da_type: str | None = None
+                if component_id == DATA_APP_COMPONENT_ID:
+                    if ds_types_available:
+                        da_type = data_app_types.get(config_id)
+                    else:
+                        existing = self._read_config_file(config_dir)
+                        if existing is not None:
+                            da_type = (existing.get("_keboola") or {}).get("data_app_type")
                 local_data = api_config_to_local(
                     component_id,
                     cfg,
                     config_id,
-                    data_app_type=(
-                        data_app_types.get(config_id)
-                        if component_id == DATA_APP_COMPONENT_ID
-                        else None
-                    ),
+                    data_app_type=da_type,
                 )
 
                 # Hash of API-converted data.  Stored as pull_config_hash so

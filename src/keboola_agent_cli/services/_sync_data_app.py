@@ -51,7 +51,9 @@ def create_synced_data_app(
     carries ``runtime.backend.size`` instead of ``parameters.size``. So the
     create call sends the minimal shell (the same shape as
     ``DataAppService.create``) and the update call sends the full body with the
-    new app's ``parameters.id``.
+    new app's ``parameters.id``. This mutates the passed ``configuration``:
+    ``parameters.id`` is set to the new app id, so the caller can persist it to
+    the local file (else the next push reverts the back-pointer).
 
     If ``update_config`` fails after ``create_app`` already created the record,
     the record is deleted, so a failed sync create leaves no orphan app in the
@@ -86,6 +88,16 @@ def create_synced_data_app(
     app_id = str(shell.get("id", ""))
     config_id = str(shell.get("configId", ""))
     if not app_id or not config_id:
+        # An id without a configId still leaves a shell behind. Delete it so a
+        # failed create leaves no orphan app, as the docstring promises.
+        if app_id:
+            try:
+                ds_client.delete_app(app_id)
+            except Exception:
+                logger.warning(
+                    "Failed to delete orphan data app %s after an incomplete create response",
+                    app_id,
+                )
         raise KeboolaApiError(
             message="POST /apps response missing id or configId",
             status_code=500,
