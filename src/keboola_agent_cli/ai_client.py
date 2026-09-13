@@ -12,6 +12,8 @@ import logging
 from typing import Any, Self
 from urllib.parse import quote
 
+import httpx
+
 from .constants import AI_SERVICE_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -30,17 +32,18 @@ class AiServiceClient(BaseHttpClient):
 
     SESSION_AUTH_FEATURE = "The Keboola AI Service"
 
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         ai_base_url = self._derive_service_url(self._stack_url, "ai")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
         super().__init__(
             base_url=ai_base_url,
             token=token,
             headers=headers,
             timeout=AI_SERVICE_TIMEOUT,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> Self:

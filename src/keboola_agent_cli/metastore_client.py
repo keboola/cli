@@ -89,13 +89,13 @@ class MetastoreClient(BaseHttpClient):
 
     SESSION_AUTH_FEATURE = "The Metastore Service (semantic layer)"
 
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         base_url = self._derive_service_url(self._stack_url, "metastore")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
-        super().__init__(base_url=base_url, token=token, headers=headers)
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
+        super().__init__(base_url=base_url, token=token, headers=headers, http_auth=http_auth)
 
     def __enter__(self) -> Self:
         return self

@@ -44,19 +44,13 @@ from ._data_app_bodies import (
     _redact_storage_config,
     _secret_fingerprint,
 )
-from .base import BaseService, ClientFactory, project_error_entry
+from .base import BaseService, ClientFactory, make_session_aware_client_factory, project_error_entry
 from .encrypt_service import EncryptService
 
 logger = logging.getLogger(__name__)
 
 
 DataScienceClientFactory = Callable[[str, str], DataScienceClient]
-
-
-def _default_ds_client_factory(stack_url: str, token: str) -> DataScienceClient:
-    """Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction."""
-    return DataScienceClient(stack_url=stack_url, token=token)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +151,9 @@ class DataAppService(BaseService):
         encrypt_service: EncryptService | None = None,
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ds_client_factory = ds_client_factory or _default_ds_client_factory
+        self._ds_client_factory = ds_client_factory or make_session_aware_client_factory(
+            config_store, DataScienceClient
+        )
         self._encrypt_service = encrypt_service or EncryptService(
             config_store=config_store, client_factory=client_factory
         )

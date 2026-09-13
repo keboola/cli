@@ -20,7 +20,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
 from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
 from ..sync.config_format import api_config_to_local, dump_config_yaml
-from .base import BaseService, ClientFactory
+from .base import BaseService, ClientFactory, make_session_aware_client_factory
 from .org_service import slugify
 
 logger = logging.getLogger(__name__)
@@ -505,7 +505,9 @@ class ComponentService(BaseService):
         ai_client_factory: AiClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
-        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
 
     def list_components(
         self,

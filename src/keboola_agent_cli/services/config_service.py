@@ -29,7 +29,13 @@ from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
-from .base import BaseService, ClientFactory, find_default_branch_id, sanitize_unexpected_error
+from .base import (
+    BaseService,
+    ClientFactory,
+    find_default_branch_id,
+    make_session_aware_client_factory,
+    sanitize_unexpected_error,
+)
 from .workspace_service import find_storage_workspace_for_sandbox_config
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
@@ -122,7 +128,9 @@ class ConfigService(BaseService):
         ai_client_factory: AiClientFactory | None = None,
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ai_client_factory = ai_client_factory or _default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
 
     def _fetch_project_configs(
         self,

@@ -18,18 +18,25 @@ Covers three things:
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from keboola_agent_cli.ai_client import AiServiceClient
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
 from keboola_agent_cli.data_science_client import DataScienceClient
 from keboola_agent_cli.errors import ErrorCode, SessionAuthUnsupportedError
+from keboola_agent_cli.metastore_client import MetastoreClient
 from keboola_agent_cli.models import ProjectConfig
-from keboola_agent_cli.services.base import default_client_factory, make_client_factory
+from keboola_agent_cli.scheduler_client import SchedulerClient
+from keboola_agent_cli.services.base import (
+    default_client_factory,
+    make_client_factory,
+    make_session_aware_client_factory,
+)
+from keboola_agent_cli.stream_client import StreamClient
 
 STACK_URL = "https://connection.keboola.com"
 SENTINEL_PROJECT_ID = 10105
@@ -283,10 +290,10 @@ class TestAiServiceFactoryGuards:
 
 class TestDataScienceFactoryGuards:
     def test_data_app_service_default_factory_raises(self) -> None:
-        from keboola_agent_cli.services.data_app_service import _default_ds_client_factory
-
+        # data_app_service builds its DS client through the session-aware factory
+        # now; the static-path guard still fires in the client constructor.
         with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            _default_ds_client_factory(STACK_URL, _sentinel_token())
+            DataScienceClient(stack_url=STACK_URL, token=_sentinel_token())
         assert exc_info.value.feature == "The Data Science Service (data apps)"
 
     def test_data_app_git_service_default_factory_raises(self) -> None:
@@ -307,8 +314,9 @@ class TestStreamServiceGuard:
 
 
 # ----------------------------------------------------------------------------
-# Multi-project paths: the guard's AUTH_NOT_SUPPORTED_ON_STACK reaches the
-# --json envelope per project, and the static project's result is unaffected.
+# Multi-project paths: data-app now accepts a browser-login project (CLI-13), so
+# a session and a static project both list; a genuine failure still maps to
+# UNEXPECTED_ERROR per project.
 # ----------------------------------------------------------------------------
 
 
@@ -317,9 +325,9 @@ class TestListDataAppsMixedProjects:
         from keboola_agent_cli.services.data_app_service import DataAppService
 
         # Stub only the HTTP call, so the real `DataScienceClient.__init__`
-        # still runs and its `SESSION_AUTH_FEATURE` guard fires for the session
-        # project. Replacing the class itself would construct a MagicMock and
-        # silently skip the very guard under test.
+        # still runs (now built with BearerAuth for the session project).
+        # Replacing the class itself would construct a MagicMock and skip the
+        # real construction path.
         return patch.object(
             DataScienceClient,
             "list_apps",
@@ -331,9 +339,7 @@ class TestListDataAppsMixedProjects:
             encrypt_service=MagicMock(),
         )
 
-    def test_session_project_errors_with_auth_code_static_project_lists(
-        self, tmp_path: Path
-    ) -> None:
+    def test_session_and_static_projects_both_list(self, tmp_path: Path) -> None:
         store = _mixed_config_store(tmp_path)
         storage_mock = MagicMock()
         storage_mock.list_component_configs.return_value = [
@@ -353,20 +359,9 @@ class TestListDataAppsMixedProjects:
         with ds_patch:
             result = service.list_data_apps(["session", "static"])
 
-        assert [a["project_alias"] for a in result["apps"]] == ["static"]
-        assert result["apps"][0]["name"] == "Sales dashboard"
-
-        assert len(result["errors"]) == 1
-        error = result["errors"][0]
-        assert error["project_alias"] == "session"
-        assert error["error_code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert "static Storage token" in error["message"]
-
-        # The --json envelope a consuming agent branches on.
-        assert (
-            json.loads(json.dumps(result["errors"]))[0]["error_code"]
-            == "AUTH_NOT_SUPPORTED_ON_STACK"
-        )
+        # CLI-13: the session project is no longer rejected; both list.
+        assert sorted(a["project_alias"] for a in result["apps"]) == ["session", "static"]
+        assert result["errors"] == []
 
     def test_unexpected_failure_still_reports_unexpected_error(self, tmp_path: Path) -> None:
         """The typed code must not come at the cost of the generic fallback."""
@@ -381,7 +376,7 @@ class TestListDataAppsMixedProjects:
         assert result["apps"] == []
         by_alias = {e["project_alias"]: e["error_code"] for e in result["errors"]}
         assert by_alias == {
-            "session": ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+            "session": "UNEXPECTED_ERROR",
             "static": "UNEXPECTED_ERROR",
         }
 
@@ -482,3 +477,36 @@ class TestConfigStoreCompatRegression:
 
         raw_config = reloaded_store.load()
         assert raw_config.version == CURRENT_CONFIG_VERSION
+
+
+@pytest.mark.parametrize(
+    "client_cls",
+    [SchedulerClient, StreamClient, DataScienceClient, MetastoreClient, AiServiceClient],
+)
+class TestSessionAwareServiceClients:
+    """CLI-13: each non-Storage service client reaches a browser-login project
+    through BearerAuth, the same way the Storage client does. A static token
+    keeps the X-StorageApi-Token header and no bearer auth; a session token
+    drops the static header and gets a bearer instead."""
+
+    def test_static_token_keeps_storage_header(self, tmp_path: Path, client_cls: type) -> None:
+        config_store = ConfigStore(config_dir=tmp_path)
+        factory = make_session_aware_client_factory(config_store, client_cls)
+        client = factory(STACK_URL, STATIC_TOKEN)
+        try:
+            assert client._client.headers.get("x-storageapi-token") == STATIC_TOKEN
+            assert client._http_auth is None
+        finally:
+            client.close()
+
+    def test_session_token_gets_bearer_no_storage_header(
+        self, tmp_path: Path, client_cls: type
+    ) -> None:
+        config_store = ConfigStore(config_dir=tmp_path)
+        factory = make_session_aware_client_factory(config_store, client_cls)
+        client = factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+            assert client._http_auth is not None
+        finally:
+            client.close()

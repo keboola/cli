@@ -33,7 +33,11 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
-from .base import ResolvedProjectCredentials, resolve_project_credentials
+from .base import (
+    ResolvedProjectCredentials,
+    make_session_aware_client_factory,
+    resolve_project_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,9 @@ class StreamService:
         stream_client_factory: StreamClientFactory | None = None,
     ) -> None:
         self._config_store = config_store
-        self._stream_client_factory = stream_client_factory or default_stream_client_factory
+        self._stream_client_factory = stream_client_factory or make_session_aware_client_factory(
+            config_store, StreamClient
+        )
 
     # ------------------------------------------------------------------
     # Public API
