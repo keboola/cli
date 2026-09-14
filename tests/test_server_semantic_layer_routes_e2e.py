@@ -185,6 +185,8 @@ def test_post_items_add_dataset(http_session: dict[str, Any]) -> None:
             "model": http_session["model_name"],
             "name": f"{http_session['tag']}_ds_a",
             "table_id": "out.c-syn.fact_a",
+            # Synthetic table: without an explicit fqn the service reads it from Storage.
+            "fqn": '"SYN_DB"."out.c-syn"."fact_a"',
         },
     )
     assert res.status_code == 200, res.text
@@ -201,6 +203,8 @@ def test_post_items_add_dataset(http_session: dict[str, Any]) -> None:
             "model": http_session["model_name"],
             "name": f"{http_session['tag']}_ds_b",
             "table_id": "out.c-syn.fact_b",
+            # Synthetic table: without an explicit fqn the service reads it from Storage.
+            "fqn": '"SYN_DB"."out.c-syn"."fact_b"',
         },
     )
     assert res2.status_code == 200, res2.text

@@ -108,6 +108,39 @@ def _column_details(
     return details
 
 
+def table_sql_path(
+    backend: str, backend_path: list[str], database_name: str, table_name: str
+) -> str | None:
+    """Quote a table's warehouse location the way its backend expects.
+
+    The location comes from the owning bucket's ``backendPath`` and is never
+    reconstructed: the Snowflake database is ``KBC_<STACK>_<PROJECT>`` on some
+    stacks and ``SAPI_<PROJECT>`` on others, and a linked bucket points at the
+    SOURCE project's database and schema, not at its own bucket id. Mirrors
+    the per-table ``sql_path`` of ``storage bucket-detail``.
+
+    Returns ``None`` when the backend is not Snowflake / BigQuery, when
+    ``backendPath`` is too short to locate the table, or when any identifier
+    contains the backend's quote character (it could not be quoted safely).
+    """
+    normalized_backend = (backend or "").lower()
+    if normalized_backend == "snowflake" and len(backend_path) >= 2:
+        quote = '"'
+        segments = [backend_path[0], backend_path[1], table_name]
+    elif normalized_backend == "bigquery" and backend_path:
+        quote = "`"
+        # `databaseName` is the GCP project; Storage often leaves it empty, and
+        # then the path is dataset-qualified only.
+        segments = [backend_path[0], table_name]
+        if database_name:
+            segments.insert(0, database_name)
+    else:
+        return None
+    if not all(segments) or any(quote in segment for segment in segments):
+        return None
+    return ".".join(f"{quote}{segment}{quote}" for segment in segments)
+
+
 def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict[str, Any]:
     """Map a Storage API table resource onto kbagent's `table-detail` payload.
 
@@ -125,18 +158,31 @@ def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict
     source_column_metadata: dict[str, list[dict[str, Any]]] = (
         (table.get("sourceTable") or {}).get("columnMetadata") or {} if table.get("isAlias") else {}
     )
+    bucket = table.get("bucket") or {}
+    backend_path = [str(segment) for segment in bucket.get("backendPath") or []]
 
     return {
         "project_alias": alias,
         "table_id": table.get("id", table_id),
         "name": table.get("name", ""),
         "display_name": table.get("displayName", ""),
-        "bucket_id": table.get("bucket", {}).get("id", ""),
+        "bucket_id": bucket.get("id", ""),
         # Storage backend of the owning bucket (e.g. "snowflake",
         # "bigquery"). Consumers: the web UI keys BigQuery-only features
         # (repartition) off it, and type resolution picks the matching
         # INFORMATION_SCHEMA dialect for alias / linked tables.
-        "backend": table.get("bucket", {}).get("backend", ""),
+        "backend": bucket.get("backend", ""),
+        # The owning bucket's warehouse location, verbatim: Snowflake
+        # [database, schema], BigQuery [dataset]. Empty when Storage omits it.
+        "backend_path": backend_path,
+        # Quoted, directly queryable table path; None when it cannot be built
+        # (see `table_sql_path`). Semantic-layer dataset `fqn` is this value.
+        "sql_path": table_sql_path(
+            bucket.get("backend", ""),
+            backend_path,
+            bucket.get("databaseName") or "",
+            table.get("name", ""),
+        ),
         "description": descriptions.table,
         "columns": columns,
         "column_details": _column_details(

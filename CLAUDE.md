@@ -916,7 +916,17 @@ kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
 kbagent semantic-layer diff (--project-a A | --file-a PATH) (--project-b B | --file-b PATH) [--model-a M] [--model-b M]
 kbagent semantic-layer add metric --project P [--model M] --name N --sql SQL --dataset TABLE_ID [--description D] [--yes]
-kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields]
+kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields] [--fqn FQN]
+# dataset fqn (#761): `add dataset` and `build` read the fqn from the table's Storage location --
+#   the owning bucket's backendPath, surfaced as `sql_path` / `backend_path` on `storage table-detail`.
+#   They used to hardcode a "KEBOOLA" database that exists in no project, so every consumer pasting
+#   the fqn into SQL failed. A LINKED bucket's path names the SOURCE project's database + schema;
+#   swapping in the consuming project's database does not resolve either. `add dataset` now needs
+#   the table to exist (one table-detail call) unless `--fqn` supplies the value verbatim; a table
+#   whose location Storage does not report fails with VALIDATION_ERROR. `build --types-workspace`
+#   queries INFORMATION_SCHEMA in that same database/schema. `validate --deep` warns FQN_MISMATCH
+#   on stored fqns that differ (pre-fix models); repair via export -> fix fqn + metric sql -> import
+#   --overwrite. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
 kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
 kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]

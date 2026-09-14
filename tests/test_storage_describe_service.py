@@ -1273,6 +1273,78 @@ class TestGetTableDetailDescriptionExtraction:
         assert result["backend"] == ""
 
 
+class TestGetTableDetailSqlPath:
+    """`backend_path` / `sql_path` come from the owning bucket's `backendPath` (#761)."""
+
+    def test_snowflake_linked_bucket_points_at_source_location(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-aws-costs-raw.reports",
+            "name": "reports",
+            "isAlias": True,
+            "bucket": {
+                "id": "in.c-aws-costs-raw",
+                "backend": "snowflake",
+                "backendPath": ["KBC_USE4_337", "in.c-keboola-ex-aws-s3-01k4q3"],
+                "databaseName": "",
+            },
+            "columns": [],
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-aws-costs-raw.reports")
+
+        assert result["backend_path"] == ["KBC_USE4_337", "in.c-keboola-ex-aws-s3-01k4q3"]
+        assert result["sql_path"] == '"KBC_USE4_337"."in.c-keboola-ex-aws-s3-01k4q3"."reports"'
+
+    def test_missing_backend_path_yields_no_sql_path(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {
+            "id": "in.c-sales.orders",
+            "name": "orders",
+            "bucket": {"id": "in.c-sales", "backend": "snowflake"},
+            "columns": [],
+            "columnMetadata": {},
+            "metadata": [],
+        }
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["backend_path"] == []
+        assert result["sql_path"] is None
+
+    @pytest.mark.parametrize(
+        "backend, backend_path, database_name, expected",
+        [
+            ("snowflake", ["SAPI_9", "out.c-x"], "", '"SAPI_9"."out.c-x"."t"'),
+            ("Snowflake", ["SAPI_9", "out.c-x"], "", '"SAPI_9"."out.c-x"."t"'),
+            ("bigquery", ["out_c_x"], "", "`out_c_x`.`t`"),
+            ("bigquery", ["out_c_x"], "kbc-proj-9", "`kbc-proj-9`.`out_c_x`.`t`"),
+            ("snowflake", ["SAPI_9"], "", None),
+            ("bigquery", [], "", None),
+            ("", ["SAPI_9", "out.c-x"], "", None),
+            ("exasol", ["DB", "out.c-x"], "", None),
+            ("snowflake", ['SAPI"9', "out.c-x"], "", None),
+            ("bigquery", ["out_c`x"], "", None),
+        ],
+    )
+    def test_table_sql_path(
+        self,
+        backend: str,
+        backend_path: list[str],
+        database_name: str,
+        expected: str | None,
+    ) -> None:
+        from keboola_agent_cli.services._table_detail import table_sql_path
+
+        assert table_sql_path(backend, backend_path, database_name, "t") == expected
+
+
 def _listing_row(table_id: str, metadata: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Row as returned by ``list_tables(include="metadata")``."""
     return {"id": table_id, "name": table_id.split(".")[-1], "metadata": metadata or []}

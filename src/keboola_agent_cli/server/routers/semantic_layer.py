@@ -89,6 +89,7 @@ class AddDataset(BaseModel):
     grain: str = ""
     primary_key: list[str] | None = None
     deep_fields: bool = False
+    fqn: str | None = None
 
 
 class AddRelationship(BaseModel):
@@ -437,6 +438,7 @@ def add_item(
             grain=d.grain,
             primary_key=d.primary_key,
             deep_fields=d.deep_fields,
+            fqn=d.fqn,
         )
     if kind == "relationship":
         r = AddRelationship.model_validate(body)

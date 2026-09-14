@@ -1598,7 +1598,9 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Basic structural checks (duplicates, dangling refs, sum-on-pct,
     constraint orphans, severity-suffix). --deep adds parallel Snowflake
     column-existence checks for phantom fields, phantom column refs, and
-    AGG-on-STRING via in-process StorageService.
+    AGG-on-STRING via in-process StorageService, plus an FQN_MISMATCH warning
+    for a dataset `fqn` that is not the table's Storage location (models built
+    before the fix carry a nonexistent "KEBOOLA" database).
 
   kbagent semantic-layer export --project P [--model M] [--output PATH]
     Snapshot the model to a self-describing JSON file. Default path:
@@ -1623,7 +1625,10 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     columns (account_code, account_name, parent_code, is_leaf, ...).
 
   kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ...
-    Add one entity. Dataset auto-derives `fqn` from --table-id; --deep-fields
+    Add one entity. Dataset `fqn` is the table's warehouse location read from
+    Storage (bucket backendPath = `storage table-detail` sql_path; a linked
+    bucket points at the SOURCE project's database + schema), so the table must
+    exist; `--fqn FQN` stores a value verbatim instead. --deep-fields
     fetches the storage schema and synthesises role-classified fields
     (PK_/FK_->key, *_DATE/*_DT->timestamp, numeric amount/value/rate->measure,
     else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
@@ -1670,7 +1675,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Non-interactive heuristic builder. AI caveat: the ai_client has no
     arbitrary-JSON endpoint, so `build` falls back to a deterministic
     heuristic (one dataset + one COUNT(*) metric + one glossary entry per
-    table; FQN derived; fields[] role-classified). Response carries
+    table; FQN from the table's Storage location; fields[] role-classified). Response carries
     `fallback_used: "heuristic"`. Push loop iterates all 5 child types in
     dependency order (fixes the long-standing sl-build skill bug where
     semantic-constraint was silently dropped). On push failure rolls back
