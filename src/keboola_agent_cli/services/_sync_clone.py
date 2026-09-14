@@ -19,6 +19,7 @@ from ..sync.clone import (
     apply_instance_rename,
     apply_variable_values,
     copy_reference_tree,
+    repoint_default_branch_configs,
     repoint_manifest_project,
 )
 from ..sync.manifest import load_manifest, save_manifest
@@ -119,24 +120,42 @@ def clone_project(
     if not already_cloned:
         copy_reference_tree(source_dir, target_path)
         manifest = load_manifest(target_path)
-        # _resolve_branch_id prefers an explicit --branch, so resolve the
-        # target's default branch only when branch_override is None (#744).
+        # Capture the source's own default branch id BEFORE the re-point moves
+        # it, so only the configs that lived on it get re-pointed (dev-branch
+        # entries keep their branch id and their own tree).
+        source_default_branch_id = manifest.branches[0].id if manifest.branches else None
+        # Resolve the target's default branch from the API only when no
+        # explicit --branch is given (#744 -- --branch skips the extra call).
         target_default_branch_id = (
             _target_default_branch_id(service, target_project) if branch_override is None else None
         )
-        # The branch push resolves for the target: --branch when given, else the
-        # target default. Every copied config entry must carry it so the
-        # create-path writeback matches its placeholder and propagates KBC.*
-        # metadata (the config folder); otherwise the folder is lost and a
-        # duplicate manifest entry is left behind (CLI-9).
+        # The branch that becomes the manifest's default tree in the target:
+        # the resolved target default, or the explicit --branch. Setting it as
+        # branches[0].id makes every stamped config resolve to the default tree
+        # (where the copied files live), not a synthetic 'branch-<id>' dir that
+        # would orphan it from diff/push (CLI-9). --branch still wins in
+        # _resolve_branch_id, so this only aligns the tree, never the API target.
         repoint_manifest_project(
             manifest,
             project_id=target_project.project_id or 0,
             api_host=urlparse(target_project.stack_url).netloc,
-            default_branch_id=target_default_branch_id,
-            config_branch_id=(
+            default_branch_id=(
                 branch_override if branch_override is not None else target_default_branch_id
             ),
+        )
+        # Move the source-default-branch configs onto the branch push will
+        # actually resolve for the target, so the create-path writeback matches
+        # its placeholder and forwards KBC.* metadata (the config folder).
+        # Deriving it from _resolve_branch_id covers a git-branching production
+        # clone (resolves to None -> 0), a plain clone (the numeric default),
+        # and --branch (the override) -- keeping gotchas.md's promise (CLI-9).
+        push_branch_id = service._resolve_branch_id(
+            target_project, manifest, target_path, branch_override=branch_override
+        )
+        repoint_default_branch_configs(
+            manifest,
+            source_default_branch_id=source_default_branch_id,
+            new_branch_id=push_branch_id or 0,
         )
         bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)
         variable_overrides = apply_variable_values(target_path, manifest, variable_values)

@@ -18,11 +18,14 @@ from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services._sync_bindings import resolve_flow_task_bindings
 from keboola_agent_cli.services.sync_service import CreatedConfig, SyncService
 from keboola_agent_cli.sync.clone import (
+    _config_dir,
+    _default_branch_dir,
     apply_bucket_map,
     apply_instance_rename,
     apply_variable_values,
     branch_path_map,
     copy_reference_tree,
+    repoint_default_branch_configs,
     repoint_manifest_project,
 )
 from keboola_agent_cli.sync.manifest import (
@@ -99,48 +102,41 @@ class TestCopyAndRepoint:
         assert m.project.id == 999
         assert [b.id for b in m.branches] == [52099]
 
-    def test_repoint_manifest_project_remaps_config_branch(self) -> None:
-        # CLI-9: every copied config entry moves onto the branch push resolves
-        # for the target. Without it the create-path writeback match on
-        # (branch_id, component_id, path) fails and the config folder is lost.
+    def test_repoint_default_branch_configs_stamps_only_source_default(self) -> None:
+        # CLI-9: configs on the source's default branch move onto the target's
+        # push branch; a dev-branch config keeps its id (and its own tree).
         m = _manifest(
             [
-                ManifestConfiguration(
-                    branchId=12345,
-                    componentId="keboola.ex-db",
-                    id="ext-golden",
-                    path="extractor/keboola.ex-db/source",
-                )
+                ManifestConfiguration(branchId=100, componentId="c", id="prod", path="p"),
+                ManifestConfiguration(branchId=200, componentId="c", id="dev", path="d"),
             ]
         )
-        repoint_manifest_project(
-            m,
-            project_id=999,
-            api_host="other.keboola.com",
-            default_branch_id=555,
-            config_branch_id=555,
-        )
-        assert [b.id for b in m.branches] == [555]
-        assert [c.branch_id for c in m.configurations] == [555]
+        repoint_default_branch_configs(m, source_default_branch_id=100, new_branch_id=555)
+        assert {c.id: c.branch_id for c in m.configurations} == {"prod": 555, "dev": 200}
 
-    def test_repoint_manifest_project_config_branch_without_default(self) -> None:
-        # --branch clone: default_branch_id is None (branches[0] is left as-is),
-        # but every config still moves onto the explicit push branch.
-        m = _manifest(
-            [
-                ManifestConfiguration(
-                    branchId=12345,
-                    componentId="keboola.ex-db",
-                    id="ext-golden",
-                    path="extractor/keboola.ex-db/source",
-                )
-            ]
+    def test_repoint_default_branch_configs_production_zero(self) -> None:
+        # A git-branching production clone resolves the push branch to None,
+        # normalized to 0 so the writeback `branch_id or 0` comparison matches.
+        m = _manifest([ManifestConfiguration(branchId=100, componentId="c", id="ext", path="p")])
+        repoint_default_branch_configs(m, source_default_branch_id=100, new_branch_id=0)
+        assert [c.branch_id for c in m.configurations] == [0]
+
+    def test_config_dir_falls_back_to_default_branch_path(self) -> None:
+        # An id not registered in the manifest resolves to branches[0].path
+        # (like branch_scope.branch_tree_path), never a hardcoded "main" -- so a
+        # git-branching / --branch clone with a "master" dir still resolves.
+        m = Manifest(
+            project=ManifestProject(id=1, apiHost="h"),
+            naming=ManifestNaming(),
+            branches=[ManifestBranch(id=100, path="master")],
+            configurations=[],
         )
-        repoint_manifest_project(
-            m, project_id=999, api_host="other.keboola.com", config_branch_id=777
-        )
-        assert [b.id for b in m.branches] == [0]
-        assert [c.branch_id for c in m.configurations] == [777]
+        default_dir = _default_branch_dir(m)
+        branch_map = branch_path_map(m)
+        assert default_dir == "master"
+        # 0 (production) and 777 (--branch) are not in branch_map -> "master".
+        assert _config_dir(Path("/t"), branch_map, 0, "p", default_dir) == Path("/t/master/p")
+        assert _config_dir(Path("/t"), branch_map, 777, "p", default_dir) == Path("/t/master/p")
 
 
 class TestBucketMap:
@@ -526,6 +522,155 @@ class TestCloneProjectOrchestration:
         call = client.set_config_metadata.call_args
         assert call.kwargs["config_id"] == "NEW-ULID-1"
         assert dict(call.kwargs["entries"]) == {"KBC.configuration.folderName": "Extractors"}
+
+    def test_clone_propagates_folder_git_branching(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # CLI-9 / zajca B-2: a git-branching production clone must STILL recreate
+        # the folder. Push resolves the production branch to None, so the config
+        # branch id is normalized to 0 for the writeback to match. Drives the
+        # REAL push.
+        from keboola_agent_cli.sync import git_utils
+        from keboola_agent_cli.sync.manifest import (
+            ManifestGitBranching,
+            load_manifest,
+            save_manifest,
+        )
+
+        source = tmp_path / "golden"
+        cfg_dir = source / "master" / "extractor/keboola.ex-db/source"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "_config.yml").write_text(
+            yaml.dump(
+                {
+                    "version": 3,
+                    "name": "Source",
+                    "parameters": {},
+                    "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (source / ".keboola").mkdir(parents=True, exist_ok=True)
+        save_manifest(
+            source,
+            Manifest(
+                project=ManifestProject(id=1, apiHost="source.keboola.com"),
+                naming=ManifestNaming(),
+                gitBranching=ManifestGitBranching(enabled=True, defaultBranch="master"),
+                branches=[ManifestBranch(id=100, path="master")],
+                configurations=[
+                    ManifestConfiguration(
+                        branchId=100,
+                        componentId="keboola.ex-db",
+                        id="ext-golden",
+                        path="extractor/keboola.ex-db/source",
+                        metadata={
+                            "pull_hash": "fh",
+                            "pull_config_hash": "ch",
+                            "KBC.configuration.folderName": "Extractors",
+                        },
+                    )
+                ],
+            ),
+        )
+        # Production on the default git branch -> _resolve_branch_id returns None.
+        monkeypatch.setattr(git_utils, "get_current_branch", lambda _root: "master")
+
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]
+        client.list_components_with_configs.return_value = []
+        client.create_config.return_value = {"id": "NEW-ULID-1"}
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.clone_project(
+            source=source, target_alias="target", target_dir=tmp_path / "clone"
+        )
+
+        assert result["status"] == "cloned"
+        assert result["created"] == 1
+        client.set_config_metadata.assert_called_once()
+        assert dict(client.set_config_metadata.call_args.kwargs["entries"]) == {
+            "KBC.configuration.folderName": "Extractors"
+        }
+        # The created entry sits on production (0) -- what push resolves.
+        post = load_manifest(tmp_path / "clone")
+        assert [c.branch_id for c in post.configurations if c.id == "NEW-ULID-1"] == [0]
+
+    def test_clone_branch_override_resolves_non_main_dir(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        # CLI-9 / zajca B-1: --branch + overrides on a non-'main' branch dir. The
+        # config is stamped with the override branch id (not in branches), so
+        # _config_dir must fall back to branches[0].path ("master") or the bucket
+        # rewrite silently no-ops. Drives the REAL push.
+        from keboola_agent_cli.sync.manifest import save_manifest
+
+        source = tmp_path / "golden"
+        cfg_dir = source / "master" / "extractor/keboola.ex-db/source"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "_config.yml").write_text(
+            yaml.dump(
+                {
+                    "version": 3,
+                    "name": "Source",
+                    "input": {"tables": [{"source": "in.c-ref.users", "destination": "users"}]},
+                    "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (source / ".keboola").mkdir(parents=True, exist_ok=True)
+        save_manifest(
+            source,
+            Manifest(
+                project=ManifestProject(id=1, apiHost="source.keboola.com"),
+                naming=ManifestNaming(),
+                branches=[ManifestBranch(id=100, path="master")],
+                configurations=[
+                    ManifestConfiguration(
+                        branchId=100,
+                        componentId="keboola.ex-db",
+                        id="ext-golden",
+                        path="extractor/keboola.ex-db/source",
+                        metadata={
+                            "pull_hash": "fh",
+                            "pull_config_hash": "ch",
+                            "KBC.configuration.folderName": "Extractors",
+                        },
+                    )
+                ],
+            ),
+        )
+
+        client = MagicMock()
+        client.list_components_with_configs.return_value = []
+        client.create_config.return_value = {"id": "NEW-ULID-1"}
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.clone_project(
+            source=source,
+            target_alias="target",
+            target_dir=tmp_path / "clone",
+            branch_override=777,
+            overrides={"bucket_map": {"in.c-ref": "in.c-prod"}},
+        )
+
+        assert result["status"] == "cloned"
+        assert result["created"] == 1
+        # The override resolved the 'master' dir, not a hardcoded 'main'.
+        assert result["bucket_rewrites"] == 1
+        copied = yaml.safe_load(
+            (
+                tmp_path / "clone" / "master" / "extractor/keboola.ex-db/source" / "_config.yml"
+            ).read_text()
+        )
+        assert copied["input"]["tables"][0]["source"] == "in.c-prod.users"
+        client.set_config_metadata.assert_called_once()
+        # --branch skips the target-default fetch (CLI-5 / #744).
+        client.list_dev_branches.assert_not_called()
 
     def test_clone_applies_overrides_and_pushes(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch

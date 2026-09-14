@@ -764,10 +764,12 @@ clone -- check the version, or verify the folders came across after a clone.
 
 Since vNEXT pull fetches the folder for each config and stores
 `KBC.configuration.folderName` in the manifest entry's `metadata`. `sync clone`
-re-points every copied config's branch id onto the target branch, so the
-create-path writeback matches the placeholder and the push create path forwards
-the `KBC.*` metadata (see "`sync push` fresh-CREATE writeback now updates
-placeholders in place" above) -- the folder is recreated in the target. Only the
+re-points its production configs onto the branch push resolves for the target,
+so the create-path writeback matches the placeholder and the push create path
+forwards the `KBC.*` metadata (see "`sync push` fresh-CREATE writeback now
+updates placeholders in place" above) -- the folder is recreated in the target.
+This holds for a plain clone, a `--branch` clone, and a git-branching production
+clone (where push resolves the branch to `None`, normalized to `0`). Only the
 CREATE path carries it: changing a folder on an existing config through a plain
 `sync push` still does not propagate (`propagate_kbc_metadata` runs only on
 create) -- use `config set-folder`.

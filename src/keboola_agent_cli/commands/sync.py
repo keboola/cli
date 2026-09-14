@@ -161,6 +161,11 @@ def sync_init(
 
 def _format_pull_result(formatter: Any, result: dict) -> None:
     """Format a single-project pull result for human output."""
+    if result.get("folder_lookup_failed"):
+        formatter.console.print(
+            "[yellow]Warning:[/yellow] config-folder lookup failed; existing folders kept, "
+            "not refreshed."
+        )
     is_dry = result.get("status") == "dry_run"
     details = result.get("details", [])
     new_cfgs = [d for d in details if d["action"] == "new"]

@@ -1578,6 +1578,41 @@ class TestPullConfigFolder:
 
         assert result["folder_lookup_failed"] is False
 
+    def test_pull_drops_folder_on_successful_empty_lookup(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A successful empty lookup drops a folder removed on the remote.
+
+        The mirror of the failed-lookup case: when the lookup succeeds and
+        returns no folder for a config (folder cleared in the UI), the manifest
+        must drop the key, not keep the stale value.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # First pull captures the folder.
+        first = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        first.list_config_folder_metadata.return_value = {"keboola.ex-http/cfg-001": "Extractors"}
+        SyncService(
+            config_store=store,
+            client_factory=lambda url, token: first,
+        ).pull(alias="prod", project_root=project_root)
+
+        # Second pull: the lookup SUCCEEDS but the folder is gone.
+        second = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        second.list_config_folder_metadata.return_value = {}
+        result = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: second,
+        ).pull(alias="prod", project_root=project_root)
+
+        assert result["folder_lookup_failed"] is False
+        manifest = load_manifest(project_root)
+        by_id = {c.id: c for c in manifest.configurations}
+        assert "KBC.configuration.folderName" not in by_id["cfg-001"].metadata
+
 
 class TestFetchConfigFolders:
     """Unit tests for SyncService._fetch_config_folders."""
