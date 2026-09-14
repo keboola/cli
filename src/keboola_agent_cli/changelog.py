@@ -24,6 +24,18 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.93.2": [
+        "New (#757): each usage event now also carries the kbagent version and an agent-vs-human "
+        "marker for the telemetry team (CLI-12). `params.cliContext` holds the User-Agent "
+        "(version + OS/arch/Python) and, when set, the conversation id -- from "
+        "`KBAGENT_CONVERSATION_ID` / `--conversation-id` on the CLI, or the `X-Conversation-ID` "
+        "header over serve. The id is bounded and cleaned (200 chars, printable only), like "
+        "`results.error`, so an oversized value never reaches the project's event log. A "
+        "`serve-` prefixed id marks a serve session, not an external agent, so a report reads "
+        "the id's shape, not its mere presence.",
+        "Note (#748, #749): housekeeping with no user-facing change. A CODEOWNERS file that "
+        "auto-requests PR review, and a docs note that `sync pull` auto-inits the manifest (CLI-7).",
+    ],
     "0.93.1": [
         "Fix (#744): `sync clone` into a fresh (empty) target project now defaults to the "
         "target's production branch, so `--branch` is optional (CLI-5). Before, "
