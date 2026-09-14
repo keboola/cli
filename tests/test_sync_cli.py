@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands.sync import _pull_one_liner
+from keboola_agent_cli.commands.sync import _format_pull_result, _pull_one_liner
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError, SyncConflictError
@@ -459,6 +459,25 @@ class TestSyncPullCli:
         assert "folder lookup failed" not in _pull_one_liner(
             {"details": [], "folder_lookup_failed": False}
         )
+
+    def test_format_pull_result_warns_on_folder_lookup_failed(self) -> None:
+        """The single-project / verbose formatter prints the folder-lookup
+        warning when the flag is set, and stays silent otherwise."""
+
+        def _printed(result: dict) -> str:
+            formatter = MagicMock()
+            _format_pull_result(formatter, result)
+            return " ".join(
+                str(c.args[0]) for c in formatter.console.print.call_args_list if c.args
+            )
+
+        base = {"status": "pulled", "details": [], "storage": {}}
+        assert "config-folder lookup failed" in _printed({**base, "folder_lookup_failed": True})
+        assert "config-folder lookup failed" not in _printed(
+            {**base, "folder_lookup_failed": False}
+        )
+        # Absent flag (older result dicts) is silent, never a KeyError.
+        assert "config-folder lookup failed" not in _printed(base)
 
     def test_sync_pull_not_initialized_error(self, tmp_path: Path) -> None:
         """sync pull returns exit code 1 when project not initialized."""

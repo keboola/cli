@@ -672,6 +672,79 @@ class TestCloneProjectOrchestration:
         # --branch skips the target-default fetch (CLI-5 / #744).
         client.list_dev_branches.assert_not_called()
 
+    def test_clone_folder_no_duplicate_manifest_entry(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        # Regression guard (CLI-9 / zajca). The bug's whole failure mode was a
+        # branch-id mismatch: the create-path writeback did NOT match its
+        # placeholder, so a SECOND manifest entry with no KBC.* metadata was
+        # appended and the folder was never POSTed. The old tests missed it
+        # because their fixtures used branch id 0. Pin the symptom directly:
+        # after a clone with a realistic source branch id (!= target default),
+        # each config keeps exactly ONE entry, that entry carries the folder,
+        # and its branch id equals what push resolves (so the writeback matches).
+        from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+
+        source = tmp_path / "golden"
+        _write_config(
+            source,
+            "extractor/keboola.ex-db/source",
+            {
+                "version": 3,
+                "name": "Source",
+                "parameters": {},
+                "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+            },
+        )
+        (source / ".keboola").mkdir(parents=True, exist_ok=True)
+        save_manifest(
+            source,
+            Manifest(
+                project=ManifestProject(id=1, apiHost="source.keboola.com"),
+                naming=ManifestNaming(),
+                branches=[ManifestBranch(id=12345, path="main")],  # source prod id
+                configurations=[
+                    ManifestConfiguration(
+                        branchId=12345,
+                        componentId="keboola.ex-db",
+                        id="ext-golden",
+                        path="extractor/keboola.ex-db/source",
+                        metadata={
+                            "pull_hash": "fh",
+                            "pull_config_hash": "ch",
+                            "KBC.configuration.folderName": "Extractors",
+                        },
+                    )
+                ],
+            ),
+        )
+
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]  # target default
+        client.list_components_with_configs.return_value = []
+        client.create_config.return_value = {"id": "NEW-ULID-1"}
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.clone_project(
+            source=source, target_alias="target", target_dir=tmp_path / "clone"
+        )
+
+        assert result["status"] == "cloned"
+        # The folder was POSTed (not silently dropped).
+        client.set_config_metadata.assert_called_once()
+        assert dict(client.set_config_metadata.call_args.kwargs["entries"]) == {
+            "KBC.configuration.folderName": "Extractors"
+        }
+        post = load_manifest(tmp_path / "clone")
+        # Exactly ONE entry -- no stale duplicate from a failed writeback match.
+        assert len(post.configurations) == 1
+        entry = post.configurations[0]
+        assert entry.id == "NEW-ULID-1"
+        assert entry.metadata.get("KBC.configuration.folderName") == "Extractors"
+        # Its branch id is what push resolved (the target default), so the
+        # writeback matched in place instead of appending.
+        assert entry.branch_id == 555
+
     def test_clone_applies_overrides_and_pushes(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
