@@ -266,40 +266,58 @@ def test_pull_preserves_type_when_ds_lookup_fails(tmp_config_dir: Path, tmp_path
     )
 
 
-def test_repull_records_newly_available_type_on_unchanged_config(
-    tmp_config_dir: Path, tmp_path: Path
-) -> None:
-    """A re-pull of an already-tracked config with an unchanged body still
-    records a type the DS list now reports.
+def _da_record(type_: str) -> dict[str, Any]:
+    """A DS /apps list entry for the cfg-da data app with the given type."""
+    return {"configId": "cfg-da", "componentId": DATA_APP_COMPONENT, "type": type_}
 
-    config_hash ignores _keboola, so the body hash alone cannot see the type.
-    Without a type-aware write decision the remote_unchanged short-circuit skips
-    the write, and the fix is a no-op for exactly the pre-fix trees it targets.
+
+@pytest.mark.parametrize(
+    ("first_list", "second_list", "expected"),
+    [
+        # on-disk None, DS reports a type -> recorded (the pre-fix trees this targets).
+        pytest.param([], [_da_record("python-js")], "python-js", id="record-newly-available"),
+        # on-disk python-js, DS list omits the config -> preserved (never strip on absence).
+        pytest.param([_da_record("python-js")], [], "python-js", id="keep-on-omission"),
+        # on-disk python-js, DS reports a different type -> updated.
+        pytest.param(
+            [_da_record("python-js")], [_da_record("streamlit")], "streamlit", id="update-on-change"
+        ),
+        # on-disk python-js, DS reports the same type -> unchanged.
+        pytest.param(
+            [_da_record("python-js")], [_da_record("python-js")], "python-js", id="noop-when-same"
+        ),
+    ],
+)
+def test_repull_type_invariant_on_unchanged_body(
+    tmp_config_dir: Path,
+    tmp_path: Path,
+    first_list: list[dict[str, Any]],
+    second_list: list[dict[str, Any]],
+    expected: str,
+) -> None:
+    """Invariant guarding the whole re-pull decision space (CLI-8).
+
+    Across a re-pull whose Storage body is unchanged, a data app's recorded type
+    changes ONLY when the DS /apps list names a different one. An omission never
+    strips it. config_hash ignores _keboola, so a wrong write decision loses the
+    type with no diff signal -- this table pins every cell so the next edit here
+    cannot silently reintroduce that.
     """
     project_root = tmp_path / "project"
     project_root.mkdir()
     api = FakeApi(_mixed_components("cfg-da"))
     store = setup_single_project(tmp_config_dir)
 
-    # First pull: the DS list is empty, so nothing records a type.
-    service = _service(store, api, FakeDs(api, list_result=[]))
+    service = _service(store, api, FakeDs(api, list_result=first_list))
     service.init_sync(alias="prod", project_root=project_root)
     service.pull(alias="prod", project_root=project_root, no_storage=True, no_jobs=True)
-    assert "data_app_type" not in _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]
 
-    # Second pull: the DS list now reports python-js, the remote body is
-    # unchanged. The type must still land on disk.
-    ds = FakeDs(
-        api,
-        list_result=[
-            {"configId": "cfg-da", "componentId": DATA_APP_COMPONENT, "type": "python-js"}
-        ],
-    )
-    _service(store, api, ds).pull(
+    # Second pull, same Storage body, DS list per the row.
+    _service(store, api, FakeDs(api, list_result=second_list)).pull(
         alias="prod", project_root=project_root, no_storage=True, no_jobs=True
     )
     assert (
-        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]["data_app_type"] == "python-js"
+        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"].get("data_app_type") == expected
     )
 
 

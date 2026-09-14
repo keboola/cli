@@ -587,7 +587,6 @@ class SyncService(BaseService):
         # otherwise a workspace's type would land on an unrelated config that
         # happens to share the id.
         data_app_types: dict[str, str] = {}
-        ds_types_available = False
         if any(comp.get("id") == DATA_APP_COMPONENT_ID for comp in components):
             try:
                 ds_client = self._ds_client_factory(project.stack_url, project.token)
@@ -599,7 +598,6 @@ class SyncService(BaseService):
                         and app.get("configId")
                         and app.get("type")
                     }
-                ds_types_available = True
             except Exception:
                 logger.warning(
                     "Failed to fetch data-app types from Data Science API", exc_info=True
@@ -761,12 +759,13 @@ class SyncService(BaseService):
                 _ensure_within_branch(branch_dir, config_dir, component_id, config_id)
 
                 # Convert API format to local _config.yml. For a data app the
-                # runtime type comes from the DS /apps list. If that lookup
-                # failed, keep the type already on disk instead of stripping it.
-                # config_hash ignores _keboola, so neither a strip nor a freshly
-                # fetched type is visible to it -- the write decision below
-                # compares on_disk_da_type against da_type, so a re-pull of an
-                # unchanged config still records the type.
+                # runtime type comes from the DS /apps list, which is the source
+                # of truth ONLY for the configs it actually lists. A config the
+                # list omits -- the DS call failed, the response left it out, or
+                # its DS record is gone while the Storage config remains -- keeps
+                # whatever type is on disk. The type therefore only ever changes
+                # when the list reports a different one; an absence never strips
+                # it (config_hash ignores _keboola, so a strip would be silent).
                 da_type: str | None = None
                 on_disk_da_type: str | None = None
                 if component_id == DATA_APP_COMPONENT_ID:
@@ -774,9 +773,7 @@ class SyncService(BaseService):
                     on_disk_da_type = (
                         (existing.get("_keboola") or {}).get("data_app_type") if existing else None
                     )
-                    da_type = (
-                        data_app_types.get(config_id) if ds_types_available else on_disk_da_type
-                    )
+                    da_type = data_app_types.get(config_id, on_disk_da_type)
                 local_data = api_config_to_local(
                     component_id,
                     cfg,
