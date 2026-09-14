@@ -113,11 +113,10 @@ def table_sql_path(
 ) -> str | None:
     """Quote a table's warehouse location the way its backend expects.
 
-    The location comes from the owning bucket's ``backendPath`` and is never
-    reconstructed: the Snowflake database is ``KBC_<STACK>_<PROJECT>`` on some
-    stacks and ``SAPI_<PROJECT>`` on others, and a linked bucket points at the
-    SOURCE project's database and schema, not at its own bucket id. Mirrors
-    the per-table ``sql_path`` of ``storage bucket-detail``.
+    ``backend_path`` is the owning bucket's Storage ``backendPath``, used
+    verbatim; for a linked bucket it names the source project's database and
+    schema. Quoting matches the per-table ``sql_path`` of ``storage
+    bucket-detail``, without that command's fallbacks for a missing path.
 
     Returns ``None`` when the backend is not Snowflake / BigQuery, when
     ``backendPath`` is too short to locate the table, or when any identifier

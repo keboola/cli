@@ -561,6 +561,9 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   partition from INFORMATION_SCHEMA.PARTITIONS). `definition` is present on EVERY response
 #   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".
 #   `storage tables` (the LIST endpoint) is unaffected: the API has no `definition` include.
+#   table-detail also returns `backend_path` (the owning bucket's Storage backendPath, verbatim)
+#   and `sql_path` (quoted, directly queryable path; null when Storage reports no location) --
+#   see the semantic-layer dataset fqn note (#761); version gate in gotchas.md.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).

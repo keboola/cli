@@ -1274,7 +1274,7 @@ class TestGetTableDetailDescriptionExtraction:
 
 
 class TestGetTableDetailSqlPath:
-    """`backend_path` / `sql_path` come from the owning bucket's `backendPath` (#761)."""
+    """`backend_path` / `sql_path` come from the owning bucket's `backendPath`."""
 
     def test_snowflake_linked_bucket_points_at_source_location(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

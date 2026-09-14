@@ -824,9 +824,7 @@ def build_information_schema_sql(
     """Build an ``INFORMATION_SCHEMA.COLUMNS`` query for a table's real types.
 
     ``backend_path`` is the owning bucket's Storage ``backendPath`` (Snowflake
-    ``[database, schema]``, BigQuery ``[dataset]``). It is used verbatim: a
-    linked bucket's path names the SOURCE project's database and schema, which
-    no derivation from the bucket id can produce.
+    ``[database, schema]``, BigQuery ``[dataset]``), used verbatim.
 
     Returns a query projecting ``(column_name, data_type)`` for the given
     backend, or ``None`` when the backend is unsupported, ``backend_path`` is

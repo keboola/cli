@@ -126,7 +126,7 @@ def _child_item(
 
 
 class TestDeriveDatasetFqn:
-    """The fqn is the table's Storage location, never a hardcoded database (#761)."""
+    """The fqn is the table-detail ``sql_path``."""
 
     def test_uses_storage_sql_path(self) -> None:
         detail = {
@@ -144,20 +144,27 @@ class TestDeriveDatasetFqn:
         with pytest.raises(KeboolaApiError) as excinfo:
             derive_dataset_fqn("in.c-raw.t", detail)
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
-        assert "--fqn" in excinfo.value.message
-        assert "KEBOOLA" not in excinfo.value.message
+        assert "add dataset --fqn" in excinfo.value.message
 
     @pytest.mark.parametrize(
-        "backend_path, name",
+        "backend, backend_path, name",
         [
-            (['KBC"X', "in.c-raw"], "t"),
-            (["KBC_X", "in.c-raw"], 't"; DROP'),
-            (["ds`x"], "t"),
+            ("snowflake", ['KBC"X', "in.c-raw"], "t"),
+            ("snowflake", ["KBC_X", "in.c-raw"], 't"; DROP'),
+            ("bigquery", ["ds`x"], "t"),
         ],
     )
-    def test_quote_in_location_rejected(self, backend_path: list[str], name: str) -> None:
-        # Defense in depth: the fqn is pasted into SQL by downstream consumers.
-        detail = {"name": name, "backend_path": backend_path, "sql_path": '"a"."b"."c"'}
+    def test_quote_in_storage_location_rejected(
+        self, backend: str, backend_path: list[str], name: str
+    ) -> None:
+        from keboola_agent_cli.services._table_detail import build_table_detail
+
+        raw_table = {
+            "id": "in.c-raw.t",
+            "name": name,
+            "bucket": {"id": "in.c-raw", "backend": backend, "backendPath": backend_path},
+        }
+        detail = build_table_detail("prod", "in.c-raw.t", raw_table)
         with pytest.raises(KeboolaApiError) as excinfo:
             derive_dataset_fqn("in.c-raw.t", detail)
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
@@ -782,7 +789,6 @@ class TestValidateDeep:
     @pytest.mark.parametrize(
         "stored_fqn, sql_path, expect_warning",
         [
-            # Pre-#761 models: the hardcoded database does not exist in the project.
             ('"KEBOOLA"."out.c"."t"', '"KBC_USE4_5725"."out.c"."t"', True),
             ('"KBC_USE4_5725"."out.c"."t"', '"KBC_USE4_5725"."out.c"."t"', False),
             # Storage reports no location: nothing to compare against.
@@ -2328,9 +2334,7 @@ class TestBuildModel:
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
 
     def test_fqn_follows_linked_bucket_backend_path(self, tmp_path: Path) -> None:
-        """A linked bucket's tables live in the SOURCE project's database and
-        schema -- neither ``"KEBOOLA"`` nor the consuming project's database
-        with its own bucket id resolves there (#761)."""
+        """A linked bucket's dataset fqn is the source project's database and schema."""
         from keboola_agent_cli.services._table_detail import build_table_detail
 
         store = _make_store(tmp_path)
@@ -3133,8 +3137,7 @@ class TestBuildInformationSchemaSql:
         assert "column_name, data_type" in sql
 
     def test_snowflake_database_and_schema_from_backend_path(self) -> None:
-        """Neither ``"KEBOOLA"`` nor the bucket id: a linked bucket's path names
-        the source project's database and schema (#761)."""
+        """Database and schema come from backendPath (a linked bucket's names the source project)."""
         from keboola_agent_cli.services._semantic_layer_internals import (
             build_information_schema_sql,
         )

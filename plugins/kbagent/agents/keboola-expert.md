@@ -431,6 +431,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   warns even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold
   (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
   skill).
+- dataset `fqn` = the table's Storage location (`storage table-detail` ->
+  `sql_path`), since vNEXT: `add dataset` fails on a table that does not exist
+  unless `--fqn` is given. Older kbagent wrote a `"KEBOOLA"` database that
+  resolves nowhere -- `validate --deep` flags those as `FQN_MISMATCH`; never
+  hand-build an fqn from the tableId (a linked bucket lives in the SOURCE
+  project's database and schema).
 
 **`permissions set --allow/--deny` validates patterns (since 0.91.0)**
 - A typo'd or fabricated pattern (`tool.admin`, `stroage.*`) fails fast with

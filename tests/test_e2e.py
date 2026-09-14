@@ -11760,7 +11760,7 @@ class TestE2ESemanticLayerLifecycle:
                     f"Expected heuristic fallback, got: {data['data'].get('fallback_used')}"
                 )
                 assert len(data["data"]["generated"]["datasets"]) == 1
-                # The fqn is the table's real Storage location, never "KEBOOLA" (#761).
+                # build's dataset fqn is the table's Storage location.
                 detail = self._run_ok(
                     "storage", "table-detail", "--project", self.alias, "--table-id", table_id
                 )
