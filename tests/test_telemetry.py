@@ -86,6 +86,35 @@ def test_conversation_id_marks_an_agent_run(
     assert body["params"]["cliContext"]["conversationId"] == "conv-abc123"
 
 
+def test_conversation_id_is_bounded_and_stripped(
+    tmp_config_dir: Path, httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An oversized / control-character conversation id is capped and cleaned (CLI-12).
+
+    conversationId is copied into the event body like results.error, so it gets the same
+    bound: a caller-supplied X-Conversation-ID / env var cannot bloat the project's event
+    log or push the POST past the events API size cap.
+    """
+    telemetry.reset()
+    setup_single_project(tmp_config_dir)
+    monkeypatch.setenv("KBAGENT_CONVERSATION_ID", "conv\x07\x1f\x7f-" + "x" * 500)
+    httpx_mock.add_response(url=_EVENTS_URL, method="POST", json={"id": "evt-1"})
+
+    telemetry.emit_cli_invocation(
+        ["kbagent", "config", "list", "--config-dir", str(tmp_config_dir)],
+        exit_code=0,
+        error=None,
+        duration_s=0.4,
+    )
+
+    conv = json.loads(httpx_mock.get_requests()[0].content)["params"]["cliContext"][
+        "conversationId"
+    ]
+    assert all(ch.isprintable() for ch in conv)  # control chars stripped
+    assert conv == "conv-" + "x" * (telemetry._MAX_CONVERSATION_ID_LEN - len("conv-"))
+    assert len(conv) == telemetry._MAX_CONVERSATION_ID_LEN
+
+
 def test_failed_command_reports_error_and_is_best_effort(tmp_config_dir: Path, httpx_mock) -> None:
     """A failed command posts ``type=error`` + message; a failing endpoint never raises."""
     telemetry.reset()

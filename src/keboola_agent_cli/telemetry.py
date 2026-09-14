@@ -53,6 +53,13 @@ logger = logging.getLogger(__name__)
 # events API's 200 KB cap and avoids dumping large response/state buffers.
 _MAX_ERROR_LEN = 1000
 
+# Longest conversation id carried in ``params.cliContext.conversationId``. The id
+# is caller-supplied -- the ``KBAGENT_CONVERSATION_ID`` env var, or (over serve) the
+# request's ``X-Conversation-ID`` header -- so it is bounded and cleaned like
+# ``results.error``: an oversized or control-character value would otherwise bloat the
+# project's event log or push the POST past the events API cap.
+_MAX_CONVERSATION_ID_LEN = 200
+
 # Command wrappers that are not a unit of work themselves. ``serve`` posts a
 # per-request event from its middleware; ``repl`` posts a per-line event from its
 # own loop. The outer invocation of each is excluded so it does not add a second,
@@ -301,6 +308,18 @@ def _telemetry_client(config_store: ConfigStore, stack_url: str, token: str) -> 
     return client, True
 
 
+def _clean_conversation_id(value: str | None) -> str | None:
+    """Strip control characters and cap the length; None if nothing usable.
+
+    The id is a caller-supplied token, so it gets the same bound as ``results.error``
+    before it enters the event body (see ``_MAX_CONVERSATION_ID_LEN``).
+    """
+    if not value:
+        return None
+    cleaned = "".join(ch for ch in value if ch.isprintable()).strip()
+    return cleaned[:_MAX_CONVERSATION_ID_LEN] or None
+
+
 def _send_event(
     config_store: ConfigStore,
     *,
@@ -321,8 +340,9 @@ def _send_event(
     # KIDS reads the CLI version (auto-update adoption) and an agent-vs-human
     # marker off the stored event body, so both ride in params.cliContext (CLI-12).
     cli_context: dict[str, Any] = {"userAgent": build_user_agent()}
-    if conversation_id:
-        cli_context["conversationId"] = conversation_id
+    clean_conversation_id = _clean_conversation_id(conversation_id)
+    if clean_conversation_id:
+        cli_context["conversationId"] = clean_conversation_id
     params["cliContext"] = cli_context
     results: dict[str, Any] = {}
     if project_id is not None:
