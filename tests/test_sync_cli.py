@@ -447,6 +447,19 @@ class TestSyncPullCli:
         assert "2 ignored" in line
         assert "up to date" not in line
 
+    def test_pull_one_liner_flags_folder_lookup_failed(self) -> None:
+        """The --all-projects one-liner signals a degraded folder lookup, even
+        when nothing else changed (the default path never calls the fuller
+        formatter unless --verbose)."""
+        # Otherwise up to date: the marker replaces "up to date".
+        line = _pull_one_liner({"details": [], "folder_lookup_failed": True})
+        assert "folder lookup failed" in line
+        assert "up to date" not in line
+        # A successful lookup is silent.
+        assert "folder lookup failed" not in _pull_one_liner(
+            {"details": [], "folder_lookup_failed": False}
+        )
+
     def test_sync_pull_not_initialized_error(self, tmp_path: Path) -> None:
         """sync pull returns exit code 1 when project not initialized."""
         config_dir = tmp_path / "config"
