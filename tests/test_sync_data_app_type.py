@@ -266,6 +266,43 @@ def test_pull_preserves_type_when_ds_lookup_fails(tmp_config_dir: Path, tmp_path
     )
 
 
+def test_repull_records_newly_available_type_on_unchanged_config(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """A re-pull of an already-tracked config with an unchanged body still
+    records a type the DS list now reports.
+
+    config_hash ignores _keboola, so the body hash alone cannot see the type.
+    Without a type-aware write decision the remote_unchanged short-circuit skips
+    the write, and the fix is a no-op for exactly the pre-fix trees it targets.
+    """
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    api = FakeApi(_mixed_components("cfg-da"))
+    store = setup_single_project(tmp_config_dir)
+
+    # First pull: the DS list is empty, so nothing records a type.
+    service = _service(store, api, FakeDs(api, list_result=[]))
+    service.init_sync(alias="prod", project_root=project_root)
+    service.pull(alias="prod", project_root=project_root, no_storage=True, no_jobs=True)
+    assert "data_app_type" not in _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]
+
+    # Second pull: the DS list now reports python-js, the remote body is
+    # unchanged. The type must still land on disk.
+    ds = FakeDs(
+        api,
+        list_result=[
+            {"configId": "cfg-da", "componentId": DATA_APP_COMPONENT, "type": "python-js"}
+        ],
+    )
+    _service(store, api, ds).pull(
+        alias="prod", project_root=project_root, no_storage=True, no_jobs=True
+    )
+    assert (
+        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]["data_app_type"] == "python-js"
+    )
+
+
 # ===================================================================
 # push: a data-app CREATE routes through the DS client with the type
 # ===================================================================

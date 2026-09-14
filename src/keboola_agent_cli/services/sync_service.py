@@ -762,16 +762,21 @@ class SyncService(BaseService):
 
                 # Convert API format to local _config.yml. For a data app the
                 # runtime type comes from the DS /apps list. If that lookup
-                # failed, keep the type already on disk instead of stripping it
-                # -- config_hash ignores _keboola, so a strip would be invisible.
+                # failed, keep the type already on disk instead of stripping it.
+                # config_hash ignores _keboola, so neither a strip nor a freshly
+                # fetched type is visible to it -- the write decision below
+                # compares on_disk_da_type against da_type, so a re-pull of an
+                # unchanged config still records the type.
                 da_type: str | None = None
+                on_disk_da_type: str | None = None
                 if component_id == DATA_APP_COMPONENT_ID:
-                    if ds_types_available:
-                        da_type = data_app_types.get(config_id)
-                    else:
-                        existing = self._read_config_file(config_dir)
-                        if existing is not None:
-                            da_type = (existing.get("_keboola") or {}).get("data_app_type")
+                    existing = self._read_config_file(config_dir)
+                    on_disk_da_type = (
+                        (existing.get("_keboola") or {}).get("data_app_type") if existing else None
+                    )
+                    da_type = (
+                        data_app_types.get(config_id) if ds_types_available else on_disk_da_type
+                    )
                 local_data = api_config_to_local(
                     component_id,
                     cfg,
@@ -878,6 +883,17 @@ class SyncService(BaseService):
                             existing_file_hashes.get(lookup_key, ""),
                             existing_extra_hashes.get(lookup_key, {}),
                         )
+
+                    # A data app's runtime type lives in _keboola, invisible to
+                    # config_hash, so a body-unchanged config would otherwise skip
+                    # the write and discard a freshly fetched (or changed) type.
+                    # Force a rewrite when the resolved type differs from disk.
+                    if (
+                        remote_unchanged
+                        and component_id == DATA_APP_COMPONENT_ID
+                        and da_type != on_disk_da_type
+                    ):
+                        remote_unchanged = False
 
                     if remote_unchanged:
                         # Nothing changed -- reuse existing file hash
