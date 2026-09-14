@@ -763,13 +763,20 @@ pre-vNEXT kbagent a golden-reference `sync clone` still produces a folder-less
 clone -- check the version, or verify the folders came across after a clone.
 
 Since vNEXT pull fetches the folder for each config and stores
-`KBC.configuration.folderName` in the manifest entry's `metadata`. The push create
-path already forwards `KBC.*` manifest metadata (see "`sync push` fresh-CREATE
-writeback now updates placeholders in place" above), so a clone recreates the
-folder in the target with no push-side change. Only the CREATE path carries it:
-changing a folder on an existing config through a plain `sync push` still does not
-propagate (`propagate_kbc_metadata` runs only on create) -- use
-`config set-folder`.
+`KBC.configuration.folderName` in the manifest entry's `metadata`. `sync clone`
+re-points every copied config's branch id onto the target branch, so the
+create-path writeback matches the placeholder and the push create path forwards
+the `KBC.*` metadata (see "`sync push` fresh-CREATE writeback now updates
+placeholders in place" above) -- the folder is recreated in the target. Only the
+CREATE path carries it: changing a folder on an existing config through a plain
+`sync push` still does not propagate (`propagate_kbc_metadata` runs only on
+create) -- use `config set-folder`.
+
+If the folder lookup fails during a pull (API error, no resolvable branch, or a
+non-dict body), pull keeps each config's folder from the previous pull instead of
+stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
+value means the folders were not refreshed this pull -- it separates "no folders
+configured" from "the lookup failed".
 
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 

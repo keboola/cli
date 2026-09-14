@@ -99,6 +99,49 @@ class TestCopyAndRepoint:
         assert m.project.id == 999
         assert [b.id for b in m.branches] == [52099]
 
+    def test_repoint_manifest_project_remaps_config_branch(self) -> None:
+        # CLI-9: every copied config entry moves onto the branch push resolves
+        # for the target. Without it the create-path writeback match on
+        # (branch_id, component_id, path) fails and the config folder is lost.
+        m = _manifest(
+            [
+                ManifestConfiguration(
+                    branchId=12345,
+                    componentId="keboola.ex-db",
+                    id="ext-golden",
+                    path="extractor/keboola.ex-db/source",
+                )
+            ]
+        )
+        repoint_manifest_project(
+            m,
+            project_id=999,
+            api_host="other.keboola.com",
+            default_branch_id=555,
+            config_branch_id=555,
+        )
+        assert [b.id for b in m.branches] == [555]
+        assert [c.branch_id for c in m.configurations] == [555]
+
+    def test_repoint_manifest_project_config_branch_without_default(self) -> None:
+        # --branch clone: default_branch_id is None (branches[0] is left as-is),
+        # but every config still moves onto the explicit push branch.
+        m = _manifest(
+            [
+                ManifestConfiguration(
+                    branchId=12345,
+                    componentId="keboola.ex-db",
+                    id="ext-golden",
+                    path="extractor/keboola.ex-db/source",
+                )
+            ]
+        )
+        repoint_manifest_project(
+            m, project_id=999, api_host="other.keboola.com", config_branch_id=777
+        )
+        assert [b.id for b in m.branches] == [0]
+        assert [c.branch_id for c in m.configurations] == [777]
+
 
 class TestBucketMap:
     def _setup(self, tmp_path: Path) -> Manifest:
@@ -420,6 +463,70 @@ def _golden_source(root: Path) -> None:
 
 
 class TestCloneProjectOrchestration:
+    def test_clone_propagates_config_folder_to_target(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        # CLI-9 end-to-end: a prior pull captured a config folder into the
+        # source manifest; clone must recreate it in the target. This drives
+        # the REAL push (not mocked), which the other clone tests skip -- so it
+        # exercises the branch-id mismatch that used to drop the folder.
+        from keboola_agent_cli.sync.manifest import save_manifest
+
+        source = tmp_path / "golden"
+        _write_config(
+            source,
+            "extractor/keboola.ex-db/source",
+            {
+                "version": 3,
+                "name": "Source",
+                "description": "",
+                "parameters": {},
+                "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+            },
+        )
+        (source / ".keboola").mkdir(parents=True, exist_ok=True)
+        save_manifest(
+            source,
+            Manifest(
+                project=ManifestProject(id=1, apiHost="source.keboola.com"),
+                naming=ManifestNaming(),
+                # SOURCE production branch id, different from the target default.
+                branches=[ManifestBranch(id=12345, path="main")],
+                configurations=[
+                    ManifestConfiguration(
+                        branchId=12345,
+                        componentId="keboola.ex-db",
+                        id="ext-golden",
+                        path="extractor/keboola.ex-db/source",
+                        metadata={
+                            "pull_hash": "fh",
+                            "pull_config_hash": "ch",
+                            "KBC.configuration.folderName": "Extractors",
+                        },
+                    )
+                ],
+            ),
+        )
+
+        client = MagicMock()
+        # TARGET default branch, resolved like `sync init` (CLI-5).
+        client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]
+        client.list_components_with_configs.return_value = []  # fresh target
+        client.create_config.return_value = {"id": "NEW-ULID-1"}
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.clone_project(
+            source=source, target_alias="target", target_dir=tmp_path / "clone"
+        )
+
+        assert result["status"] == "cloned"
+        assert result["created"] == 1
+        # The folder reached the target via the create-path metadata POST.
+        client.set_config_metadata.assert_called_once()
+        call = client.set_config_metadata.call_args
+        assert call.kwargs["config_id"] == "NEW-ULID-1"
+        assert dict(call.kwargs["entries"]) == {"KBC.configuration.folderName": "Extractors"}
+
     def test_clone_applies_overrides_and_pushes(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

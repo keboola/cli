@@ -121,14 +121,21 @@ def clone_project(
         manifest = load_manifest(target_path)
         # _resolve_branch_id prefers an explicit --branch, so resolve the
         # target's default branch only when branch_override is None (#744).
+        target_default_branch_id = (
+            _target_default_branch_id(service, target_project) if branch_override is None else None
+        )
+        # The branch push resolves for the target: --branch when given, else the
+        # target default. Every copied config entry must carry it so the
+        # create-path writeback matches its placeholder and propagates KBC.*
+        # metadata (the config folder); otherwise the folder is lost and a
+        # duplicate manifest entry is left behind (CLI-9).
         repoint_manifest_project(
             manifest,
             project_id=target_project.project_id or 0,
             api_host=urlparse(target_project.stack_url).netloc,
-            default_branch_id=(
-                _target_default_branch_id(service, target_project)
-                if branch_override is None
-                else None
+            default_branch_id=target_default_branch_id,
+            config_branch_id=(
+                branch_override if branch_override is not None else target_default_branch_id
             ),
         )
         bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)

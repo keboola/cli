@@ -69,6 +69,7 @@ def repoint_manifest_project(
     project_id: int,
     api_host: str,
     default_branch_id: int | None = None,
+    config_branch_id: int | None = None,
 ) -> None:
     """Re-point the manifest's project block at the clone's target project.
 
@@ -79,11 +80,22 @@ def repoint_manifest_project(
     exist in the target; a fresh clone with no explicit ``--branch`` then
     resolves that stale id and diff/push fail with
     ``Branch id "..." does not exists`` (CLI-5).
+
+    ``config_branch_id`` re-points every copied ``ManifestConfiguration`` onto
+    the branch push resolves for the target (``--branch`` when given, else the
+    target default). Without it each entry keeps the source branch id, so the
+    create-path writeback match on ``(branch_id, component_id, path)`` fails: a
+    duplicate entry carrying no ``KBC.*`` metadata is appended, and config
+    metadata such as ``KBC.configuration.folderName`` never reaches the target
+    (CLI-9).
     """
     manifest.project.id = project_id
     manifest.project.api_host = api_host
     if default_branch_id is not None and manifest.branches:
         manifest.branches[0].id = default_branch_id
+    if config_branch_id is not None:
+        for cfg in manifest.configurations:
+            cfg.branch_id = config_branch_id
 
 
 def _config_dir(target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str) -> Path:
