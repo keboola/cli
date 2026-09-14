@@ -218,9 +218,12 @@ class TestKaiServiceGuard:
 
 
 class TestSharingServiceGuard:
-    def test_resolve_master_token_fallback_raises(
+    def test_resolve_master_token_fallback_returns_session_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # CLI-13: with no env master token, a session project falls back to its
+        # own token; the session-aware client factory reaches sharing over the
+        # bearer and the Storage API enforces the master privilege.
         from keboola_agent_cli.services.sharing_service import SharingService
 
         monkeypatch.delenv("KBC_MASTER_TOKEN", raising=False)
@@ -229,9 +232,7 @@ class TestSharingServiceGuard:
         config_store = ConfigStore(config_dir=tmp_path)
         service = SharingService(config_store=config_store)
         project = _sentinel_project()
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            service.resolve_master_token("sentinel", project)
-        assert exc_info.value.feature == "kbagent sharing (master-token path)"
+        assert service.resolve_master_token("sentinel", project) == project.token
 
     def test_explicit_master_token_env_wins_no_guard(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
