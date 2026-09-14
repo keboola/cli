@@ -32,8 +32,6 @@ class SchedulerClient(BaseHttpClient):
     Inherits _do_request() and _raise_api_error() from BaseHttpClient.
     """
 
-    SESSION_AUTH_FEATURE = "The Scheduler Service"
-
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         scheduler_base_url = self._derive_service_url(self._stack_url, "scheduler")

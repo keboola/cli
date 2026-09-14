@@ -32,6 +32,7 @@ from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.data_science_client import DataScienceClient
 from keboola_agent_cli.dev_portal_client import DeveloperPortalClient
 from keboola_agent_cli.errors import ErrorCode, SessionAuthUnsupportedError
+from keboola_agent_cli.http_base import BaseHttpClient
 from keboola_agent_cli.manage_client import ManageClient
 from keboola_agent_cli.metastore_client import MetastoreClient
 from keboola_agent_cli.scheduler_client import SchedulerClient
@@ -227,51 +228,60 @@ class TestManageClientParity:
         assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
 
 
-class TestSessionAuthFeatureGuard:
-    """``BaseHttpClient.SESSION_AUTH_FEATURE`` guards static-token-only clients.
+class _GuardedClient(BaseHttpClient):
+    """A synthetic static-token-only client, to test the guard mechanism.
 
-    Before this, each service's client factory called ``require_static_token``
-    itself, so a new factory -- or a direct constructor call like the one in
-    ``client/stream.py`` -- silently sent the sentinel instead of failing fast.
-    Declaring the feature on the class moves the check to the one place every
-    caller must go through.
+    After CLI-13 no shipped client sets ``SESSION_AUTH_FEATURE``; the attribute
+    stays as the sanctioned way to mark a future client static-token-only.
+    """
+
+    SESSION_AUTH_FEATURE = "The Test Service"
+
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
+        super().__init__(base_url=stack_url, token=token, headers={}, http_auth=http_auth)
+
+
+class TestSessionAuthFeatureGuard:
+    """``BaseHttpClient.SESSION_AUTH_FEATURE`` marks a client static-token-only.
+
+    When it is set and no ``http_auth`` hook is given, the constructor rejects a
+    session sentinel before it can go out as a meaningless static token. Every
+    shipped service client is bearer-capable and leaves it ``None``.
     """
 
     def test_guarded_client_rejects_a_sentinel_token(self) -> None:
-        for cls in (AiServiceClient, DataScienceClient, MetastoreClient, SchedulerClient):
-            with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-                cls(stack_url=STACK_URL, token=SENTINEL_TOKEN)
-            assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-            assert cls.SESSION_AUTH_FEATURE in str(exc_info.value)
-
-        with pytest.raises(SessionAuthUnsupportedError):
-            StreamClient(stack_url=STACK_URL, token=SENTINEL_TOKEN)
+        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
+            _GuardedClient(stack_url=STACK_URL, token=SENTINEL_TOKEN)
+        assert exc_info.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert _GuardedClient.SESSION_AUTH_FEATURE in str(exc_info.value)
 
     def test_guarded_client_accepts_a_static_token(self) -> None:
-        for cls in (AiServiceClient, DataScienceClient, MetastoreClient, SchedulerClient):
-            with cls(stack_url=STACK_URL, token="123-static"):
-                pass
-        with StreamClient(stack_url=STACK_URL, token="123-static"):
+        with _GuardedClient(stack_url=STACK_URL, token="123-static"):
             pass
-
-    def test_bearer_capable_clients_are_not_guarded(self) -> None:
-        """A sentinel must not be *rejected* by clients that support sessions.
-
-        ``KeboolaClient`` / ``ManageClient`` reach Storage and Manage over bearer,
-        so guarding them would break the supported path. ``DeveloperPortalClient``
-        authenticates with its own identity and never sees a project token.
-        """
-        assert KeboolaClient.SESSION_AUTH_FEATURE is None
-        assert ManageClient.SESSION_AUTH_FEATURE is None
-        assert DeveloperPortalClient.SESSION_AUTH_FEATURE is None
 
     def test_supplying_http_auth_bypasses_the_guard(self) -> None:
         """In session mode the token is empty and the credential is the auth hook.
 
         The guard must not fire then, or every bearer-mode sub-client would break.
         """
-        with StreamClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()):
+        with _GuardedClient(stack_url=STACK_URL, token="", http_auth=_StubBearerAuth()):
             pass
+
+    def test_service_clients_are_bearer_capable(self) -> None:
+        """CLI-13: the service clients reach a browser-login project over bearer,
+        so none of them is guarded. Storage / Manage / Developer Portal never were.
+        """
+        for cls in (
+            KeboolaClient,
+            ManageClient,
+            DeveloperPortalClient,
+            AiServiceClient,
+            DataScienceClient,
+            MetastoreClient,
+            SchedulerClient,
+            StreamClient,
+        ):
+            assert cls.SESSION_AUTH_FEATURE is None
 
     def test_stream_sub_client_inherits_the_bearer_hook(self, httpx_mock) -> None:
         """``client/stream.py`` builds a ``StreamClient`` from the main client.

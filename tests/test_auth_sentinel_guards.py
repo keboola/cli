@@ -187,15 +187,6 @@ class TestMakeClientFactory:
 
 
 class TestSemanticLayerGuards:
-    def test_default_metastore_client_factory_raises(self) -> None:
-        from keboola_agent_cli.services.semantic_layer_service import (
-            default_metastore_client_factory,
-        )
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            default_metastore_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Metastore Service (semantic layer)"
-
     def test_encrypt_token_raises(self, tmp_path: Path) -> None:
         from keboola_agent_cli.services.semantic_layer_service import SemanticLayerService
 
@@ -255,63 +246,6 @@ class TestLibClientGuard:
         with pytest.raises(SessionAuthUnsupportedError) as exc_info:
             Client(url=STACK_URL, token=_sentinel_token())
         assert exc_info.value.feature == "The importable SDK Client"
-
-
-class TestAiServiceFactoryGuards:
-    """default AI-service factories in component_service / config_service / flow_service."""
-
-    def test_component_service_default_factory_raises(self) -> None:
-        from keboola_agent_cli.services.component_service import default_ai_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            default_ai_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Keboola AI Service"
-
-    def test_config_service_default_factory_raises(self) -> None:
-        from keboola_agent_cli.services.config_service import _default_ai_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            _default_ai_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Keboola AI Service"
-
-    def test_flow_service_ai_factory_raises(self) -> None:
-        from keboola_agent_cli.services.flow_service import default_ai_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            default_ai_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Keboola AI Service"
-
-    def test_flow_service_scheduler_factory_raises(self) -> None:
-        from keboola_agent_cli.services.flow_service import default_scheduler_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            default_scheduler_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Scheduler Service"
-
-
-class TestDataScienceFactoryGuards:
-    def test_data_app_service_default_factory_raises(self) -> None:
-        # data_app_service builds its DS client through the session-aware factory
-        # now; the static-path guard still fires in the client constructor.
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            DataScienceClient(stack_url=STACK_URL, token=_sentinel_token())
-        assert exc_info.value.feature == "The Data Science Service (data apps)"
-
-    def test_data_app_git_service_default_factory_raises(self) -> None:
-        from keboola_agent_cli.services.data_app_git_service import _default_ds_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            _default_ds_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Data Science Service (data apps)"
-
-
-class TestStreamServiceGuard:
-    def test_default_stream_client_factory_raises(self) -> None:
-        from keboola_agent_cli.services.stream_service import default_stream_client_factory
-
-        with pytest.raises(SessionAuthUnsupportedError) as exc_info:
-            default_stream_client_factory(STACK_URL, _sentinel_token())
-        assert exc_info.value.feature == "The Data Streams Service"
 
 
 # ----------------------------------------------------------------------------

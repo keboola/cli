@@ -29,12 +29,6 @@ from .base import BaseService, ClientFactory, make_session_aware_client_factory
 DataScienceClientFactory = Any  # Callable[[str, str], DataScienceClient]
 
 
-def _default_ds_client_factory(stack_url: str, token: str) -> DataScienceClient:
-    """Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction."""
-    return DataScienceClient(stack_url=stack_url, token=token)
-
-
 class DataAppGitService(BaseService):
     """Service for the data-app git-repo endpoints (sandboxes-service)."""
 

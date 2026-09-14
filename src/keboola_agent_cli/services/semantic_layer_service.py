@@ -229,16 +229,6 @@ logger = logging.getLogger(__name__)
 MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
 
-def default_metastore_client_factory(stack_url: str, token: str) -> MetastoreClient:
-    """Build a :class:`MetastoreClient` for the given project.
-
-    Static-token-only: the Metastore Service is not wired for bearer sessions
-    (v1 scope is Storage + Manage), so the client's ``SESSION_AUTH_FEATURE``
-    makes a session sentinel fail fast on construction.
-    """
-    return MetastoreClient(stack_url=stack_url, token=token)
-
-
 class SemanticLayerService(BaseService):
     """Business logic for the semantic-layer command group.
 

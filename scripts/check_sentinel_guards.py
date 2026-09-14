@@ -123,6 +123,13 @@ BEARER_CAPABLE_CLIENTS = {
     "ManageClient",  # Manage: the supported bearer path
     "AuthClient",  # talks to the auth service itself, token=""
     "DeveloperPortalClient",  # own username/password identity, never a project token
+    # CLI-13: these reach their backend over a bearer via
+    # make_session_aware_client_factory; the backends accept OAuth tokens.
+    "SchedulerClient",
+    "StreamClient",
+    "DataScienceClient",
+    "MetastoreClient",
+    "AiServiceClient",
 }
 
 # Check 3: guards that describe no user-reachable command surface.

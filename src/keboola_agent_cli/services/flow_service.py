@@ -137,24 +137,6 @@ class FlowSchemaFetch:
     reason: str | None
 
 
-def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Default factory: build an ``AiServiceClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return AiServiceClient(stack_url=stack_url, token=token)
-
-
-def default_scheduler_client_factory(stack_url: str, token: str) -> SchedulerClient:
-    """Default factory: build a ``SchedulerClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return SchedulerClient(stack_url=stack_url, token=token)
-
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

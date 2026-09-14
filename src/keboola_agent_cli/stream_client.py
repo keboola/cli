@@ -94,8 +94,6 @@ class StreamClient(BaseHttpClient):
     :class:`BaseHttpClient`.
     """
 
-    SESSION_AUTH_FEATURE = "The Data Streams Service"
-
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         stream_base_url = self._derive_service_url(self._stack_url, "stream")

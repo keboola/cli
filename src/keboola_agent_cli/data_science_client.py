@@ -55,8 +55,6 @@ class DataScienceClient(BaseHttpClient):
     Inherits retry / backoff / token-masking from ``BaseHttpClient``.
     """
 
-    SESSION_AUTH_FEATURE = "The Data Science Service (data apps)"
-
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         ds_base_url = self._derive_service_url(self._stack_url, "data-science")
