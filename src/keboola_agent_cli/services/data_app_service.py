@@ -43,6 +43,7 @@ from ._data_app_bodies import (
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
+    partition_secret_entries,
 )
 from .base import BaseService, ClientFactory, project_error_entry
 from .encrypt_service import EncryptService
@@ -1004,7 +1005,17 @@ class DataAppService(BaseService):
         allow_plaintext_on_encrypt_failure: bool = False,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Encrypt and write ``#``-prefixed secrets to the linked Storage config.
+        """Write entries to ``parameters.dataApp.secrets`` on the linked Storage config.
+
+        The block holds two kinds of entry and this method writes both, keyed
+        on the ``#`` prefix exactly as the Keboola UI's "optional encryption"
+        checkbox does:
+
+        - ``#KEY`` -- encrypted under THIS project's KMS before it is written.
+        - ``KEY``  -- a plain env var, written verbatim. Non-secret runtime
+          configuration (a Storage Files tag, a feature flag, a log level)
+          belongs here so ``secrets-list`` / ``config detail`` and the UI show
+          the real value instead of ``<encrypted>``.
 
         Read-modify-write at the service layer. The Storage API's
         ``configuration`` field is a full-document overwrite; relying on
@@ -1016,11 +1027,12 @@ class DataAppService(BaseService):
 
         Fail-closed: any encryption failure aborts before Storage is
         touched. ``allow_plaintext_on_encrypt_failure`` is bootstrap/debug
-        only and emits a stderr warning when used.
+        only and emits a stderr warning when used; it never applies to a
+        deliberate plaintext key, which was never going to be encrypted.
         """
         if not secrets:
             raise KeboolaApiError(
-                message="At least one --secret '#KEY=VALUE' is required.",
+                message="At least one --secret '#KEY=VALUE' or 'KEY=VALUE' is required.",
                 status_code=0,
                 error_code=ErrorCode.DATA_APP_INVALID_SECRET,
                 retryable=False,
@@ -1028,30 +1040,11 @@ class DataAppService(BaseService):
 
         # Validate every key + value at the service boundary; we don't
         # trust the command layer to have caught everything.
-        validated: dict[str, str] = {}
-        for key, value in secrets.items():
-            self._validate_secret_key(key)
-            if not isinstance(value, str):
-                raise KeboolaApiError(
-                    message=(f"Secret '{key}' value must be a string; got {type(value).__name__}."),
-                    status_code=0,
-                    error_code=ErrorCode.DATA_APP_INVALID_SECRET,
-                    retryable=False,
-                )
-            if value.startswith("KBC::"):
-                raise KeboolaApiError(
-                    message=(
-                        f"Secret '{key}' value starts with 'KBC::', which suggests an "
-                        "already-encrypted ciphertext. The --secret flag expects "
-                        "plaintext; pass pre-encrypted values via --secrets-file or "
-                        "re-encrypt under THIS project's KMS via "
-                        "`kbagent encrypt values --component-id keboola.data-apps`."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.DATA_APP_INVALID_SECRET,
-                    retryable=False,
-                )
-            validated[key] = value
+        to_encrypt, plain = partition_secret_entries(
+            secrets,
+            validate_key=lambda key: self._validate_secret_key(key, require_hash=False),
+        )
+        validated: dict[str, str] = {**to_encrypt, **plain}
 
         # Reserved-name warnings -- WARN (not BLOCKING). The platform
         # silently shadows colliding env vars at runtime. We still write
@@ -1083,8 +1076,9 @@ class DataAppService(BaseService):
 
             if dry_run:
                 preview_secrets = dict(existing_secrets)
-                for key in validated:
+                for key in to_encrypt:
                     preview_secrets[key] = "<encrypted at runtime>"
+                preview_secrets.update(plain)
                 preview_body = self._merge_secrets_into_body(current_body, preview_secrets)
                 return {
                     "dry_run": True,
@@ -1094,7 +1088,9 @@ class DataAppService(BaseService):
                     "secrets_set": sorted(_derive_runtime_env_var_name(k) for k in validated),
                     "secrets_unchanged": unchanged,
                     "shadowed_by_runtime": shadowed,
-                    "encryption_request_keys": sorted(validated.keys()),
+                    "encryption_request_keys": sorted(to_encrypt.keys()),
+                    "encrypted_keys": sorted(_derive_runtime_env_var_name(k) for k in to_encrypt),
+                    "plaintext_keys": sorted(_derive_runtime_env_var_name(k) for k in plain),
                     "put_storage_config_preview": _redact_storage_config(
                         {"configuration": preview_body}
                     ),
@@ -1104,20 +1100,25 @@ class DataAppService(BaseService):
                     ),
                 }
 
-            # Encrypt every plaintext value under THIS project's KMS.
-            try:
-                encrypted = self._encrypt_service.encrypt(
-                    alias=alias,
-                    component_id=DATA_APP_COMPONENT_ID,
-                    input_data=validated,
-                )
-            except ConfigError as exc:
-                raise KeboolaApiError(
-                    message=f"Failed to prepare secrets for encryption: {exc.message}",
-                    status_code=0,
-                    error_code=ErrorCode.ENCRYPTION_FAILED,
-                    retryable=False,
-                ) from exc
+            # Encrypt the '#' half under THIS project's KMS. A payload of only
+            # plain keys must not call the Encryption API at all -- an
+            # unreachable API would otherwise fail a write that needs no
+            # encryption.
+            encrypted: dict[str, str] = {}
+            if to_encrypt:
+                try:
+                    encrypted = self._encrypt_service.encrypt(
+                        alias=alias,
+                        component_id=DATA_APP_COMPONENT_ID,
+                        input_data=to_encrypt,
+                    )
+                except ConfigError as exc:
+                    raise KeboolaApiError(
+                        message=f"Failed to prepare secrets for encryption: {exc.message}",
+                        status_code=0,
+                        error_code=ErrorCode.ENCRYPTION_FAILED,
+                        retryable=False,
+                    ) from exc
 
             # Validate every returned ciphertext starts with a project-scoped
             # prefix. Mirror the fail-closed check from _build_git_block at
@@ -1155,6 +1156,7 @@ class DataAppService(BaseService):
             # replaced; everything else is preserved bit-identical.
             updated_secrets = dict(existing_secrets)
             updated_secrets.update(encrypted)
+            updated_secrets.update(plain)
             new_body = self._merge_secrets_into_body(current_body, updated_secrets)
 
             put_response = storage_client.update_config(
@@ -1162,7 +1164,7 @@ class DataAppService(BaseService):
                 config_id=config_id,
                 configuration=new_body,
                 change_description=(
-                    f"Set {len(validated)} secret(s) via kbagent data-app secrets set"
+                    f"Set {len(validated)} env-var entr(ies) via kbagent data-app secrets-set"
                 ),
                 branch_id=branch_id,
             )
@@ -1175,6 +1177,8 @@ class DataAppService(BaseService):
                 "app_id": str(app_id),
                 "config_id": config_id,
                 "secrets_set": secrets_set,
+                "encrypted_keys": sorted(_derive_runtime_env_var_name(k) for k in to_encrypt),
+                "plaintext_keys": sorted(_derive_runtime_env_var_name(k) for k in plain),
                 "secrets_unchanged": unchanged,
                 "shadowed_by_runtime": shadowed,
                 # Keys whose ciphertext check failed but were written anyway under
@@ -1189,8 +1193,9 @@ class DataAppService(BaseService):
                     f"kbagent data-app deploy --project {alias} --app-id {app_id} --wait"
                 ),
                 "message": (
-                    f"{len(secrets_set)} secret(s) encrypted and written. "
-                    "The running container keeps the old config until you redeploy."
+                    f"{len(to_encrypt)} secret(s) encrypted, {len(plain)} plain value(s) "
+                    "written as-is. The running container keeps the old config until "
+                    "you redeploy."
                 ),
             }
         finally:
@@ -1208,10 +1213,14 @@ class DataAppService(BaseService):
         """Return metadata for every key in ``parameters.dataApp.secrets``.
 
         The block holds both ``#``-prefixed encrypted secrets and plain
-        (unencrypted) env-var values; both are enumerated. Never returns an
-        encrypted ciphertext in full and never attempts to decrypt -- the
-        Encryption API is one-way; decryption from the CLI is impossible by
-        design.
+        (unencrypted) env-var values; both are enumerated, tagged with
+        ``encrypted``. A plain entry carries its literal ``value`` -- it is
+        already stored in clear and visible through ``config detail``, so
+        showing it leaks nothing the caller could not already read, and it is
+        the whole point of storing non-secret configuration unencrypted. An
+        encrypted entry always has ``value: None``: the Encryption API is
+        one-way, so the CLI never returns a ciphertext in full and cannot
+        decrypt even if it wanted to.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1229,15 +1238,21 @@ class DataAppService(BaseService):
             entries: list[dict[str, Any]] = []
             for key in sorted(raw_secrets.keys()):
                 env_var = _derive_runtime_env_var_name(key)
+                stored = raw_secrets[key]
+                is_encrypted = isinstance(stored, str) and stored.startswith("KBC::")
                 entry: dict[str, Any] = {
                     "key": key,
                     "env_var": env_var,
                     "shadowed_by_runtime": env_var in RESERVED_RUNTIME_ENV_VARS,
+                    "encrypted": is_encrypted,
+                    # A plain entry is already stored in clear and readable via
+                    # `config detail`, so echoing it leaks nothing new; an
+                    # encrypted one is never decrypted (the API is one-way).
+                    "value": None if is_encrypted else stored,
                 }
                 if show_fingerprint:
-                    ciphertext = raw_secrets[key]
-                    entry["fingerprint"] = _secret_fingerprint(ciphertext)
-                    entry["encryption_prefix"] = self._derive_encryption_prefix(ciphertext)
+                    entry["fingerprint"] = _secret_fingerprint(stored)
+                    entry["encryption_prefix"] = self._derive_encryption_prefix(stored)
                 entries.append(entry)
 
             return {

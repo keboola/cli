@@ -1360,21 +1360,39 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     WHY a deploy reverted to stopped. Project storage token only.
 
   kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE'
-        [--secret '#KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
+        [--secret 'KEY2=VALUE2' ...] [--secrets-file PATH] [--branch ID]
         [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
-    Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.
+    Write env-var entries into parameters.dataApp.secrets. Since vNEXT the
+    '#' prefix DECIDES encryption instead of being mandatory, mirroring the
+    UI's "optional encryption" checkbox:
+      '#KEY=VALUE' -> encrypted under the project KMS (unchanged behaviour).
+      'KEY=VALUE'  -> written VERBATIM as a plain env var, so secrets-list /
+                      config detail / the UI show the real value instead of
+                      <encrypted>. Use it for non-secret settings (a Storage
+                      Files tag, a feature flag, a log level).
+    Before vNEXT a bare key was REJECTED, so a non-secret had to be either
+    encrypted (invisible to everyone) or written via sync pull + hand-edited
+    _config.yml + sync push. Reading and removing both kinds always worked.
     Per-project KMS via the Encryption API; ciphertext does not cross
-    projects (writeup §8). Read-modify-write at the service layer to
-    preserve sibling keys; never use Storage merge=True for nested edits.
+    projects (writeup §8). A payload with NO '#' key never calls the
+    Encryption API at all. A 'KBC::' value is rejected under EITHER form.
+    --allow-plaintext-on-encrypt-failure is unrelated: it covers a '#' key
+    whose encryption FAILED, never a deliberate plain key.
+    Read-modify-write at the service layer to preserve sibling keys; never
+    use Storage merge=True for nested edits.
     The runtime exposes each key as an env var with '#' stripped, '-'
     replaced with '_', uppercased ('#my-api-key' -> 'MY_API_KEY').
-    Adding a secret bumps the Storage version; the running container
-    keeps the OLD config until the next 'kbagent data-app deploy'.
+    Response carries encrypted_keys / plaintext_keys (env-var names) beside
+    the combined secrets_set. Writing bumps the Storage version; the running
+    container keeps the OLD config until the next 'kbagent data-app deploy'.
 
   kbagent data-app secrets-list --project ALIAS --app-id ID [--branch ID]
         [--show-fingerprint]
     List the keys in parameters.dataApp.secrets with derived runtime
-    env-var names. Never echoes encrypted ciphertext in full and never
+    env-var names. Each entry carries `encrypted` and `value` (since vNEXT):
+    a PLAIN entry shows its literal value -- already stored in clear and
+    visible via config detail -- while an ENCRYPTED entry always has
+    value: null. Never echoes encrypted ciphertext in full and never
     decrypts. --show-fingerprint includes a short fingerprint per key.
 
   kbagent data-app secrets-get --project ALIAS --app-id ID --key 'KEY'

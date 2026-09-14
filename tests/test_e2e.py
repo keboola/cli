@@ -10003,6 +10003,133 @@ class TestE2EDataAppLifecycle:
         )
 
     @skip_without_data_app_public
+    def test_data_app_secrets_set_writes_plain_env_vars(self) -> None:
+        """`secrets-set` writes a bare KEY in clear and a #KEY encrypted (#738).
+
+        Before this, a bare key was rejected outright; the only way to store a
+        non-secret was to encrypt it (invisible to everyone afterwards) or to
+        hand-edit the config through `sync`. Verified against a real project
+        KMS so the mixed payload's two halves are provably different on the
+        wire.
+        """
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        plain_value = "ppl-assessment-db"
+        secret_value = "supersecret-do-not-leak"
+
+        _step(1, "Create shell app")
+        create = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E PlainEnv {RUN_ID}",
+                    "--slug",
+                    f"e2e-plainenv-{RUN_ID}"[:60],
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        app_id = create["app_id"]
+        self._created_app_ids.append(app_id)
+
+        _step(2, "secrets-set: one plain entry + one encrypted entry")
+        set_raw = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "data-app",
+                "secrets-set",
+                "--project",
+                self.alias,
+                "--app-id",
+                app_id,
+                "--secret",
+                f"E2E_PLAIN_TAG={plain_value}",
+                "--secret",
+                f"#E2E_ENC_KEY={secret_value}",
+                "--no-hint-next",
+            ],
+        )
+        body = _json_ok(set_raw)["data"]
+        assert body["plaintext_keys"] == ["E2E_PLAIN_TAG"], body
+        assert body["encrypted_keys"] == ["E2E_ENC_KEY"], body
+        assert secret_value not in set_raw.output, (
+            "the encrypted half's plaintext MUST NEVER appear in secrets-set output"
+        )
+
+        _step(3, "secrets-list reports the plain value and masks the encrypted one")
+        listed = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-list",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                ],
+            )
+        )["data"]["secrets"]
+        by_key = {entry["key"]: entry for entry in listed}
+        assert by_key["E2E_PLAIN_TAG"]["encrypted"] is False
+        assert by_key["E2E_PLAIN_TAG"]["value"] == plain_value
+        assert by_key["#E2E_ENC_KEY"]["encrypted"] is True
+        assert by_key["#E2E_ENC_KEY"]["value"] is None
+
+        _step(4, "the plain value is stored VERBATIM in the config, not as ciphertext")
+        stored = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    create["config_id"],
+                ],
+            )
+        )["data"]
+        block = stored["configuration"]["parameters"]["dataApp"]["secrets"]
+        assert block["E2E_PLAIN_TAG"] == plain_value, block
+        assert block["#E2E_ENC_KEY"].startswith("KBC::"), block
+
+        _step(5, "secrets-remove drops the plain entry")
+        removed = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-remove",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--key",
+                    "E2E_PLAIN_TAG",
+                    "--yes",
+                ],
+            )
+        )["data"]
+        assert removed["removed"] == ["E2E_PLAIN_TAG"], removed
+
+    @skip_without_data_app_public
     def test_data_app_logs_validation_and_not_running(self) -> None:
         """E2E coverage for ``data-app logs`` (since v0.43.8).
 
