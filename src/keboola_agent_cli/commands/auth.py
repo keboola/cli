@@ -133,9 +133,9 @@ def _render_session_restrictions(console: Console, features: Sequence[str]) -> N
     """Disclose what a session-backed project cannot do, right after registering it.
 
     Printed at registration time (rather than left to `docs/auth.md`) so the
-    v1 scope -- Storage and Manage only -- is known before the first refusal
-    instead of being discovered one failed command at a time. The same list
-    ships as `session_unsupported_features` in `--json`.
+    current session restrictions are known before the first refusal instead of
+    being discovered one failed command at a time. The same list ships as
+    `session_unsupported_features` in `--json`.
     """
     if not features:
         return

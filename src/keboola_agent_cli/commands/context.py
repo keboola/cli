@@ -195,34 +195,37 @@ Use `kbagent <command> --help` for full flag details and examples.
   already kept there (deliberate RFC 8628 deviation; see
   docs/programmatic-auth-login-plan.md section 4.2).
 
-  v1 scope: the Storage + Manage paths. `kbagent serve` reaches them too --
-  it delegates to the same already-guarded services -- so a session project
-  is usable over the REST API and web UI. Two consequences: whoever holds
-  KBAGENT_SERVE_TOKEN acts as the signed-in USER (a session is a user
-  credential, not a project one), and a session that expires while the
+  A session now works with nearly every command. `kbagent serve` reaches
+  them too -- it delegates to the same already-guarded services -- so a
+  session project is usable over the REST API and web UI. Two consequences:
+  whoever holds KBAGENT_SERVE_TOKEN acts as the signed-in USER (a session is
+  a user credential, not a project one), and a session that expires while the
   server runs answers HTTP 401 with error_code SESSION_EXPIRED, which only a
   human on the host can fix by re-running `auth login`.
 
-  These surfaces fail fast on a sentinel-token (`kbc-session://...`) project
-  with AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback -- they
-  do not (yet) understand bearer sessions. SESSION_UNSUPPORTED_FEATURES in
+  Only three features still fail fast on a sentinel-token (`kbc-session://...`)
+  project with AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback --
+  they do not understand bearer sessions. SESSION_UNSUPPORTED_FEATURES in
   services/_auth_registration.py is the in-code copy of this list. `auth login`
   and `auth register-projects` print it, and both ship it in --json as the
   additive key session_unsupported_features (`auth status` does NOT carry it):
     - kbagent kai
-    - kbagent semantic-layer (Metastore Service)
-    - kbagent data-app (Data Science Service)
-    - kbagent stream (Data Streams Service)
-    - kbagent sharing, unless a master token is set in the environment
-    - AI Service paths: docs query, config examples, config new,
-      component detail/search, flow new/update/validate
-    - Scheduler Service paths: flow schedule, flow schedule-remove
+    - kbagent semantic-layer token --encrypt (Metastore Service)
     - the importable SDK (keboola_agent_cli.Client)
+
+  Everything else now works on a session over bearer auth: the Scheduler
+  (flow schedule, flow schedule-remove), Data Streams (stream), Data Science
+  (data-app), the rest of semantic-layer, the AI Service (docs query,
+  config new, config examples, component detail, flow new/update/validate),
+  and Storage bucket sharing (sharing share/unshare, where the Storage API
+  enforces the master privilege).
 
   `dev-portal` is NOT on that list: it authenticates with its own Developer
   Portal identity (`dev-portal identity add`), never a project token, so a
-  session project changes nothing there. `flow` splits -- `flow list` /
-  `flow detail` are plain Storage calls and work.
+  session project changes nothing there. The whole `flow` group works on a
+  session -- `flow list` / `flow detail` are plain Storage calls, `flow new` /
+  `update` / `validate` reach the AI Service, and `flow schedule` /
+  `flow schedule-remove` reach the Scheduler.
 
   An older kbagent build has no
   sentinel-token support at all: it gets an opaque 401 on a plain
@@ -243,12 +246,12 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   In multi-project commands (`data-app list`, `flow list`, `storage tables`)
   a per-project failure keeps its real error_code in the --json `errors[]`
-  array instead of being relabelled UNEXPECTED_ERROR.
-  A session project on an unsupported surface therefore reports
-  error_code AUTH_NOT_SUPPORTED_ON_STACK per project -- branch on that code
-  to auto-remediate (register a static-token alias) rather than parsing the
-  message text. Only an exception carrying no code at all gets the fallback,
-  and its message is truncated because its content is unknown.
+  array instead of being relabelled UNEXPECTED_ERROR -- branch on that code
+  to auto-remediate rather than parsing the message text. These readers now
+  work on a session project, so a per-project AUTH_NOT_SUPPORTED_ON_STACK
+  comes only from one of the three static-only features. Only an exception
+  carrying no code at all gets the fallback, and its message is truncated
+  because its content is unknown.
 
 ### Project Management
 

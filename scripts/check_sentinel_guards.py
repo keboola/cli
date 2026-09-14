@@ -140,15 +140,9 @@ FEATURE_EXEMPT_GUARDS = {
 # Guard wording -> the substring of the user-facing entry that covers it, so
 # both can read naturally without being byte-identical.
 FEATURE_ALIASES = {
-    "The Keboola AI Service": "AI Service",
-    "The Scheduler Service": "Scheduler Service",
-    "The Metastore Service (semantic layer)": "Metastore Service",
     "semantic-layer token --encrypt": "Metastore Service",
-    "The Data Science Service (data apps)": "Data Science Service",
-    "The Data Streams Service": "Data Streams Service",
     "The importable SDK Client": "importable SDK",
     "kbagent kai": "kbagent kai",
-    "kbagent sharing (master-token path)": "kbagent sharing",
 }
 
 

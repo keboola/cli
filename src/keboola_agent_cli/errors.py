@@ -291,18 +291,16 @@ class SessionAuthUnsupportedError(ConfigError):
     """Raised when a session-registered project (``kbc-session://`` sentinel token)
     reaches a code path that only understands static Storage tokens.
 
-    v1 wires bearer sessions through the Storage and Manage clients. Everything
-    outside those paths fails fast here -- the AI / data-science / metastore /
-    stream / Scheduler clients, the ``sharing`` master-token path, and the
-    importable SDK; the authoritative list is
-    ``SESSION_UNSUPPORTED_FEATURES`` in ``services/_auth_registration.py``. The
-    Developer Portal client is absent from it because it authenticates with its
-    own identity, never a project token. Failing fast beats sending the literal
+    After CLI-13 the service clients build a bearer for a session, so the
+    sentinel reaches nearly every command. Only three features still fail fast
+    here -- ``kbagent kai``, ``semantic-layer token --encrypt``, and the
+    importable SDK; the authoritative list is ``SESSION_UNSUPPORTED_FEATURES``
+    in ``services/_auth_registration.py``. Failing fast beats sending the literal
     sentinel string as a credential, which
     yields an opaque 401 or, worse, gets the sentinel encrypted and persisted as
-    if it were a real token. ``kbagent serve`` is **not** among them: it reaches
-    Storage and Manage by delegating to those same already-guarded services, so
-    session projects do work through it (``server/dependencies.py``).
+    if it were a real token. ``kbagent serve`` reaches the supported services by
+    delegating to those same already-guarded clients, so session projects do
+    work through it (``server/dependencies.py``).
 
     Also raised outside the sentinel guards by
     ``ConfigStore._reject_session_credential_swap``, where the project stays

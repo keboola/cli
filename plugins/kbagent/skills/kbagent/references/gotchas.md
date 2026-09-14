@@ -179,8 +179,8 @@ Versioning convention:
   silently skipped, unlike the original 0.80.0 `--register-projects` batch
   path. Collision handling matches `--register-projects` above: never
   overwrites an existing `config.json` entry.
-- **A session works with almost every client.** Only three features still
-  require a static Storage token and fail FAST with
+- **A session works with almost every client** *(since vNEXT)*. Only three
+  features still require a static Storage token and fail FAST with
   `AUTH_NOT_SUPPORTED_ON_STACK` on a session project, naming the static-token
   fallback, rather than silently sending the `kbc-session://` sentinel as if it
   were a real credential. The authoritative list is

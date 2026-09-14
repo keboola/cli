@@ -299,3 +299,51 @@ class TestSessionAuthFeatureGuard:
         request = httpx_mock.get_requests()[0]
         assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
         assert not request.headers.get("X-StorageApi-Token")
+
+
+_SESSION_AWARE_SERVICE_CLIENTS = [
+    AiServiceClient,
+    DataScienceClient,
+    MetastoreClient,
+    SchedulerClient,
+    StreamClient,
+]
+
+
+@pytest.mark.parametrize("client_cls", _SESSION_AWARE_SERVICE_CLIENTS)
+class TestServiceClientBearerReachesTheWire:
+    """CLI-13: a session bearer must reach the wire on every service client.
+
+    ``TestSessionAwareServiceClients`` (test_auth_sentinel_guards.py) proves the
+    factory routes a session token into ``http_auth`` at construction. This
+    proves the routed client then puts ``Authorization: Bearer`` +
+    ``X-KBC-ProjectId`` on a real request and drops ``X-StorageApi-Token`` --
+    and that the static path is the mirror image (static header, no bearer).
+    Asserting the constructed header dict is not enough: only an actual request
+    exercises the ``auth=http_auth`` propagation into ``httpx``.
+    """
+
+    def test_session_request_carries_bearer_and_project_id(
+        self, client_cls: type, httpx_mock
+    ) -> None:
+        httpx_mock.add_response(json={})
+        with client_cls(
+            stack_url=STACK_URL, token="", http_auth=_StubBearerAuth(project_id=9840)
+        ) as client:
+            client._do_request("GET", "/")
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["Authorization"] == f"Bearer {BEARER_TOKEN}"
+        assert request.headers["X-KBC-ProjectId"] == "9840"
+        assert not request.headers.get("X-StorageApi-Token")
+
+    def test_static_request_carries_storage_header_and_no_bearer(
+        self, client_cls: type, httpx_mock
+    ) -> None:
+        httpx_mock.add_response(json={})
+        with client_cls(stack_url=STACK_URL, token=STATIC_TOKEN) as client:
+            client._do_request("GET", "/")
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["X-StorageApi-Token"] == STATIC_TOKEN
+        assert "Authorization" not in request.headers
