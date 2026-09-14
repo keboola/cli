@@ -9631,6 +9631,114 @@ class TestE2EDataAppLifecycle:
         assert body["requests"]["put_storage_config"]["runtime"]["workspace"] == {"enabled": True}
 
     @skip_without_data_app_public
+    def test_data_app_update_toggles_storage_access(self) -> None:
+        """`data-app update` flips runtime.workspace.enabled on a LIVE app (#737).
+
+        Proves the three contract points a mocked unit test cannot: the flag
+        actually reaches Storage, `detail` reads it back, and repeating the
+        same request writes nothing (no config version minted).
+        """
+        _step(1, "Create an app with Storage access ON")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        body = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Update {RUN_ID}",
+                    "--slug",
+                    f"e2e-upd-{RUN_ID}"[:60],
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",  # avoid waiting on a real container build
+                ],
+            )
+        )["data"]
+        app_id = body["app_id"]
+        self._created_app_ids.append(app_id)
+
+        def _detail() -> dict:
+            return _json_ok(
+                _invoke(
+                    self.config_dir,
+                    ["--json", "data-app", "detail", "--project", self.alias, "--app-id", app_id],
+                )
+            )["data"]
+
+        assert _detail()["workspace_enabled"] is True
+
+        _step(2, "Turn Storage access OFF")
+        off = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "update",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--no-workspace",
+                ],
+            )
+        )["data"]
+        assert off["changed"] == ["workspace"], off
+        assert off["deploy_required"] is True
+        assert _detail()["workspace_enabled"] is False
+
+        _step(3, "Repeating the same request is a no-op -- no config version minted")
+        repeat = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "update",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--no-workspace",
+                ],
+            )
+        )["data"]
+        assert repeat["changed"] == []
+        assert repeat["deploy_required"] is False
+        assert repeat["config_version_after"] == repeat["config_version_before"]
+
+        _step(4, "Turn it back on together with a new auto-suspend")
+        on = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "update",
+                    "--project",
+                    self.alias,
+                    "--app-id",
+                    app_id,
+                    "--workspace",
+                    "--auto-suspend",
+                    "600",
+                ],
+            )
+        )["data"]
+        assert set(on["changed"]) == {"workspace", "auto_suspend_after_seconds"}, on
+        detail = _detail()
+        assert detail["workspace_enabled"] is True
+        assert str(detail["auto_suspend_after_seconds"]) == "600", detail
+
+    @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:
         """git-repo against a deployed public app.
 

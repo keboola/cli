@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**235 operations** across **205 paths** and **30 routers**.
+**236 operations** across **205 paths** and **30 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -292,7 +292,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `POST` | `/notifications/{project}` | Create a notification subscription |
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 
-### `data-apps` (18 operations)
+### `data-apps` (19 operations)
 
 Streamlit / R / Python data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
@@ -300,6 +300,7 @@ Streamlit / R / Python data apps -- create, deploy, start/stop, manage secrets. 
 |---|---|---|
 | `GET` | `/data-apps` | List data apps across projects |
 | `GET` | `/data-apps/{project}/{app_id}` | Get data app detail |
+| `PATCH` | `/data-apps/{project}/{app_id}` | Update data app settings |
 | `DELETE` | `/data-apps/{project}/{app_id}` | Delete a data app |
 | `POST` | `/data-apps/{project}` | Create a data app |
 | `POST` | `/data-apps/{project}/{app_id}/deploy` | Deploy a data app version |

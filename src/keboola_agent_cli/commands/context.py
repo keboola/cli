@@ -1274,6 +1274,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent data-app detail --project NAME --app-id ID [--branch ID]
     Full merged view: state, desiredState, url, deployed configVersion, slug,
     runtime size, git settings (PAT redacted as <encrypted>).
+    `workspace_enabled` (since vNEXT) reports whether Storage access is on --
+    i.e. whether the platform injects KBC_TOKEN / WORKSPACE_ID /
+    QUERY_SERVICE_URL. Human mode prints it as "Storage access:
+    enabled/disabled". Before vNEXT nothing in `detail` showed it, so the
+    missing-token symptom could not be diagnosed from the CLI at all.
 
   kbagent data-app create --project ALIAS --name NAME --slug SLUG
     (--git-repo URL | --use-managed-git-repo)
@@ -1309,6 +1314,24 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
       kbagent config update --project P --component-id keboola.data-apps
         --config-id ID --merge --set 'runtime.workspace.enabled=true'
     then redeploy (deploy pins the LATEST version, so the change takes effect).
+
+  kbagent data-app update --project NAME --app-id ID
+    [--workspace/--no-workspace] [--auto-suspend N] [--size tiny|small|medium|large]
+    [--auth password|public] [--git-branch BRANCH] [--branch ID] [--dry-run]
+    (since vNEXT) Change deployment settings on an EXISTING app. Read-modify-write
+    on the linked Storage config: ONLY the flags you pass are touched, everything
+    else (secrets, the encrypted git #password, storage mapping) is preserved
+    bit-identical. Omitting --workspace/--no-workspace leaves Storage access
+    unchanged -- it is tri-state, not a boolean defaulting to off.
+    --no-workspace DELETES runtime.workspace, matching what `create
+    --no-workspace` writes, rather than writing `enabled: false`.
+    A request that already matches the stored config writes NOTHING: the result
+    reports changed=[] and deploy_required=false, and no config version is minted.
+    --git-branch retargets an EXTERNAL repo's branch; on a Keboola-managed repo
+    (no parameters.dataApp.git block) it fails with DATA_APP_INVALID_GIT.
+    Never auto-deploys -- the running container keeps its pinned configVersion
+    until the next `data-app deploy`. Before vNEXT the only CLI path to these
+    fields was `sync init` + `sync pull` + hand-editing _config.yml + `sync push`.
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID]

@@ -44,6 +44,7 @@ from ._data_app_bodies import (
     _redact_storage_config,
     _secret_fingerprint,
 )
+from ._data_app_update import DataAppUpdateMixin, read_workspace_enabled
 from .base import BaseService, ClientFactory, project_error_entry
 from .encrypt_service import EncryptService
 
@@ -141,7 +142,7 @@ SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
-class DataAppService(BaseService):
+class DataAppService(DataAppUpdateMixin, BaseService):
     """Lifecycle service for Keboola data apps.
 
     Wires together the Data Science API (deployment record), the Storage
@@ -311,6 +312,7 @@ class DataAppService(BaseService):
             ),
             "last_start_timestamp": app.get("lastStartTimestamp"),
             "slug": data_app_block.get("slug", ""),
+            "workspace_enabled": read_workspace_enabled(configuration),
             "git": _redact_git_block(git_block) if git_block else {},
             "raw": {
                 "deployment": app,
@@ -944,42 +946,6 @@ class DataAppService(BaseService):
     # ------------------------------------------------------------------
     # Secrets lifecycle (parameters.dataApp.secrets in the Storage config)
     # ------------------------------------------------------------------
-
-    def _load_data_app_storage_config(
-        self,
-        *,
-        ds_client: DataScienceClient,
-        storage_client: Any,
-        app_id: str,
-        branch_id: int | None,
-    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
-        """Resolve ``configId`` from the Data Science app and load the Storage config.
-
-        Returns ``(config_id, storage_envelope, body)`` where ``body`` is a
-        deep-copy of ``storage_envelope.configuration`` so callers can
-        mutate it freely. Mirrors the pattern at
-        :meth:`deploy_data_app` (data_app_service.py:586-594).
-        """
-        app = ds_client.get_app(app_id)
-        config_id = str(app.get("configId") or "")
-        if not config_id:
-            raise KeboolaApiError(
-                message=f"Data app {app_id} has no associated configId",
-                status_code=500,
-                error_code=ErrorCode.API_ERROR,
-                retryable=False,
-            )
-        envelope = storage_client.get_config_detail(
-            DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
-        )
-        if not isinstance(envelope, dict):
-            envelope = {}
-        configuration = envelope.get("configuration")
-        if not isinstance(configuration, dict):
-            configuration = {}
-        # Deep-copy so caller mutations don't reach the cached upstream.
-        body = json.loads(json.dumps(configuration))
-        return config_id, envelope, body
 
     def _read_secrets_block(self, body: dict[str, Any]) -> dict[str, str]:
         """Return ``parameters.dataApp.secrets`` from a config body, or ``{}``."""

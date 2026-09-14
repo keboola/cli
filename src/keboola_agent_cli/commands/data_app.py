@@ -22,6 +22,7 @@ from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._data_app_git import register_git_commands
 from ._data_app_runtime import register_secrets_commands
+from ._data_app_settings import register_settings_commands
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -179,6 +180,10 @@ def data_app_detail(
             ),
             c.print(f"  [bold]Size:[/bold] {d.get('size', '')}"),
             c.print(f"  [bold]Auto-suspend:[/bold] {d.get('auto_suspend_after_seconds', '?')}s"),
+            c.print(
+                "  [bold]Storage access:[/bold] "
+                + ("enabled" if d.get("workspace_enabled") else "[yellow]disabled[/yellow]")
+            ),
             c.print(f"  [bold]URL:[/bold] {d.get('url', '')}"),
             c.print(f"  [bold]Last started:[/bold] {d.get('last_start_timestamp', '')}"),
             c.print(f"  [bold]Git:[/bold] {d.get('git', {})}"),
@@ -999,3 +1004,4 @@ def data_app_validate_repo(
 # as `kbagent data-app git-*` / `secrets-*` on this sub-app.
 register_git_commands(data_app_app)
 register_secrets_commands(data_app_app)
+register_settings_commands(data_app_app)

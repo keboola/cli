@@ -352,9 +352,13 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   bumping the version.
 - **Data app Storage access fails SILENTLY**: no `runtime.workspace.enabled`
   -> deploys green, reads nothing, platform logs nothing. Empty results -> read
-  `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
-  grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
-  patch + redeploy.
+  `data-app detail` -> `workspace_enabled` FIRST (**vNEXT+**; on <= 0.91.0 read
+  `config detail` -> `configuration.runtime` instead -- an empty `data-app logs`
+  grep rules nothing out either way). `create` defaults it ON at **0.87.0+**;
+  <= 0.86.0 patch + redeploy. To FIX it on an existing app: `data-app update
+  --workspace` then `deploy` (**vNEXT+**); on <= 0.91.0 there is no update
+  command -- `config update --merge --set 'runtime.workspace.enabled=true'`
+  then `deploy`.
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
   `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do
