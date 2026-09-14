@@ -5013,6 +5013,15 @@ It carries the command name, the outcome, and the duration -- never argument val
 
 - **It shows up in the project's own event log.** An agent auditing a project's events
   sees one `ext.keboola.cli.` entry per kbagent command. That is expected, not a stray write.
+- **The event body also carries the kbagent version** *(since vNEXT)*: `params.cliContext.userAgent`
+  holds the `keboola-cli/<version> (<os>; <arch>; <impl> <pyver>)` User-Agent, and
+  `params.cliContext.conversationId` holds the conversation id when one is set
+  (`KBAGENT_CONVERSATION_ID` / `--conversation-id`; over `serve` the request's `X-Conversation-ID`).
+  A usage report reads `userAgent` to segment by version. `conversationId` is whatever set
+  `KBAGENT_CONVERSATION_ID`: an external agent harness, or `kbagent serve` itself, which generates a
+  `serve-<timestamp>-<hex>` id and exports it to its child processes. So a `serve-`-prefixed id marks
+  a serve session, not an external agent -- read the id's shape, not its mere presence, to split agent
+  from human. Neither field holds argument values.
 - **Over `serve`, only mutating requests are logged.** A read (GET) posts nothing -- UI
   polling would otherwise write hundreds of events an hour into the project's event log.
   The CLI still logs reads, where volume is one event per invocation.
