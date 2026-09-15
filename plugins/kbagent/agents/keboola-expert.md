@@ -355,6 +355,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
   grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
   patch + redeploy.
+- **Data-app type in `sync`**: a `keboola.data-apps` config's runtime type (`python-js` / `streamlit`) lives only on the Data Science `/apps` record. `sync pull` records it as `_keboola.data_app_type`, and `sync push` / `sync clone` send it through `create_app`. A tree pulled before this carries no type, so re-pull the source before you clone, or the app deploys under the platform default, `streamlit` (since vNEXT).
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
   `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do

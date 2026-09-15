@@ -159,6 +159,7 @@ def api_config_to_local(
     config_id: str,
     *,
     legacy_scripts: bool = False,
+    data_app_type: str | None = None,
 ) -> dict[str, Any]:
     """Convert an API configuration response to the local ``_config.yml`` structure.
 
@@ -172,7 +173,7 @@ def api_config_to_local(
     - ``configuration.storage.input`` -> ``input``
     - ``configuration.storage.output`` -> ``output``
     - ``configuration.processors`` -> ``processors``
-    - ``_keboola``: ``{component_id, config_id}``
+    - ``_keboola``: ``{component_id, config_id}`` (+ ``data_app_type`` when given)
 
     Any remaining keys inside ``configuration`` that are not explicitly
     promoted are preserved under a ``_configuration_extra`` key so that
@@ -184,6 +185,14 @@ def api_config_to_local(
             (:func:`_normalize_scripts_legacy`) so the caller can recompute
             the hash an older kbagent would have stored for this same remote
             config. Never pass it on a path that WRITES the result.
+        data_app_type: The Data Science runtime type (``python-js`` /
+            ``streamlit`` / ...) of a ``keboola.data-apps`` config. It lives
+            only on the DS ``/apps`` record, never in the Storage config body,
+            so ``sync push``/``sync clone`` would otherwise drop it and the
+            cloned app would deploy under the platform default (CLI-8). It is
+            recorded in the ``_keboola`` footer, which is stripped before
+            hashing (:data:`diff_engine._IGNORED_KEYS`), so it never shows a
+            spurious diff.
     """
     configuration: dict[str, Any] = config_data.get("configuration") or {}
 
@@ -223,6 +232,8 @@ def api_config_to_local(
         "component_id": component_id,
         "config_id": config_id,
     }
+    if data_app_type:
+        local["_keboola"]["data_app_type"] = data_app_type
 
     return local
 

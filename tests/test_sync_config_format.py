@@ -13,6 +13,7 @@ from keboola_agent_cli.sync.config_format import (
     local_config_to_api,
     local_row_to_api,
 )
+from keboola_agent_cli.sync.diff_engine import config_hash
 
 SAMPLE_API_CONFIG: dict[str, Any] = {
     "id": "cfg-123",
@@ -142,6 +143,45 @@ class TestApiConfigToLocal:
         assert "output" not in local
         assert "processors" not in local
         assert "_configuration_extra" not in local
+
+    def test_data_app_type_recorded_in_keboola(self) -> None:
+        """A data-app's runtime type lands in the _keboola footer (CLI-8)."""
+        local = api_config_to_local(
+            "keboola.data-apps",
+            SAMPLE_API_CONFIG,
+            SAMPLE_CONFIG_ID,
+            data_app_type="python-js",
+        )
+        assert local["_keboola"]["data_app_type"] == "python-js"
+
+    def test_data_app_type_absent_by_default(self) -> None:
+        """Without a type, the footer is unchanged -- non-data-app configs never get the key."""
+        local = api_config_to_local(SAMPLE_COMPONENT_ID, SAMPLE_API_CONFIG, SAMPLE_CONFIG_ID)
+        assert "data_app_type" not in local["_keboola"]
+
+    def test_data_app_type_is_hash_invisible(self) -> None:
+        """The type sits in _keboola (an ignored key), so it never changes the
+        config hash -- pulling it in adds no spurious diff on existing configs."""
+        without = api_config_to_local("keboola.data-apps", SAMPLE_API_CONFIG, SAMPLE_CONFIG_ID)
+        with_type = api_config_to_local(
+            "keboola.data-apps",
+            SAMPLE_API_CONFIG,
+            SAMPLE_CONFIG_ID,
+            data_app_type="streamlit",
+        )
+        assert config_hash(without) == config_hash(with_type)
+
+    def test_data_app_type_does_not_leak_into_api_body(self) -> None:
+        """local_config_to_api drops _keboola, so the type never reaches the Storage body."""
+        local = api_config_to_local(
+            "keboola.data-apps",
+            SAMPLE_API_CONFIG,
+            SAMPLE_CONFIG_ID,
+            data_app_type="python-js",
+        )
+        _, _, configuration = local_config_to_api(local)
+        assert "data_app_type" not in configuration
+        assert "python-js" not in str(configuration)
 
 
 class TestLocalConfigToApiRoundTrip:
