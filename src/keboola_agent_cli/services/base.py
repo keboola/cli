@@ -192,7 +192,11 @@ def make_session_aware_client_factory(
         return client_cls(
             stack_url=stack_url,
             token="",
-            http_auth=BearerAuth(provider, project_id),
+            http_auth=BearerAuth(
+                provider,
+                project_id,
+                refresh_on_401=getattr(client_cls, "BEARER_REFRESH_ON_401", True),
+            ),
         )
 
     return _factory

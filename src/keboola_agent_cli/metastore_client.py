@@ -87,6 +87,13 @@ class MetastoreClient(BaseHttpClient):
     no in-memory caching. All such concerns live in the service layer.
     """
 
+    # The metastore answers a VALID non-master token with 401 (its master-token
+    # gate, #711), so a bearer 401 here is not an expired token. Opt out of the
+    # refresh-and-retry: otherwise every non-master session call burns a
+    # refresh-token rotation and can report SESSION_EXPIRED instead of the real
+    # MISSING_MASTER_TOKEN. See ``_do_request`` below and ``BearerAuth``.
+    BEARER_REFRESH_ON_401 = False
+
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         base_url = self._derive_service_url(self._stack_url, "metastore")
@@ -120,16 +127,29 @@ class MetastoreClient(BaseHttpClient):
                 raise
             id_match = _EXCEPTION_ID_SUFFIX.search(exc.message)
             id_suffix = id_match.group(0) if id_match else ""
+            if self._http_auth is not None:
+                # Session (browser-login) project: the token is a bearer, so the
+                # masked-token note and `project edit --token` remedy do not apply.
+                remedy = (
+                    "This browser-login session is not a project master. Register "
+                    "the project with a static MASTER Storage token "
+                    "(`kbagent project add`), or sign in as a project admin, to "
+                    "use semantic-layer commands."
+                )
+            else:
+                remedy = (
+                    f"The token ({self._masked_token}) is not a master token. Check "
+                    f"`kbagent project info` -> is_master_token, and register a "
+                    f"master token (`kbagent project edit --token ...`) to use "
+                    f"semantic-layer commands."
+                )
             raise KeboolaApiError(
                 message=(
                     f"The Metastore API (semantic layer) rejected the request with "
                     f"HTTP 401 {_PROJECT_SCOPE_401_EXCEPTION!r}. Unlike the Storage "
                     f"API, the metastore accepts only a MASTER (project admin) "
                     f"Storage token, and this is how it answers a valid non-master "
-                    f"token (token: {self._masked_token}). Check "
-                    f"`kbagent project info` -> is_master_token, and register a "
-                    f"master token (`kbagent project edit --token ...`) to use "
-                    f"semantic-layer commands.{id_suffix}"
+                    f"token. {remedy}{id_suffix}"
                 ),
                 status_code=exc.status_code,
                 error_code=ErrorCode.MISSING_MASTER_TOKEN,
