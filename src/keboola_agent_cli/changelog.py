@@ -24,6 +24,36 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.94.0": [
+        "New (#759): a browser-login session (`auth login`) now works with nearly every command, "
+        "not just the Storage and Manage paths (CLI-13). It reaches the Scheduler (`flow schedule` / "
+        "`flow schedule-remove`), Data Streams (`stream`), Data Science (`data-app`), the full "
+        "`semantic-layer` group, the AI Service (`docs query`, `config new` / `examples`, "
+        "`component detail`, `flow new` / `update` / `validate`), and Storage bucket `sharing`. Only "
+        "three features still need a static Storage token and fail fast with "
+        "`AUTH_NOT_SUPPORTED_ON_STACK`: `kai`, `semantic-layer token --encrypt`, and the importable "
+        "SDK (`keboola_agent_cli.Client`). `auth login` and `auth register-projects` print the list "
+        "and ship it in `--json` as `session_unsupported_features`.",
+        "New (#736): a `merge-request` command group (hidden alias `mr`) drives the Branches 2.0 "
+        "merge lifecycle (DMD-1900). It covers create, request-review, approve, auto-merge, merge, "
+        "and conflict resolution (`diff` / `resolve`), on a project with the `branches-merge-requests` "
+        "feature. Each command targets the merge request of the active branch by default, or "
+        "`--merge-request-id N` / `--branch B` to pick one. Commands that move an MR toward production "
+        "(`merge`, `request-review`, `approve`, `resolve`, `auto-merge`) are destructive for "
+        "`--deny-destructive`. `create` / `update` / `request-changes` are writes. `branch merge` is "
+        "now deprecated -- it only built a UI URL and never merged through the API.",
+        "Fix (#752): `sync pull` and `sync clone` no longer strip a data app's runtime type when the "
+        "Data Science list omits it (CLI-8). The type (`python-js` / `streamlit` / ...) lives only on "
+        "the Data Science API, so a cloned or re-pulled app keeps the type it deploys with.",
+        "Fix (#753): `sync pull` and `sync clone` now keep each config's UI folder "
+        "(`KBC.configuration.folderName`) (CLI-9). Before, both silently dropped it and every config "
+        "landed in the tree root, with nothing warning about it.",
+        "Note (#764, #729, #730, #733, #734, #750, #751): housekeeping with no user-facing change. "
+        "#764 shares one session-aware default Data Science client factory between the sync and "
+        "data-app services. It corrects an import that the #752 and #759 combination broke on `main` "
+        "before any release. The rest are web UI and backend dependency bumps (fastify, fast-uri, "
+        "vitest, browserslist, postcss-selector-parser).",
+    ],
     "0.93.2": [
         "New (#757): each usage event now also carries the kbagent version and an agent-vs-human "
         "marker for the telemetry team (CLI-12). `params.cliContext` holds the User-Agent "
