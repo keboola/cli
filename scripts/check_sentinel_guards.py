@@ -113,7 +113,34 @@ CREDENTIAL_WRITE_ALLOWED = {
 # endpoint-family mixins -- every one of them a class that runs that same
 # `__init__` -- outside the check. `KeboolaClient` stays listed because it is the
 # name a reader looks for here; it is already covered as a descendant.
-PROJECT_CREDENTIAL_CLIENTS = {"_CoreClient", "KeboolaClient"}
+#
+# CLI-13: the five service clients below reach their backend over a bearer and
+# dropped `SESSION_AUTH_FEATURE`, so the `http_base.py` runtime guard no longer
+# stops a direct construction from a `kbc-session://` `project.token`. They are
+# built only by `make_session_aware_client_factory` (sentinel-aware); listing
+# them here makes Check 4 guard every OTHER construction site, restoring the net
+# their dropped guard removed.
+PROJECT_CREDENTIAL_CLIENTS = {
+    "_CoreClient",
+    "KeboolaClient",
+    "SchedulerClient",
+    "StreamClient",
+    "DataScienceClient",
+    "MetastoreClient",
+    "AiServiceClient",
+}
+
+# Check 4 exemptions keyed `<file>::<enclosing function>`, each with a reason --
+# a construction that is provably safe even though its own scope is not
+# sentinel-aware. Mirrors `CREDENTIAL_WRITE_ALLOWED` for Check 1.
+PROJECT_CLIENT_CONSTRUCTION_ALLOWED = {
+    "client/stream.py::_get_stream_client": (
+        "built from the parent client's already-resolved (token, http_auth): a "
+        "session parent carries token='' + a BearerAuth hook, a static parent a "
+        "real token + no hook, so a raw sentinel can never reach it "
+        "(test_http_base_auth.py::test_stream_sub_client_inherits_the_bearer_hook)"
+    ),
+}
 
 # Check 2: clients that reach Storage or Manage over bearer, or authenticate
 # with an identity of their own, and so must NOT be guarded. Anything else must
@@ -123,6 +150,13 @@ BEARER_CAPABLE_CLIENTS = {
     "ManageClient",  # Manage: the supported bearer path
     "AuthClient",  # talks to the auth service itself, token=""
     "DeveloperPortalClient",  # own username/password identity, never a project token
+    # CLI-13: these reach their backend over a bearer via
+    # make_session_aware_client_factory; the backends accept OAuth tokens.
+    "SchedulerClient",
+    "StreamClient",
+    "DataScienceClient",
+    "MetastoreClient",
+    "AiServiceClient",
 }
 
 # Check 3: guards that describe no user-reachable command surface.
@@ -133,15 +167,9 @@ FEATURE_EXEMPT_GUARDS = {
 # Guard wording -> the substring of the user-facing entry that covers it, so
 # both can read naturally without being byte-identical.
 FEATURE_ALIASES = {
-    "The Keboola AI Service": "AI Service",
-    "The Scheduler Service": "Scheduler Service",
-    "The Metastore Service (semantic layer)": "Metastore Service",
     "semantic-layer token --encrypt": "Metastore Service",
-    "The Data Science Service (data apps)": "Data Science Service",
-    "The Data Streams Service": "Data Streams Service",
     "The importable SDK Client": "importable SDK",
     "kbagent kai": "kbagent kai",
-    "kbagent sharing (master-token path)": "kbagent sharing",
 }
 
 
@@ -390,6 +418,7 @@ def _unguarded_project_clients(root: Path = SRC_ROOT) -> list[str]:
     # same finding under a different name.
     credential_clients = _descendants_of(root, set(PROJECT_CREDENTIAL_CLIENTS))
     for path in _py_files(root):
+        rel = _rel(path, root)
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         parents = _parent_map(tree)
@@ -408,7 +437,9 @@ def _unguarded_project_clients(root: Path = SRC_ROOT) -> list[str]:
             if _scope_is_sentinel_aware(node, parents, source):
                 continue
             scope = _enclosing_function_name(node, parents)
-            offenders.append(f"{_rel(path, root)}:{node.lineno} (in {scope})")
+            if f"{rel}::{scope}" in PROJECT_CLIENT_CONSTRUCTION_ALLOWED:
+                continue
+            offenders.append(f"{rel}:{node.lineno} (in {scope})")
     return offenders
 
 

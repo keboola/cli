@@ -34,36 +34,42 @@ headlessly.** Both issue a USER-scoped "programmatic session"
 - `auth logout [--stack URL|alias] [--remove-projects] [--yes]` -- revoke the refresh token server-side and delete the local session from `auth.json`. `--remove-projects` also removes `config.json` aliases pointing at this session (sentinel-token projects only; a static-token project on the same stack is never touched).
 - `auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]` -- register an EXISTING session's accessible projects as `config.json` aliases, without re-running `login`. Fixes two usability gaps in plain `login`: nothing was registered unless `--register-projects` was passed, and the suggested alias was always slugified from the project NAME, so a project id like `9840` from the login table never resolved as `--project 9840`. `--all` selects every accessible project; `--project-id ID` (repeatable) selects specific ones (an inaccessible id raises a `ConfigError`); passing neither starts an interactive arrow-key + spacebar checkbox picker -- every not-yet-registered project preselected, up/down or `j`/`k` move, `space` toggles, `a` selects/deselects all, `enter` accepts, `q`/`esc`/`ctrl-c` cancels -- followed by a single `Edit aliases?` confirm (default no) that opens the old per-project alias prompt only if you opt in (each row already shows its suggested alias), then a final `typer.confirm`. On a piped stdin or a terminal without real interactive capabilities, the picker falls back to the original typed prompt (numbers / ranges `1-3` / `all` / `none`). In a non-TTY or `--json` context with neither `--all` nor `--project-id`, the command fails fast telling the caller to pass `--all` or `--project-id` instead of hanging on a prompt. `--alias ID=ALIAS` (repeatable) overrides the suggested alias for a given project id in every mode, including as the picker's prefilled default. `--yes` skips only the picker's final confirmation. Two collision rules, in both modes: a project already registered under an alias for this project+stack reports `status: "exists"` (no-op -- rename via `project edit --new-alias` instead of re-registering); an alias already claimed by a different project (or a static-token project) reports `status: "skipped"` with a rename-hint note -- an existing `config.json` entry is never overwritten. `auth login` (without `--register-projects`) now also offers this same picker interactively right after a successful login, when stdout is a TTY and `--json` was not used; otherwise it just prints the hint to run this command later, and a failure in that optional follow-up never changes `login`'s own (already-successful) exit code.
 
-v1 scope: the Storage + Manage paths. `serve` reaches them too (it delegates to
-the same already-guarded services), so a session project works over the REST API
-and web UI -- but whoever holds `KBAGENT_SERVE_TOKEN` then acts as the signed-in
-USER, and a session expiring mid-run answers HTTP 401 with
-`error_code: SESSION_EXPIRED` that only a human on the host can clear.
+A session project works with almost every command -- only three features still
+require a static Storage token (listed below). `serve` reaches the supported
+services too (it delegates to the same already-guarded services), so a session
+project works over the REST API and web UI -- but whoever holds
+`KBAGENT_SERVE_TOKEN` then acts as the signed-in USER, and a session expiring
+mid-run answers HTTP 401 with `error_code: SESSION_EXPIRED` that only a human on
+the host can clear.
 
-These fail fast on a sentinel-token project with `AUTH_NOT_SUPPORTED_ON_STACK`,
-naming the static-token fallback. `SESSION_UNSUPPORTED_FEATURES` in
-`services/_auth_registration.py` is the in-code copy. `auth login` and
-`auth register-projects` print it and both ship it in `--json` as the additive
-key `session_unsupported_features` (`auth status` does **not** carry it):
-`kai`; `semantic-layer` (Metastore); `data-app` (Data Science); `stream` (Data
-Streams); `sharing` unless a master token is in the environment; the AI Service
-paths (`docs query`, `config examples`, `config new`, `component
-detail`/`search`, `flow new`/`update`/`validate`); the Scheduler Service paths
-(`flow schedule`, `flow schedule-remove`); and the importable SDK
-(`lib.Client`).
+Three features still fail fast on a sentinel-token project with
+`AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback.
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
+in-code copy. `auth login` and `auth register-projects` print it and both ship
+it in `--json` as the additive key `session_unsupported_features` (`auth status`
+does **not** carry it): `kbagent kai`,
+`kbagent semantic-layer token --encrypt (Metastore Service)`, and the importable
+SDK (`keboola_agent_cli.Client`). Everything else now works on a session,
+including the Scheduler (`flow schedule`, `flow schedule-remove`), Data Streams
+(`stream`), Data Science (`data-app`), the rest of `semantic-layer`, the AI
+Service (`docs query`, `config new`, `config examples`, `component detail`,
+`flow new`/`update`/`validate`), and Storage bucket `sharing` (the Storage API
+enforces the master privilege).
 
 `dev-portal` is **not** on that list -- it authenticates with its own Developer
-Portal identity, never a project token. `flow` splits: `flow list` /
-`flow detail` are plain Storage calls and work.
+Portal identity, never a project token. The whole `flow` group works with a
+session: `flow list` / `flow detail` are plain Storage calls, `flow new` /
+`update` / `validate` reach the AI Service, and `flow schedule` /
+`flow schedule-remove` reach the Scheduler.
 
-In multi-project commands (`data-app list`, `flow list`, `storage tables`)
-a per-project failure keeps its real `error_code` in the `--json`
-`errors[]` array rather than being relabelled `UNEXPECTED_ERROR`,
-so a session project on an unsupported surface reports
-`AUTH_NOT_SUPPORTED_ON_STACK` per project -- branch on the code to auto-remediate
-instead of matching message text. Only a code-less exception gets the fallback,
-and its message is truncated. See `auth-workflow.md` for the end-to-end
-walkthrough and troubleshooting.
+In multi-project commands (`data-app list`, `flow list`, `storage tables`) a
+per-project failure keeps its real `error_code` in the `--json` `errors[]` array
+rather than being relabelled `UNEXPECTED_ERROR` -- branch on the code to
+auto-remediate instead of matching message text. These readers now work on a
+session project. A per-project `AUTH_NOT_SUPPORTED_ON_STACK` would come only
+from one of the three static-only features. Only a code-less exception gets the
+fallback, and its message is truncated. See `auth-workflow.md` for the
+end-to-end walkthrough and troubleshooting.
 
 ## Project Management
 - `project add --project NAME --url URL --token TOKEN` -- connect a project (token verified via API)

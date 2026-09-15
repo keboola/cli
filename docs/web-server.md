@@ -432,13 +432,13 @@ For a suppression flag, failing open is the wrong direction.
 Projects registered through `kbagent auth login --register-projects` carry a
 `kbc-session://<project_id>` sentinel instead of a Storage token; the live
 credential is a browser-login session in `auth.json` on the host. `serve`
-supports them for the Storage and Manage paths, because it never turns a
-project into credentials itself — every service in the registry resolves its
-own client factory, so the REST surface inherits the same bearer support the
-CLI has (`server/dependencies.py`). Everything outside those paths fails fast
-with `AUTH_NOT_SUPPORTED_ON_STACK` and names the static-token fallback, over
-REST exactly as on the CLI. The authoritative list of those surfaces is
-`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`; see
+supports them, because it never turns a project into credentials itself — every
+service in the registry resolves its own client factory, so the REST API
+inherits the same session behaviour the CLI has (`server/dependencies.py`). A
+session reaches almost every command over REST, exactly as on the CLI. The few
+features that still need a static token fail fast with
+`AUTH_NOT_SUPPORTED_ON_STACK` and name the fallback. The authoritative list is
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`. See
 [Browser login](auth.md) for the same list in prose.
 
 A session that expires while the server runs answers **HTTP 401** with

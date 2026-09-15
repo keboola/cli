@@ -461,15 +461,27 @@ class BearerAuth(httpx.Auth):
     `(stack_url, token) -> KeboolaClient` factory call sites.
     """
 
-    def __init__(self, provider: TokenProvider, project_id: int | None = None) -> None:
+    def __init__(
+        self,
+        provider: TokenProvider,
+        project_id: int | None = None,
+        *,
+        refresh_on_401: bool = True,
+    ) -> None:
         self._provider = provider
         self._project_id = project_id
+        self._refresh_on_401 = refresh_on_401
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         token = self._provider.get_access_token()
         self._stamp(request, token)
         response = yield request
-        if response.status_code == 401:
+        # A 401 normally means the access token expired mid-flight, so refresh
+        # once and retry. `refresh_on_401=False` opts a client out: the metastore
+        # answers a VALID non-master token with 401 (its master-token gate), and a
+        # refresh cannot fix that -- retrying only burns a refresh-token rotation
+        # and can mask MISSING_MASTER_TOKEN behind a bogus SESSION_EXPIRED.
+        if response.status_code == 401 and self._refresh_on_401:
             token = self._provider.force_refresh(token)
             self._stamp(request, token)
             yield request

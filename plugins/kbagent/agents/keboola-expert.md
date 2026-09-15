@@ -398,15 +398,16 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `--project 9840` never resolves. Use `kbagent project list` or
   `auth register-projects` to find/register the real alias; it never overwrites
   an existing registration.
-- **Session auth covers Storage + Manage only**; everything else fails fast with
-  `AUTH_NOT_SUPPORTED_ON_STACK`. **Do NOT reconstruct that list from memory** --
-  `auth login --json` and `auth register-projects --json` ship it as
-  `session_unsupported_features` (NOT `auth status`). `dev-portal` is NOT on
-  it (own identity, no project token) and `flow list`/`flow detail` are plain
-  Storage -- do not pre-emptively refuse those. Register the project a
-  second time with a static token to reach a guarded surface. Over `serve`, a
-  session expiring at runtime answers HTTP 401 `SESSION_EXPIRED` and only a
-  human on the host can re-login.
+- **Session auth covers almost every command** -- only three features still
+  need a static token: `kbagent kai`, `semantic-layer token --encrypt`, and the
+  importable SDK (`keboola_agent_cli.Client`). **Do NOT reconstruct that list
+  from memory** -- `auth login --json` and `auth register-projects --json` ship
+  it as `session_unsupported_features` (NOT `auth status`). `dev-portal` is NOT
+  on it (own identity, no project token) and the whole `flow` group works on a
+  session -- do not pre-emptively refuse any of it. Register the project a
+  second time with a static token to reach one of the three static-only
+  features. Over `serve`, a session expiring at runtime answers HTTP 401
+  `SESSION_EXPIRED` and only a human on the host can re-login.
 - **Read `auth_mode` to tell the modes apart; never parse the token**:
   `project list --json | jq '.data[].auth_mode'` is exactly `session`|`static`
   and always present -- branch on it, don't test for absence. `config.json`
@@ -414,9 +415,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   corrupt token); session tokens live in `auth.json` (0600), which you never
   read (§1 Rule 8).
 - **Multi-project `--json` keeps the real `error_code`** in `errors[]`: a
-  session project on a guarded surface reports `AUTH_NOT_SUPPORTED_ON_STACK`,
-  not `UNEXPECTED_ERROR`, while other projects succeed. Branch on the code;
-  never parse the message.
+  failing project keeps its own code, not `UNEXPECTED_ERROR`, while other
+  projects succeed. Branch on the code, never on the message. The fan-out
+  readers work on a session now, so a per-project `AUTH_NOT_SUPPORTED_ON_STACK`
+  comes only from one of the three static-only features.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`
   does not override). A refresh TIMEOUT is exit 4 (network) -- re-run, do not
   re-login.

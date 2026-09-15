@@ -33,7 +33,11 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..stream_client import StreamClient, provision_otlp_sinks, stream_task_source_id
-from .base import ResolvedProjectCredentials, resolve_project_credentials
+from .base import (
+    ResolvedProjectCredentials,
+    make_session_aware_client_factory,
+    resolve_project_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +50,6 @@ _SIGNAL_NAMES: dict[str, str] = {path: path.split("/")[-1] for path in OTLP_SIGN
 _SECRET_MASK = "***"
 
 
-def default_stream_client_factory(stack_url: str, token: str) -> StreamClient:
-    """Construct a :class:`StreamClient` bound to ``stack_url`` + ``token``.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return StreamClient(stack_url=stack_url, token=token)
-
-
 class StreamService:
     """Business logic for Data Streams sources (list / create / detail / delete)."""
 
@@ -64,7 +59,9 @@ class StreamService:
         stream_client_factory: StreamClientFactory | None = None,
     ) -> None:
         self._config_store = config_store
-        self._stream_client_factory = stream_client_factory or default_stream_client_factory
+        self._stream_client_factory = stream_client_factory or make_session_aware_client_factory(
+            config_store, StreamClient
+        )
 
     # ------------------------------------------------------------------
     # Public API

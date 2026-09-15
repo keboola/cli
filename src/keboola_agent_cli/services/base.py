@@ -159,26 +159,28 @@ def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
     return KeboolaClient(stack_url=stack_url, token=token)
 
 
-def make_client_factory(config_store: ConfigStore) -> ClientFactory:
-    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+def make_session_aware_client_factory(
+    config_store: ConfigStore, client_cls: Callable[..., Any]
+) -> Callable[[str, str], Any]:
+    """Return a ``(stack_url, token) -> client_cls`` factory that reaches a
+    browser-login project the way ``KeboolaClient`` already does.
 
-    The factory signature stays 2-arg, so none of the ~150 existing call
-    sites change shape: a `kbc-session://{project_id}` sentinel token is
-    detected here, the project id is parsed out of the sentinel itself (the
-    one datum the 2-arg signature otherwise lacks), and the client is built
-    with `http_auth=BearerAuth(...)` instead of a static `X-StorageApi-Token`.
-    A plain static token takes the unchanged, byte-identical path.
+    For a plain static token it builds ``client_cls(stack_url, token)`` -- the
+    unchanged, byte-identical path. For a `kbc-session://{project_id}` token it
+    builds the client with ``http_auth=BearerAuth(...)`` and an empty token, so
+    the request carries `Authorization: Bearer` + `X-KBC-ProjectId` instead of a
+    static header. ``client_cls`` must accept a keyword-only ``http_auth`` (every
+    ``BaseHttpClient`` subclass that forwards the argument does).
 
     `auth.state_store` / `auth.token_provider` are imported lazily inside the
-    returned closure (not at module level) so the static-token startup path
-    never pays for constructing the auth package's heavier dependencies
-    (filelock, httpx client machinery) -- only a session-registered project
-    ever reaches that branch.
+    returned closure (not at module level) so the static-token path never pays
+    for the auth package's heavier dependencies (filelock, httpx client
+    machinery) -- only a session-registered project ever reaches that branch.
     """
 
-    def _factory(stack_url: str, token: str) -> KeboolaClient:
+    def _factory(stack_url: str, token: str) -> Any:
         if not is_session_token(token):
-            return KeboolaClient(stack_url=stack_url, token=token)
+            return client_cls(stack_url=stack_url, token=token)
 
         project_id = parse_session_project_id(token)
         if project_id is None:
@@ -193,13 +195,27 @@ def make_client_factory(config_store: ConfigStore) -> ClientFactory:
 
         state_store = AuthStateStore.from_config_store(config_store)
         provider = get_session_token_provider(stack_url, state_store)
-        return KeboolaClient(
+        return client_cls(
             stack_url=stack_url,
             token="",
-            http_auth=BearerAuth(provider, project_id),
+            http_auth=BearerAuth(
+                provider,
+                project_id,
+                refresh_on_401=getattr(client_cls, "BEARER_REFRESH_ON_401", True),
+            ),
         )
 
     return _factory
+
+
+def make_client_factory(config_store: ConfigStore) -> ClientFactory:
+    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+
+    The Storage-client specialisation of :func:`make_session_aware_client_factory`.
+    The factory signature stays 2-arg, so none of the ~150 existing call sites
+    change shape.
+    """
+    return make_session_aware_client_factory(config_store, KeboolaClient)
 
 
 def make_telemetry_client(

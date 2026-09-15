@@ -286,19 +286,20 @@ looks odd, and every path that would spend it as a credential refuses to.
 |---|---|
 | Storage API — `storage`, `config`, `job`, `flow` (read/list), `branch`, `workspace`, `search`, `sync`, `transformation` | Works, over bearer auth, including refresh rotation and a single 401 retry |
 | Manage API — `project` (members, invitations), `org`, `feature`, `sharing` (project-token path) | Works |
-| `kbagent serve` (REST API + Web UI) | Works, for the Storage and Manage paths — with the accepted risks in [section 5](#5-session-projects-in-kbagent-serve) |
+| `kbagent serve` (REST API + Web UI) | Works — the REST API inherits the CLI's session behaviour, bearer support and fail-fast guards alike, with the accepted risks in [section 5](#5-session-projects-in-kbagent-serve) |
 | `kai` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `semantic-layer` (Metastore Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `data-app` (Data Science Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `stream` (Data Streams Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| AI Service paths — `docs query`, `config examples`, `config new`, `component detail`, `component list --query`, `flow new` / `update` / `validate --project` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| Scheduler Service paths — `flow schedule`, `flow schedule-remove` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `sharing`, when it needs a master token | `AUTH_NOT_SUPPORTED_ON_STACK` unless a master token is in the environment |
+| `semantic-layer` (Metastore Service) | Works, over bearer auth — except `semantic-layer token --encrypt`, which still needs a static token (`AUTH_NOT_SUPPORTED_ON_STACK`) |
+| `data-app` (Data Science Service) | Works, over bearer auth |
+| `stream` (Data Streams Service) | Works, over bearer auth |
+| AI Service paths — `docs query`, `config examples`, `config new`, `component detail`, `component list --query`, `flow new` / `update` / `validate --project` | Works, over bearer auth |
+| Scheduler Service paths — `flow schedule`, `flow schedule-remove` | Works, over bearer auth |
+| Storage bucket sharing — `sharing share`, `sharing unshare` | Works, over bearer auth — the Storage API enforces the master privilege |
 | The importable SDK (`keboola_agent_cli.Client`) | `AUTH_NOT_SUPPORTED_ON_STACK` — construct it with a static token ([Python SDK](sdk.md)) |
 
-`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
-in-code version of this list. `auth login` and `auth register-projects` print it
-once they have registered something, and carry it as
+The rows above that still report `AUTH_NOT_SUPPORTED_ON_STACK` are
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`. `auth login`
+and `auth register-projects` print that list once they have registered
+something, and carry it as
 `session_unsupported_features` in `--json`, so you learn the restrictions up
 front rather than at first use. `auth status` does not carry that field.
 
@@ -307,21 +308,15 @@ Notes worth knowing before you hit them:
 - **`dev-portal` is unaffected.** It authenticates with its own Developer
   Portal identity (`dev-portal identity add`), not with a project token, so a
   session project changes nothing there.
-- **`flow` splits.** `flow list` / `flow detail` are plain Storage calls and
-  work. `flow new` / `flow update` / `flow validate --project` fetch the live
-  schema from the AI Service, so on a session project they fail rather than
-  falling back to the semantic-only validation they use when the schema fetch
-  merely errors.
-- **`config` mostly works; `config new` depends on its flags.** `config list`,
-  `detail`, `search`, `update`, the row and metadata subcommands and
-  `variables-*` are pure Storage calls. `config new` builds its scaffold from the
-  component schema fetched from the AI Service, and the scaffold is only skipped
-  for `--push --no-files` (`commands/config.py:1335`) — so the default
-  scaffold-writing form fails on a session project no matter what
-  `--no-validate` says. `config new --push --no-files` stays on the Storage path
-  as long as validation does not fire: pass `--no-validate`, or omit an explicit
-  `--configuration` body, which auto-skips it. Otherwise write the config with
-  `config update` (or `sync push`).
+- **`flow` works on a session.** `flow list` / `flow detail` are plain Storage
+  calls. `flow new` / `flow update` / `flow validate --project` fetch the live
+  schema from the AI Service, and `flow schedule` / `flow schedule-remove` reach
+  the Scheduler. Both backends now accept a session's bearer token.
+- **`config` works, including `config new`.** `config list`, `detail`,
+  `search`, `update`, the row and metadata subcommands and `variables-*` are
+  pure Storage calls. `config new` builds the new configuration from the
+  component schema fetched from the AI Service, which now accepts a session's
+  bearer token, so it runs normally on a session project.
 - **The failure is immediate and typed**, not an opaque 401 from the service:
   the guard fires before the client is even constructed and names the feature
   it refused.

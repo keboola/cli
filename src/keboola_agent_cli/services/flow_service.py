@@ -28,7 +28,12 @@ from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
 from ..scheduler_client import SchedulerClient
-from .base import BaseService, ClientFactory, project_error_entry
+from .base import (
+    BaseService,
+    ClientFactory,
+    make_session_aware_client_factory,
+    project_error_entry,
+)
 from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
 logger = logging.getLogger(__name__)
@@ -130,24 +135,6 @@ class FlowSchemaFetch:
 
     schema: dict[str, Any] | None
     reason: str | None
-
-
-def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Default factory: build an ``AiServiceClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return AiServiceClient(stack_url=stack_url, token=token)
-
-
-def default_scheduler_client_factory(stack_url: str, token: str) -> SchedulerClient:
-    """Default factory: build a ``SchedulerClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return SchedulerClient(stack_url=stack_url, token=token)
 
 
 # ---------------------------------------------------------------------------
@@ -275,9 +262,12 @@ class FlowService(BaseService):
         scheduler_client_factory: SchedulerClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
-        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
         self._scheduler_client_factory = (
-            scheduler_client_factory or default_scheduler_client_factory
+            scheduler_client_factory
+            or make_session_aware_client_factory(config_store, SchedulerClient)
         )
 
     # ── schema fetch ─────────────────────────────────────────────────

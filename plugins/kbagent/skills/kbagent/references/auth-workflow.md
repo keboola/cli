@@ -10,7 +10,7 @@
 > Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`).
 > Full command reference: `commands-reference.md` > "Programmatic Auth
 > (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
-> login) needs a human to approve; sentinel tokens; v1 scope" and > "`auth
+> login) needs a human to approve; sentinel tokens; session scope" and > "`auth
 > login-password` is the CI-safe, headless exception...".
 
 ## Read this first: `auth login` needs a human -- `auth login-password` does not
@@ -145,7 +145,7 @@ kbagent auth login-password --email E (--password-stdin | --password P)
 - Everything after the token exchange -- session persistence, best-effort
   revoke of the session it replaces, introspection, `--register-projects` --
   is identical to `login` above; the result is stored in `auth.json` the
-  same way and follows the same v1 scope restrictions.
+  same way and follows the same session restrictions.
 - **Security note.** Storing an account's password (and TOTP seed) as CI
   secrets is a bigger blast radius than a single scoped Storage token --
   whoever holds them can do anything that account can do, not just what one
@@ -279,43 +279,43 @@ kbagent auth logout --remove-projects
 | `expired` | The refresh token itself expired or was revoked -- run `auth login` again. |
 | `missing` | No session is persisted for this stack yet. |
 
-## v1 scope: what session auth does NOT cover yet
+## What session auth does NOT cover
 
-Session auth is wired through the **Storage and Manage** paths. `kbagent
-serve` reaches them too, because it delegates to the same guarded services --
-but read the caveat below before serving a session project. Every other
-surface recognizes the `kbc-session://` sentinel and refuses fast with
-`AUTH_NOT_SUPPORTED_ON_STACK` instead of silently sending the sentinel
-string as if it were a real credential:
+A session now works with the Storage and Manage clients, the Scheduler
+(`flow schedule`, `flow schedule-remove`), Data Streams (`stream`), Data
+Science (`data-app`), the `semantic-layer` group, the AI Service (`docs query`,
+`config new`, `config examples`, `component detail`, `flow new` / `update` /
+`validate`), and Storage bucket `sharing` (`sharing share`, `sharing unshare`,
+where the Storage API enforces the master privilege). `kbagent serve` reaches
+all of them too, because it delegates to the same services -- but read the
+caveat below before serving a session project.
 
-- `kai`
-- `semantic-layer` (Metastore Service)
-- `data-app` (Data Science Service)
-- `stream` (Data Streams Service)
-- `sharing`, unless a master token is set in the environment
-- the AI Service paths: `docs query`, `config examples`, `config new`,
-  `component detail` / `search`, `flow new` / `update` / `validate`
-- the Scheduler Service paths: `flow schedule`, `flow schedule-remove`
-- the importable SDK (`from keboola_agent_cli import Client`)
+Only three features still refuse the `kbc-session://` sentinel and fail fast
+with `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, instead
+of sending the sentinel string as if it were a real credential:
+
+- `kbagent kai` -- the external `kai_client` library has no bearer path.
+- `kbagent semantic-layer token --encrypt (Metastore Service)` -- it encrypts
+  the project's own token for reuse, and a sentinel is not a reusable
+  credential. The rest of the `semantic-layer` group works.
+- the importable SDK (`from keboola_agent_cli import Client`) -- stateless,
+  with no config dir or session store to hold a bearer.
 
 `SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
 in-code copy of that list. `auth login` and `auth register-projects` print it,
 and both ship it in `--json` as the additive key
 `session_unsupported_features`, so you learn the restrictions up front instead
 of at first use. (`auth status` reports session health, not this list.)
-Two surfaces are commonly assumed to be on it
-and are not: **`dev-portal`** authenticates with its own Developer Portal
-identity, never a project token, so a session changes nothing there; and
-**`flow` splits** -- `flow list` / `flow detail` are plain Storage calls that
-work, while `flow new` / `update` / `validate --project` need the AI Service
-and fail.
+`dev-portal` is commonly assumed to be on it and is not: it authenticates with
+its own Developer Portal identity, never a project token, so a session changes
+nothing there.
 
-In a multi-project command (`data-app list`, `flow list`, `storage tables`)
-that guard does not abort the whole run: the offending project gets an
-`errors[]` entry keeping the real `error_code`
-(`AUTH_NOT_SUPPORTED_ON_STACK`, not a generic `UNEXPECTED_ERROR`) while the
-other projects succeed. Branch on that code rather
-than on the message text.
+In a multi-project command (`data-app list`, `flow list`, `storage tables`) a
+per-project failure does not abort the whole run: the offending project gets an
+`errors[]` entry keeping the real `error_code` (not a generic
+`UNEXPECTED_ERROR`) while the other projects succeed. Branch on that code
+rather than on the message text. These readers now work on a session project,
+so a session no longer fails them with `AUTH_NOT_SUPPORTED_ON_STACK`.
 
 If your workflow needs one of those, register the same project again under
 a different alias with a static Storage token:

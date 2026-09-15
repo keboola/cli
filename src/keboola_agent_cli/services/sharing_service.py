@@ -13,7 +13,6 @@ import logging
 import os
 from typing import Any
 
-from ..auth.sentinel import require_static_token
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE, ENV_KBC_MASTER_TOKEN
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
@@ -61,9 +60,11 @@ class SharingService(BaseService):
             logger.debug("Using global master token from %s", ENV_KBC_MASTER_TOKEN)
             return token
 
-        # Last resort: project's configured token
+        # Last resort: the project's own token. For a session project this is
+        # the kbc-session:// token, which the session-aware client factory turns
+        # into a bearer; the Storage API then enforces the master privilege (a
+        # master session passes, a non-master one gets its own 403).
         logger.debug("No master token found, using project token for '%s'", alias)
-        require_static_token(project.token, feature="kbagent sharing (master-token path)")
         return project.token
 
     def list_shared(

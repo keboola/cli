@@ -14,6 +14,8 @@ import logging
 from typing import Any, Self
 from urllib.parse import quote
 
+import httpx
+
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
@@ -30,18 +32,19 @@ class SchedulerClient(BaseHttpClient):
     Inherits _do_request() and _raise_api_error() from BaseHttpClient.
     """
 
-    SESSION_AUTH_FEATURE = "The Scheduler Service"
-
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         scheduler_base_url = self._derive_service_url(self._stack_url, "scheduler")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
+        # See ManageClient: with bearer auth active the static header must not be
+        # sent; BearerAuth stamps Authorization + X-KBC-ProjectId per request.
         super().__init__(
             base_url=scheduler_base_url,
             token=token,
             headers=headers,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> Self:

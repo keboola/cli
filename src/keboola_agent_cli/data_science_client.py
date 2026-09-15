@@ -41,6 +41,8 @@ import logging
 from typing import Any, Self
 from urllib.parse import quote
 
+import httpx
+
 from .constants import DEFAULT_TIMEOUT
 from .http_base import BaseHttpClient
 
@@ -53,19 +55,18 @@ class DataScienceClient(BaseHttpClient):
     Inherits retry / backoff / token-masking from ``BaseHttpClient``.
     """
 
-    SESSION_AUTH_FEATURE = "The Data Science Service (data apps)"
-
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         ds_base_url = self._derive_service_url(self._stack_url, "data-science")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
         super().__init__(
             base_url=ds_base_url,
             token=token,
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> Self:

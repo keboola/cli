@@ -59,7 +59,7 @@ from ._semantic_layer_internals import validate_deep as _validate_deep_helper
 from ._semantic_layer_internals import write_snapshot_to_file as _write_snapshot_to_file
 from ._semantic_layer_lookup import run_get_context as _run_get_context_helper
 from ._semantic_layer_lookup import run_search_context as _run_search_context_helper
-from .base import BaseService, ClientFactory
+from .base import BaseService, ClientFactory, make_session_aware_client_factory
 from .encrypt_service import EncryptService
 from .storage_service import StorageService
 from .workspace_service import WorkspaceService
@@ -229,16 +229,6 @@ logger = logging.getLogger(__name__)
 MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
 
-def default_metastore_client_factory(stack_url: str, token: str) -> MetastoreClient:
-    """Build a :class:`MetastoreClient` for the given project.
-
-    Static-token-only: the Metastore Service is not wired for bearer sessions
-    (v1 scope is Storage + Manage), so the client's ``SESSION_AUTH_FEATURE``
-    makes a session sentinel fail fast on construction.
-    """
-    return MetastoreClient(stack_url=stack_url, token=token)
-
-
 class SemanticLayerService(BaseService):
     """Business logic for the semantic-layer command group.
 
@@ -260,7 +250,8 @@ class SemanticLayerService(BaseService):
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
         self._metastore_factory: MetastoreClientFactory = (
-            metastore_client_factory or default_metastore_client_factory
+            metastore_client_factory
+            or make_session_aware_client_factory(config_store, MetastoreClient)
         )
 
     # Helpers (used by every subcommand).

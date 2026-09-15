@@ -89,7 +89,7 @@ Versioning convention:
   the job (a human's email vs a scheduler's or trigger's token) is the one
   factual provenance signal the Queue payload carries.
 
-## Programmatic auth (browser login) needs a human to approve; sentinel tokens; v1 scope (since v0.80.0)
+## Programmatic auth (browser login) needs a human to approve; sentinel tokens; session scope (since v0.80.0)
 
 - **`kbagent auth login` always needs a human at a browser (or a device to
   type a code into) -- there is no headless/unattended path for THIS
@@ -179,41 +179,40 @@ Versioning convention:
   silently skipped, unlike the original 0.80.0 `--register-projects` batch
   path. Collision handling matches `--register-projects` above: never
   overwrites an existing `config.json` entry.
-- **v1 wires bearer sessions through the Storage + Manage paths.** Everything
-  else recognises the `kbc-session://` sentinel and fails FAST with
-  `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, rather than
-  silently sending the sentinel string as if it were a real credential. The
-  authoritative list is `SESSION_UNSUPPORTED_FEATURES` in
-  `services/_auth_registration.py`. `auth login` and `auth register-projects`
-  print it and both ship it in `--json` as the additive key
-  `session_unsupported_features` (`auth status` does **not** carry it), so read
-  it from there instead of reconstructing it from memory:
-  `kai`; `semantic-layer` (Metastore); `data-app` (Data Science);
-  `stream` (Data Streams); `sharing` unless a master token is in the
-  environment; the AI Service paths (`docs query`, `config examples`,
-  `config new`, `component detail`/`search`, `flow new`/`update`/`validate`);
-  the Scheduler Service paths (`flow schedule`, `flow schedule-remove`);
-  and the importable SDK
-  (`lib.Client`). If a task needs one of those, register the same project again
-  with a static Storage token (`project add --project <alias2> --token ...`)
-  instead of fighting the guard.
-- **Two surfaces people wrongly expect on that list.** `dev-portal` is
-  unaffected -- it authenticates with its own Developer Portal identity
-  (`dev-portal identity add`), never a project token, so a session project
-  changes nothing there. And `flow` splits: `flow list` / `flow detail` are
-  plain Storage calls that work, while `flow new` / `flow update` /
-  `flow validate --project` fetch the live schema from the AI Service and so
-  fail -- they do NOT degrade to the semantic-only validation they fall back to
-  when a schema fetch merely errors.
-- **`config new` depends on the flag shape, not just `--no-validate`.** The
-  scaffold step calls the AI Service unconditionally, and it runs unless BOTH
-  `--push` and `--no-files` are set. So plain `config new` and
-  `config new --push` fail on a session project regardless of `--no-validate`.
-  Only `config new --push --no-files` skips the scaffold; that shape then still
-  hits the AI Service if you pass an explicit `--configuration` without
-  `--no-validate`, because body validation is the other AI call. Working
-  combination on a session project: `--push --no-files` plus either
-  `--no-validate` or no explicit body.
+- **A session works with almost every client** *(since vNEXT)*. Only three
+  features still require a static Storage token and fail FAST with
+  `AUTH_NOT_SUPPORTED_ON_STACK` on a session project, naming the static-token
+  fallback, rather than silently sending the `kbc-session://` sentinel as if it
+  were a real credential. The authoritative list is
+  `SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`. `auth
+  login` and `auth register-projects` print it and both ship it in `--json` as
+  the additive key `session_unsupported_features` (`auth status` does **not**
+  carry it), so read it from there instead of reconstructing it from memory.
+  The three entries are `kbagent kai`,
+  `kbagent semantic-layer token --encrypt (Metastore Service)`, and the
+  importable SDK (`keboola_agent_cli.Client`). `kai` needs the external
+  `kai_client` library, which has no bearer path. `semantic-layer token
+  --encrypt` encrypts the project's own token for reuse, and a sentinel is not a
+  reusable credential. The SDK is stateless, with no config dir or session store
+  to hold a bearer. Everything else now works on a session: the Scheduler
+  (`flow schedule`, `flow schedule-remove`), Data Streams (`stream`), Data
+  Science (`data-app`), the rest of `semantic-layer`, the AI Service
+  (`docs query`, `config new`, `config examples`, `component detail`,
+  `flow new`/`update`/`validate`), and Storage bucket `sharing` (the Storage API
+  enforces the master privilege). If a task needs one of the three static-only
+  features, register the same project again with a static Storage token
+  (`project add --project <alias2> --token ...`) instead of fighting the guard.
+- **`dev-portal` is not on the list either.** It authenticates with its own
+  Developer Portal identity (`dev-portal identity add`), never a project token,
+  so a session project changes nothing there. And `flow` no longer splits:
+  `flow list` / `flow detail` are plain Storage calls, `flow new` / `flow
+  update` / `flow validate --project` reach the AI Service, and `flow schedule`
+  / `flow schedule-remove` reach the Scheduler -- all of them accept a session's
+  bearer token now.
+- **`config new` works on a session project.** It fetches the component schema
+  from the AI Service, which now accepts a session's bearer token, so every flag
+  shape runs normally. The `--push` / `--no-files` / `--no-validate` flags still
+  control which AI calls happen, but they no longer gate session support.
 - **`kbagent serve` DOES serve session projects -- it is not on the fail-fast
   list.** It delegates to the same already-guarded services, so the REST API
   and web UI work against a sentinel-token project. Two things follow that are
@@ -315,7 +314,7 @@ Versioning convention:
   resets rather than a bare `API error 429`.
 - **The session this produces is stored in `auth.json` exactly like a
   browser-login session** (same `auth_mode: session`, same
-  `--register-projects` contract, same v1 scope restrictions above) with one
+  `--register-projects` contract, same session-unsupported-feature restrictions above) with one
   privilege difference worth knowing: for an MFA-enabled account it carries
   a live 3-hour sudo window that a browser-login session usually does not
   (see `docs/auth.md`) -- treat the credentials backing it with the same
@@ -2361,11 +2360,13 @@ One project failing does not block others. Check the `errors` array:
 **`error_code` survives the catch-all handler -- branch on it, never on the
 message (since v0.80.0).** In `data-app list`, `flow list` and the other
 multi-project readers, a per-project failure that already carries a code keeps
-it instead of being relabelled `UNEXPECTED_ERROR`. So a browser-login
-(session) project hitting an unsupported surface reports
-`error_code: "AUTH_NOT_SUPPORTED_ON_STACK"` for that one project while the
-others succeed, which is the hook for auto-remediating (register a static-token
-alias) without parsing prose. Only an exception carrying no code at all falls
+it instead of being relabelled `UNEXPECTED_ERROR`. So a project that fails --
+a bad or revoked token, a permission error -- reports its real `error_code` for
+that one project while the others succeed, which is the hook for
+auto-remediating without parsing prose. (These readers now work on a session
+project, so a session no longer trips `AUTH_NOT_SUPPORTED_ON_STACK` here; that
+guard still fires per-project for the three static-only features.) Only an
+exception carrying no code at all falls
 back, and then its message is deliberately truncated because its content is
 unknown -- do not try to parse a fallback message.
 
