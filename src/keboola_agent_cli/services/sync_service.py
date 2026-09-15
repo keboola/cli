@@ -518,6 +518,7 @@ class SyncService(BaseService):
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
             self._ensure_branch_registered(manifest, branch_id, client)
+            folder_map = self._fetch_config_folders(client, branch_id)
 
             if not no_storage:
                 try:
@@ -979,6 +980,22 @@ class SyncService(BaseService):
                         # shape version is stamped alongside it (issue #686).
                         CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
                     }
+                # Keep the UI folder (KBC.configuration.folderName) with the
+                # config. Pull dropped it before, so every pulled or cloned
+                # config landed in the root (CLI-9). The push create path
+                # already forwards KBC.* manifest metadata through
+                # propagate_kbc_metadata, so storing it here closes the loop.
+                # When the lookup failed (folder_map is None), keep the folder
+                # a previous pull captured rather than stripping it from every
+                # entry over one transient failure.
+                if folder_map is not None:
+                    folder_name = folder_map.get(lookup_key)
+                else:
+                    folder_name = existing_metadata.get(lookup_key, {}).get(
+                        "KBC.configuration.folderName"
+                    )
+                if folder_name:
+                    cfg_metadata["KBC.configuration.folderName"] = folder_name
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -1061,6 +1078,10 @@ class SyncService(BaseService):
             "jobs_written": jobs_written,
             "storage": storage_stats,
             "details": pull_details,
+            # True when the config-folder lookup failed: folders were kept from
+            # the previous pull, not refreshed. Lets a caller tell "no folders"
+            # from "the lookup failed" (CLI-9).
+            "folder_lookup_failed": folder_map is None,
         }
 
     # ------------------------------------------------------------------
@@ -2041,6 +2062,37 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch_config_folders(client: Any, branch_id: int | None) -> dict[str, str] | None:
+        """Map ``{component_id}/{config_id}`` to its UI folder name.
+
+        The folder is config metadata (``KBC.configuration.folderName``), not a
+        field in the ``list_components_with_configs`` body, so pull must fetch it
+        separately. The search endpoint that serves it is branch-only, so a
+        production pull (``branch_id`` is ``None``) resolves the default branch
+        id first -- the same fallback ``ConfigService`` uses.
+
+        Returns ``None`` when the lookup fails (API error, no resolvable branch,
+        or a non-dict body). ``None`` means "unknown", NOT "no folders": the
+        caller then keeps each config's previously captured folder instead of
+        dropping it from every manifest entry over one transient failure
+        (CLI-9). A successful lookup returns a dict, possibly empty when no
+        config has a folder.
+        """
+        try:
+            folder_branch_id = branch_id or find_default_branch_id(client.list_dev_branches())
+            if not folder_branch_id:
+                logger.warning("config-folder lookup skipped: no branch id resolved")
+                return None
+            result = client.list_config_folder_metadata(branch_id=folder_branch_id)
+            if isinstance(result, dict):
+                return result
+            logger.warning("config-folder lookup returned a non-dict body")
+            return None
+        except Exception:
+            logger.warning("config-folder metadata lookup failed", exc_info=True)
+            return None
 
     @staticmethod
     def _resolve_branch_id(

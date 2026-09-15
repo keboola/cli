@@ -750,6 +750,36 @@ Useful for targeting a freshly-created dev branch without running `branch use` o
 to the manifest or to the config store, so subsequent commands without `--branch`
 fall back to the normal priority chain.
 
+## `sync pull` / `sync clone` now keep the config folder (`KBC.configuration.folderName`)
+
+*(since vNEXT)*
+
+A config's UI folder is config metadata under `KBC.configuration.folderName`. It
+comes from a branch-only `search/component-configurations` call, not from the
+`list_components_with_configs` body that pull reads for config data. Before vNEXT
+`sync pull` never fetched it, so `sync pull` and `sync clone` silently dropped the
+folder and every config landed in the tree root. Nothing warned about it. On a
+pre-vNEXT kbagent a golden-reference `sync clone` still produces a folder-less
+clone -- check the version, or verify the folders came across after a clone.
+
+Since vNEXT pull fetches the folder for each config and stores
+`KBC.configuration.folderName` in the manifest entry's `metadata`. `sync clone`
+re-points its production configs onto the branch push resolves for the target,
+so the create-path writeback matches the placeholder and the push create path
+forwards the `KBC.*` metadata (see "`sync push` fresh-CREATE writeback now
+updates placeholders in place" above) -- the folder is recreated in the target.
+This holds for a plain clone, a `--branch` clone, and a git-branching production
+clone (where push resolves the branch to `None`, normalized to `0`). Only the
+CREATE path carries it: changing a folder on an existing config through a plain
+`sync push` still does not propagate (`propagate_kbc_metadata` runs only on
+create) -- use `config set-folder`.
+
+If the folder lookup fails during a pull (API error, no resolvable branch, or a
+non-dict body), pull keeps each config's folder from the previous pull instead of
+stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
+value means the folders were not refreshed this pull -- it separates "no folders
+configured" from "the lookup failed".
+
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 
 Opt-in flag (default `False`, so existing callers are unaffected). When set,
