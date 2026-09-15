@@ -4277,8 +4277,9 @@ class TestFullE2E:
             # 2. add two datasets, three metrics, one constraint, one glossary entry.
             # tableId comes from the bucket/table built earlier in the big test.
             # We don't depend on it existing in actual Snowflake — the metastore
-            # accepts any string. validate --deep is skipped (would 404 trying to
-            # fetch storage detail for a synthetic tableId).
+            # accepts any string. `--fqn` is passed because without it `add dataset`
+            # reads the fqn from Storage, which would 404 for a synthetic tableId
+            # (so would validate --deep, skipped here).
             ds1 = self._run_ok(
                 "semantic-layer",
                 "add",
@@ -4291,6 +4292,8 @@ class TestFullE2E:
                 f"{tag}_ds_a",
                 "--table-id",
                 "out.c-syn.fact_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_a"',
             )
             created_items.append(("semantic-dataset", ds1["data"]["id"]))
 
@@ -4306,6 +4309,8 @@ class TestFullE2E:
                 f"{tag}_ds_b",
                 "--table-id",
                 "out.c-syn.fact_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_b"',
             )
             created_items.append(("semantic-dataset", ds2["data"]["id"]))
 
@@ -11396,6 +11401,8 @@ class TestE2ESemanticLayerLifecycle:
                 f"{tag}_ds_a",
                 "--table-id",
                 "out.c-syn.fact_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_a"',
             )
             created_items.append(("semantic-dataset", ds1["data"]["id"]))
 
@@ -11411,6 +11418,8 @@ class TestE2ESemanticLayerLifecycle:
                 f"{tag}_ds_b",
                 "--table-id",
                 "out.c-syn.fact_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_b"',
             )
             created_items.append(("semantic-dataset", ds2["data"]["id"]))
 
@@ -11751,6 +11760,12 @@ class TestE2ESemanticLayerLifecycle:
                     f"Expected heuristic fallback, got: {data['data'].get('fallback_used')}"
                 )
                 assert len(data["data"]["generated"]["datasets"]) == 1
+                # build's dataset fqn is the table's Storage location.
+                detail = self._run_ok(
+                    "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+                )
+                assert detail["data"]["sql_path"]
+                assert data["data"]["generated"]["datasets"][0]["fqn"] == detail["data"]["sql_path"]
             else:
                 print("  WARN: no storage tables in project -- build --dry-run skipped")
 
