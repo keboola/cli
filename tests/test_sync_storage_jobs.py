@@ -30,7 +30,7 @@ from keboola_agent_cli.services._sync_storage import (
     write_storage_metadata,
 )
 from keboola_agent_cli.services.sync_service import SyncService
-from keboola_agent_cli.sync.manifest import ManifestConfiguration
+from keboola_agent_cli.sync.manifest import ManifestConfiguration, load_manifest
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -226,6 +226,10 @@ def _make_sync_mock_client(
         client.list_jobs_grouped.return_value = jobs_grouped_response
     else:
         client.list_jobs_grouped.return_value = []
+
+    # Default: a successful, empty config-folder lookup (no config has a
+    # folder). A test that cares sets its own return value.
+    client.list_config_folder_metadata.return_value = {}
 
     return client
 
@@ -1452,3 +1456,222 @@ class TestPullJobsFallback:
         # call_args_list, not call_count: see the thread-safety note in
         # test_falls_back_to_per_config_when_limit_insufficient.
         assert len(pull_client.list_jobs.call_args_list) == 101
+
+
+# ===================================================================
+# 6. Config folder (KBC.configuration.folderName) capture on pull (CLI-9)
+# ===================================================================
+
+
+class TestPullConfigFolder:
+    """pull() must keep each config's UI folder in the manifest (CLI-9).
+
+    The folder is config metadata (``KBC.configuration.folderName``) from a
+    separate branch-only search endpoint, not from ``list_components_with_configs``.
+    Before the fix pull never fetched it, so every pulled or cloned config lost
+    its folder. The push create path already forwards ``KBC.*`` manifest
+    metadata (see the ``test_propagate_kbc_metadata_*`` tests in
+    test_sync_service.py), so capturing it on pull closes the round-trip.
+    """
+
+    def test_pull_captures_config_folder_into_manifest(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A config with a folder lands with KBC.configuration.folderName set."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_SIMPLE,
+        )
+        # Only cfg-001 has a folder; cfg-002 has none.
+        pull_client.list_config_folder_metadata.return_value = {
+            "keboola.ex-http/cfg-001": "Extractors",
+        }
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root)
+
+        manifest = load_manifest(project_root)
+        by_id = {c.id: c for c in manifest.configurations}
+        assert by_id["cfg-001"].metadata.get("KBC.configuration.folderName") == "Extractors"
+        # A config with no folder must NOT get the key (round-trip would
+        # otherwise create a bogus folder on push).
+        assert "KBC.configuration.folderName" not in by_id["cfg-002"].metadata
+
+    def test_pull_folder_lookup_uses_resolved_branch(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """The folder search runs against the branch the pull resolved."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        pull_client = _make_sync_mock_client(
+            components_response=SAMPLE_COMPONENTS_SIMPLE,
+        )
+        pull_client.list_config_folder_metadata.return_value = {}
+        svc = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        )
+
+        svc.pull(alias="prod", project_root=project_root)
+
+        # SAMPLE_BRANCHES default id is 12345 -> manifest fallback branch id.
+        pull_client.list_config_folder_metadata.assert_called_once_with(branch_id=12345)
+
+    def test_pull_preserves_folder_when_lookup_fails(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A failed folder lookup keeps the previously captured folder.
+
+        A transient failure of the folder-search endpoint must not strip the
+        folder from every manifest entry -- that would silently reintroduce the
+        loss this fix closes (CLI-9).
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # First pull captures the folder into the manifest.
+        first = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        first.list_config_folder_metadata.return_value = {"keboola.ex-http/cfg-001": "Extractors"}
+        SyncService(
+            config_store=store,
+            client_factory=lambda url, token: first,
+        ).pull(alias="prod", project_root=project_root)
+
+        # Second pull: the folder lookup FAILS.
+        second = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        second.list_config_folder_metadata.side_effect = RuntimeError("boom")
+        result = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: second,
+        ).pull(alias="prod", project_root=project_root)
+
+        assert result["folder_lookup_failed"] is True
+        manifest = load_manifest(project_root)
+        by_id = {c.id: c for c in manifest.configurations}
+        # The folder survives the failed lookup.
+        assert by_id["cfg-001"].metadata.get("KBC.configuration.folderName") == "Extractors"
+
+    def test_pull_reports_folder_lookup_ok(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """A successful lookup reports folder_lookup_failed=False."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+        pull_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        pull_client.list_config_folder_metadata.return_value = {}
+        result = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: pull_client,
+        ).pull(alias="prod", project_root=project_root)
+
+        assert result["folder_lookup_failed"] is False
+
+    def test_pull_drops_folder_on_successful_empty_lookup(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A successful empty lookup drops a folder removed on the remote.
+
+        The mirror of the failed-lookup case: when the lookup succeeds and
+        returns no folder for a config (folder cleared in the UI), the manifest
+        must drop the key, not keep the stale value.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        store = _init_project(tmp_config_dir, project_root)
+
+        # First pull captures the folder.
+        first = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        first.list_config_folder_metadata.return_value = {"keboola.ex-http/cfg-001": "Extractors"}
+        SyncService(
+            config_store=store,
+            client_factory=lambda url, token: first,
+        ).pull(alias="prod", project_root=project_root)
+
+        # Second pull: the lookup SUCCEEDS but the folder is gone.
+        second = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS_SIMPLE)
+        second.list_config_folder_metadata.return_value = {}
+        result = SyncService(
+            config_store=store,
+            client_factory=lambda url, token: second,
+        ).pull(alias="prod", project_root=project_root)
+
+        assert result["folder_lookup_failed"] is False
+        manifest = load_manifest(project_root)
+        by_id = {c.id: c for c in manifest.configurations}
+        assert "KBC.configuration.folderName" not in by_id["cfg-001"].metadata
+
+
+class TestFetchConfigFolders:
+    """Unit tests for SyncService._fetch_config_folders."""
+
+    def test_uses_given_branch_without_dev_branch_lookup(self) -> None:
+        """A resolved branch id is used directly; no default-branch lookup."""
+        client = MagicMock()
+        client.list_config_folder_metadata.return_value = {"comp/1": "Folder A"}
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result == {"comp/1": "Folder A"}
+        client.list_config_folder_metadata.assert_called_once_with(branch_id=42)
+        client.list_dev_branches.assert_not_called()
+
+    def test_resolves_default_branch_for_production(self) -> None:
+        """branch_id=None (production) resolves the default branch first."""
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 777, "isDefault": True}]
+        client.list_config_folder_metadata.return_value = {"comp/1": "Prod Folder"}
+
+        result = SyncService._fetch_config_folders(client, None)
+
+        assert result == {"comp/1": "Prod Folder"}
+        client.list_config_folder_metadata.assert_called_once_with(branch_id=777)
+
+    def test_none_when_no_default_branch(self) -> None:
+        """No resolvable branch -> None (unknown), endpoint never called."""
+        client = MagicMock()
+        client.list_dev_branches.return_value = []
+
+        result = SyncService._fetch_config_folders(client, None)
+
+        assert result is None
+        client.list_config_folder_metadata.assert_not_called()
+
+    def test_none_on_api_error(self) -> None:
+        """A folder-lookup failure returns None (unknown), never aborts."""
+        client = MagicMock()
+        client.list_config_folder_metadata.side_effect = RuntimeError("boom")
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result is None
+
+    def test_none_on_non_dict_response(self) -> None:
+        """A non-dict response returns None (unknown), not an empty success."""
+        client = MagicMock()
+        client.list_config_folder_metadata.return_value = ["unexpected"]
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result is None
+
+    def test_empty_dict_on_successful_empty_lookup(self) -> None:
+        """A successful lookup with no foldered configs returns {} (not None)."""
+        client = MagicMock()
+        client.list_config_folder_metadata.return_value = {}
+
+        result = SyncService._fetch_config_folders(client, 42)
+
+        assert result == {}

@@ -99,6 +99,7 @@ from ._sync_bulk import (
     push_all as _bulk_push_all,
 )
 from ._sync_clone import clone_project as _clone_project_impl
+from ._sync_data_app import load_data_app_types, resolve_pull_type, type_needs_rewrite
 from ._sync_models import CreatedConfig, LocalConfigHashes
 from ._sync_push_ops import push_create, push_row_change, push_update
 from ._sync_storage import (
@@ -537,6 +538,7 @@ class SyncService(BaseService):
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
             self._ensure_branch_registered(manifest, branch_id, client)
+            folder_map = self._fetch_config_folders(client, branch_id)
 
             if not no_storage:
                 try:
@@ -574,34 +576,10 @@ class SyncService(BaseService):
             if with_samples and tables_data:
                 samples_data = fetch_samples(client, tables_data, sample_limit, max_samples)
 
-        # Data-app runtime types (CLI-8). The type (python-js / streamlit / ...)
-        # lives only on the Data Science /apps record, never in the Storage
-        # config, so it is fetched here and stamped into each data-app's
-        # _config.yml. One list call covers the project; skipped entirely when
-        # the tree holds no data apps. A DS failure degrades to no type (the
-        # pre-fix behavior), never an aborted pull.
-        #
-        # /apps also returns sandbox/workspace records (componentId of the
-        # parent component, e.g. keboola.ex-db-mysql, and a backend `type` such
-        # as `snowflake`), so the map is restricted to real data-app records --
-        # otherwise a workspace's type would land on an unrelated config that
-        # happens to share the id.
-        data_app_types: dict[str, str] = {}
-        if any(comp.get("id") == DATA_APP_COMPONENT_ID for comp in components):
-            try:
-                ds_client = self._ds_client_factory(project.stack_url, project.token)
-                with ds_client:
-                    data_app_types = {
-                        str(app.get("configId")): str(app.get("type"))
-                        for app in ds_client.list_apps()
-                        if app.get("componentId") == DATA_APP_COMPONENT_ID
-                        and app.get("configId")
-                        and app.get("type")
-                    }
-            except Exception:
-                logger.warning(
-                    "Failed to fetch data-app types from Data Science API", exc_info=True
-                )
+        # Data-app runtime types (CLI-8): one DS /apps call per project, resolved
+        # per config below. Empty when the tree has no data apps or the lookup
+        # fails. See _sync_data_app.load_data_app_types.
+        data_app_types = load_data_app_types(self._ds_client_factory, project, components)
 
         # Determine branch directory name
         branch_dir_name = self._find_branch_path(manifest, branch_id)
@@ -759,21 +737,11 @@ class SyncService(BaseService):
                 _ensure_within_branch(branch_dir, config_dir, component_id, config_id)
 
                 # Convert API format to local _config.yml. For a data app the
-                # runtime type comes from the DS /apps list, which is the source
-                # of truth ONLY for the configs it actually lists. A config the
-                # list omits -- the DS call failed, the response left it out, or
-                # its DS record is gone while the Storage config remains -- keeps
-                # whatever type is on disk. The type therefore only ever changes
-                # when the list reports a different one; an absence never strips
-                # it (config_hash ignores _keboola, so a strip would be silent).
-                da_type: str | None = None
-                on_disk_da_type: str | None = None
-                if component_id == DATA_APP_COMPONENT_ID:
-                    existing = self._read_config_file(config_dir)
-                    on_disk_da_type = (
-                        (existing.get("_keboola") or {}).get("data_app_type") if existing else None
-                    )
-                    da_type = data_app_types.get(config_id, on_disk_da_type)
+                # runtime type is resolved from the DS list, keeping the on-disk
+                # value on an absence. See _sync_data_app.resolve_pull_type.
+                da_type, on_disk_da_type = resolve_pull_type(
+                    self._read_config_file, config_dir, component_id, data_app_types, config_id
+                )
                 local_data = api_config_to_local(
                     component_id,
                     cfg,
@@ -881,14 +849,11 @@ class SyncService(BaseService):
                             existing_extra_hashes.get(lookup_key, {}),
                         )
 
-                    # A data app's runtime type lives in _keboola, invisible to
-                    # config_hash, so a body-unchanged config would otherwise skip
-                    # the write and discard a freshly fetched (or changed) type.
-                    # Force a rewrite when the resolved type differs from disk.
-                    if (
-                        remote_unchanged
-                        and component_id == DATA_APP_COMPONENT_ID
-                        and da_type != on_disk_da_type
+                    # A data app's type lives in _keboola, invisible to
+                    # config_hash, so a body-unchanged config would otherwise
+                    # skip the write and discard a fetched (or changed) type.
+                    if remote_unchanged and type_needs_rewrite(
+                        component_id, da_type, on_disk_da_type
                     ):
                         remote_unchanged = False
 
@@ -1058,6 +1023,22 @@ class SyncService(BaseService):
                         # shape version is stamped alongside it (issue #686).
                         CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
                     }
+                # Keep the UI folder (KBC.configuration.folderName) with the
+                # config. Pull dropped it before, so every pulled or cloned
+                # config landed in the root (CLI-9). The push create path
+                # already forwards KBC.* manifest metadata through
+                # propagate_kbc_metadata, so storing it here closes the loop.
+                # When the lookup failed (folder_map is None), keep the folder
+                # a previous pull captured rather than stripping it from every
+                # entry over one transient failure.
+                if folder_map is not None:
+                    folder_name = folder_map.get(lookup_key)
+                else:
+                    folder_name = existing_metadata.get(lookup_key, {}).get(
+                        "KBC.configuration.folderName"
+                    )
+                if folder_name:
+                    cfg_metadata["KBC.configuration.folderName"] = folder_name
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -1140,6 +1121,10 @@ class SyncService(BaseService):
             "jobs_written": jobs_written,
             "storage": storage_stats,
             "details": pull_details,
+            # True when the config-folder lookup failed: folders were kept from
+            # the previous pull, not refreshed. Lets a caller tell "no folders"
+            # from "the lookup failed" (CLI-9).
+            "folder_lookup_failed": folder_map is None,
         }
 
     # ------------------------------------------------------------------
@@ -2143,6 +2128,37 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch_config_folders(client: Any, branch_id: int | None) -> dict[str, str] | None:
+        """Map ``{component_id}/{config_id}`` to its UI folder name.
+
+        The folder is config metadata (``KBC.configuration.folderName``), not a
+        field in the ``list_components_with_configs`` body, so pull must fetch it
+        separately. The search endpoint that serves it is branch-only, so a
+        production pull (``branch_id`` is ``None``) resolves the default branch
+        id first -- the same fallback ``ConfigService`` uses.
+
+        Returns ``None`` when the lookup fails (API error, no resolvable branch,
+        or a non-dict body). ``None`` means "unknown", NOT "no folders": the
+        caller then keeps each config's previously captured folder instead of
+        dropping it from every manifest entry over one transient failure
+        (CLI-9). A successful lookup returns a dict, possibly empty when no
+        config has a folder.
+        """
+        try:
+            folder_branch_id = branch_id or find_default_branch_id(client.list_dev_branches())
+            if not folder_branch_id:
+                logger.warning("config-folder lookup skipped: no branch id resolved")
+                return None
+            result = client.list_config_folder_metadata(branch_id=folder_branch_id)
+            if isinstance(result, dict):
+                return result
+            logger.warning("config-folder lookup returned a non-dict body")
+            return None
+        except Exception:
+            logger.warning("config-folder metadata lookup failed", exc_info=True)
+            return None
 
     @staticmethod
     def _resolve_branch_id(

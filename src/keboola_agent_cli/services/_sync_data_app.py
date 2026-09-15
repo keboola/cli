@@ -1,16 +1,19 @@
-"""Data-app create for the sync engine (CLI-8).
+"""Data-app runtime type for the sync engine (CLI-8).
 
-``sync push`` / ``sync clone`` create configs through the Storage API only.
 A ``keboola.data-apps`` config has a second half, the Data Science ``/apps``
 deployment record, and the runtime type (``python-js`` / ``streamlit`` / ...)
-lives ONLY on that record. This module owns the one create path that carries
-the type, kept out of ``data_app_service`` so that already-large module does
-not grow past its file-size budget.
+lives ONLY on that record, never in the Storage config body. This module owns
+the type on both sides of sync: ``load_data_app_types`` / ``resolve_pull_type``
+read it on pull, and ``create_synced_data_app`` sends it on push. Kept out of
+``sync_service`` and ``data_app_service`` so neither grows past its file-size
+budget.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ..client import KeboolaClient
@@ -19,6 +22,68 @@ from ..errors import ErrorCode, KeboolaApiError
 from .data_app_service import DATA_APP_COMPONENT_ID
 
 logger = logging.getLogger(__name__)
+
+
+def load_data_app_types(
+    ds_client_factory: Callable[[str, str], DataScienceClient],
+    project: Any,
+    components: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Return ``{config_id: runtime type}`` from the DS ``/apps`` list.
+
+    Data-app records only -- the list also carries sandbox/workspace records
+    whose id can collide with an unrelated config. Empty when the tree has no
+    data apps, or when the lookup fails (logged, not raised): the caller then
+    keeps whatever type is already on disk.
+    """
+    if not any(comp.get("id") == DATA_APP_COMPONENT_ID for comp in components):
+        return {}
+    try:
+        ds_client = ds_client_factory(project.stack_url, project.token)
+        with ds_client:
+            return {
+                str(app.get("configId")): str(app.get("type"))
+                for app in ds_client.list_apps()
+                if app.get("componentId") == DATA_APP_COMPONENT_ID
+                and app.get("configId")
+                and app.get("type")
+            }
+    except Exception:
+        logger.warning("Failed to fetch data-app types from Data Science API", exc_info=True)
+        return {}
+
+
+def resolve_pull_type(
+    read_config_file: Callable[[Path], dict[str, Any] | None],
+    config_dir: Path,
+    component_id: str,
+    data_app_types: dict[str, str],
+    config_id: str,
+) -> tuple[str | None, str | None]:
+    """Return ``(da_type, on_disk_da_type)`` for a config on pull.
+
+    Both are ``None`` for a non-data-app. For a data app, the DS list is the
+    source of truth ONLY for the configs it names: a config the list omits (the
+    call failed, the response left it out, or the DS record is gone while the
+    Storage config remains) keeps its on-disk type. The type therefore changes
+    only when the list reports a different one; an absence never strips it.
+    ``config_hash`` ignores ``_keboola``, so the caller compares the two values
+    to decide whether to rewrite an otherwise-unchanged config.
+    """
+    if component_id != DATA_APP_COMPONENT_ID:
+        return None, None
+    existing = read_config_file(config_dir)
+    on_disk = (existing.get("_keboola") or {}).get("data_app_type") if existing else None
+    return data_app_types.get(config_id, on_disk), on_disk
+
+
+def type_needs_rewrite(component_id: str, da_type: str | None, on_disk_da_type: str | None) -> bool:
+    """True when a data app's resolved type differs from the on-disk one.
+
+    The type lives in ``_keboola``, which ``config_hash`` ignores, so a config
+    with an otherwise-unchanged body must still be rewritten to record it.
+    """
+    return component_id == DATA_APP_COMPONENT_ID and da_type != on_disk_da_type
 
 
 def create_synced_data_app(

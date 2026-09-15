@@ -161,6 +161,11 @@ def sync_init(
 
 def _format_pull_result(formatter: Any, result: dict) -> None:
     """Format a single-project pull result for human output."""
+    if result.get("folder_lookup_failed"):
+        formatter.console.print(
+            "[yellow]Warning:[/yellow] config-folder lookup failed; existing folders kept, "
+            "not refreshed."
+        )
     is_dry = result.get("status") == "dry_run"
     details = result.get("details", [])
     new_cfgs = [d for d in details if d["action"] == "new"]
@@ -393,8 +398,6 @@ def _pull_one_liner(result: dict) -> str:
     ren_n = sum(1 for d in details if d["action"] == "renamed")
     skip_n = sum(1 for d in details if d["action"] == "skipped")
     ign_n = sum(1 for d in details if d["action"] == "ignored")
-    if not new_n and not upd_n and not rem_n and not ren_n and not skip_n and not ign_n:
-        return "[green]up to date[/green]"
     parts = []
     if ren_n:
         parts.append(f"[magenta]>{ren_n} renamed[/magenta]")
@@ -408,6 +411,12 @@ def _pull_one_liner(result: dict) -> str:
         parts.append(f"[cyan]!{skip_n} skipped[/cyan]")
     if ign_n:
         parts.append(f"[dim]-{ign_n} ignored[/dim]")
+    # Show the degraded folder lookup here too: --all-projects human mode
+    # renders only this one-liner (not _format_pull_result) unless --verbose.
+    if result.get("folder_lookup_failed"):
+        parts.append("[yellow]folder lookup failed[/yellow]")
+    if not parts:
+        return "[green]up to date[/green]"
     return ", ".join(parts)
 
 

@@ -86,8 +86,40 @@ def repoint_manifest_project(
         manifest.branches[0].id = default_branch_id
 
 
-def _config_dir(target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str) -> Path:
-    return target_dir / branch_map.get(branch_id, _DEFAULT_BRANCH_DIR) / path
+def repoint_default_branch_configs(
+    manifest: Any, *, source_default_branch_id: int | None, new_branch_id: int
+) -> None:
+    """Move source-default-branch configs onto the branch push resolves.
+
+    Only configs that lived on the source's own default branch are re-pointed;
+    dev-branch entries keep their branch id so their tree still resolves. Push
+    matches a create placeholder on ``(branch_id, component_id, path)`` and
+    resolves the target branch to ``new_branch_id``. Without this the match
+    fails, a duplicate entry with no ``KBC.*`` metadata is appended, and config
+    metadata such as ``KBC.configuration.folderName`` never reaches the target
+    (CLI-9). ``new_branch_id`` must be what ``_resolve_branch_id`` returns for
+    the target, normalized to ``0`` for production (``None``), so the writeback
+    ``branch_id or 0`` comparison matches.
+    """
+    for cfg in manifest.configurations:
+        if cfg.branch_id == source_default_branch_id:
+            cfg.branch_id = new_branch_id
+
+
+def _default_branch_dir(manifest: Any) -> str:
+    """On-disk tree for an unregistered branch id -- the default branch's dir.
+
+    Mirrors ``branch_scope.branch_tree_path``'s fallback (``branches[0].path``),
+    NOT a hardcoded literal, so a non-``main`` default-branch dir (git-branching
+    names it after the git default branch) still resolves correctly.
+    """
+    return manifest.branches[0].path if manifest.branches else _DEFAULT_BRANCH_DIR
+
+
+def _config_dir(
+    target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str, default_dir: str
+) -> Path:
+    return target_dir / branch_map.get(branch_id, default_dir) / path
 
 
 def _remap_bucket_in_table_id(table_id: Any, bucket_map: dict[str, str]) -> Any:
@@ -139,14 +171,16 @@ def apply_bucket_map(target_dir: Path, manifest: Any, bucket_map: dict[str, str]
     if not bucket_map:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     rewrites = 0
     for cfg in manifest.configurations:
         rewrites += _rewrite_buckets_in_config(
-            _config_dir(target_dir, branch_map, cfg.branch_id, cfg.path), bucket_map
+            _config_dir(target_dir, branch_map, cfg.branch_id, cfg.path, default_dir), bucket_map
         )
         for row in cfg.rows:
             rewrites += _rewrite_buckets_in_config(
-                _config_dir(target_dir, branch_map, cfg.branch_id, row.path), bucket_map
+                _config_dir(target_dir, branch_map, cfg.branch_id, row.path, default_dir),
+                bucket_map,
             )
     return rewrites
 
@@ -181,13 +215,15 @@ def apply_variable_values(target_dir: Path, manifest: Any, variable_values: dict
     if not variable_values:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     overridden = 0
     for cfg in manifest.configurations:
         if cfg.component_id != VARIABLES_COMPONENT_ID:
             continue
         for row in cfg.rows:
             overridden += _override_values_in_row(
-                _config_dir(target_dir, branch_map, cfg.branch_id, row.path), variable_values
+                _config_dir(target_dir, branch_map, cfg.branch_id, row.path, default_dir),
+                variable_values,
             )
     return overridden
 
@@ -205,13 +241,14 @@ def apply_instance_rename(target_dir: Path, manifest: Any, renames: dict[str, st
     if not renames:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     moved: set[tuple[str, str]] = set()
     renamed = 0
     for old, new in renames.items():
         for cfg in manifest.configurations:
             if not (cfg.path == old or cfg.path.startswith(old + "/")):
                 continue
-            branch_dir = branch_map.get(cfg.branch_id, _DEFAULT_BRANCH_DIR)
+            branch_dir = branch_map.get(cfg.branch_id, default_dir)
             move_key = (branch_dir, old)
             if move_key not in moved:
                 src = target_dir / branch_dir / old
