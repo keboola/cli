@@ -367,6 +367,20 @@ class TestConstructorLevelWiring:
         finally:
             client.close()
 
+    def test_sync_service_default_ds_factory_is_bearer_aware(self, tmp_path: Path) -> None:
+        # Regression for #764: SyncService's default DS factory must build a
+        # working client, not reference a removed symbol, and must reach a
+        # session project the same way DataAppService does.
+        from keboola_agent_cli.services.sync_service import SyncService
+
+        config_store = ConfigStore(config_dir=tmp_path)
+        service = SyncService(config_store=config_store)
+        client = service._ds_client_factory(STACK_URL, _sentinel_token())
+        try:
+            assert "x-storageapi-token" not in client._client.headers
+        finally:
+            client.close()
+
     def test_named_default_factories_still_fail_fast_when_injected_explicitly(self) -> None:
         """The module-level default_*_client_factory functions (kept for
         explicit injection / back-compat) still delegate to the static-token
