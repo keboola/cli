@@ -10,7 +10,10 @@ call sites keep working.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
+
+from ..errors import ErrorCode, KeboolaApiError
 
 # Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
 # ciphertext -- one variant per cloud, and exactly these three exist:
@@ -195,6 +198,115 @@ def _build_runtime_block(*, size: str, workspace: bool) -> dict[str, Any]:
     if workspace:
         runtime["workspace"] = {"enabled": True}
     return runtime
+
+
+def _build_managed_git_block(repo: dict[str, Any], app_id: str) -> dict[str, Any]:
+    """Build ``parameters.dataApp.git`` for a managed-repo app from a
+    ``get_git_repo`` response.
+
+    See CLI-15: a managed-repo app's first deploy does not get a workspace
+    just from omitting ``configVersion`` -- provisioning is gated on this
+    block being present in Storage config, independent of
+    ``managedGitRepoId``/``hasManagedGitRepo``. ``deploy_data_app`` calls this
+    to backfill it before deploying, same as an external-git app.
+
+    Raises if the lookup returned neither URL -- fail loudly rather than
+    deploy with no source pointer.
+    """
+    git_url = repo.get("httpsUrl") or repo.get("sshUrl")
+    if not git_url:
+        raise KeboolaApiError(
+            error_code=ErrorCode.API_ERROR,
+            message=f"App {app_id} is managed but git-repo lookup returned no URL",
+            status_code=500,
+            retryable=False,
+        )
+    return {"repository": git_url, "branch": "main", "private": True}
+
+
+@dataclass(frozen=True)
+class ManagedGitBackfillTarget:
+    """The identifying context :func:`backfill_managed_git` needs,
+    grouped so the call site at ``deploy_data_app`` stays one line."""
+
+    app_id: str
+    config_id: str
+    branch_id: int | None
+    latest_version: str
+
+
+def backfill_managed_git(
+    ds_client: Any,
+    storage_client: Any,
+    configuration: dict[str, Any],
+    ctx: ManagedGitBackfillTarget,
+) -> str:
+    """Resolve + persist ``parameters.dataApp.git`` for a managed-repo app with
+    no git block yet; returns the resulting configVersion to pin.
+
+    See CLI-15: ``deploy_data_app``'s configVersion-omission branch alone does
+    not get the app a workspace -- provisioning is gated on this block being
+    present. Takes pre-constructed clients (not a service instance) so
+    ``deploy_data_app`` can call it inline with no new constructor wiring.
+    """
+    git_block = _build_managed_git_block(ds_client.get_git_repo(ctx.app_id), ctx.app_id)
+    configuration.setdefault("parameters", {}).setdefault("dataApp", {})["git"] = git_block
+    updated = storage_client.update_config(
+        component_id="keboola.data-apps",  # mirrors data_app_service.DATA_APP_COMPONENT_ID
+        config_id=ctx.config_id,
+        configuration=configuration,
+        change_description="Auto-backfill managed-repo git block (workspace provisioning fix)",
+        branch_id=ctx.branch_id,
+    )
+    return str(updated.get("version", "") or ctx.latest_version)
+
+
+def resolve_effective_version(
+    ds_client: Any,
+    storage_client: Any,
+    app: dict[str, Any],
+    app_id: str,
+    config_id: str,
+    branch_id: int | None,
+) -> str | None:
+    """Resolve the Storage ``configVersion`` for ``deploy_data_app`` to pin.
+
+    configVersion resolution depends on where the app's *source* lives:
+
+    * Streamlit / external-git (``parameters.dataApp.git`` present) -- pin the
+      latest Storage version so the operator reads the current git block.
+    * A pure managed repo (``hasManagedGitRepo``, no git block yet) -- backfill
+      the git block first (CLI-15: omitting configVersion alone does not get
+      the app a workspace; see :func:`backfill_managed_git`), then pin the
+      version that backfill wrote.
+
+    Raises if neither a git block can be backfilled nor a Storage version is
+    resolvable.
+    """
+    storage_config = storage_client.get_config_detail(
+        "keboola.data-apps",  # mirrors data_app_service.DATA_APP_COMPONENT_ID
+        config_id,
+        branch_id=branch_id,
+    )
+    latest_version = str(storage_config.get("version", "") or "")
+    configuration = _coerce_config_dict(storage_config.get("configuration"))
+    data_app_cfg = (configuration.get("parameters") or {}).get("dataApp") or {}
+    is_managed = bool(app.get("hasManagedGitRepo"))
+    has_git_block = bool(data_app_cfg.get("git"))
+    if is_managed and not has_git_block:
+        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version)
+        return backfill_managed_git(ds_client, storage_client, configuration, ctx)
+    if not latest_version:
+        raise KeboolaApiError(
+            message=(
+                f"Cannot resolve a Storage configVersion for app {app_id}; "
+                "Storage config returned no version."
+            ),
+            status_code=500,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+    return latest_version
 
 
 def _redact_secret(value: Any) -> Any:

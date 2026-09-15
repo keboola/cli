@@ -38,11 +38,11 @@ from ._data_app_bodies import (
     RESERVED_RUNTIME_ENV_VARS,
     _auth_block_for,
     _build_runtime_block,
-    _coerce_config_dict,
     _derive_runtime_env_var_name,
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
+    resolve_effective_version,
 )
 from .base import BaseService, ClientFactory, make_session_aware_client_factory, project_error_entry
 from .encrypt_service import EncryptService
@@ -596,47 +596,14 @@ class DataAppService(BaseService):
                     retryable=False,
                 )
 
-            # configVersion resolution depends on where the app's *source*
-            # lives, which we infer from the latest Storage config:
-            #
-            #  * Streamlit / external-git (parameters.dataApp.git present) -> the
-            #    source pointer lives IN the Storage config, so we PIN the latest
-            #    version so the operator reads the current git block.
-            #  * A managed repo (useManagedGitRepo, NO git block) -> the source
-            #    resolves via app.managedGitRepoId and the platform injects the
-            #    clone credentials at deploy time, so we OMIT configVersion
-            #    (matches keboola-mcp-server / Kai and the sandboxes-service
-            #    `testManagedGitRepo.sh` contract). Pinning a managed app's
-            #    no-git-block config instead makes the runtime demand
-            #    `dataApp.git.repository` and the deploy fails -- that was the
-            #    pre-0.65.0 bug this branch fixes.
-            #
-            # An explicit --config-version always wins as an escape hatch.
+            # An explicit --config-version always wins as an escape hatch; see
+            # resolve_effective_version's docstring for the resolution rules.
             effective_version: str | None = config_version
             if config_version is None:
                 storage_client = self._client_factory(project.stack_url, project.token)
-                storage_config = storage_client.get_config_detail(
-                    DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
+                effective_version = resolve_effective_version(
+                    ds_client, storage_client, app, app_id, config_id, branch_id
                 )
-                latest_version = str(storage_config.get("version", "") or "")
-                configuration = _coerce_config_dict(storage_config.get("configuration"))
-                data_app_cfg = (configuration.get("parameters") or {}).get("dataApp") or {}
-                is_managed = bool(app.get("hasManagedGitRepo"))
-                has_git_block = bool(data_app_cfg.get("git"))
-                if is_managed and not has_git_block:
-                    effective_version = None  # deploy from managedGitRepoId, no pin
-                else:
-                    if not latest_version:
-                        raise KeboolaApiError(
-                            message=(
-                                f"Cannot resolve a Storage configVersion for app {app_id}; "
-                                "Storage config returned no version."
-                            ),
-                            status_code=500,
-                            error_code=ErrorCode.API_ERROR,
-                            retryable=False,
-                        )
-                    effective_version = latest_version
 
             deployed = ds_client.patch_app(
                 app_id,
