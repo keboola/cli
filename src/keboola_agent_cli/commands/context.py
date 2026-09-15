@@ -1206,7 +1206,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete branch (async). Auto-resets to main if it was active.
 
   kbagent branch merge --project ALIAS [--branch ID]
-    DEPRECATED (since vNEXT): builds a KBC UI merge URL (does NOT merge via API) and
+    DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
     resets the active branch. On a project with merge requests enabled use
     `merge-request create` + `merge-request merge` below.
 

@@ -232,7 +232,7 @@ def branch_merge(
     """[DEPRECATED] Get the KBC UI merge URL for a development branch.
 
     Does NOT perform the merge via API -- it builds the URL to the Keboola
-    UI and then resets the active branch to main. Deprecated since vNEXT:
+    UI and then resets the active branch to main. Deprecated since 0.94.0:
     on a project with merge requests enabled ('branches-merge-requests'),
     use `kbagent merge-request create` and `kbagent merge-request merge`,
     which merge from the CLI and delete the source branch. This command

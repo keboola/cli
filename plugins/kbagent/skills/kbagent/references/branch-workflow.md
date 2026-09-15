@@ -30,12 +30,12 @@ kbagent --json branch merge --project ALIAS
 | `branch use --branch ID` | Switch to existing branch |
 | `branch reset` | Switch back to main/production |
 | `branch delete --branch ID` | Delete branch (resets if it was active) |
-| `branch merge` | DEPRECATED (since vNEXT): get merge URL, reset to main. On a project with `branches-merge-requests` use `merge-request` -- see [merge-request-workflow.md](merge-request-workflow.md) |
+| `branch merge` | DEPRECATED (since 0.94.0): get merge URL, reset to main. On a project with `branches-merge-requests` use `merge-request` -- see [merge-request-workflow.md](merge-request-workflow.md) |
 
 ## Key details
 
 - **Async operations**: `branch create` and `branch delete` are async on the API. kbagent waits for completion (typically 1-3s). No need to poll.
-- **Merge from the CLI needs the merge-request group** *(since vNEXT)*: `branch merge` only returns a URL for the Keboola UI (and is deprecated). On a project with the `branches-merge-requests` feature, `kbagent merge-request create` + `merge-request merge` merge via the API with review and conflict resolution -- see [merge-request-workflow.md](merge-request-workflow.md).
+- **Merge from the CLI needs the merge-request group** *(since 0.94.0)*: `branch merge` only returns a URL for the Keboola UI (and is deprecated). On a project with the `branches-merge-requests` feature, `kbagent merge-request create` + `merge-request merge` merge via the API with review and conflict resolution -- see [merge-request-workflow.md](merge-request-workflow.md).
 - **Active branch persistence**: stored in kbagent config. Survives between sessions.
 - **Config commands respect active branch**: `config list`, `config detail`, and `config search` auto-scope to the active branch. Use `--branch ID` to override.
 - **Workspaces respect active branch**: `workspace create` and `workspace delete` operate in the active branch context.
