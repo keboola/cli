@@ -608,7 +608,7 @@ class DataAppService(BaseService):
             deployed = ds_client.patch_app(
                 app_id,
                 desired_state=RUNNING_STATE,
-                config_version=effective_version,  # None only for pure managed repos
+                config_version=effective_version,
                 restart_if_running=True,
             )
             poll_result: dict[str, Any] | None = None

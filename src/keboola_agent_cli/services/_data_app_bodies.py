@@ -1,19 +1,27 @@
-"""Pure body-builders and redaction helpers for :mod:`data_app_service`.
+"""Body-builders, redaction helpers, and git/version resolution for
+:mod:`data_app_service`.
 
 Extracted from ``data_app_service.py`` (which is over its file-size budget)
-so the service module holds orchestration only. Everything here is a pure
-function of its arguments: no HTTP, no config store, no I/O. The service
-re-exports these names, so existing ``from ...data_app_service import _x``
-call sites keep working.
+so the service module holds orchestration only. Most functions here are pure
+functions of their arguments -- no HTTP, no config store, no I/O. The
+exceptions are ``backfill_managed_git`` and ``resolve_effective_version``,
+which call the pre-constructed client objects they are passed (no new I/O
+wiring of their own); they live here anyway because they are the direct
+continuation of ``deploy_data_app``'s git-block/version-resolution logic, not
+a separate concern. The service re-exports these names, so existing
+``from ...data_app_service import _x`` call sites keep working.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ErrorCode, KeboolaApiError
+
+logger = logging.getLogger(__name__)
 
 # Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
 # ciphertext -- one variant per cloud, and exactly these three exist:
@@ -258,7 +266,16 @@ def backfill_managed_git(
         change_description="Auto-backfill managed-repo git block (workspace provisioning fix)",
         branch_id=ctx.branch_id,
     )
-    return str(updated.get("version", "") or ctx.latest_version)
+    new_version = str(updated.get("version", "") or ctx.latest_version)
+    logger.info(
+        "Backfilled parameters.dataApp.git for managed-repo app %s (config %s); "
+        "Storage version %s -> %s",
+        ctx.app_id,
+        ctx.config_id,
+        ctx.latest_version,
+        new_version,
+    )
+    return new_version
 
 
 def resolve_effective_version(
@@ -268,7 +285,7 @@ def resolve_effective_version(
     app_id: str,
     config_id: str,
     branch_id: int | None,
-) -> str | None:
+) -> str:
     """Resolve the Storage ``configVersion`` for ``deploy_data_app`` to pin.
 
     configVersion resolution depends on where the app's *source* lives:

@@ -304,7 +304,9 @@ kbagent --json data-app git-repo --project prod --app-id 12345678   # -> https_u
 git push "https://<token>@<managed-host>/keboola/app-12345678.git" HEAD:main
 
 # 4. Deploy. The platform injects the clone credentials at deploy time, so no
-#    credential is wired into the config.
+#    credential is wired into the config. Since vNEXT (CLI-15), this step also
+#    backfills parameters.dataApp.git from the managed repo's URL before
+#    pinning a version -- required for the app to get a workspace at all.
 kbagent data-app deploy --project prod --app-id 12345678 --wait
 ```
 
@@ -318,6 +320,17 @@ credentials at deploy time (the sandboxes-service `testManagedGitRepo.sh`
 contract), so `data-app deploy` on a pure managed repo deploys straight from
 `app.managedGitRepoId`. If a deploy ever reverts to stopped, diagnose it with
 `data-app runs` (`failure_reason` + `startup_logs`).
+
+**Workspace access is a separate concern from cloning (since vNEXT/CLI-15).**
+Cloning needs no credential wiring, as above -- but an app that also reads
+Storage (`runtime.workspace.enabled: true`, the `--workspace` default) needs a
+workspace grant, and that grant is gated on `parameters.dataApp.git` being
+present in Storage config, independent of `managedGitRepoId`. Step 4 above now
+backfills that block automatically before the first deploy, so this flow needs
+no extra manual step. On an older kbagent version, the tell for the
+unpatched gap is `data-app detail` showing `Git: {}` (empty) on a `running`
+app with no `WORKSPACE_ID` -- see the gotchas reference for the manual
+workaround.
 
 ### Manage app-runtime secrets
 
