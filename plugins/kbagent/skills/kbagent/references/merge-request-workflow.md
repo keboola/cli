@@ -1,0 +1,160 @@
+# Merge Request Workflow -- merging a dev branch into production with review
+
+*(since vNEXT, DMD-1900)*
+
+`kbagent merge-request` (alias `mr`) is the non-SOX "Branches 2.0" lifecycle: open a merge
+request from a development branch, optionally get it reviewed, inspect and resolve conflicts,
+merge. Requires the project feature `branches-merge-requests`. Read this before automating any
+of it -- **two things in this group merge production without a human saying so** if you let them.
+
+## The short path (0 required approvals, the non-SOX default)
+
+```bash
+kbagent branch create --project P --name "fix-x"          # auto-activates the branch
+# ... edit configs on the branch (config update / sync push --branch) ...
+kbagent mr create --project P --title "Fix X"              # from the active branch
+kbagent mr detail --project P                              # readiness, blockers, conflicts
+kbagent mr merge --project P                               # prompt -> merge -> branch deleted
+```
+
+Every command except `list` / `create` finds its merge request **from the active branch** when
+`--merge-request-id` (or `--id`) is omitted -- a branch has at most one merge request, ever.
+`--branch B` names another branch; `--merge-request-id N` names the MR directly; both at once
+is exit 2. `--project` is single-project (the `project use` pin works).
+
+`merge` works **straight from `development`** on a 0-approval project: the backend skips the
+review itself. `request-review` is optional there (and lands directly in `approved`);
+`approve` answers **422 in every state** because `in_review` is never reached. Both commands
+exist for projects that require approvals.
+
+## From a script or an agent (`--json`)
+
+```bash
+MR=$(kbagent --json mr create --project P --title "Fix X" --branch 123 | jq .data.id)
+kbagent --json mr detail --project P --merge-request-id "$MR" | jq '.data | {mergeable, merge_blockers}'
+kbagent --json mr merge  --project P --merge-request-id "$MR"     # explicit target REQUIRED
+```
+
+**Under `--json`, every destructive command requires an explicit target** (`--merge-request-id`
+or `--branch`) -- `merge`, `request-review`, `approve`, `resolve`, `auto-merge`. Every destructive
+kbagent command either prompts or is told its target; `--json` has no prompt, so a bare
+`--json mr merge` would be the one command where nothing on the command line says what gets
+destroyed. The check runs before anything is resolved (next section says why the class is
+known up front). Every `--json` result carries `merge_request_id`,
+`branch_from_id` and `resolved_from_branch` so you can assert on what was operated upon.
+
+## What is destructive -- a property of the command, never of a flag or of the MR's state
+
+Anything that moves a merge request **toward or into production** is destructive, always. That
+makes the classification static: a policy is evaluated from the command name alone, before any
+network call, and nothing about it depends on whether the MR happens to be armed.
+
+| command | class | why |
+|---|---|---|
+| `merge` | destructive | deletes the source branch, rewrites production |
+| `request-review` | destructive | on the non-SOX default of 0 approvals it lands the MR directly in `approved` -- where `merge` needs nothing more and an armed auto-merge fires |
+| `approve` | destructive | the last approval is what a merge (or an armed auto-merge) waits for |
+| `resolve` | destructive | removes the blocker a merge is waiting on |
+| `auto-merge` | destructive | see below; `--strategy none` disarms and rides the same command, same class |
+| `create` / `update` / `request-changes` | write | shape the MR without moving it (`request-changes` moves it *away* from approved) |
+
+So an agent run with `--deny-destructive` can **observe and shape** merge requests -- list,
+inspect, diff, open, retitle, send back -- and **cannot move one** by any route. Human mode
+prompts at the two decision points a human must consciously take (`merge`, arming
+`auto-merge`); the other destructive commands warn afterwards when the MR turns out to be armed
+(read off the write's own result -- no extra request).
+
+### Auto-merge is its own command
+
+```bash
+kbagent mr auto-merge --project P --strategy immediately          # arm
+kbagent mr auto-merge --project P --strategy scheduled --at 2026-10-01T09:00:00Z
+kbagent mr auto-merge --project P --strategy none                 # disarm
+```
+
+A backend scheduler runs every `approved` merge request whose strategy is `immediately` (or
+`scheduled` and due) through the **same merge processor** the `merge` command uses -- on its
+own, retrying every tick until it lands, with `merge` never called and nothing in the arming
+call's response saying so. Arming is therefore a delayed production merge and a consciously
+separate step: `create` and `update` do not take an auto-merge flag at all.
+
+## Conflicts
+
+A conflict = a configuration changed in the branch **and** in production since the branch was
+created. The backend computes them live on every `conflicts` call and every `merge` attempt;
+rebasing each listed configuration is sufficient (no re-validate step).
+
+```bash
+kbagent mr conflicts --project P                                     # what is in conflict
+kbagent mr diff --project P --component-id C --config-id I            # per path: both / only you / only production
+kbagent mr resolve --project P --component-id C --config-id I --take ours     # keep your content
+kbagent mr resolve ... --take theirs                                   # adopt production's
+kbagent mr resolve ... --take delete                                   # drop the configuration
+```
+
+For a hand-made three-way merge, the git-mergetool loop with a file as the third pane:
+
+```bash
+kbagent mr diff --project P --component-id C --config-id I --output resolved.json   # your content, prefilled
+$EDITOR resolved.json
+kbagent mr resolve --project P --component-id C --config-id I --resolved @resolved.json
+```
+
+- `diff` reports a side that deleted the configuration wholesale **as a sentence with the
+  `--take` to pick**, not as a table: "Production deleted this configuration; your branch
+  changed it. Resolve with `--take delete` or `--take ours`."
+- The `--output` file carries **all five keys** -- `name`, `description` (an explicit `null`
+  when empty), `isDisabled`, `configuration`, `rows`. Rebase REPLACES the whole configuration:
+  a body missing any of them is refused, because a defaulted `isDisabled` would silently
+  re-enable a disabled configuration and the merge would push that to production. Edit
+  values, do not delete keys.
+- There is no `--all`. Conflicts are meant to be walked; loop over `conflicts --json` yourself
+  if you truly want to take one side everywhere.
+- `--change-description` on a `--take delete` is dropped with a warning -- the delete
+  tombstone has nowhere to carry it.
+
+## What the outputs mean
+
+- **Status** is the *derived* state the web UI shows: `in_development`, `in_review`,
+  `approved`, `in_merge`, `merged`, `closed`, `rejected`. `closed` / `rejected` depend on
+  reviewer status a 0-approval project never populates -- the same blind spot the UI has
+  (DMD-1988). **There is no `close` command**: `request-changes` by the creator is the UI's
+  cancel and leaves the MR in `development`.
+- `detail.mergeable` / `merge_blockers` (`conflicts`, `approvals`, `state`) are
+  informational; the merge itself is the authority (409 → `MR_MERGE_CONFLICT` or
+  `MR_NOT_READY_TO_MERGE`, the latter retryable).
+- The **change log is empty until the MR is sent for review** -- the backend writes it then.
+  Not a gap; "what will this merge" is unavailable in `development`.
+- `allowed_actions` are state-derived and **feature-blind** in `list`: on a project where the
+  feature was later switched off, rows recommend writes that will fail `FEATURE_NOT_ENABLED`.
+  `detail` carries `feature_enabled` (free there) and its hint-next respects it -- read the flag
+  before acting on a detail's actions.
+- A merge whose source branch id could not be read carries **`cleanup_skipped: true`** and
+  `branch_from_id_raw`: the local active-branch reset and sync unlink did **not** run. Key on the
+  flag, not on warning text; recover with `branch reset` + `sync branch-unlink`.
+- Every result may carry `warnings[]` (a failed post-merge cleanup, a dropped
+  change-description). Render or log it.
+- A **truncated conflict list** inside `MR_MERGE_CONFLICT` carries
+  `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
+
+## Errors you will meet
+
+| error | cause | do |
+|---|---|---|
+| `FEATURE_NOT_ENABLED` (exit 5) | project lacks `branches-merge-requests` -- surfaces from ANY command whose target was resolved implicitly, reads included; second wording = SOX project (`protected-default-branch`), which kbagent does not support | enable the feature / use the UI on SOX |
+| `ACCESS_DENIED` on everything but `list` | scoped Storage token; the detail/conflicts endpoints require an admin identity | use a master token |
+| exit 2 `INVALID_ARGUMENT` | both `--merge-request-id` and `--branch`; unknown `--state`/`--take`/`--strategy`; `--json` destructive without a target; `update` with no fields; `--at` without `--strategy scheduled` | fix the flags |
+| `NOT_FOUND` from the resolver | the branch has no merge request | `mr create` |
+| `MR_NOT_READY_TO_MERGE` (retryable) | merge lock, wrong state, another MR merging | retry |
+| `STORAGE_JOB_TIMEOUT` (exit 4) | merge ran past 10 min; it continues server-side | poll `mr detail` |
+
+## Requesting review emails people
+
+With no `--reviewer-id` and no project-designated reviewers, the review-requested notification
+goes to **every project member**. Pass reviewer ids (from `project member-list`) or, on a
+0-approval project, just `merge`.
+
+## `branch merge` is deprecated
+
+It only builds a UI URL (and resets the active branch). It keeps working -- it also serves
+projects without the feature -- but on a project with merge requests enabled use this group.

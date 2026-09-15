@@ -129,6 +129,38 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
     "branch.metadata-delete": "destructive",
+    # Merge requests (non-SOX Branches 2.0). Classification is STATIC -- a
+    # property of the command, never of a flag or of the MR's state -- so a
+    # policy can be evaluated from the command name alone, before any network
+    # call (docs/merge-requests-layer1.md, "What is destructive").
+    # Destructive = moves a merge request toward, or into, production:
+    # `merge` (deletes the source branch, rewrites production); `request-review`
+    # (on the non-SOX default of 0 approvals it lands the MR directly in
+    # `approved`, where an armed auto-merge fires); `approve` (the last approval
+    # is what an armed auto-merge waits for); `resolve` (removes the blocker a
+    # merge is waiting on); `auto-merge` (arms the backend scheduler that merges
+    # on its own -- a delayed production merge, and the disarm rides the same
+    # command). Write = shapes the MR without moving it: `create`, `update`
+    # (title/description/reviewers/external id -- auto-merge is NOT a field
+    # here), `request-changes` (moves it AWAY from approved). Reads are
+    # ungated on the server.
+    "merge-request.list": "read",
+    "merge-request.detail": "read",
+    "merge-request.conflicts": "read",
+    "merge-request.diff": "read",
+    "merge-request.create": "write",
+    "merge-request.update": "write",
+    "merge-request.request-changes": "write",
+    "merge-request.request-review": "destructive",
+    "merge-request.approve": "destructive",
+    "merge-request.resolve": "destructive",
+    "merge-request.merge": "destructive",
+    "merge-request.auto-merge": "destructive",
+    # Serve-only: `GET /merge-requests/{project}/by-branch/{branch_id}` exposes
+    # the branch->MR resolver that the CLI hides behind an omitted
+    # --merge-request-id (there is no active-branch idiom over HTTP). No CLI
+    # leaf command -- exempted from the dead-key check via SERVE_ONLY_OPERATIONS.
+    "merge-request.by-branch": "read",
     # Workspace lifecycle
     "workspace.create": "write",
     "workspace.list": "read",
@@ -405,7 +437,7 @@ FLAG_ESCALATIONS: dict[str, str] = {
 # they have no CLI leaf command, so the command-sync gate would otherwise report
 # them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
 # its "key matching no live command" check.
-SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects"})
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects", "merge-request.by-branch"})
 
 
 # The operation namespace that disappeared with the MCP passthrough, and the
