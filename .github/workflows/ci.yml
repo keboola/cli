@@ -57,9 +57,9 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:
@@ -226,6 +226,33 @@ jobs:
         run: uv run python scripts/check_file_size.py
 
   # ────────────────────────────────────────────────────────────────────────
+  # Dependency vulnerability audit (uv audit, OSV). Kept OUT of the `check`
+  # job on purpose: its verdict depends on the OSV advisory database at run
+  # time, not on the diff, so a newly disclosed CVE – or an OSV outage –
+  # must never turn an unrelated PR's static-analysis gate red. It runs on its
+  # own and is NOT a required check: a finding shows red here for visibility,
+  # but does not block a merge. Dependabot remains the automated fix channel.
+  # ────────────────────────────────────────────────────────────────────────
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.15"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # `uv audit --frozen` reads uv.lock directly; no `uv sync` needed.
+      - name: Dependency audit
+        run: uv audit --frozen
+
+  # ────────────────────────────────────────────────────────────────────────
   # Test suite. pyproject declares `requires-python = ">=3.12"`, so the
   # supported interpreters are 3.12 + 3.13 (3.10/3.11 are intentionally out of
   # scope). `integration` tests are deselected; `e2e` tests self-skip without
@@ -265,9 +292,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:
@@ -312,9 +339,9 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:

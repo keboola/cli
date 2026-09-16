@@ -102,7 +102,7 @@ jobs:
           PY=$(sed -n -E 's/^version = "([^"]+)"/\1/p' pyproject.toml | head -1)
           [ "$PY" = "$VERSION" ] || { echo "::error::tag v$VERSION does not match pyproject version $PY"; exit 1; }
       - uses: astral-sh/setup-uv@v7
-        with: { version: "0.11.16" }
+        with: { version: "0.12.15" }
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: uv sync --extra server

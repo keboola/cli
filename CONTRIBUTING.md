@@ -856,6 +856,7 @@ make check              # CI parity: lint + format + typecheck + skill + version
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
+make audit              # Audit locked dependencies for known vulnerabilities (uv audit, OSV)
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
@@ -889,6 +890,11 @@ Two GitHub Actions workflows guard the repo:
   (`-m "not integration"`; `e2e` self-skips without credentials). Coverage is
   printed (`--cov ... --cov-report=term-missing`) but **informational** --
   there is no `--cov-fail-under` threshold, so coverage never blocks a merge.
+- **`audit` job** (one run, Python 3.12): `uv audit --frozen` against the OSV
+  advisory database. Deliberately separate and **not** a required check -- its
+  result depends on advisories published over time, not on the diff, so a
+  finding shows red here for visibility but never blocks a merge. Run it locally
+  with `make audit`. Dependabot stays the automated fix channel.
 - **`build-windows` job**: real `uv build` wheel checks (issue #320).
 
 `make check` runs the same gates as the `check` + `test` CI jobs locally and is
