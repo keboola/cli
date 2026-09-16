@@ -647,12 +647,24 @@ class ConfigStore:
         config = self.load()
         return config.projects.get(alias)
 
-    def set_project_branch(self, alias: str, branch_id: int | None) -> None:
+    def set_project_branch(
+        self,
+        alias: str,
+        branch_id: int | None,
+        branch_name: str | None = None,
+    ) -> None:
         """Set or clear the active development branch for a project.
+
+        The branch name is persisted next to the ID (issue #766) so the
+        "Using active dev branch ..." echo on every branch-aware command can
+        name the branch without an API call. Resetting (``branch_id=None``)
+        always clears the name too -- a stale name beside a null ID would be
+        exactly the misleading signal this exists to prevent.
 
         Args:
             alias: The project alias.
             branch_id: Branch ID to activate, or None to reset to main.
+            branch_name: Human-readable branch name; ignored when branch_id is None.
 
         Raises:
             ConfigError: If the alias does not exist.
@@ -663,6 +675,9 @@ class ConfigStore:
                 raise self.project_not_found_error(alias)
             self._reject_ephemeral_mutation(config, alias, "modified")
             config.projects[alias].active_branch_id = branch_id
+            config.projects[alias].active_branch_name = (
+                branch_name if branch_id is not None else None
+            )
             self.save(config)
 
     @staticmethod

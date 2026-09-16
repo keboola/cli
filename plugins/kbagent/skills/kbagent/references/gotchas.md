@@ -321,6 +321,45 @@ Versioning convention:
   care as any other long-lived secret, not as a lesser one than a scoped
   Storage token.
 
+## A `branch use` pin routes reads AND writes to the dev branch for days; every command now says so
+
+*(since vNEXT, #766)*
+
+- **The pin is persistent, not per-shell.** `branch use` / `branch create`
+  write `active_branch_id` into config.json and it stays until `branch
+  reset`. A branch activated for one task governs an unrelated task days
+  later: a `config update` and a 73-minute job once landed on a forgotten
+  dev branch while the operator watched production for the result.
+- **Before vNEXT, `--json` carried NO signal at all**, and `config update` /
+  `rename` / `delete` / `row-*` / `set-default-bucket` and `flow new` /
+  `update` / `delete` / `schedule*` said nothing in ANY mode -- they applied
+  the pin in the service layer (`branch_id or project.active_branch_id`)
+  while only the command layer printed the human info line. `--dry-run`
+  reported success identically for production and a branch.
+- **Now every branch-aware command echoes its target.** Human mode: `Info:
+  Using active dev branch 456 'feature-x' for project 'prod' -- reads AND
+  writes target that branch, not production (...)` on stderr. `--json`: a
+  top-level `branch` key NEXT TO `data` in the envelope --
+  `{"id": 456, "source": "active", "project": "prod", "active_branch_id":
+  456, "active_branch_name": "feature-x"}`. `source` is `explicit`
+  (`--branch`), `active` (pin) or `production` (`id` null; also what a
+  storage READ that deliberately ignores the pin reports, with the pin still
+  visible in `active_branch_id`). **The key is ABSENT on commands that are
+  not branch-scoped** (`project list`, `token list`, ...) -- absence means
+  "not branch-scoped", never "production". Read `branch.id` before trusting
+  a `--dry-run` or starting a job.
+- **`kbagent branch current`** is the offline "where am I?" (id + name per
+  project + the config path the pins came from -- a pin set under one
+  `--config-dir` / `.kbagent` tree is invisible from another, which is the
+  usual reason `branch list`'s `Active` column looks empty). `kbagent
+  doctor` WARNs (`active_dev_branches`) on any pinned project; WARN, not
+  FAIL, so `healthy` stays true.
+- **The branch NAME is captured at pin time** (`active_branch_name`, cleared
+  with the id). A pin written by an older kbagent shows the id only until it
+  is re-set.
+- **Version counters are per branch.** A config reading `v11` where the UI
+  shows `v54` is the other tell that you are on a branch copy.
+
 ## `doctor`'s `claude_plugin` check: `warn`/`skip` is not a setup failure (since v0.92.0, #704)
 
 - **The plugin is an upgrade, not a prerequisite.** `kbagent context` gives

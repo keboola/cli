@@ -3,8 +3,9 @@
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from rich.console import Console
 from rich.panel import Panel
@@ -93,6 +94,33 @@ def write_machine_output(text: str) -> None:
     buffer.flush()
 
 
+BranchSource = Literal["explicit", "active", "production"]
+
+
+@dataclass(frozen=True)
+class BranchContext:
+    """Which branch a branch-aware command ended up targeting (issue #766).
+
+    Produced by ``resolve_branch()`` and attached to the formatter, so the
+    JSON envelope of EVERY branch-aware command carries it without each
+    command threading the value through its own payload. ``id`` is the
+    effective branch (None = production); ``active_branch_id`` /
+    ``active_branch_name`` mirror the ``branch use`` pin whether or not it
+    was honoured, so a read that deliberately ignored the pin still shows
+    the operator that a pin exists.
+    """
+
+    id: int | None
+    source: BranchSource
+    project: str | None
+    active_branch_id: int | None
+    active_branch_name: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Plain-dict form for the JSON envelope."""
+        return asdict(self)
+
+
 class OutputFormatter:
     """Formats CLI output as either JSON (for machines/agents) or Rich (for humans).
 
@@ -108,6 +136,8 @@ class OutputFormatter:
     ) -> None:
         self.json_mode = json_mode
         self.verbose = verbose
+        # Set by resolve_branch(); surfaced on the JSON envelope by output().
+        self.branch_context: BranchContext | None = None
         is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
         force_terminal = None if is_tty and not no_color else False
         self.console = Console(
@@ -132,8 +162,7 @@ class OutputFormatter:
                            human-friendly output. If None in human mode, prints repr.
         """
         if self.json_mode:
-            response = SuccessResponse(status="ok", data=data)
-            write_machine_output(response.model_dump_json(indent=2))
+            write_machine_output(self._success_envelope(data))
         else:
             if human_formatter is not None:
                 human_formatter(self.console, data)
@@ -174,10 +203,14 @@ class OutputFormatter:
                 retryable=retryable,
                 details=details if details else None,
             )
-            error_envelope = {
+            error_envelope: dict[str, Any] = {
                 "status": "error",
                 "error": err.model_dump(exclude_none=True),
             }
+            # Same additive key as the success envelope (issue #766): a
+            # failed write should still say which branch it was aimed at.
+            if self.branch_context is not None:
+                error_envelope["branch"] = self.branch_context.to_dict()
             write_machine_output(json.dumps(error_envelope, indent=2))
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")
@@ -189,10 +222,25 @@ class OutputFormatter:
             message: The success message to display.
         """
         if self.json_mode:
-            response = SuccessResponse(status="ok", data={"message": message})
-            write_machine_output(response.model_dump_json(indent=2))
+            write_machine_output(self._success_envelope({"message": message}))
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
+
+    def _success_envelope(self, data: Any) -> str:
+        """Serialize the ``{"status": "ok", "data": ...}`` envelope.
+
+        The ``branch`` key is added ONLY when a BranchContext was recorded
+        (issue #766); it is excluded -- not emitted as null -- otherwise, so
+        consumers can key off presence: absent means the command is not
+        branch-scoped, never that it ran on production. ``exclude`` is
+        scoped to that one top-level field on purpose -- a blanket
+        ``exclude_none`` would also strip nulls from inside ``data`` and
+        change every existing payload.
+        """
+        branch = self.branch_context.to_dict() if self.branch_context is not None else None
+        response = SuccessResponse(status="ok", data=data, branch=branch)
+        exclude = {"branch"} if branch is None else None
+        return response.model_dump_json(indent=2, exclude=exclude)
 
     def warning(self, message: str) -> None:
         """Output a warning message to stderr (human mode only).

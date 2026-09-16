@@ -732,6 +732,7 @@ kbagent permissions check OPERATION
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
 kbagent branch use --project ALIAS --branch ID
+kbagent branch current [--project NAME]
 kbagent branch reset --project ALIAS
 kbagent branch delete --project ALIAS --branch ID
 kbagent branch merge --project ALIAS [--branch ID]
@@ -739,6 +740,17 @@ kbagent branch metadata-list --project NAME [--branch ID|default]
 kbagent branch metadata-get --project NAME --key KEY [--branch ID|default]
 kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
+# Branch visibility (#766): a `branch use` pin persists in config.json across sessions/days and every
+#   branch-aware command (config reads AND writes, job run, flow writes) silently targeted it -- in
+#   --json there was NO signal at all, and `config update` (+ rename/delete/row-*/set-default-bucket,
+#   flow new/update/delete/schedule*) said nothing in ANY mode because only the service layer applied
+#   the pin. Now: human mode prints `Info: Using active dev branch <id> '<name>' ...` on stderr; --json
+#   adds a top-level `branch` key beside `data`: {id, source explicit|active|production, project,
+#   active_branch_id, active_branch_name}. ABSENT on non-branch-scoped commands (absence != production).
+#   `branch current` = offline "where am I?" (id + name per project, config path); `doctor` WARNs
+#   (check `active_dev_branches`) on any pinned project. The branch NAME is captured at `branch use` /
+#   `branch create` time (config.json `active_branch_name`, cleared with the id); pins written before
+#   this field show the id only. Version gate for this entry lives in gotchas.md.
 # branch merge is DEPRECATED (since 0.94.0): it only builds a UI URL and resets the active branch. On a
 #   project with `branches-merge-requests` use the merge-request group below; the command keeps working
 #   (it also serves projects without the feature) and now carries `deprecation` in --json.

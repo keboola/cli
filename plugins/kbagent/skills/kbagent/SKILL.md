@@ -44,6 +44,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 7. **Always `--dry-run` first** for destructive operations (`config update`, `config delete`, `storage delete-*`, `branch delete`, `sync push`). Show the user the diff and get explicit confirmation before applying.
 8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
+10. **Know which branch you are writing to.** A `branch use` pin persists for days and routes every branch-aware command (config reads AND writes, `job run`, flow writes) to that dev branch. Run `kbagent branch current --project P` before a write or a long job, and read the top-level `branch` key in every `--json` envelope (`source`: `explicit` / `active` / `production`; absent = not branch-scoped) -- a `--dry-run` that looks fine may be previewing the branch copy. See [branch-workflow](references/branch-workflow.md).
 
 ## Safe write workflow
 
@@ -237,6 +238,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
+| Show which branch each project's commands currently target | `kbagent branch current` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
 | [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |

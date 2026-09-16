@@ -25,7 +25,8 @@ from ..constants import (
     EXIT_PERMISSION_DENIED,
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
-from ..output import OutputFormatter
+from ..models import ProjectConfig
+from ..output import BranchContext, OutputFormatter
 
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
@@ -331,6 +332,11 @@ def resolve_branch(
     When an active branch is resolved from config, --project is also set
     to the project alias (branch is per-project).
 
+    Every call records a ``BranchContext`` on the formatter (issue #766), so
+    the JSON envelope of the command carries ``branch: {id, source, ...}`` --
+    an agent driving ``--json`` otherwise had NO signal that a days-old
+    ``branch use`` pin was routing its reads and writes to a dev branch.
+
     Args:
         config_store: Config store for looking up project configs.
         formatter: Output formatter for info messages.
@@ -348,51 +354,73 @@ def resolve_branch(
     Returns:
         Tuple of (effective_project, effective_branch_id).
     """
+    alias, proj_config = _find_branch_pin(config_store, project)
+    pinned_id = proj_config.active_branch_id if proj_config is not None else None
+    pinned_name = proj_config.active_branch_name if proj_config is not None else None
+
+    if branch is not None:
+        effective_id: int | None = branch
+        source = "explicit"
+    elif pinned_id is not None and not ignore_active_branch:
+        effective_id = pinned_id
+        source = "active"
+    else:
+        effective_id = None
+        source = "production"
+
+    formatter.branch_context = BranchContext(
+        id=effective_id,
+        source=source,
+        project=alias,
+        active_branch_id=pinned_id,
+        active_branch_name=pinned_name,
+    )
+
     if branch is not None:
         return project, branch
+    if pinned_id is None:
+        return project, None
 
+    label = f"{pinned_id} '{pinned_name}'" if pinned_name else str(pinned_id)
+    if ignore_active_branch:
+        if not formatter.json_mode:
+            formatter.err_console.print(
+                f"[bold blue]Info:[/bold blue] Using production branch for read "
+                f"(active dev branch {label} on project '{alias}' ignored; "
+                f"pass --branch {pinned_id} to override)"
+            )
+        return alias, None
+    if not formatter.json_mode:
+        formatter.err_console.print(
+            f"[bold blue]Info:[/bold blue] Using active dev branch {label} for project "
+            f"'{alias}' -- reads AND writes target that branch, not production "
+            f"(`kbagent branch reset --project {alias}` to leave it)"
+        )
+    return alias, pinned_id
+
+
+def _find_branch_pin(
+    config_store: ConfigStore, project: str | None
+) -> tuple[str | None, ProjectConfig | None]:
+    """Locate the project whose ``branch use`` pin governs this call.
+
+    With an explicit alias, that project's config (or None when unknown --
+    the caller's own alias validation reports it). Without one, the single
+    project carrying an active branch, if exactly one does: with several
+    pinned projects the pick would be a guess, so none is returned and the
+    command runs on production (pre-#766 behaviour, unchanged).
+    """
     if project is not None:
-        proj_config = config_store.get_project(project)
-        if proj_config and proj_config.active_branch_id is not None:
-            if ignore_active_branch:
-                if not formatter.json_mode:
-                    formatter.err_console.print(
-                        f"[bold blue]Info:[/bold blue] Using production branch for read "
-                        f"(active dev branch '{proj_config.active_branch_id}' ignored; "
-                        f"pass --branch {proj_config.active_branch_id} to override)"
-                    )
-                return project, None
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj_config.active_branch_id}) for project '{project}'"
-                )
-            return project, proj_config.active_branch_id
-    else:
-        config = config_store.load()
-        active_projects = [
-            (alias, proj)
-            for alias, proj in config.projects.items()
-            if proj.active_branch_id is not None
-        ]
-        if len(active_projects) == 1:
-            alias, proj = active_projects[0]
-            if ignore_active_branch:
-                if not formatter.json_mode:
-                    formatter.err_console.print(
-                        f"[bold blue]Info:[/bold blue] Using production branch for read "
-                        f"(active dev branch '{proj.active_branch_id}' on project '{alias}' "
-                        f"ignored; pass --branch {proj.active_branch_id} to override)"
-                    )
-                return alias, None
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj.active_branch_id}) for project '{alias}'"
-                )
-            return alias, proj.active_branch_id
-
-    return project, None
+        return project, config_store.get_project(project)
+    config = config_store.load()
+    pinned = [
+        (alias, proj)
+        for alias, proj in config.projects.items()
+        if proj.active_branch_id is not None
+    ]
+    if len(pinned) == 1:
+        return pinned[0]
+    return None, None
 
 
 _CONFIRM_CODE_LENGTH = 4

@@ -716,6 +716,9 @@ def config_update(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     # --- Parse configuration content ------------------------------------------
     config_dict: dict | None = None
@@ -924,6 +927,9 @@ def config_set_default_bucket(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     if bucket is not None and clear:
         formatter.error(
@@ -1038,6 +1044,9 @@ def config_rename(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     # Auto-detect sync directory from CWD if not specified
     effective_directory = directory
@@ -1117,6 +1126,9 @@ def config_delete(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     try:
         result = service.delete_config(
@@ -1374,6 +1386,10 @@ def config_new(
     # ── Push path: also create remotely via Storage API ──────────────────────
     if push:
         config_service = get_service(ctx, "config_service")
+        # --push requires --project (validated above), so the pin is per that
+        # alias. Echo + record the effective branch (issue #766); the service
+        # would fall back to the same pin silently otherwise.
+        _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
         try:
             push_result = config_service.create_config(
                 alias=project,
@@ -2230,6 +2246,9 @@ def config_row_create(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     config_dict: dict | None = None
     if configuration:
@@ -2403,6 +2422,9 @@ def config_row_update(
 
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     config_dict: dict | None = None
     if configuration:
@@ -2516,6 +2538,9 @@ def config_row_delete(
         raise typer.Exit(code=0)
 
     service = get_service(ctx, "config_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     try:
         result = service.delete_config_row(

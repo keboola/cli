@@ -5,8 +5,10 @@ No business logic belongs here.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
+from rich.console import Console
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
@@ -144,6 +146,54 @@ def branch_use(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+@branch_app.command("current")
+def branch_current(
+    ctx: typer.Context,
+    project: list[str] | None = typer.Option(
+        None,
+        "--project",
+        help="Project alias to report (can be repeated; default: every registered project)",
+    ),
+) -> None:
+    """Show which branch each project's commands currently target.
+
+    Offline "where am I?" check (issue #766): a `branch use` pin persists
+    across shell sessions and days, and every branch-aware command then
+    silently reads from AND writes to that dev branch. Run this before a
+    write or a long job when in doubt; `branch reset` leaves the branch.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "branch_service")
+
+    try:
+        result = service.current_branch(aliases=project)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+    formatter.output(result, _format_branch_current)
+
+
+def _format_branch_current(console: Console, data: dict[str, Any]) -> None:
+    """One line per project: the pinned dev branch, or ``main (production)``."""
+    for row in data.get("projects", []):
+        alias = row["project_alias"]
+        branch_id = row.get("active_branch_id")
+        if branch_id is None:
+            console.print(f"[bold magenta]{alias}[/bold magenta]  main [dim](production)[/dim]")
+            continue
+        name = row.get("active_branch_name") or ""
+        label = f"{branch_id} '{name}'" if name else str(branch_id)
+        console.print(
+            f"[bold magenta]{alias}[/bold magenta]  [bold green]dev branch {label}[/bold green]"
+            f"  [dim](writes target this branch; `kbagent branch reset --project {alias}`"
+            " to leave)[/dim]"
+        )
+    if data.get("active_count", 0) == 0:
+        console.print("[dim]No dev branch is active -- every command targets production.[/dim]")
+    console.print(f"[dim]Pins read from: {data.get('config_path', '')}[/dim]")
 
 
 @branch_app.command("reset")

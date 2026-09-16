@@ -28,6 +28,7 @@ kbagent --json branch merge --project ALIAS
 | `branch list` | List all branches (marks active one) |
 | `branch create --name "..."` | Create + auto-activate |
 | `branch use --branch ID` | Switch to existing branch |
+| `branch current` | *(since vNEXT)* Which branch each project's commands target right now (offline) |
 | `branch reset` | Switch back to main/production |
 | `branch delete --branch ID` | Delete branch (resets if it was active) |
 | `branch merge` | DEPRECATED (since 0.94.0): get merge URL, reset to main. On a project with `branches-merge-requests` use `merge-request` -- see [merge-request-workflow.md](merge-request-workflow.md) |
@@ -36,7 +37,10 @@ kbagent --json branch merge --project ALIAS
 
 - **Async operations**: `branch create` and `branch delete` are async on the API. kbagent waits for completion (typically 1-3s). No need to poll.
 - **Merge from the CLI needs the merge-request group** *(since 0.94.0)*: `branch merge` only returns a URL for the Keboola UI (and is deprecated). On a project with the `branches-merge-requests` feature, `kbagent merge-request create` + `merge-request merge` merge via the API with review and conflict resolution -- see [merge-request-workflow.md](merge-request-workflow.md).
-- **Active branch persistence**: stored in kbagent config. Survives between sessions.
+- **Active branch persistence**: stored in kbagent config. Survives between sessions -- and days. A branch activated for one task silently governs an unrelated task later (issue #766: a `config update` and a 73-minute job landed on a forgotten dev branch). Two safeguards *(since vNEXT)*:
+  - **Every branch-aware command echoes its target.** Human mode: `Info: Using active dev branch 456 'feature-x' for project 'prod' -- reads AND writes target that branch, not production (...)` on stderr. `--json`: a top-level `branch` key beside `data` -- `{"id": 456, "source": "active", "project": "prod", "active_branch_id": 456, "active_branch_name": "feature-x"}`; `source` is `explicit` / `active` / `production` (`id` null). The key is ABSENT on commands that are not branch-scoped, so absence never means production. **Check `branch.id` before trusting a `--dry-run` or starting a job.** This now covers `config update` / `rename` / `delete` / `row-*` / `set-default-bucket` and `flow new` / `update` / `delete` / `schedule*`, which used to apply the pin in the service layer with no message in ANY mode.
+  - **`kbagent branch current`** answers "where am I?" offline; `kbagent doctor` WARNs on any pinned project.
+  - The other tell: a config `version` far below what the UI shows -- version counters are per branch.
 - **Config commands respect active branch**: `config list`, `config detail`, and `config search` auto-scope to the active branch. Use `--branch ID` to override.
 - **Workspaces respect active branch**: `workspace create` and `workspace delete` operate in the active branch context.
 - **Sync respects active branch**: `sync pull` writes dev branch configs into a separate directory (e.g. `fix-etl/` instead of `main/`). `sync diff` and `sync push` also auto-scope to the active branch. See [sync-workflow.md](sync-workflow.md) for details.
