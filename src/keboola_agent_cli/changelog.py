@@ -24,6 +24,29 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.95.0": [
+        "New (#772): `auth login`'s device-code panel now offers `press c to copy` for the "
+        "verification link, and leads with the pre-filled one-click link. The panel used to print "
+        "the manual URL + code first and the pre-filled `verification_uri_complete` link last, "
+        "under `Or open this link (code pre-filled):`; that link is now the headline and the "
+        "type-the-code URL is the fallback below it. The copy hint reads the single keypress "
+        "inside the wait the command already does between device-token polls -- no background "
+        "thread, no redraw -- and copies through a native clipboard command (`pbcopy`, `clip`, "
+        "`wl-copy`, `xclip`, `xsel`, or `clip.exe` on WSL). It disables itself and prints nothing "
+        "in `--json` mode, off a TTY, or when no clipboard command is installed, so a scripted or "
+        "agent-driven login is byte-for-byte unchanged.",
+        "Note (#768): building kbagent from source now requires uv 0.12.15 or newer "
+        "(`uv self update`) -- CI gates on `uv audit` instead of pip-audit (CLI-16). This is a "
+        "contributor-facing requirement: it comes from `[tool.uv] required-version` in this "
+        "repository's `pyproject.toml`, so installing or updating a published kbagent is "
+        "unaffected. The dependency audit also moved into its own non-blocking CI job, so an "
+        "advisory in a transitive dependency reports without failing an unrelated PR.",
+        "Note (#773): housekeeping with no user-facing change. #773 makes the `_url_copy` tests "
+        "type-clean (`ty` rejected reading a Rich console's `StringIO` back through "
+        "`Console.file`) and independent of the machine they run on -- two of them asserted that "
+        "no clipboard backend is detected, which is true only in a bare CI container and false on "
+        "macOS, Windows, WSL, or any Linux desktop.",
+    ],
     "0.94.0": [
         "New (#759): a browser-login session (`auth login`) now works with nearly every command, "
         "not just the Storage and Manage paths (CLI-13). It reaches the Scheduler (`flow schedule` / "
