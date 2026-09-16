@@ -3708,7 +3708,11 @@ Other behaviors of this family:
   `data-app password`); the `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
-## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed; workspace-provisioning gap fixed vNEXT/CLI-15)
+## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
+
+**A workspace-provisioning gap in the guidance below was fixed in vNEXT
+(CLI-15)** -- see the correction bullet at the end of this section before
+relying on anything above it about workspace access.
 
 `--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
 (POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It
