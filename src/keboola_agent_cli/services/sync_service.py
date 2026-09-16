@@ -114,11 +114,7 @@ from ._sync_writeback import (
     stamp_updated_config,
 )
 from .base import BaseService, ClientFactory, find_default_branch_id
-from .data_app_service import (
-    DATA_APP_COMPONENT_ID,
-    DataScienceClientFactory,
-    _default_ds_client_factory,
-)
+from .data_app_service import DATA_APP_COMPONENT_ID, DataScienceClient, DataScienceClientFactory
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +264,11 @@ class SyncService(BaseService):
         # for ``keboola.data-apps`` configs, whose runtime type lives on the DS
         # ``/apps`` record and would otherwise be lost by pull/clone (CLI-8).
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ds_client_factory = ds_client_factory or _default_ds_client_factory
+        from .base import make_session_aware_client_factory
+
+        self._ds_client_factory = ds_client_factory or make_session_aware_client_factory(
+            config_store, DataScienceClient
+        )
 
     # ------------------------------------------------------------------
     # init
