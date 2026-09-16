@@ -103,6 +103,43 @@ retiring the git-HEAD risk.
 Set with `gh secret set <NAME> --env release --repo keboola/cli` piping the value via
 **stdin** (never argv); shred the temp file after.
 
+#### Creating `WINGET_TOKEN` (step-by-step)
+
+The `winget` release job (`.github/workflows/release-kbagent.yml`) needs a classic PAT
+belonging to an **org-owned bot account** — never a personal token — because
+`wingetcreate` forks `microsoft/winget-pkgs` and opens the PR as whoever owns the
+token.
+
+1. Get (or create) an org-owned GitHub bot account for this purpose — not a personal
+   account. It only needs to be a regular GitHub user; it does **not** need to be a
+   member of the `keboola` org or have any repo permissions here, since the token is
+   only ever used against the external `microsoft/winget-pkgs` repo.
+2. Sign in to GitHub as that bot account.
+3. Go to **Settings → Developer settings → Personal access tokens → Tokens
+   (classic)** (`https://github.com/settings/tokens`).
+4. Click **Generate new token (classic)**.
+5. Name it something identifiable, e.g. `wingetcreate-keboola-cli2`.
+6. Set an expiration per org security policy (rotate before it lapses — an expired
+   token fails the release job with an auth error, not a build error).
+7. Under scopes, check **only** `public_repo`. Nothing else is needed.
+8. Click **Generate token** and copy the value — GitHub shows it exactly once.
+9. Store it as the repo secret, scoped to the `release` environment, piping the value
+   via stdin so it never lands in shell history:
+   ```
+   gh secret set WINGET_TOKEN --env release --repo keboola/cli
+   ```
+   (paste the token, then Ctrl-D / Enter depending on your shell — see the `Set with`
+   line above for the general pattern).
+10. Shred any temp file or clipboard copy of the token once it's set.
+
+This alone does not turn the `winget` job green: as of this writing that job is
+disabled (`if: false`) because `Keboola.KeboolaCLI2` has never had its **first**
+submission to `microsoft/winget-pkgs` — `wingetcreate update` only bumps an existing
+manifest, it can't create one. Someone with the token above still needs to run
+`wingetcreate submit` once by hand (see the NOTE in the `winget:` job for what that
+first manifest must set, e.g. `License: Apache-2.0`) before the automated per-release
+`update` job can be re-enabled.
+
 ### Rollout
 
 1. **P0** — npm-hook prebuilt wheel + PyPI (OIDC). Instant `uv`/`uvx`/`pipx` parity.
