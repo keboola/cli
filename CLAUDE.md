@@ -739,11 +739,11 @@ kbagent branch metadata-list --project NAME [--branch ID|default]
 kbagent branch metadata-get --project NAME --key KEY [--branch ID|default]
 kbagent branch metadata-set --project NAME --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]
 kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
-# branch merge is DEPRECATED (since vNEXT): it only builds a UI URL and resets the active branch. On a
+# branch merge is DEPRECATED (since 0.94.0): it only builds a UI URL and resets the active branch. On a
 #   project with `branches-merge-requests` use the merge-request group below; the command keeps working
 #   (it also serves projects without the feature) and now carries `deprecation` in --json.
 
-# merge-request (since vNEXT, DMD-1900): the non-SOX Branches 2.0 lifecycle. Hidden alias `mr`. Every
+# merge-request (since 0.94.0, DMD-1900): the non-SOX Branches 2.0 lifecycle. Hidden alias `mr`. Every
 #   command except list/create takes `[--merge-request-id N | --id N] [--branch B]`: omitted, the target is
 #   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
 #   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI

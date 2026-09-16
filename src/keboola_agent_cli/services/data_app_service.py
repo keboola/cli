@@ -53,6 +53,12 @@ logger = logging.getLogger(__name__)
 DataScienceClientFactory = Callable[[str, str], DataScienceClient]
 
 
+def make_default_ds_client_factory(config_store: Any) -> DataScienceClientFactory:
+    """Session-aware default DS client factory, shared by DataAppService and
+    SyncService so both reach browser-login projects the same way."""
+    return make_session_aware_client_factory(config_store, DataScienceClient)
+
+
 # ---------------------------------------------------------------------------
 # Constants encoded from the writeup
 # ---------------------------------------------------------------------------
@@ -151,9 +157,7 @@ class DataAppService(BaseService):
         encrypt_service: EncryptService | None = None,
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ds_client_factory = ds_client_factory or make_session_aware_client_factory(
-            config_store, DataScienceClient
-        )
+        self._ds_client_factory = ds_client_factory or make_default_ds_client_factory(config_store)
         self._encrypt_service = encrypt_service or EncryptService(
             config_store=config_store, client_factory=client_factory
         )

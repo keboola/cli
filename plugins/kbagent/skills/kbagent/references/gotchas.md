@@ -179,7 +179,7 @@ Versioning convention:
   silently skipped, unlike the original 0.80.0 `--register-projects` batch
   path. Collision handling matches `--register-projects` above: never
   overwrites an existing `config.json` entry.
-- **A session works with almost every client** *(since vNEXT)*. Only three
+- **A session works with almost every client** *(since 0.94.0)*. Only three
   features still require a static Storage token and fail FAST with
   `AUTH_NOT_SUPPORTED_ON_STACK` on a session project, naming the static-token
   fallback, rather than silently sending the `kbc-session://` sentinel as if it
@@ -751,17 +751,17 @@ fall back to the normal priority chain.
 
 ## `sync pull` / `sync clone` now keep the config folder (`KBC.configuration.folderName`)
 
-*(since vNEXT)*
+*(since 0.94.0)*
 
 A config's UI folder is config metadata under `KBC.configuration.folderName`. It
 comes from a branch-only `search/component-configurations` call, not from the
-`list_components_with_configs` body that pull reads for config data. Before vNEXT
+`list_components_with_configs` body that pull reads for config data. Before 0.94.0
 `sync pull` never fetched it, so `sync pull` and `sync clone` silently dropped the
 folder and every config landed in the tree root. Nothing warned about it. On a
-pre-vNEXT kbagent a golden-reference `sync clone` still produces a folder-less
+pre-0.94.0 kbagent a golden-reference `sync clone` still produces a folder-less
 clone -- check the version, or verify the folders came across after a clone.
 
-Since vNEXT pull fetches the folder for each config and stores
+Since 0.94.0 pull fetches the folder for each config and stores
 `KBC.configuration.folderName` in the manifest entry's `metadata`. `sync clone`
 re-points its production configs onto the branch push resolves for the target,
 so the create-path writeback matches the placeholder and the push create path
@@ -814,7 +814,7 @@ without losing data.
 
 ## `sync` carries a data app's runtime type: pull records it, push and clone send it
 
-A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since vNEXT).
+A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since 0.94.0).
 
 `sync pull` now reads the type from the DS `/apps` list and records it in the config's `_keboola` block as `data_app_type`. The config hash already ignores that key, so it adds no `sync diff` noise. `sync push` and `sync clone` route a `keboola.data-apps` CREATE through the Data Science `create_app` when the local config carries a `data_app_type`. That call sends the type and writes the new app's `parameters.id`. A config with no recorded type still uses the plain `create_config` path.
 
@@ -5100,7 +5100,7 @@ It carries the command name, the outcome, and the duration -- never argument val
 
 ## `merge-request` group: arming auto-merge IS a production merge
 
-*(since vNEXT, DMD-1900)*
+*(since 0.94.0, DMD-1900)*
 
 `kbagent merge-request` (alias `mr`) merges a dev branch into production with review
 (non-SOX "Branches 2.0", project feature `branches-merge-requests`). Full playbook:
