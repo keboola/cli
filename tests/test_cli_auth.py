@@ -244,7 +244,7 @@ class TestLogin:
         assert result.exit_code == 0, result.output
         assert "https://connection.keboola.com/device" in result.output
         assert "ABCD-EFGH" in result.output
-        assert "Or open this link (code pre-filled):" in result.output
+        assert "Or enter the code by hand at this URL:" in result.output
         assert "https://connection.keboola.com/device?user_code=ABCD-EFGH" in result.output
 
     def test_device_login_panel_omits_one_click_link_when_absent(self, tmp_path: Path) -> None:
@@ -263,7 +263,7 @@ class TestLogin:
         assert result.exit_code == 0, result.output
         assert "https://connection.keboola.com/device" in result.output
         assert "ABCD-EFGH" in result.output
-        assert "Or open this link" not in result.output
+        assert "Or enter the code by hand" not in result.output
 
 
 class TestLoginPassword:
