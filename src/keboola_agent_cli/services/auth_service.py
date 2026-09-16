@@ -206,6 +206,7 @@ class AuthService:
         register_projects: bool = False,
         on_device_prompt: Callable[[DeviceAuthorization], None] | None = None,
         on_notice: Callable[[str], None] | None = None,
+        device_wait: Callable[[float], None] | None = None,
     ) -> LoginResult:
         """Run the browser-login flow to a durable session, then introspect it.
 
@@ -262,7 +263,10 @@ class AuthService:
                 outcome = run_device_flow(
                     client,
                     on_prompt=self._wrap_device_prompt(prompt, notice),
-                    sleep=self._sleep,
+                    # `device_wait`, when the command layer passes one, waits
+                    # between polls AND watches the keyboard for the 'press c to
+                    # copy' option; otherwise the plain injected sleep is used.
+                    sleep=device_wait or self._sleep,
                 )
                 tokens = outcome.tokens
 
