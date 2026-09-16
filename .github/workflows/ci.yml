@@ -57,7 +57,7 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
@@ -69,6 +69,10 @@ jobs:
         # `--extra server` pulls in fastapi/uvicorn/sse-starlette/python-multipart/
         # croniter so the test suite can import `keboola_agent_cli.server.*`.
         run: uv sync --extra server
+
+      - name: Dependency audit
+        # Checks locked packages against OSV; the preview warning is expected.
+        run: uv audit --frozen
 
       - name: Lint
         run: uv run ruff check src/ tests/ scripts/
@@ -265,7 +269,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
@@ -312,7 +316,7 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 

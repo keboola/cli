@@ -171,8 +171,10 @@ dev = [
     "ruff>=0.16",
     "ty>=0.0.33",
     "bandit>=1.9.4",
-    "pip-audit>=2.10.0",
 ]
+
+[tool.uv]
+required-version = ">=0.12.15"
 
 [tool.ty.src]
 include = ["src", "tests", "scripts"]

@@ -852,10 +852,11 @@ foot-gun.
 ## Running CI Locally
 
 ```bash
-make check              # CI parity: lint + format + typecheck + skill + version + command-sync + endpoints + changelog + error-codes + sentinel-guards + test
+make check              # CI parity: lint + format + typecheck + audit + skill + version + command-sync + endpoints + changelog + error-codes + sentinel-guards + test
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
+make audit              # Audit locked dependencies for known vulnerabilities (uv audit, OSV)
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
