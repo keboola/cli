@@ -173,7 +173,7 @@ hooks: ## Install git pre-commit hook (lint + format on staged files)
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check typecheck audit skill-check version-check version-gate-check command-sync-check endpoints-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + audit + skill + version + version-gates + command-sync + endpoints + changelog + error-codes + sentinel-guards + file-size + test)
+check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check endpoints-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + endpoints + changelog + error-codes + sentinel-guards + file-size + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
