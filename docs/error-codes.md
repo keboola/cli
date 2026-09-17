@@ -194,3 +194,9 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 |---|---|
 | `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
 | `MR_MERGE_CONFLICT` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |
+
+### Row-Level Security
+
+| Code | Description |
+|---|---|
+| `INVALID_RLS_POLICY` | An `rls create`/`update` candidate body (`table`/`dialect`/`rules`/`condition`) failed validation -- either the schema-independent local checks (unknown op, `principal`/`principals` not exactly one) or the live JSON-Schema check against the metastore's `rls-policy` schema when reachable. The message lists every violation found; nothing was written. Not retryable |

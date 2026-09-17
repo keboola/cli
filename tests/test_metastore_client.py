@@ -338,7 +338,95 @@ class TestSemanticTypes:
             "semantic-constraint",
             "semantic-glossary",
             "semantic-reference-data",
+            "rls-policy",
         }
+
+
+class TestPostItemScope:
+    """post_item/put_item default to project scope but accept organization/
+
+    targeted -- CLI-17: rls-policy is the first type that must never use
+    plain project scope.
+    """
+
+    def test_default_scope_is_still_project(self, httpx_mock, metastore_client) -> None:
+        """Every existing caller (semantic-layer) keeps its current behavior."""
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            json={"data": {"type": "semantic-metric", "id": "new-id", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item("semantic-metric", name="rev", data={"name": "rev"})
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "project"
+        assert "targetProjectIds" not in body
+
+    def test_organization_scope(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy",
+            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item(
+            "rls-policy",
+            name="in.c-crm.invoices",
+            data={"table": "in.c-crm.invoices"},
+            scope="organization",
+        )
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "organization"
+        assert "targetProjectIds" not in body
+
+    def test_targeted_scope_includes_target_project_ids(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy",
+            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item(
+            "rls-policy",
+            name="in.c-crm.invoices",
+            data={"table": "in.c-crm.invoices"},
+            scope="targeted",
+            target_project_ids=["111", "222"],
+        )
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "targeted"
+        assert body["targetProjectIds"] == ["111", "222"]
+
+    def test_put_item_accepts_scope_too(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1",
+            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
+            status_code=200,
+        )
+        metastore_client.put_item(
+            "rls-policy",
+            "rls-1",
+            name="in.c-crm.invoices",
+            data={"table": "in.c-crm.invoices"},
+            scope="organization",
+        )
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["scope"] == "organization"
+
+
+class TestPutTargetProjects:
+    def test_puts_project_ids_body(self, httpx_mock, metastore_client) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
+            json={"data": {"type": "rls-policy", "id": "rls-1"}},
+            status_code=200,
+        )
+        result = metastore_client.put_target_projects("rls-policy", "rls-1", ["111", "222"])
+        assert result["id"] == "rls-1"
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PUT"
+        assert request.url.path.endswith("/rls-policy/rls-1/target-projects")
+        body = json.loads(request.content)
+        assert body["projectIds"] == ["111", "222"]
 
 
 class TestProjectScope401Reclassification:

@@ -58,6 +58,7 @@ SemanticType = Literal[
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
 ]
 
 
@@ -69,8 +70,15 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
 )
 
+
+# Every metastore write is scoped. Every type this client has served until now
+# (the semantic-layer catalog) is authored at plain project scope; `rls-policy`
+# is the first type that must never use it (org-admin-only authorship -- see
+# RFC "Scope is organization or targeted -- never plain project, by design").
+MetastoreScope = Literal["project", "organization", "targeted"]
 
 # Envelope fields kept constant across every POST (per metastore contract).
 _ENVELOPE_BRANCH = "main"
@@ -223,24 +231,37 @@ class MetastoreClient(BaseHttpClient):
         item_type: SemanticType,
         name: str,
         data: dict[str, Any],
+        *,
+        scope: MetastoreScope = _ENVELOPE_SCOPE,
+        target_project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create an item. Returns the server's stored representation.
 
         ``data`` is the inner ``attributes`` payload (including ``modelUUID``
         for non-model types). The outer envelope is added here.
 
+        ``scope`` defaults to ``"project"`` -- every existing caller (the
+        semantic-layer catalog) keeps its current behavior unchanged. A
+        caller authoring an org-admin-only type (``rls-policy``) passes
+        ``"organization"`` or ``"targeted"`` explicitly; ``target_project_ids``
+        is only included in the envelope when given (meaningful for
+        ``"targeted"`` scope -- see :meth:`put_target_projects` for the
+        separate grant-management call ``targeted`` scope also needs).
+
         Normalizes the duplicate-name conflict into a clean
         :data:`ErrorCode.ALREADY_EXISTS`, accepting both shapes the metastore
         has used: HTTP 409 (post go-monorepo PR #513) and HTTP 500 with
         ``"Failed to create meta object"`` (legacy / pre-fix deployments).
         """
-        envelope = {
+        envelope: dict[str, Any] = {
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
             "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
-            "scope": _ENVELOPE_SCOPE,
+            "scope": scope,
         }
+        if target_project_ids:
+            envelope["targetProjectIds"] = target_project_ids
         try:
             response = self._do_request(
                 "POST",
@@ -281,6 +302,9 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
+        *,
+        scope: MetastoreScope = _ENVELOPE_SCOPE,
+        target_project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
@@ -288,17 +312,20 @@ class MetastoreClient(BaseHttpClient):
         use, ``PUT`` updates the record in place and increments
         ``meta.revision`` server-side, preserving the metastore's revision
         history. ``data`` is the inner ``attributes`` payload; the outer
-        envelope is added here (identical shape to :meth:`post_item`).
+        envelope is added here (identical shape to :meth:`post_item`,
+        including the same ``scope``/``target_project_ids`` semantics).
 
         Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
         """
-        envelope = {
+        envelope: dict[str, Any] = {
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
             "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
-            "scope": _ENVELOPE_SCOPE,
+            "scope": scope,
         }
+        if target_project_ids:
+            envelope["targetProjectIds"] = target_project_ids
         response = self._do_request(
             "PUT",
             f"/api/v1/repository/{item_type}/{item_id}",
@@ -313,3 +340,28 @@ class MetastoreClient(BaseHttpClient):
         Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
         """
         self._do_request("DELETE", f"/api/v1/repository/{item_type}/{item_id}")
+
+    def put_target_projects(
+        self, item_type: SemanticType, item_id: str, project_ids: list[str]
+    ) -> dict[str, Any]:
+        """Replace the target-project grant list for a ``targeted``-scope item.
+
+        ``PUT /api/v1/repository/{type}/{id}/target-projects`` -- required
+        once an item uses ``targeted`` scope, or grant management 403s
+        unconditionally (RFC "Scope is organization or targeted", PLAN.md's
+        go-monorepo section: ``x-metastore.acl.manageGrants``).
+
+        **Speculative**: this endpoint does not exist on any deployed
+        metastore yet (the ``rls-policy`` object type it exists for is still
+        unregistered on the backend -- see PLAN.md's go-monorepo section).
+        The request body shape (``{"projectIds": [...]}``) is inferred from
+        the RFC/PLAN's own wording, not observed against a live server.
+        Verify and adjust this method once the backend registers the type.
+        """
+        response = self._do_request(
+            "PUT",
+            f"/api/v1/repository/{item_type}/{item_id}/target-projects",
+            json={"projectIds": project_ids},
+        )
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
