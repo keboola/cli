@@ -25,6 +25,7 @@ from keboola_agent_cli.auth.models import (
     DeviceAuthorization,
     IntrospectResponse,
     MfaChallengeResult,
+    ProvisionedProject,
     RevokeResult,
 )
 from keboola_agent_cli.auth.pkce import (
@@ -1372,7 +1373,7 @@ def _provisioned(
     async_backend: bool = False,
 ) -> AgentProvisioningResponse:
     return AgentProvisioningResponse(
-        project={"id": project_id, "name": project_name, "backend": backend},
+        project=ProvisionedProject(id=project_id, name=project_name, backend=backend),
         accessToken="kbc_at_sess9_secret",
         refreshToken="kbc_rt_sess9_secret",
         accessTokenExpiresIn=3600,
