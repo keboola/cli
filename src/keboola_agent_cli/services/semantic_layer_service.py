@@ -36,6 +36,7 @@ from ._semantic_layer_crud import edit_simple as _edit_simple_helper
 from ._semantic_layer_crud import find_target_for_remove as _find_target_for_remove
 from ._semantic_layer_crud import scan_orphan_constraints as _scan_orphan_constraints
 from ._semantic_layer_crud import validate_constraint_attrs as _validate_constraint_attrs
+from ._semantic_layer_fqn import derive_dataset_fqn as _derive_dataset_fqn
 from ._semantic_layer_internals import _normalize_field_type, collect_side_from_file
 from ._semantic_layer_internals import build_export_snapshot as _build_export_snapshot
 from ._semantic_layer_internals import default_export_path as _default_export_path
@@ -104,38 +105,6 @@ _MEASURE_TOKENS = (
 _NUMERIC_NORMALIZED_TYPES = ("integer", "decimal")
 # Normalized field types that represent a point in time.
 _TEMPORAL_NORMALIZED_TYPES = ("date", "datetime")
-
-
-def _derive_fqn(table_id: str) -> str:
-    """Compute ``"KEBOOLA"."<schema>"."<table>"`` from a Keboola tableId.
-
-    The Keboola Snowflake mapping is ``"KEBOOLA"."<bucket-path>"."<table>"``;
-    we split off the last segment as the table and quote both remaining
-    pieces as a single schema string.
-    """
-    if '"' in table_id:
-        # Reject double-quotes in tableIds at the service boundary: the FQN
-        # is stored verbatim in the metastore and pasted into Snowflake SQL by
-        # downstream consumers. A `"` inside a segment would terminate a quoted
-        # identifier early and let an attacker steer parsing — defense in depth
-        # even though Keboola Storage would reject the bucket/table at creation.
-        raise KeboolaApiError(
-            message=(
-                f"tableId {table_id!r} contains a double-quote, which is "
-                "rejected at the FQN-derivation boundary because the FQN is "
-                "pasted into Snowflake SQL by downstream consumers."
-            ),
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
-    parts = table_id.split(".")
-    if len(parts) < 2:
-        raise KeboolaApiError(
-            message=f"tableId {table_id!r} must contain at least one dot.",
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
-    schema = ".".join(parts[:-1])
-    table = parts[-1]
-    return f'"KEBOOLA"."{schema}"."{table}"'
 
 
 def _classify_field_role(name: str, basetype: str) -> str:
@@ -818,19 +787,36 @@ class SemanticLayerService(BaseService):
         grain: str = "",
         primary_key: list[str] | None = None,
         deep_fields: bool = False,
+        fqn: str | None = None,
     ) -> dict[str, Any]:
-        """Create a dataset, auto-deriving ``fqn`` from the tableId.
+        """Create a dataset.
 
-        With ``deep_fields=True``, fetches the storage column schema and
-        synthesises a ``fields[]`` array with role heuristics.
+        ``fqn`` is taken verbatim when given; otherwise it is the table's
+        warehouse location read from Storage (see ``derive_dataset_fqn``), so
+        the table must exist. With ``deep_fields=True``, the same storage
+        column schema also seeds a ``fields[]`` array with role heuristics.
         """
+        if fqn is not None and not fqn.strip():
+            raise KeboolaApiError(
+                message="--fqn must not be empty.",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+        detail: dict[str, Any] = {}
+        if fqn is None or deep_fields:
+            storage = StorageService(
+                config_store=self._config_store,
+                client_factory=self._client_factory,
+            )
+            detail = storage.get_table_detail(alias, table_id)
+        resolved_fqn = fqn if fqn is not None else _derive_dataset_fqn(table_id, detail)
+
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             data: dict[str, Any] = {
                 "name": name,
                 "tableId": table_id,
-                "fqn": _derive_fqn(table_id),
+                "fqn": resolved_fqn,
                 "modelUUID": model_uuid,
             }
             if description:
@@ -840,13 +826,7 @@ class SemanticLayerService(BaseService):
             if primary_key:
                 data["primaryKey"] = list(primary_key)
             if deep_fields:
-                storage = StorageService(
-                    config_store=self._config_store,
-                    client_factory=self._client_factory,
-                )
-                fields = _synthesize_role_classified_fields(
-                    storage, alias, table_id, _classify_field_role
-                )
+                fields = _synthesize_role_classified_fields(detail, _classify_field_role)
                 if fields:
                     data["fields"] = fields
             return client.post_item("semantic-dataset", name=name, data=data)
@@ -1570,7 +1550,7 @@ class SemanticLayerService(BaseService):
         generated = _heuristic_generate_helper(
             schemas=schemas_by_tid,
             model_name=model_name or "kbagent_build_model",
-            derive_fqn=_derive_fqn,
+            derive_fqn=_derive_dataset_fqn,
             classify_role=_classify_field_role,
         )
 
