@@ -1011,6 +1011,36 @@ kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 #   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
 #   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
 
+kbagent rls list --project P
+kbagent rls detail --project P --policy-id ID
+kbagent rls schema --project P
+kbagent rls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+kbagent rls delete --project P --policy-id ID [--yes]
+kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--yes]
+# rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
+#   one object per protected table). ORG-ADMIN-ONLY, STRUCTURALLY: every write (create/update/
+#   setup) is authored at organization scope (default) or targeted scope (--target-project,
+#   repeatable), never project scope -- there is no --scope flag offering project at all, matching
+#   the backend's own restriction that a project's own admin can never author policy for its own
+#   tables. --rules is a JSON array of {principal|principals, condition} objects; condition is a
+#   declarative primitive tree (column/op/value comparisons, in/not_in, is_null/is_not_null,
+#   and/or nesting, or a {"true": true} sentinel) -- never a free-text predicate string, closing
+#   the injection surface a hand-written-SQL model would have. `--dry-run` previews the compiled
+#   condition via kbagent's OWN preview renderer, which is explicitly NOT the enforcement engine
+#   (that lives in keboola-mcp-server's `query_data`, a different repo/runtime) -- the preview is
+#   for admin sanity-checking only, drift between the two is acceptable since the preview string
+#   is never executed. `rls setup` is a guided, interactive-terminal-only wizard (checkbox table
+#   picker + guided condition builder, reusing `storage tables` and the same write path `rls
+#   create` uses) -- it refuses under --json or a non-TTY stdout with a hint to use `rls create`
+#   directly, same carve-out as `auth register-projects`'s picker, and has no REST route.
+#   THE METASTORE BACKEND DOES NOT REGISTER `rls-policy` ON ANY DEPLOYED STACK YET (a companion
+#   go-monorepo change, tracked separately) -- every command here answers a clean, classified
+#   error (schema fetch failure, NOT_FOUND) against a real project until that lands; this is
+#   expected, not a kbagent bug. New error code: INVALID_RLS_POLICY. Version gate for this whole
+#   entry lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment
+#   lines (check_version_gates.py parses them as ATX markdown headings).
+
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
 kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]
