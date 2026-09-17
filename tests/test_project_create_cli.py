@@ -163,6 +163,38 @@ class TestProjectCreate:
         assert "Nobody owns this project yet" in result.stdout
         assert "auth login" in result.stdout
 
+    def test_url_is_not_taken_from_the_environment(self, tmp_path: Path, monkeypatch) -> None:
+        """`project add` reads KBC_STORAGE_API_URL; this must not. An ambient
+        value would quietly decide which stack pays for a billable project."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        monkeypatch.setenv("KBC_STORAGE_API_URL", STACK_URL)
+        svc = MagicMock()
+
+        result = _invoke(config_dir, svc, ["project", "create"])
+
+        assert result.exit_code == 2
+        svc.provision_project.assert_not_called()
+
+    def test_confirm_url_markup_is_not_interpreted(self, tmp_path: Path) -> None:
+        """The URL is server-supplied, so Rich markup in it must print
+        literally -- and must not be backslash-escaped either, since the user
+        copy-pastes the string verbatim."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        hostile = "https://connection.keboola.com/agent-project/confirm?token=[bold]x[/bold]"
+        svc = MagicMock()
+        svc.provision_project.return_value = _result(
+            confirm_url=hostile,
+            next_steps=[f"Open {hostile} and sign in.", "Then run `kbagent auth login`."],
+        )
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        flat = result.stdout.replace("\n", "")
+        assert "[bold]x[/bold]" in flat
+        assert "\\[bold]" not in flat
+
     def test_warnings_are_shown(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

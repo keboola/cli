@@ -351,7 +351,12 @@ Versioning convention:
 - **Refuses when a session for that stack already exists** (exit 5,
   `CONFIG_ERROR`). `auth.json` holds one session per stack, so provisioning
   would replace a real login -- and anyone who already has a session has an
-  account, and should create the project in the Keboola UI instead.
+  account, and should create the project in the Keboola UI instead. The same
+  check runs again after the POST, and there it can fail with a project
+  already created (a racing `project create`, or a `login` that finished
+  first): that exit-5 message **carries the new project's id and its confirm
+  link**. Read it and relay the link -- discarding it because the exit code
+  was non-zero is what orphans the project.
 - **A stack without the `agent-provisioning` feature answers 404**, mapped to
   `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the browser
   alternatives. That is a stack capability, not a broken URL and not a

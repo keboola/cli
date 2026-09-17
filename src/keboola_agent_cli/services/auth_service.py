@@ -33,7 +33,7 @@ from ..auth.sentinel import is_session_token
 from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
 from ..auth.totp import compute_totp_code
-from ..config_store import ConfigStore
+from ..config_store import ConfigStore, validate_alias_format
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from ._auth_registration import (
@@ -415,6 +415,25 @@ class AuthService:
         who already has a session has an account, which is the thing this
         command exists to avoid needing.
 
+        That check is made twice, before and after the POST, and the second
+        one is the load-bearing half. The pre-check cannot be held across the
+        call: it would mean holding `auth.json`'s cross-process lock for the
+        whole provisioning round trip (unbounded with `--sync-backend-init`),
+        which is longer than `AUTH_LOCK_TIMEOUT`, so every concurrent kbagent
+        process on that stack would fail its own token refresh on a lock
+        timeout. So the pre-check stays a fast, friendly fail, and the write
+        re-reads under the store's transaction: if a session appeared while
+        this call was in flight -- a racing `project create`, or a `login`
+        that finished first -- the session is NOT overwritten and the error
+        names the project id and the confirm link, so the project this call
+        created is loudly reported rather than silently orphaned with its
+        only claim link gone.
+
+        Everything that can be validated locally is validated BEFORE the
+        POST, for the same reason: the call is not idempotent, so a bad
+        `--project` alias must never cost an organization, a billable project
+        and a credit grant to discover.
+
         Order of operations mirrors `_finalize_login`: persist the session
         BEFORE registering the alias, so a failure between the two leaves a
         usable credential rather than an alias pointing at nothing.
@@ -429,6 +448,11 @@ class AuthService:
                 "have an account -- create the project in the Keboola UI, or run "
                 f"`kbagent auth logout --stack {stack_url}` first."
             )
+        if alias:
+            # Before the POST, never after: `apply_selections` would raise on a
+            # malformed alias only once an organization, a billable project and
+            # a credit grant already existed.
+            validate_alias_format(alias, field="alias")
 
         warnings: list[str] = []
         with self._auth_client_factory(stack_url) as client:
@@ -448,7 +472,17 @@ class AuthService:
             created_at=now,
             agent_confirm_url=provisioned.confirm_url,
         )
-        self._state_store.put_session(session)
+        with self._state_store.transaction():
+            raced = self._state_store.get_session(stack_url)
+            if raced is not None:
+                raise ConfigError(
+                    f"Project {provisioned.project.id} was created on {stack_url}, "
+                    f"but a session for that stack (session {raced.session_id}) "
+                    "appeared while it was being provisioned, so kbagent did not "
+                    "overwrite it -- one session per stack. Claim the new project "
+                    f"here, or it stays owned by nobody: {provisioned.confirm_url}"
+                )
+            self._state_store.put_session(session)
 
         project = provisioned.project
         candidates = self.candidates_from_projects(
@@ -462,18 +496,33 @@ class AuthService:
             warnings,
         )
 
-        registered_alias = registered[0].alias if registered else alias
+        # `apply_selections` reports "skipped" when the requested alias is
+        # already taken by something else. It still echoes the alias that was
+        # ASKED for, so keying the next step off the name alone would promise
+        # the caller an alias that does not exist.
+        entry = registered[0] if registered else None
+        alias_registered = entry is not None and entry.status in ("registered", "exists")
+        if alias_registered and entry is not None:
+            alias_step = (
+                f"Then run `kbagent auth login --stack {stack_url}`: confirming "
+                "revokes this agent session, and signing in as yourself keeps the "
+                f"alias '{entry.alias}' working."
+            )
+        else:
+            alias_step = (
+                f"Then run `kbagent auth login --stack {stack_url}`: confirming "
+                "revokes this agent session. No local alias was registered for "
+                f"project {provisioned.project.id} (see the warnings above) -- add "
+                "one with `kbagent auth register-projects --project-id "
+                f"{provisioned.project.id} --alias {provisioned.project.id}=<free-alias>`."
+            )
         next_steps = [
             (
                 f"Open {provisioned.confirm_url} and sign in -- this makes the "
                 "project yours. The link is single-use and expires in a few days; "
                 "until it is opened the project belongs to nobody."
             ),
-            (
-                f"Then run `kbagent auth login --stack {stack_url}`: confirming "
-                "revokes this agent session, and signing in as yourself keeps the "
-                f"alias '{registered_alias}' working."
-            ),
+            alias_step,
         ]
         if provisioned.backend_init_dispatched_async:
             warnings.append(

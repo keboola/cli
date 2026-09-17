@@ -21,6 +21,12 @@ def format_provision_result(console: Console, result: ProvisionProjectResult) ->
     The confirm URL is printed on its own line, unwrapped and unstyled, so it
     survives a copy-paste out of any terminal: it is single-use, it expires,
     and it is the only path to ever owning the project that was just created.
+
+    It is printed with ``markup=False`` rather than ``escape()``: the value
+    comes from the stack, so Rich markup in it must not be interpreted, but
+    escaping would insert backslashes into the very string the user has to
+    copy-paste verbatim. ``markup=False`` prints it byte-for-byte and
+    interprets nothing.
     """
     alias = result.registered_projects[0].alias if result.registered_projects else ""
     console.print(
@@ -49,7 +55,7 @@ def format_provision_result(console: Console, result: ProvisionProjectResult) ->
         "\n[bold yellow]Nobody owns this project yet.[/bold yellow] "
         "Open this link in a browser and sign in to claim it:\n"
     )
-    console.print(result.confirm_url, highlight=False, soft_wrap=True)
+    console.print(result.confirm_url, markup=False, highlight=False, soft_wrap=True)
 
     console.print("\n[bold]Next steps[/bold]")
     for index, step in enumerate(result.next_steps, start=1):

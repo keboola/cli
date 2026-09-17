@@ -243,8 +243,12 @@ def project_create(
     url: str = typer.Option(
         ...,
         "--url",
+        # Deliberately NOT `envvar=ENV_KBC_STORAGE_API_URL`, unlike `project
+        # add`: this command creates a real, billable project, and an ambient
+        # KBC_STORAGE_API_URL would quietly decide which stack pays for it.
+        # `project add` can afford the convenience because it also needs a
+        # token for that same stack; this one needs nothing at all.
         help="Keboola stack URL to create the project on (required -- never guessed)",
-        envvar=ENV_KBC_STORAGE_API_URL,
     ),
     alias: str | None = typer.Option(
         None, "--project", help="Local alias for the new project (default: from its name)"

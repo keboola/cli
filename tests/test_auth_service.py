@@ -27,6 +27,7 @@ from keboola_agent_cli.auth.models import (
     MfaChallengeResult,
     ProvisionedProject,
     RevokeResult,
+    StackSession,
 )
 from keboola_agent_cli.auth.pkce import (
     LoopbackCallback,
@@ -77,6 +78,10 @@ class _FakeAuthClient:
         self.verify_mfa_side_effect: Exception | None = None
         self.provision_response: AgentProvisioningResponse | None = None
         self.provision_side_effect: Exception | None = None
+        # Runs while `provision_project` is 'in flight', so a test can make
+        # the world change under the call (e.g. another process writing a
+        # session) without reassigning a bound method.
+        self.provision_during_call: Callable[[], None] | None = None
 
     def __enter__(self) -> Self:
         return self
@@ -136,6 +141,8 @@ class _FakeAuthClient:
 
     def provision_project(self, **kwargs: Any) -> AgentProvisioningResponse:
         self.calls.append(("provision_project", kwargs))
+        if self.provision_during_call is not None:
+            self.provision_during_call()
         if self.provision_side_effect is not None:
             raise self.provision_side_effect
         assert self.provision_response is not None
@@ -1513,6 +1520,69 @@ class TestProvisionProject:
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
         assert state_store.get_session(STACK_URL) is None
         assert store.load().projects == {}
+
+    def test_bad_alias_is_rejected_before_the_network_call(self, store, state_store) -> None:
+        """The POST is not idempotent: a typo in --project must not cost an
+        organization, a billable project and a credit grant to discover."""
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError):
+            service.provision_project(stack=STACK_URL, alias="not a valid alias")
+
+        assert client.calls == []
+        assert state_store.get_session(STACK_URL) is None
+
+    def test_a_session_appearing_mid_flight_is_not_overwritten(self, store, state_store) -> None:
+        """A racing `project create` (or a `login` that finished first) must not
+        have its session clobbered -- and the project this call created must be
+        reported with its claim link, never silently orphaned."""
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        winner = StackSession(
+            stack_url=STACK_URL,
+            session_id="sess-winner",
+            access_token="at-w",
+            refresh_token="rt-w",
+            created_at=datetime.now(UTC),
+        )
+
+        def _another_process_writes_a_session() -> None:
+            state_store.put_session(winner)
+
+        client.provision_during_call = _another_process_writes_a_session
+
+        with pytest.raises(ConfigError) as excinfo:
+            service.provision_project(stack=STACK_URL)
+
+        message = excinfo.value.message
+        assert "9840" in message
+        assert "kbc_apc_7_s" in message  # the claim link, not lost
+        # The session that was already there is still the one on disk.
+        session = state_store.get_session(STACK_URL)
+        assert session is not None
+        assert session.session_id == "sess-winner"
+
+    def test_next_steps_do_not_promise_an_alias_that_was_skipped(self, store, state_store) -> None:
+        """A taken alias comes back as `skipped` while still echoing the name
+        that was asked for -- the next step must not call that registered."""
+        store.add_project(
+            "taken",
+            ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=1, project_name="X"),
+        )
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL, alias="taken")
+
+        assert result.registered_projects[0].status == "skipped"
+        assert "keeps the alias" not in result.next_steps[1]
+        assert "No local alias was registered" in result.next_steps[1]
+        assert "register-projects" in result.next_steps[1]
 
     def test_status_resurfaces_the_confirm_link(self, store, state_store) -> None:
         client = _FakeAuthClient()
