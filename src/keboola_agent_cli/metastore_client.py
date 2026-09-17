@@ -92,6 +92,7 @@ SemanticType = Literal[
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
 ]
 
 
@@ -103,6 +104,7 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
 )
 
 
@@ -354,6 +356,9 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
+        *,
+        scope: MetastoreScope = _ENVELOPE_SCOPE,
+        target_project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
