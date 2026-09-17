@@ -493,6 +493,7 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Flow
     ErrorCode.SCHEDULE_DELETE_FAILED: ErrorClass("api", 1),
     ErrorCode.INVALID_FLOW_DEFINITION: ErrorClass("api", 1),
+    ErrorCode.INVALID_RLS_POLICY: ErrorClass("api", 1),
     # Data apps
     ErrorCode.DATA_APP_BUILD_FAILED: ErrorClass("api", 1),
     ErrorCode.DATA_APP_DEPLOY_TIMEOUT: ErrorClass("api", 1),
