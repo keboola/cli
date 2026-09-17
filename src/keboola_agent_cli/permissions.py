@@ -357,6 +357,22 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # Row-level security (metastore) — CLI-17. Classified `admin` (not
+    # merely `write`): the RFC's whole design point is that RLS policy
+    # authorship is org-level, never a project's own admin (see
+    # keboola-mcp-server's feature_spec/rls_query_tool/RFC.md) -- `admin`
+    # is the class this repo's own taxonomy reserves for org-level
+    # operations (see `project.add` etc. above). `setup` performs the exact
+    # same write as `create`, just via an interactive picker, so it must
+    # carry the same class or a permission policy that allows `setup` but
+    # not `create` (or vice versa) would leave a hole.
+    "rls.list": "read",
+    "rls.detail": "read",
+    "rls.schema": "read",
+    "rls.create": "admin",
+    "rls.update": "admin",
+    "rls.delete": "admin",
+    "rls.setup": "admin",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method under the taxonomy at the top
     # of this registry: GET = read, POST/PATCH = write (they create/modify),
