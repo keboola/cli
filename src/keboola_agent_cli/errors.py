@@ -179,6 +179,11 @@ class ErrorCode(StrEnum):
     UPDATED_ACROSS_MAJOR = "UPDATED_ACROSS_MAJOR"
     UPDATED_ACROSS_BREAKING = "UPDATED_ACROSS_BREAKING"
 
+    # Row-level security (CLI-17). Same role INVALID_FLOW_DEFINITION plays
+    # for conditional flows: a candidate `rls-policy` body (table/dialect/
+    # rules/condition) that fails op-name or JSON-Schema structural checks.
+    INVALID_RLS_POLICY = "INVALID_RLS_POLICY"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
