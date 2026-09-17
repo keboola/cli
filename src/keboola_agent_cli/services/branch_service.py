@@ -164,8 +164,8 @@ class BranchService(BaseService):
 
         branch_id = int(branch_data["id"])
 
-        # Auto-activate the created branch
-        self._config_store.set_project_branch(alias, branch_id)
+        # Auto-activate the created branch (name persisted too, issue #766)
+        self._config_store.set_project_branch(alias, branch_id, branch_data.get("name", name))
 
         return {
             "project_alias": alias,
@@ -217,9 +217,9 @@ class BranchService(BaseService):
                 f"Use 'kbagent branch list --project {alias}' to see available branches."
             )
 
-        self._config_store.set_project_branch(alias, branch_id)
-
         branch_name = target_branch.get("name", "")
+        self._config_store.set_project_branch(alias, branch_id, branch_name)
+
         return {
             "project_alias": alias,
             "branch_id": branch_id,
@@ -227,6 +227,46 @@ class BranchService(BaseService):
             "message": (
                 f"Active branch set to '{branch_name}' (ID: {branch_id}) for project '{alias}'."
             ),
+        }
+
+    def current_branch(self, aliases: list[str] | None = None) -> dict[str, Any]:
+        """Report the active development branch per project -- the "where am I?" check.
+
+        Issue #766: ``branch use`` persists across shell sessions and days, and
+        every branch-aware command then silently targets that branch. This is
+        the fast, offline answer (config.json only, no API call) so an operator
+        or agent can verify the target before a write or a long job.
+
+        Args:
+            aliases: Project aliases to report. None means every registered project.
+
+        Returns:
+            Dict with keys:
+                - "projects": list of ``{project_alias, active_branch_id,
+                  active_branch_name, is_production}`` sorted by alias
+                - "active_count": how many of them have a dev branch active
+                - "config_path": the config file the pins were read from, so a
+                  mismatch between two working directories is diagnosable
+
+        Raises:
+            ConfigError: If a specified alias is not found.
+        """
+        projects = self.resolve_projects(aliases)
+        rows: list[dict[str, Any]] = []
+        for alias in sorted(projects):
+            project = projects[alias]
+            rows.append(
+                {
+                    "project_alias": alias,
+                    "active_branch_id": project.active_branch_id,
+                    "active_branch_name": project.active_branch_name,
+                    "is_production": project.active_branch_id is None,
+                }
+            )
+        return {
+            "projects": rows,
+            "active_count": sum(1 for row in rows if not row["is_production"]),
+            "config_path": str(self._config_store.config_path),
         }
 
     def reset_branch(self, alias: str) -> dict[str, Any]:

@@ -240,7 +240,8 @@ Bucket sharing + linking across projects in the same organization. `sharing edge
 ## Development Branches
 - `branch list [--project NAME]` -- list dev branches
 - `branch create --project ALIAS --name "..." [--description "..."]` -- create and auto-activate branch
-- `branch use --project ALIAS --branch ID` -- switch active branch
+- `branch use --project ALIAS --branch ID` -- switch active branch. The pin PERSISTS in config.json across shell sessions and days; every branch-aware command (config reads AND writes, `job run`, flow writes) targets it until `branch reset`. Since vNEXT the branch NAME is captured too (`active_branch_name`), so the echo below can name it
+- `branch current [--project NAME]` -- (since vNEXT, #766) offline "where am I?": pinned dev branch id + name per project, or `main (production)`, plus the config path the pins were read from (a pin set from one working directory is invisible from another `--config-dir` / `.kbagent` tree). Run before a write or a long job when in doubt; `doctor` WARNs (`active_dev_branches`) on the same condition. Permission class `read`
 - `branch reset --project ALIAS` -- reset to main/production
 - `branch delete --project ALIAS --branch ID` -- delete branch (resets if active)
 - `branch merge --project ALIAS [--branch ID]` -- DEPRECATED (since 0.94.0): get merge URL (does NOT merge via API), resets the active branch. Prefer `merge-request` on projects with the feature

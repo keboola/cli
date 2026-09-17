@@ -34,6 +34,19 @@ def list_branches(
     return registry.branch.list_branches(aliases=project)
 
 
+@router.get("/current", summary="Active branch per project")
+def current(
+    project: list[str] | None = Query(None),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Report the pinned dev branch per project (config-only, no API call).
+
+    Mirrors `kbagent branch current` (issue #766). Declared before the
+    ``/{project}`` routes so the literal segment is not swallowed as an alias.
+    """
+    return registry.branch.current_branch(aliases=project)
+
+
 @router.post("/{project}", summary="Create a branch")
 def create(
     project: str, body: BranchCreate, registry: ServiceRegistry = Depends(get_registry)

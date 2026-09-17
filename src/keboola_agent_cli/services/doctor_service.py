@@ -100,6 +100,9 @@ class DoctorService:
         inert_patterns_check = self._check_inert_permission_patterns(config)
         all_checks.append(inert_patterns_check)
 
+        # Check 10: projects pinned to a dev branch by `branch use` (issue #766)
+        all_checks.append(self._check_active_dev_branches(config))
+
         # Build summary
         total = len(all_checks)
         passed = sum(1 for c in all_checks if c["status"] == "pass")
@@ -346,6 +349,54 @@ class DoctorService:
                 f"match no known operation: {', '.join(inert)}. {' '.join(hints)}"
             ),
             "details": details,
+        }
+
+    @staticmethod
+    def _check_active_dev_branches(config: AppConfig | None) -> dict[str, Any]:
+        """Check 10: surface every project pinned to a dev branch (issue #766).
+
+        A ``branch use`` pin persists across shell sessions and days, and every
+        branch-aware command then silently targets that branch -- a config edit
+        and a 73-minute job once landed on a dev branch the operator had
+        forgotten about. WARN, not FAIL: a pin is a legitimate state, it is
+        just one the operator must be able to see. Offline, config.json only.
+        """
+        pinned = (
+            [
+                {
+                    "project_alias": alias,
+                    "active_branch_id": project.active_branch_id,
+                    "active_branch_name": project.active_branch_name,
+                }
+                for alias, project in config.projects.items()
+                if project.active_branch_id is not None
+            ]
+            if config is not None
+            else []
+        )
+        if not pinned:
+            return {
+                "check": "active_dev_branches",
+                "name": "Active dev branches",
+                "status": "pass",
+                "message": "No dev branch is active -- every command targets production.",
+            }
+        labels = ", ".join(
+            f"{row['project_alias']} -> {row['active_branch_id']}"
+            + (f" '{row['active_branch_name']}'" if row["active_branch_name"] else "")
+            for row in pinned
+        )
+        return {
+            "check": "active_dev_branches",
+            "name": "Active dev branches",
+            "status": "warn",
+            "message": (
+                f"{len(pinned)} project(s) pinned to a dev branch: {labels}. Reads AND "
+                "writes on those projects target the dev branch, not production. "
+                "Run `kbagent branch current` to review, `kbagent branch reset --project "
+                "<alias>` to leave."
+            ),
+            "details": {"pinned": pinned},
         }
 
     def _check_config_source(self) -> dict[str, Any]:

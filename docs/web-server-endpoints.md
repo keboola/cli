@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**248 operations** across **216 paths** and **31 routers**.
+**249 operations** across **217 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -336,13 +336,14 @@ Snowflake / BigQuery workspaces -- CRUD, load tables, run SQL via Query Service,
 
 ## Development
 
-### `branches` (10 operations)
+### `branches` (11 operations)
 
 Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata. Mirrors `kbagent branch *`.
 
 | Method | Path | Summary |
 |---|---|---|
 | `GET` | `/branches` | List branches |
+| `GET` | `/branches/current` | Active branch per project |
 | `POST` | `/branches/{project}` | Create a branch |
 | `POST` | `/branches/{project}/use` | Pin the active branch |
 | `POST` | `/branches/{project}/reset` | Reset to the default branch |

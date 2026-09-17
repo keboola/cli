@@ -80,6 +80,16 @@ class ProjectConfig(BaseModel):
         default=None,
         description="Active development branch ID (None = main/production branch)",
     )
+    active_branch_name: str | None = Field(
+        default=None,
+        description=(
+            "Name of the active development branch, captured when `branch use` / "
+            "`branch create` activates it (issue #766). Lets every branch-aware "
+            "command echo a human-readable target without an extra API round-trip; "
+            "cleared together with active_branch_id. None on configs written before "
+            "the field existed -- the ID alone still resolves the branch."
+        ),
+    )
     org_id: int | None = Field(
         default=None,
         description="Organization ID (populated via `org setup` or when verify_token returns it)",
@@ -385,6 +395,17 @@ class SuccessResponse(BaseModel):
 
     status: str = Field(default="ok", description="Always 'ok' for success responses")
     data: Any = Field(default=None, description="Response payload")
+    branch: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Effective branch the command targeted (issue #766). Present ONLY on "
+            "branch-aware commands -- those that went through resolve_branch(): "
+            "{id, source, project, active_branch_id, active_branch_name}. "
+            "`source` is 'explicit' (--branch), 'active' (`branch use` pin) or "
+            "'production' (id is null). Omitted entirely on every other command, so "
+            "absence means 'not branch-scoped', never 'production'."
+        ),
+    )
 
 
 class ProjectMember(BaseModel):

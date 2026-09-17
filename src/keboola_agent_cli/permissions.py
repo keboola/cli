@@ -120,6 +120,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "org.setup": "admin",
     # Branch lifecycle
     "branch.list": "read",
+    "branch.current": "read",
     "branch.create": "write",
     "branch.use": "write",
     "branch.reset": "write",

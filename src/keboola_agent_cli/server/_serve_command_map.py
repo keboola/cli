@@ -50,6 +50,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/auth/status"): "auth status",
     ("GET", "/billing/credits"): "billing credits",
     ("GET", "/branches"): "branch list",
+    ("GET", "/branches/current"): "branch current",
     ("GET", "/branches/{project}/merge-url"): "branch merge",
     ("GET", "/branches/{project}/metadata"): "branch metadata-list",
     ("GET", "/branches/{project}/metadata/{key}"): "branch metadata-get",

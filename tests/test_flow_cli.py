@@ -1101,3 +1101,69 @@ class TestScheduleNegativeResultWording:
 
         assert "No cron schedules found" in result.output
         assert "kbagent flow triggers" in result.output
+
+
+# ---------------------------------------------------------------------------
+# issue #766 -- write commands echo the pinned branch and pass it explicitly
+# ---------------------------------------------------------------------------
+
+
+class TestFlowWriteCommandsEchoBranch:
+    def test_delete_dry_run_json_carries_active_branch(self, tmp_path: Path) -> None:
+        """Before #766 the dry-run looked identical for production and a dev branch."""
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        store.set_project_branch("prod", 456, "feature-x")
+        mock_flow = MagicMock()
+        result = _invoke(
+            store,
+            mock_flow,
+            ["--json", "flow", "delete", "--project", "prod", "--flow-id", "1", "--dry-run"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["branch"] == {
+            "id": 456,
+            "source": "active",
+            "project": "prod",
+            "active_branch_id": 456,
+            "active_branch_name": "feature-x",
+        }
+
+    def test_delete_passes_pinned_branch_to_service(self, tmp_path: Path) -> None:
+        """The command layer now resolves the pin -- the service no longer has to."""
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        store.set_project_branch("prod", 456, "feature-x")
+        mock_flow = MagicMock()
+        mock_flow.delete_flow.return_value = {"status": "deleted"}
+        result = _invoke(
+            store,
+            mock_flow,
+            ["--json", "flow", "delete", "--project", "prod", "--flow-id", "1", "--yes"],
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_flow.delete_flow.call_args.kwargs["branch_id"] == 456
+
+    def test_schedule_human_names_branch_on_stderr(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        store.set_project_branch("prod", 456, "feature-x")
+        mock_flow = MagicMock()
+        mock_flow.set_flow_schedule.return_value = {
+            "status": "created",
+            "project_alias": "prod",
+            "schedule_id": "sched-99",
+            "schedule_name": "Daily Run (Schedule)",
+            "component_id": "keboola.flow",
+            "config_id": "flow-1",
+            "cron": "0 6 * * *",
+            "timezone": "UTC",
+            "enabled": True,
+            "activated": True,
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            ["flow", "schedule", "--project", "prod", "--flow-id", "flow-1", "--cron", "0 6 * * *"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Using active dev branch 456 'feature-x'" in result.output
+        assert mock_flow.set_flow_schedule.call_args.kwargs["branch_id"] == 456

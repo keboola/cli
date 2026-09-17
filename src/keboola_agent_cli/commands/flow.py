@@ -652,6 +652,9 @@ def flow_new(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     phases: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
@@ -726,6 +729,9 @@ def flow_update(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
@@ -802,6 +808,9 @@ def flow_delete(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     if dry_run:
         result = {
@@ -884,6 +893,9 @@ def flow_schedule(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     try:
         result = service.set_flow_schedule(
@@ -957,6 +969,9 @@ def flow_schedule_remove(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    # Echo + record the effective branch (issue #766); the service would
+    # fall back to the same pin silently otherwise.
+    _, branch = resolve_branch(ctx.obj["config_store"], formatter, project, branch)
 
     if dry_run:
         try:

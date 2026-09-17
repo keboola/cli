@@ -1197,10 +1197,31 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create dev branch and auto-activate it. Async, CLI waits for completion.
 
   kbagent branch use --project ALIAS --branch ID
-    Set existing branch as active for subsequent commands.
+    Set existing branch as active for subsequent commands. The pin PERSISTS in
+    config.json across shell sessions and days -- every branch-aware command
+    (config reads AND writes, job run, flow writes) then targets that branch
+    until `branch reset`.
+
+  kbagent branch current [--project NAME]
+    "Where am I?" -- the pinned dev branch per project (id + name), or
+    `main (production)`. Offline (config.json only), --project repeatable.
+    Run it before a write or a long job when in doubt. `doctor` WARNs on the
+    same condition.
 
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
+
+  Branch echo on every branch-aware command (issue #766): human mode prints
+  `Info: Using active dev branch <id> '<name>' for project '<alias>' ...` on
+  stderr; --json adds a top-level `branch` key NEXT TO `data` in the envelope:
+  {{"status": "ok", "data": {{...}}, "branch": {{"id": 456, "source": "active",
+  "project": "prod", "active_branch_id": 456, "active_branch_name": "feature-x"}}}}.
+  `source` is "explicit" (--branch), "active" (`branch use` pin) or
+  "production" (`id` null). The key is ABSENT on commands that are not
+  branch-scoped (e.g. project list) -- absence means "not branch-scoped",
+  never "production". Check `branch.id` before trusting a `--dry-run` or
+  starting a job; a config `version` far below what the UI shows is the
+  other tell (version counters are per branch).
 
   kbagent branch delete --project ALIAS --branch ID
     Delete branch (async). Auto-resets to main if it was active.
