@@ -28,6 +28,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("DELETE", "/flows/{project}/{config_id}/schedule"): "flow schedule-remove",
     ("DELETE", "/notifications/{project}/{subscription_id}"): "notification delete",
     ("DELETE", "/projects/{alias}"): "project remove",
+    ("DELETE", "/rls/{project}/{policy_id}"): "rls delete",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "",
     ("DELETE", "/semantic-layer/models/{model}"): "semantic-layer model delete",
     (
@@ -120,6 +121,9 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/projects/status"): "project status",
     ("GET", "/projects/{alias}/description"): "project description-get",
     ("GET", "/projects/{alias}/info"): "project info",
+    ("GET", "/rls/{project}"): "rls list",
+    ("GET", "/rls/{project}/schema"): "rls schema",
+    ("GET", "/rls/{project}/{policy_id}"): "rls detail",
     ("GET", "/schedules"): "schedule list",
     ("GET", "/schedules/find/query"): "schedule find",
     ("GET", "/schedules/{project}/{schedule_id}"): "schedule detail",
@@ -239,6 +243,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/projects"): "project add",
     ("POST", "/projects/bulk-delete"): "project remove",
     ("POST", "/projects/use/{alias}"): "project use",
+    ("POST", "/rls/{project}"): "rls create",
     ("POST", "/semantic-layer/build"): "semantic-layer build",
     ("POST", "/semantic-layer/diff"): "semantic-layer diff",
     ("POST", "/semantic-layer/import"): "semantic-layer import",
@@ -287,6 +292,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("PUT", "/configs/{project}/{component_id}/{config_id}/variables"): "config variables-set",
     ("PUT", "/data-apps/{project}/{app_id}/secrets"): "data-app secrets-set",
     ("PUT", "/projects/{alias}/description"): "project description-set",
+    ("PUT", "/rls/{project}/{policy_id}"): "rls update",
     ("PUT", "/semantic-layer/items/{kind}/{name}"): "",
     ("PUT", "/semantic-layer/reference-data"): "semantic-layer reference-data set",
 }
