@@ -423,6 +423,19 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 | `PUT` | `/semantic-layer/scope/{context_id}/elevation-request` | Request scope elevation |
 | `DELETE` | `/semantic-layer/scope/{context_id}/elevation-request` | Withdraw scope elevation request |
 
+### `rls` (6 operations)
+
+Row-level security policies (metastore-backed `rls-policy` objects), always authored at `organization`/`targeted` scope -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/rls/{project}` | List RLS policies |
+| `POST` | `/rls/{project}` | Create an RLS policy |
+| `GET` | `/rls/{project}/schema` | Fetch the live rls-policy JSON Schema |
+| `GET` | `/rls/{project}/{policy_id}` | Get one RLS policy |
+| `PUT` | `/rls/{project}/{policy_id}` | Update an RLS policy |
+| `DELETE` | `/rls/{project}/{policy_id}` | Delete an RLS policy |
+
 ## AI & Tools
 
 ### `kai` (6 operations)

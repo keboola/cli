@@ -8,7 +8,7 @@ description: >
   Storage tables/files/snapshots, data apps,
   flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, Developer Portal, browser login,
+  layer, row-level security, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
@@ -18,7 +18,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, zero-copy clone, workspace load type,
+  restore config, rls,
   set up keboola, setup, connect project, logout, sign out.
 ---
 
