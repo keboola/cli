@@ -10,16 +10,18 @@ rather than on the client, and `revoke` is a public endpoint that takes the
 token to revoke in its request body.
 
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
-:class:`BaseHttpClient`, with four deliberate exceptions that keep the mapping
+:class:`BaseHttpClient`, with five deliberate exceptions that keep the mapping
 but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
 state, not a failure), `refresh` (a blind retry would re-present the refresh
 token, and it runs under a wall-clock ceiling the retry loop would outlast),
-and `login_password`/`verify_mfa_totp` (a blind retry against `/v1/auth/login`
+`login_password`/`verify_mfa_totp` (a blind retry against `/v1/auth/login`
 burns extra requests against the account's rate-limit bucket before the
 server's own `X-RateLimit-Reset` guidance is even read, and against
 `/v1/auth/mfa` would replay a TOTP code the server already marked consumed --
-burning one of the account's limited MFA attempts for nothing). The last
-three share `_request_bypassing_retry`, which maps transport failures
+burning one of the account's limited MFA attempts for nothing), and
+`provision_project` (not idempotent: every success creates an organization, a
+billable project and a credit grant, so a retried 5xx mints a second one). The
+last four share `_request_bypassing_retry`, which maps transport failures
 (`httpx.TimeoutException`/`httpx.TransportError`) the way `_do_request` would
 have, since bypassing the retry loop must not also mean losing that mapping.
 `refresh` makes one further narrow exception of its own for a rotation
@@ -39,6 +41,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..constants import (
+    AGENT_PROVISIONING_PATH,
     AUTH_CLIENT_ID,
     AUTH_DEVICE_PATH,
     AUTH_DEVICE_TOKEN_PATH,
@@ -60,6 +63,7 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 from ..http_base import BaseHttpClient
 from .models import (
+    AgentProvisioningResponse,
     CliTokenResponse,
     DeviceAuthorization,
     DevicePollResult,
@@ -654,6 +658,85 @@ class AuthClient(BaseHttpClient):
                 ) from exc
             raise
         raise AssertionError("unreachable: _map_auth_error always raises")
+
+    # ------------------------------------------------------------------
+    # Agent provisioning
+    # ------------------------------------------------------------------
+
+    def provision_project(
+        self,
+        *,
+        project_name: str = "",
+        backend: str | None = None,
+        sync_backend_init: bool = False,
+    ) -> AgentProvisioningResponse:
+        """Provision a brand-new Keboola project (``POST /manage/programmatic-projects``).
+
+        Unauthenticated by design -- this is the one endpoint reachable from a
+        machine with no Keboola identity at all. Answers a project-pinned,
+        Manage-less programmatic session plus a single-use ``confirmUrl`` for
+        the human who will take ownership.
+
+        Bypasses `_do_request`/the shared retry loop -- the same deliberate
+        exception `login_password`, `verify_mfa_totp` and `refresh` already
+        make (see the module docstring), and here for the strongest reason of
+        the four: the call is **not idempotent**. Every success creates an
+        organization, a billable project and a free-credit grant, so a blind
+        retry of a 5xx (or of a read timeout on a response that was already in
+        flight) mints a second project nobody asked for, holding a second slot
+        against the stack's unconfirmed-project cap, with a confirm link the
+        caller never sees. A 503 here is contention on the stack-wide
+        provisioning lock and means nothing was created; it comes back as a
+        retryable error for the *user* to repeat, deliberately not for this
+        client to repeat on its own.
+
+        ``backend`` of None keeps the stack maintainer's own default. The
+        ``clientId`` is sent for audit attribution: every org/project event of
+        this flow carries the stack's shared agent admin as actor, so without
+        it the audit log says only "the shared admin did it".
+        """
+        body: dict[str, Any] = {"clientId": AUTH_CLIENT_ID}
+        if project_name:
+            body["projectName"] = project_name
+        if backend:
+            body["backend"] = backend
+        if sync_backend_init:
+            body["syncBackendInit"] = True
+
+        response = self._request_bypassing_retry(
+            "POST",
+            AGENT_PROVISIONING_PATH,
+            json=body,
+            action="Creating a Keboola project",
+        )
+        if response.status_code >= 400:
+            self._raise_provisioning_error(response)
+        return AgentProvisioningResponse.model_validate(response.json())
+
+    def _raise_provisioning_error(self, response: httpx.Response) -> NoReturn:
+        """Map a failed provisioning response, naming the right remedy on 404.
+
+        A 404 means the `agent-provisioning` stack feature is off -- the
+        endpoint is fail-closed exactly like the rest of this client's
+        surface. It cannot go through `_map_auth_error`, whose 404 message is
+        about *browser login* and points at `project add`: the caller here has
+        no token to add and no account to log in with, so the only honest
+        remedies are a different stack or a human-created project.
+        """
+        if response.status_code == 404:
+            raise KeboolaApiError(
+                message=(
+                    f"Creating a Keboola project from the CLI is not enabled on this "
+                    f"stack ({self._base_url}). Create a project at {self._base_url} in "
+                    "a browser, then connect it with `kbagent auth login` or "
+                    "`kbagent project add --project <alias> --url <stack> --token <token>`."
+                ),
+                status_code=404,
+                error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+                retryable=False,
+            )
+        super()._raise_api_error(response, self._base_url)
+        raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
 
     def introspect(self, access_token: str) -> IntrospectResponse:
         """Fetch session metadata + accessible projects for a live access token.

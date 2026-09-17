@@ -78,6 +78,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |

@@ -34,6 +34,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "auth.projects": "read",
     # Project management
     "project.add": "admin",
+    # `project create` provisions a REAL organization, project and credit
+    # grant on the stack -- the most consequential write in this group, and
+    # irreversible from the CLI. Same admin class as `project add`.
+    "project.create": "admin",
     "project.list": "read",
     "project.remove": "admin",
     "project.edit": "admin",

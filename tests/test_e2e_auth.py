@@ -35,6 +35,13 @@ different credential shape and must never be conflated with `E2E_API_TOKEN`):
    logins/logouts against it and must never disturb the shared session the
    other classes in this file depend on.
 
+4. Separate opt-in gate, only for `TestProjectCreateProvisions` (`project
+   create`, DMD-1940): E2E_AGENT_PROVISIONING_URL, a stack with the
+   `agent-provisioning` feature. Opt-in because a successful run creates a
+   real, billable, unconfirmed project that no CLI command can delete again.
+   The free half of that coverage (`TestProjectCreateRefusesToClobberASession`)
+   runs under gate 1 and never reaches the network.
+
 How to provision E2E_SESSION_REFRESH_TOKEN without ever typing it on the
 command line or committing it anywhere:
 
@@ -625,6 +632,116 @@ class TestLoginPasswordCommand:
         assert error["code"] == "AUTH_FLOW_DENIED"
         assert "invalid email or password" in error["message"].lower()
         assert "invalid or expired token" not in error["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 4c. `project create` -- agent provisioning (DMD-1940)
+#
+# CLAUDE.md convention #16 wants every new command covered end to end, but a
+# successful run of this one creates a REAL organization, a REAL billable
+# project and a REAL credit grant, and nothing in the CLI can delete an
+# unconfirmed project again -- so an unconditional E2E would leak a billable
+# orphan per CI run. The split below is what that leaves:
+#
+#   - The guard that costs nothing runs on every session-credentialled CI run:
+#     a stack that already has a session must be refused BEFORE any request is
+#     made. That is the failure mode with real blast radius (it would replace
+#     a live user session), and it is free to assert.
+#   - The provisioning call itself is behind its own opt-in env var, so an
+#     operator can verify the whole flow deliberately without CI ever paying
+#     for it.
+# ---------------------------------------------------------------------------
+
+ENV_PROVISIONING_URL = "E2E_AGENT_PROVISIONING_URL"
+
+skip_without_provisioning_stack = pytest.mark.skipif(
+    not os.environ.get(ENV_PROVISIONING_URL),
+    reason=(
+        f"`project create` E2E is opt-in via {ENV_PROVISIONING_URL} (a stack with the "
+        "`agent-provisioning` feature): a successful run creates a real billable "
+        "project that no CLI command can delete again."
+    ),
+)
+
+
+@skip_without_session_credentials
+@pytest.mark.e2e
+@pytest.mark.e2e_auth
+class TestProjectCreateRefusesToClobberASession:
+    """The free half: refusing a stack that already has a session.
+
+    Uses the shared pre-provisioned session, in a throwaway config dir, and
+    must fail before any network call -- so it is safe to run on every CI
+    pass even though the command it drives is the one that provisions
+    projects.
+    """
+
+    def test_existing_session_is_refused(
+        self, session_state_store: AuthStateStore, stack_url: str
+    ) -> None:
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(session_state_store.config_dir),
+                "project",
+                "create",
+                "--url",
+                stack_url,
+            ],
+        )
+
+        assert result.exit_code == 5, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.CONFIG_ERROR
+        assert "auth logout" in error["message"]
+
+
+@skip_without_provisioning_stack
+@pytest.mark.e2e
+@pytest.mark.e2e_auth
+class TestProjectCreateProvisions:
+    """The opt-in half: a real provisioning call against a real stack.
+
+    Leaves behind an unconfirmed project on purpose -- there is no CLI path
+    to remove one, and inventing one here would mean deleting a project the
+    operator may want to claim. The printed confirm URL is the operator's
+    handle on it.
+    """
+
+    def test_creates_a_project_and_returns_a_confirm_url(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "provisioned"
+        config_dir.mkdir()
+        stack = normalize_stack_url(os.environ[ENV_PROVISIONING_URL])
+
+        result = CliRunner().invoke(
+            app,
+            ["--json", "--config-dir", str(config_dir), "project", "create", "--url", stack],
+        )
+
+        if result.exit_code != 0:
+            error = json.loads(result.output)["error"]
+            # The acceptance criterion for a stack without the feature: a
+            # named answer and a clean exit, never a traceback.
+            assert error["code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK, result.output
+            pytest.skip(f"{ENV_PROVISIONING_URL} has no `agent-provisioning` feature enabled")
+
+        data = json.loads(result.output)["data"]
+        assert data["project_id"] > 0
+        assert data["confirm_url"].startswith("http")
+        assert data["registered_projects"][0]["status"] == "registered"
+        # Never the credential itself -- only the claim link is meant to be shown.
+        assert "kbc_at_" not in result.output
+        assert "kbc_rt_" not in result.output
+
+        # The claim link must survive losing this output.
+        status = CliRunner().invoke(
+            app,
+            ["--json", "--config-dir", str(config_dir), "auth", "status", "--stack", stack],
+        )
+        assert status.exit_code == 0, status.output
+        assert json.loads(status.output)["data"]["agent_confirm_url"] == data["confirm_url"]
 
 
 # ---------------------------------------------------------------------------

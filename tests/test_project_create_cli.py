@@ -1,0 +1,227 @@
+"""CLI tests for `kbagent project create` (agent provisioning, DMD-1940).
+
+The service is mocked throughout -- these tests pin the *command* layer's
+contract: argument wiring, exit codes, permission classification, and the two
+things that make this command different from every other one in the group.
+
+First, it is the only kbagent command reachable with no Keboola identity at
+all, so its failure mode on a stack without the `agent-provisioning` feature
+has to read as an answer rather than a crash. Second, its result deliberately
+carries one credential-bearing value -- the single-use confirmation link --
+because nobody can ever own the provisioned project without it; the access and
+refresh tokens must still never appear anywhere.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+from typer.testing import CliRunner
+
+from keboola_agent_cli.cli import app
+from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
+from keboola_agent_cli.permissions import OPERATION_REGISTRY
+from keboola_agent_cli.services.auth_service import ProvisionProjectResult, RegisteredProject
+
+STACK_URL = "https://connection.keboola.com"
+CONFIRM_URL = "https://connection.keboola.com/agent-project/confirm?token=kbc_apc_7_secret"
+SECRET_ACCESS_TOKEN = "kbc_at_should_never_leak_00000000"
+SECRET_REFRESH_TOKEN = "kbc_rt_should_never_leak_00000000"
+
+runner = CliRunner()
+
+
+def _invoke(config_dir: Path, svc: MagicMock, args: list[str]):
+    with patch("keboola_agent_cli.cli.AuthService", return_value=svc):
+        return runner.invoke(app, ["--config-dir", str(config_dir), *args])
+
+
+def _result(**overrides: Any) -> ProvisionProjectResult:
+    defaults: dict[str, Any] = {
+        "status": "ok",
+        "stack_url": STACK_URL,
+        "project_id": 9840,
+        "project_name": "Agent Project",
+        "backend": "snowflake",
+        "session_id": "sess-9",
+        "access_expires_at": "2026-09-17T12:00:00+00:00",
+        "confirm_url": CONFIRM_URL,
+        "backend_init_dispatched_async": False,
+        "registered_projects": [
+            RegisteredProject(
+                alias="agent-project",
+                project_id=9840,
+                project_name="Agent Project",
+                status="registered",
+            )
+        ],
+        "next_steps": [f"Open {CONFIRM_URL} and sign in.", "Then run `kbagent auth login`."],
+        "warnings": [],
+    }
+    defaults.update(overrides)
+    return ProvisionProjectResult(**defaults)  # type: ignore[arg-type]
+
+
+class TestProjectCreate:
+    def test_passes_every_option_to_the_service(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result()
+
+        result = _invoke(
+            config_dir,
+            svc,
+            [
+                "--json",
+                "project",
+                "create",
+                "--url",
+                STACK_URL,
+                "--project",
+                "scratch",
+                "--name",
+                "Agent Project",
+                "--backend",
+                "bigquery",
+                "--sync-backend-init",
+            ],
+        )
+
+        assert result.exit_code == 0
+        svc.provision_project.assert_called_once_with(
+            stack=STACK_URL,
+            alias="scratch",
+            project_name="Agent Project",
+            backend="bigquery",
+            sync_backend_init=True,
+        )
+
+    def test_defaults_leave_the_stack_to_decide(self, tmp_path: Path) -> None:
+        """An omitted --backend must reach the service as None, not a guess:
+        None is what keeps the stack maintainer's own default."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result()
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        assert result.exit_code == 0
+        svc.provision_project.assert_called_once_with(
+            stack=STACK_URL,
+            alias="",
+            project_name="",
+            backend=None,
+            sync_backend_init=False,
+        )
+
+    def test_url_is_required(self, tmp_path: Path) -> None:
+        """Provisioning a billable project on a guessed stack is not a mistake
+        worth being able to make."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+
+        result = _invoke(config_dir, svc, ["project", "create"])
+
+        assert result.exit_code == 2
+        svc.provision_project.assert_not_called()
+
+    def test_json_carries_the_confirm_url_and_no_tokens(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result()
+
+        result = _invoke(config_dir, svc, ["--json", "project", "create", "--url", STACK_URL])
+
+        payload = json.loads(result.stdout)["data"]
+        assert payload["project_id"] == 9840
+        assert payload["confirm_url"] == CONFIRM_URL
+        assert SECRET_ACCESS_TOKEN not in result.stdout
+        assert SECRET_REFRESH_TOKEN not in result.stdout
+        assert "kbc_at_" not in result.stdout
+        assert "kbc_rt_" not in result.stdout
+
+    def test_human_output_prints_the_link_and_next_steps(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result()
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        assert result.exit_code == 0
+        # Rich wraps a narrow terminal; assert on the unwrappable tail of the
+        # link plus the ownership warning, not on the whole URL.
+        assert "kbc_apc_7_secret" in result.stdout.replace("\n", "")
+        assert "Nobody owns this project yet" in result.stdout
+        assert "auth login" in result.stdout
+
+    def test_warnings_are_shown(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result(
+            backend_init_dispatched_async=True,
+            warnings=["The project's storage backend is still being initialized."],
+        )
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        assert "still being initialized" in result.stdout
+
+    def test_feature_off_is_an_answer_not_a_traceback(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.side_effect = KeboolaApiError(
+            "Creating a Keboola project from the CLI is not enabled on this stack.",
+            status_code=404,
+            error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+            retryable=False,
+        )
+
+        result = _invoke(config_dir, svc, ["--json", "project", "create", "--url", STACK_URL])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["error"]["code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "not enabled on this stack" in payload["error"]["message"]
+        assert "Traceback" not in result.stdout
+
+    def test_existing_session_is_a_config_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.side_effect = ConfigError(
+            "A Keboola session for this stack already exists."
+        )
+
+        result = _invoke(config_dir, svc, ["--json", "project", "create", "--url", STACK_URL])
+
+        assert result.exit_code == 5
+        assert json.loads(result.stdout)["error"]["code"] == ErrorCode.CONFIG_ERROR
+
+
+class TestPermissionClassification:
+    def test_create_is_admin_class(self) -> None:
+        """It provisions a real organization, project and credit grant."""
+        assert OPERATION_REGISTRY["project.create"] == "admin"
+
+    def test_deny_writes_blocks_it(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+
+        result = _invoke(
+            config_dir, svc, ["--deny-writes", "--json", "project", "create", "--url", STACK_URL]
+        )
+
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        svc.provision_project.assert_not_called()

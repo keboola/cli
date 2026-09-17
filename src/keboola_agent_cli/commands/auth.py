@@ -229,6 +229,17 @@ def _format_status_result(console: Console, result: AuthStatusResult) -> None:
         )
     console.print(Panel("\n".join(lines), title="Keboola auth status", expand=False))
 
+    if result.agent_confirm_url:
+        # This session came from `kbagent project create` and the project it
+        # provisioned is still owned by nobody. Printed unstyled on its own
+        # line so it survives a copy-paste; the claim expires, and once it
+        # does the project cannot be claimed at all.
+        console.print(
+            "\n[bold yellow]This session's project has not been claimed yet.[/bold yellow] "
+            "Open this link in a browser and sign in to take ownership:\n"
+        )
+        console.print(result.agent_confirm_url, highlight=False, soft_wrap=True)
+
     _render_accessible_projects_table(console, result.accessible_projects)
 
 

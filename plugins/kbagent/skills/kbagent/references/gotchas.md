@@ -321,6 +321,50 @@ Versioning convention:
   care as any other long-lived secret, not as a lesser one than a scoped
   Storage token.
 
+## `project create` makes a project nobody owns until a human clicks
+
+*(since vNEXT, DMD-1940)*
+
+- **It is the only kbagent command that works from nothing** -- no account,
+  no token, no `auth login` first: `kbagent project create --url URL
+  [--project ALIAS] [--name NAME] [--backend snowflake|bigquery]
+  [--sync-backend-init]`. One call provisions the project, stores the
+  returned project-pinned session in `auth.json`, and registers it in
+  `config.json` under the `kbc-session://` sentinel, becoming the default
+  project when nothing else was registered.
+- **The project it creates belongs to NOBODY, and stays that way until a
+  human opens `confirm_url`.** That link is single-use, expires in days, and
+  is the only path to ownership -- relay it to the user verbatim and do not
+  treat the command as finished before they have used it. An unconfirmed
+  project is a billable orphan that also holds a slot against the stack's
+  unconfirmed-project cap.
+- **Losing the terminal is recoverable; losing the claim window is not.**
+  `kbagent auth status` re-prints the pending link (`agent_confirm_url` in
+  `--json`) for as long as the claim is outstanding, and empty on every
+  ordinary login session.
+- **Confirming REVOKES the session `project create` gave you.** That is by
+  design, not a failure: after the human confirms, run `kbagent auth login
+  --stack URL`. The registered alias keeps working across it, because the
+  sentinel keys on project id + stack, never on the session id. Do not
+  blind-retry commands that start failing right after a confirmation -- check
+  `auth status` first.
+- **Refuses when a session for that stack already exists** (exit 5,
+  `CONFIG_ERROR`). `auth.json` holds one session per stack, so provisioning
+  would replace a real login -- and anyone who already has a session has an
+  account, and should create the project in the Keboola UI instead.
+- **A stack without the `agent-provisioning` feature answers 404**, mapped to
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the browser
+  alternatives. That is a stack capability, not a broken URL and not a
+  credential problem -- do not retry it and do not go looking for a token.
+- **Never auto-retried, on any status.** The POST is not idempotent: every
+  success creates an organization, a billable project and a credit grant, so
+  a 5xx/429 comes straight back to the caller (a 503 is stack-wide
+  provisioning contention and means nothing was created). Retry deliberately,
+  once, if at all.
+- **Without `--sync-backend-init` the storage backend initializes in the
+  background** and the result carries a warning saying so -- the first Storage
+  command against the new project may fail until it lands.
+
 ## `doctor`'s `claude_plugin` check: `warn`/`skip` is not a setup failure (since v0.92.0, #704)
 
 - **The plugin is an upgrade, not a prerequisite.** `kbagent context` gives

@@ -131,6 +131,33 @@ class LoginResult:
 
 
 @dataclass(frozen=True)
+class ProvisionProjectResult:
+    """Result of `kbagent project create`. Carries no access/refresh token.
+
+    `confirm_url` is the one exception to this package's "no credential in a
+    result" rule, and a deliberate one: it is a single-use claim link whose
+    entire purpose is to be handed to a human, and without it the project it
+    unlocks can never be owned by anybody. It is also on disk in `auth.json`
+    (`StackSession.agent_confirm_url`) and re-printed by `auth status`, so
+    losing this output is recoverable.
+    """
+
+    status: str  # "ok"
+    stack_url: str
+    project_id: int
+    project_name: str
+    backend: str
+    session_id: str
+    access_expires_at: str
+    confirm_url: str
+    backend_init_dispatched_async: bool
+    registered_projects: list[RegisteredProject]
+    next_steps: list[str]
+    warnings: list[str]
+    session_unsupported_features: list[str] = field(default_factory=default_unsupported_features)
+
+
+@dataclass(frozen=True)
 class AuthStatusResult:
     """Result of `kbagent auth status`. Carries no token value."""
 
@@ -144,6 +171,11 @@ class AuthStatusResult:
     accessible_projects: list[dict[str, Any]]
     orphaned_session_ids: list[str]
     detail: str
+    # Non-empty only while this stack's session came from `project create`
+    # and the project it provisioned has not been claimed by a human yet.
+    # Re-surfaced here because the link is single-use, time-limited, and the
+    # terminal that first printed it is routinely gone by now.
+    agent_confirm_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -349,6 +381,120 @@ class AuthService:
                 register_projects=register_projects,
                 warnings=warnings,
             )
+
+    # ------------------------------------------------------------------
+    # agent provisioning
+    # ------------------------------------------------------------------
+
+    def provision_project(
+        self,
+        *,
+        stack: str,
+        alias: str = "",
+        project_name: str = "",
+        backend: str | None = None,
+        sync_backend_init: bool = False,
+    ) -> ProvisionProjectResult:
+        """Create a brand-new Keboola project from a machine with no identity.
+
+        The one flow here that needs neither an account nor a token: the
+        stack provisions a project owned by a synthetic agent admin, hands
+        back a project-pinned programmatic session, and returns a single-use
+        link a human opens to take ownership. Confirmation **revokes this
+        session**, which is why the result names `auth login` as the next
+        step rather than pretending the credential is durable.
+
+        `stack` is required and never discovered -- on a fresh machine there
+        is no default project to infer one from, and silently provisioning a
+        billable project on a guessed stack is not a mistake worth being able
+        to make.
+
+        Refuses when a session already exists for this stack. `auth.json`
+        holds exactly one session per stack, so provisioning would replace
+        (and, on the login path, revoke) a real user's login -- and anyone
+        who already has a session has an account, which is the thing this
+        command exists to avoid needing.
+
+        Order of operations mirrors `_finalize_login`: persist the session
+        BEFORE registering the alias, so a failure between the two leaves a
+        usable credential rather than an alias pointing at nothing.
+        """
+        stack_url = self._resolve_stack_url(stack)
+        existing = self._state_store.get_session(stack_url)
+        if existing is not None:
+            raise ConfigError(
+                f"A Keboola session for {stack_url} already exists "
+                f"(session {existing.session_id}); kbagent keeps one session per "
+                "stack, so creating a project here would replace it. You already "
+                "have an account -- create the project in the Keboola UI, or run "
+                f"`kbagent auth logout --stack {stack_url}` first."
+            )
+
+        warnings: list[str] = []
+        with self._auth_client_factory(stack_url) as client:
+            provisioned = client.provision_project(
+                project_name=project_name,
+                backend=backend,
+                sync_backend_init=sync_backend_init,
+            )
+
+        now = datetime.now(UTC)
+        session = StackSession(
+            stack_url=stack_url,
+            session_id=provisioned.session_id,
+            access_token=provisioned.access_token,
+            refresh_token=provisioned.refresh_token,
+            access_expires_at=now + timedelta(seconds=provisioned.access_token_expires_in),
+            created_at=now,
+            agent_confirm_url=provisioned.confirm_url,
+        )
+        self._state_store.put_session(session)
+
+        project = provisioned.project
+        candidates = self.candidates_from_projects(
+            stack_url, [{"id": project.id, "name": project.name, "role": "admin"}]
+        )
+        registered = apply_selections(
+            self._config_store,
+            stack_url,
+            {c.project_id: c for c in candidates},
+            [ProjectSelection(project_id=project.id, alias=alias)],
+            warnings,
+        )
+
+        registered_alias = registered[0].alias if registered else alias
+        next_steps = [
+            (
+                f"Open {provisioned.confirm_url} and sign in -- this makes the "
+                "project yours. The link is single-use and expires in a few days; "
+                "until it is opened the project belongs to nobody."
+            ),
+            (
+                f"Then run `kbagent auth login --stack {stack_url}`: confirming "
+                "revokes this agent session, and signing in as yourself keeps the "
+                f"alias '{registered_alias}' working."
+            ),
+        ]
+        if provisioned.backend_init_dispatched_async:
+            warnings.append(
+                "The project's storage backend is still being initialized in the "
+                "background; the first Storage command may fail until it finishes."
+            )
+
+        return ProvisionProjectResult(
+            status="ok",
+            stack_url=stack_url,
+            project_id=project.id,
+            project_name=project.name,
+            backend=project.backend,
+            session_id=session.session_id,
+            access_expires_at=_iso(session.access_expires_at),
+            confirm_url=provisioned.confirm_url,
+            backend_init_dispatched_async=provisioned.backend_init_dispatched_async,
+            registered_projects=registered,
+            next_steps=next_steps,
+            warnings=warnings,
+        )
 
     def _finalize_login(
         self,
@@ -670,6 +816,7 @@ class AuthService:
                     accessible_projects=[],
                     orphaned_session_ids=session.orphaned_session_ids,
                     detail=exc.message,
+                    agent_confirm_url=session.agent_confirm_url,
                 )
             if exc.error_code in _NETWORK_ERROR_CODES:
                 return AuthStatusResult(
@@ -686,6 +833,7 @@ class AuthService:
                         "Could not reach the Keboola auth service to verify the "
                         f"session live; showing locally stored data. {exc.message}"
                     ),
+                    agent_confirm_url=session.agent_confirm_url,
                 )
             raise
 
@@ -706,6 +854,7 @@ class AuthService:
             accessible_projects=accessible_projects,
             orphaned_session_ids=current.orphaned_session_ids,
             detail="",
+            agent_confirm_url=current.agent_confirm_url,
         )
 
     # ------------------------------------------------------------------
@@ -889,6 +1038,7 @@ __all__ = [
     "ProjectCandidate",
     "ProjectCandidatesResult",
     "ProjectSelection",
+    "ProvisionProjectResult",
     "RegisterProjectsResult",
     "RegisteredProject",
     "default_auth_client_factory",

@@ -32,6 +32,14 @@ from ._helpers import (
     resolve_manage_token,
 )
 from ._metadata_input import resolve_text_input
+from ._project_create import format_provision_result
+
+
+class ProjectBackend(StrEnum):
+    """Storage backend an agent-provisioned project may ask for."""
+
+    snowflake = "snowflake"
+    bigquery = "bigquery"
 
 
 class ProjectRole(StrEnum):
@@ -223,6 +231,64 @@ def project_add(
             error_code=exc.error_code,
             retryable=exc.retryable,
         )
+        raise typer.Exit(code=exit_code) from None
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+
+
+@project_app.command("create")
+def project_create(
+    ctx: typer.Context,
+    url: str = typer.Option(
+        ...,
+        "--url",
+        help="Keboola stack URL to create the project on (required -- never guessed)",
+        envvar=ENV_KBC_STORAGE_API_URL,
+    ),
+    alias: str | None = typer.Option(
+        None, "--project", help="Local alias for the new project (default: from its name)"
+    ),
+    name: str | None = typer.Option(None, "--name", help="Name for the new Keboola project"),
+    backend: ProjectBackend | None = typer.Option(
+        None, "--backend", help="Storage backend (default: the stack's own default)"
+    ),
+    sync_backend_init: bool = typer.Option(
+        False,
+        "--sync-backend-init",
+        help=(
+            "Wait for the storage backend to be initialized before answering, "
+            "instead of letting the stack finish it in the background"
+        ),
+    ),
+) -> None:
+    """Create a brand-new Keboola project -- no account, no token needed.
+
+    The only kbagent command that works from nothing: the stack provisions a
+    project, kbagent stores the resulting session and registers the project as
+    a local alias, and the printed confirmation link is how a human takes
+    ownership of it. Confirming REVOKES this session, so the last step is
+    always `kbagent auth login`.
+
+    Needs the `agent-provisioning` stack feature; a stack without it says so
+    and exits non-zero. On a stack where you already have a session, use the
+    Keboola UI instead -- kbagent keeps one session per stack.
+    """
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, "auth_service")
+
+    try:
+        result = service.provision_project(
+            stack=url,
+            alias=alias or "",
+            project_name=name or "",
+            backend=backend.value if backend else None,
+            sync_backend_init=sync_backend_init,
+        )
+        formatter.output(result, format_provision_result)
+    except KeboolaApiError as exc:
+        exit_code = map_error_to_exit_code(exc)
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

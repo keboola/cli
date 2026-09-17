@@ -852,6 +852,22 @@ AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
 # token -- see plan review B-1/B-2).
 AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
 
+# Agent provisioning (DMD-1940): create a brand-new Keboola project from a
+# machine with no Keboola identity at all. Unauthenticated POST -- the request
+# itself is the credential -- answering a project-pinned, Manage-less
+# programmatic session (the same AT/RT pair every other flow here produces)
+# plus a single-use `confirmUrl` a human opens to take ownership. Gated by the
+# stack feature `agent-provisioning`; a stack without it answers 404.
+#
+# Lives under /manage, not /v1/auth, because the public surface is named
+# "programmatic projects" while the internal feature kept the shipped
+# `agent-provisioning` name (keboola/connection#8081).
+AGENT_PROVISIONING_PATH: str = "/manage/programmatic-projects"
+
+# Backends a provisioning request may ask for. None keeps the stack
+# maintainer's own default (Snowflake wins when it has both).
+AGENT_PROVISIONING_BACKENDS: tuple[str, ...] = ("snowflake", "bigquery")
+
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down
 AUTH_DEVICE_SLOW_DOWN_INCREMENT: int = 5  # bump when the server sends no interval
