@@ -241,6 +241,105 @@ class TestProjectCreate:
         assert json.loads(result.stdout)["error"]["code"] == ErrorCode.CONFIG_ERROR
 
 
+class TestFeatureOffEndToEnd:
+    """The full CLI path -- argv to rendered message -- with only the socket faked.
+
+    Every other test in this file mocks `AuthService`, which is right for
+    argument wiring but would not catch the thing that actually matters here:
+    the command is ALWAYS registered, so on a stack without
+    `STACK_FEATURES__AGENT_PROVISIONING` the 404 response is the only place a
+    user ever learns the capability is missing. These drive the real service,
+    the real client and the real error mapping so the message, the exit code
+    and the absence of a traceback are pinned end to end.
+    """
+
+    def test_human_mode_explains_the_missing_stack_feature(
+        self, tmp_path: Path, httpx_mock
+    ) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        # A legacy dispatcher answers HTML, not JSON -- the message must not
+        # degrade into markup or an unparsed-body error.
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=404,
+            html="<html><body><h1>404 Not Found</h1></body></html>",
+        )
+
+        result = runner.invoke(
+            app, ["--config-dir", str(config_dir), "project", "create", "--url", STACK_URL]
+        )
+
+        assert result.exit_code == 1, result.output
+        flat = " ".join(result.output.split())
+        assert "not available on" in flat
+        assert "agent-provisioning" in flat
+        assert "STACK_FEATURES__AGENT_PROVISIONING" in flat
+        # Names a way forward, and never a stack trace.
+        assert "kbagent auth login" in flat
+        assert "Traceback" not in result.output
+        assert "404 Not Found" not in result.output
+
+    def test_json_mode_carries_the_code_and_message(self, tmp_path: Path, httpx_mock) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=404,
+            json={"error": "Not Found"},
+        )
+
+        result = runner.invoke(
+            app,
+            ["--json", "--config-dir", str(config_dir), "project", "create", "--url", STACK_URL],
+        )
+
+        assert result.exit_code == 1, result.output
+        error = json.loads(result.stdout)["error"]
+        assert error["code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert "STACK_FEATURES__AGENT_PROVISIONING" in error["message"]
+        assert error["retryable"] is False
+
+    def test_nothing_is_persisted_when_the_feature_is_off(self, tmp_path: Path, httpx_mock) -> None:
+        """No session in auth.json, no alias in config.json, no stray files."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=404,
+            json={"error": "Not Found"},
+        )
+
+        runner.invoke(
+            app, ["--config-dir", str(config_dir), "project", "create", "--url", STACK_URL]
+        )
+
+        assert not (config_dir / "auth.json").exists()
+        config = config_dir / "config.json"
+        assert not config.exists() or json.loads(config.read_text())["projects"] == {}
+
+    def test_the_feature_check_costs_exactly_one_request(self, tmp_path: Path, httpx_mock) -> None:
+        """A disabled feature never becomes enabled by retrying, and the call
+        is not idempotent -- so a 404 must not be retried."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=404,
+            json={"error": "Not Found"},
+        )
+
+        runner.invoke(
+            app, ["--config-dir", str(config_dir), "project", "create", "--url", STACK_URL]
+        )
+
+        assert len(httpx_mock.get_requests()) == 1
+
+
 class TestPermissionClassification:
     def test_create_is_admin_class(self) -> None:
         """It provisions a real organization, project and credit grant."""

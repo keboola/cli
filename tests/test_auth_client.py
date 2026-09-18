@@ -1611,9 +1611,15 @@ class TestProvisionProject:
             client.close()
 
         assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
-        assert "not enabled on this stack" in excinfo.value.message
-        assert STACK_URL in excinfo.value.message
-        assert "Browser login" not in excinfo.value.message
+        message = excinfo.value.message
+        assert STACK_URL in message
+        # Names the capability that is missing AND the flag an operator flips,
+        # because this response is the only place a caller learns either.
+        assert "agent-provisioning" in message
+        assert "STACK_FEATURES__AGENT_PROVISIONING" in message
+        # Not the generic auth-404 text, which tells the caller to paste a
+        # token -- the one thing a caller of this command does not have.
+        assert "Browser login" not in message
 
     def test_5xx_is_not_retried(self, httpx_mock) -> None:
         """The call creates an organization, a billable project and a credit

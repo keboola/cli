@@ -259,9 +259,12 @@ Use `kbagent <command> --help` for full flag details and examples.
                          [--backend snowflake|bigquery] [--sync-backend-init]
     Create a BRAND-NEW Keboola project from a machine with no Keboola
     identity -- no account, no token, no `auth login` first. The only command
-    here that works from nothing. Needs the `agent-provisioning` stack
-    feature; without it the stack answers 404 and the command exits 1 with
-    AUTH_NOT_SUPPORTED_ON_STACK naming the browser alternative.
+    here that works from nothing. Needs the `agent-provisioning` stack feature
+    (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
+    command is always registered, so its presence in --help proves nothing
+    about the stack; without the feature the stack answers 404 and the command
+    exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    flips and how to connect an existing project instead.
     What it does in one call: provisions the project, stores the returned
     project-pinned session in auth.json, and registers the project in
     config.json under a session sentinel (as `auth login --register-projects`

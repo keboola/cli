@@ -357,10 +357,16 @@ Versioning convention:
   first): that exit-5 message **carries the new project's id and its confirm
   link**. Read it and relay the link -- discarding it because the exit code
   was non-zero is what orphans the project.
-- **A stack without the `agent-provisioning` feature answers 404**, mapped to
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the browser
-  alternatives. That is a stack capability, not a broken URL and not a
-  credential problem -- do not retry it and do not go looking for a token.
+- **The command is always registered; the CAPABILITY is not.** It is gated by
+  the `agent-provisioning` stack feature
+  (`STACK_FEATURES__AGENT_PROVISIONING`), which is off on most stacks, so
+  `kbagent project create --help` working tells you nothing about whether the
+  stack will accept it. A stack without the feature answers 404, mapped to
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1); the message names the missing
+  feature, the flag an operator flips to enable it, and how to connect an
+  existing project instead. That is a stack capability, not a broken URL and
+  not a credential problem -- do not retry it, do not go looking for a token,
+  and do not report it as a kbagent bug.
 - **Never auto-retried, on any status.** The POST is not idempotent: every
   success creates an organization, a billable project and a credit grant, so
   a 5xx/429 comes straight back to the caller (a 503 is stack-wide

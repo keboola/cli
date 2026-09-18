@@ -143,9 +143,13 @@ Other behaviour worth knowing:
 - **`--url` is required and never inferred.** On a fresh machine there is no
   default project to infer it from, and provisioning a billable project on a
   guessed stack is not a mistake worth being able to make.
-- **A stack without the feature answers 404**, surfaced as
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the browser
-  alternatives -- not a routing bug and not a credential problem.
+- **The command is always available; the capability is not.** It is gated by
+  the `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
+  off on most stacks, so `kbagent project create --help` says nothing about
+  whether this stack will accept it. Without the feature the stack answers 404,
+  surfaced as `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the
+  missing feature, the flag an operator flips, and how to connect an existing
+  project instead -- not a routing bug and not a credential problem.
 - **The call is never retried automatically**, on any status. It is not
   idempotent: each success creates an organization, a project and a credit
   grant. A 503 is stack-wide provisioning contention and means nothing was

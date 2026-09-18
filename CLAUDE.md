@@ -452,8 +452,10 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
 # project create (since vNEXT, DMD-1940): the ONLY kbagent command that works from nothing --
 #   no account, no token, no `auth login`. POSTs the unauthenticated provisioning endpoint
-#   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature; without it
-#   the stack 404s and this exits 1 with AUTH_NOT_SUPPORTED_ON_STACK naming the browser path),
+#   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
+#   / `STACK_FEATURES__AGENT_PROVISIONING`, off on most stacks -- the COMMAND is always
+#   registered, so `--help` proves nothing about the stack; without the feature the stack 404s
+#   and this exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
 #   stores the returned project-pinned session in auth.json, and registers the project in
 #   config.json under the `kbc-session://` sentinel -- becoming the default project when nothing
 #   else was registered. THE PROJECT IT CREATES IS OWNED BY NOBODY: the result's `confirm_url` is a

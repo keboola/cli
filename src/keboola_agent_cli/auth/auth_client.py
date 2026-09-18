@@ -716,20 +716,33 @@ class AuthClient(BaseHttpClient):
     def _raise_provisioning_error(self, response: httpx.Response) -> NoReturn:
         """Map a failed provisioning response, naming the right remedy on 404.
 
-        A 404 means the `agent-provisioning` stack feature is off -- the
-        endpoint is fail-closed exactly like the rest of this client's
-        surface. It cannot go through `_map_auth_error`, whose 404 message is
-        about *browser login* and points at `project add`: the caller here has
-        no token to add and no account to log in with, so the only honest
-        remedies are a different stack or a human-created project.
+        A 404 means the `agent-provisioning` stack feature
+        (STACK_FEATURES__AGENT_PROVISIONING) is off -- the endpoint is
+        fail-closed exactly like the rest of this client's surface, and the
+        command itself is always registered, so this response is the ONLY
+        place a caller learns the capability is missing here. The message
+        therefore has to carry the whole answer: what is missing, who can
+        turn it on, and what to do instead meanwhile.
+
+        It cannot go through `_map_auth_error`, whose 404 message is about
+        *browser login*: that one tells the caller to paste a token, which
+        is exactly what a caller of THIS command does not have.
+
+        The body is never parsed here. A stack without the route can answer
+        404 as HTML from a legacy dispatcher, and reading a server message
+        out of that would replace a useful sentence with markup.
         """
         if response.status_code == 404:
             raise KeboolaApiError(
                 message=(
-                    f"Creating a Keboola project from the CLI is not enabled on this "
-                    f"stack ({self._base_url}). Create a project at {self._base_url} in "
-                    "a browser, then connect it with `kbagent auth login` or "
-                    "`kbagent project add --project <alias> --url <stack> --token <token>`."
+                    f"Creating a Keboola project from the CLI is not available on "
+                    f"{self._base_url}. It needs the `agent-provisioning` stack feature "
+                    "(STACK_FEATURES__AGENT_PROVISIONING), which is off on this stack -- "
+                    "ask the stack operator to enable it, or use another stack. To use a "
+                    f"project that already exists: create one at {self._base_url} in a "
+                    f"browser, then connect it with `kbagent auth login --stack "
+                    f"{self._base_url}` or `kbagent project add --project <alias> --url "
+                    f"{self._base_url} --token <token>`."
                 ),
                 status_code=404,
                 error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
