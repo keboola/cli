@@ -372,9 +372,20 @@ Versioning convention:
   a 5xx/429 comes straight back to the caller (a 503 is stack-wide
   provisioning contention and means nothing was created). Retry deliberately,
   once, if at all.
+- **A timeout is two different events, and the error says which.** A connect
+  timeout never reached the stack -- `retryable: true`, run it again. A READ
+  timeout means the POST was delivered and may well have succeeded:
+  `retryable: false`, and the message says not to repeat it. Do not re-run on
+  that one -- check `kbagent auth status --stack URL` instead, which prints
+  the stored session and its claim link if a project was in fact created.
+  Branch on `error.retryable`, never on the word "timed out".
 - **Without `--sync-backend-init` the storage backend initializes in the
   background** and the result carries a warning saying so -- the first Storage
-  command against the new project may fail until it lands.
+  command against the new project may fail until it lands. Passing the flag
+  holds the request open until the backend is ready and raises the read
+  timeout to 300 s for that call, which can outlast an agent's own foreground
+  tool-shell timeout -- prefer the async default there and poll Storage
+  yourself.
 
 ## `doctor`'s `claude_plugin` check: `warn`/`skip` is not a setup failure (since v0.92.0, #704)
 

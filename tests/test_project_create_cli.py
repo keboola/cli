@@ -208,6 +208,42 @@ class TestProjectCreate:
 
         assert "still being initialized" in result.stdout
 
+    def test_panel_does_not_name_an_alias_that_was_not_registered(self, tmp_path: Path) -> None:
+        """`apply_selections` echoes the REQUESTED alias on a skip, so reading
+        the name alone printed "Local alias: taken" directly above a next step
+        saying no alias was registered."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result(
+            registered_projects=[
+                RegisteredProject(
+                    alias="taken",
+                    project_id=9840,
+                    project_name="Agent Project",
+                    status="skipped",
+                    note="Alias 'taken' already points at a different project.",
+                )
+            ],
+            next_steps=["Open the link.", "No local alias was registered for project 9840."],
+        )
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        flat = " ".join(result.stdout.split())
+        assert "Local alias: none registered" in flat
+        assert "Local alias: taken" not in flat
+
+    def test_panel_names_a_registered_alias(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.provision_project.return_value = _result()
+
+        result = _invoke(config_dir, svc, ["project", "create", "--url", STACK_URL])
+
+        assert "agent-project" in " ".join(result.stdout.split())
+
     def test_feature_off_is_an_answer_not_a_traceback(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

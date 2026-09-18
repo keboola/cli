@@ -42,6 +42,7 @@ import httpx
 
 from ..constants import (
     AGENT_PROVISIONING_PATH,
+    AGENT_PROVISIONING_SYNC_TIMEOUT,
     AUTH_CLIENT_ID,
     AUTH_DEVICE_PATH,
     AUTH_DEVICE_TOKEN_PATH,
@@ -570,20 +571,33 @@ class AuthClient(BaseHttpClient):
         json: dict[str, Any],
         timeout: httpx.Timeout | float | None = None,
         action: str,
+        repeat_unsafe: str = "",
     ) -> httpx.Response:
         """Issue one request outside the shared retry loop, still mapping
         transport failures the way `_do_request` would have.
 
-        Shared by `login_password`, `verify_mfa_totp`, and `refresh`
-        (via `_post_refresh`) -- each bypasses the retry loop for its own
-        reason (see their docstrings and the module docstring), but
-        bypassing retry must not also mean losing the
+        Shared by `login_password`, `verify_mfa_totp`, `refresh` (via
+        `_post_refresh`) and `provision_project` -- each bypasses the retry
+        loop for its own reason (see their docstrings and the module
+        docstring), but bypassing retry must not also mean losing the
         `TimeoutException`/`TransportError` -> structured-error mapping
         `_do_request` gives every other call; without it, a network blip
         would escape as a raw traceback instead of a `--json` error
         envelope. `action` names what the caller was doing
         ("Signing in", "Refreshing your Keboola login", ...), reused in
-        both message templates below.
+        every message template below.
+
+        `repeat_unsafe`, when non-empty, says the call MUST NOT simply be
+        repeated and carries the remedy to print instead. It only changes
+        what happens on a timeout that was already delivered, and it exists
+        because "timed out" is two different events: a connect/pool timeout
+        never reached the server and is always safe to repeat, while a
+        read/write timeout means the request WAS sent and its outcome is
+        unknown. `BaseHttpClient._do_request` already draws exactly that
+        line (and `_non_idempotent_note` says so in prose); flattening it
+        here would tell the caller of a non-idempotent write to run it
+        again, which for `provision_project` means a second organization, a
+        second billable project and a second credit grant.
         """
         kwargs: dict[str, Any] = {"json": json}
         if timeout is not None:
@@ -591,6 +605,17 @@ class AuthClient(BaseHttpClient):
         try:
             return self._client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
+            delivered = not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
+            if repeat_unsafe and delivered:
+                raise KeboolaApiError(
+                    message=(
+                        f"{action} at {self._base_url} timed out after the request had "
+                        f"been sent, so it may have succeeded anyway. {repeat_unsafe}"
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.TIMEOUT,
+                    retryable=False,
+                ) from exc
             raise KeboolaApiError(
                 message=f"{action} at {self._base_url} timed out. Run the command again.",
                 status_code=0,
@@ -690,6 +715,22 @@ class AuthClient(BaseHttpClient):
         retryable error for the *user* to repeat, deliberately not for this
         client to repeat on its own.
 
+        A timeout is classified, not lumped together: a connect/pool timeout
+        never reached the stack and is reported retryable, while a read
+        timeout means the POST was delivered and may well have succeeded --
+        that one is reported NON-retryable and points at `auth status`, whose
+        stored session (and claim link) is the evidence of whether a project
+        exists. Telling the caller to "run the command again" there is how a
+        second organization, project and credit grant get created over a lost
+        response.
+
+        ``sync_backend_init`` also buys a much longer read budget
+        (`AGENT_PROVISIONING_SYNC_TIMEOUT`): that flag exists to hold the
+        request open until the backend is ready, so the default 30 s would
+        make the timeout above the EXPECTED outcome rather than the rare one.
+        Note it can outlast an agent's foreground tool-shell timeout -- the
+        async default (no flag) is the one to use there.
+
         ``backend`` of None keeps the stack maintainer's own default. The
         ``clientId`` is sent for audit attribution: every org/project event of
         this flow carries the stack's shared agent admin as actor, so without
@@ -707,7 +748,16 @@ class AuthClient(BaseHttpClient):
             "POST",
             AGENT_PROVISIONING_PATH,
             json=body,
+            # `--sync-backend-init` keeps the response open until the backend
+            # is ready, well past the 30 s client default.
+            timeout=AGENT_PROVISIONING_SYNC_TIMEOUT if sync_backend_init else None,
             action="Creating a Keboola project",
+            repeat_unsafe=(
+                "Do NOT just run it again -- that would create a second project. "
+                "Check with `kbagent auth status --stack "
+                f"{self._base_url}`: if a session is reported, the project was "
+                "created and the claim link is printed there."
+            ),
         )
         if response.status_code >= 400:
             self._raise_provisioning_error(response)

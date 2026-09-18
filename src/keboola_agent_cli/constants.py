@@ -864,9 +864,15 @@ AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
 # `agent-provisioning` name (keboola/connection#8081).
 AGENT_PROVISIONING_PATH: str = "/manage/programmatic-projects"
 
-# Backends a provisioning request may ask for. None keeps the stack
-# maintainer's own default (Snowflake wins when it has both).
-AGENT_PROVISIONING_BACKENDS: tuple[str, ...] = ("snowflake", "bigquery")
+# `--sync-backend-init` holds the provisioning request open until the stack has
+# finished initializing the storage backend, which routinely outlasts the
+# client default read timeout (30 s). Timing out there is the WORST outcome
+# this command has -- the project was created, the response was lost, and the
+# confirm link with it -- so the synchronous variant gets its own budget.
+# Connect/write/pool stay short: only the wait for the body is long.
+AGENT_PROVISIONING_SYNC_TIMEOUT: httpx.Timeout = httpx.Timeout(
+    connect=10.0, read=300.0, write=10.0, pool=5.0
+)
 
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down

@@ -1594,6 +1594,79 @@ class TestProvisionProject:
         body = json.loads(httpx_mock.get_requests()[0].read().decode())
         assert body["syncBackendInit"] is True
 
+    def test_read_timeout_is_not_reported_as_repeatable(self, httpx_mock) -> None:
+        """The request WAS sent and may have created the project. Reporting it
+        retryable -- and saying "run the command again" -- is how a second
+        organization, billable project and credit grant get created over a
+        lost response."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("timed out"),
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.TIMEOUT
+        assert excinfo.value.retryable is False
+        assert "may have succeeded" in excinfo.value.message
+        assert "Do NOT just run it again" in excinfo.value.message
+        assert "auth status" in excinfo.value.message
+        assert "Run the command again." not in excinfo.value.message
+
+    def test_connect_timeout_is_repeatable(self, httpx_mock) -> None:
+        """Never delivered, so nothing was created -- the ordinary advice holds."""
+        httpx_mock.add_exception(
+            httpx.ConnectTimeout("timed out"),
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert excinfo.value.retryable is True
+        assert "Run the command again." in excinfo.value.message
+
+    def test_sync_backend_init_gets_a_longer_read_budget(self, httpx_mock) -> None:
+        """Without it the flag's own success path -- waiting for the backend --
+        would routinely trip the 30s default and land in the timeout above."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project(sync_backend_init=True)
+        finally:
+            client.close()
+
+        assert httpx_mock.get_requests()[0].extensions["timeout"]["read"] == 300.0
+
+    def test_async_default_keeps_the_client_timeout(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project()
+        finally:
+            client.close()
+
+        assert httpx_mock.get_requests()[0].extensions["timeout"]["read"] != 300.0
+
     def test_404_names_provisioning_not_browser_login(self, httpx_mock) -> None:
         """The stack feature is off. The generic auth 404 message points at
         `project add --token`, which a caller with no account cannot use."""

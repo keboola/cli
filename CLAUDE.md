@@ -469,7 +469,11 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   maintainer's own default; `--sync-backend-init` waits for backend init instead of the async
 #   default (which warns that the first Storage command may fail until it lands). The provisioning
 #   POST is never auto-retried on 5xx/429 -- it is not idempotent, and each success creates an
-#   organization, a billable project and a credit grant.
+#   organization, a billable project and a credit grant. A timeout is classified rather than
+#   lumped together: a connect timeout never reached the stack (retryable), a READ timeout was
+#   delivered and may have succeeded (retryable:false, message says not to repeat -- check
+#   `auth status`, whose stored session + claim link is the evidence). `--sync-backend-init`
+#   raises that call's read timeout to 300s, which can outlast an agent's foreground shell.
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
 kbagent project remove --project NAME

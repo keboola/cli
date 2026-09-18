@@ -28,7 +28,17 @@ def format_provision_result(console: Console, result: ProvisionProjectResult) ->
     copy-paste verbatim. ``markup=False`` prints it byte-for-byte and
     interprets nothing.
     """
-    alias = result.registered_projects[0].alias if result.registered_projects else ""
+    # `apply_selections` echoes the REQUESTED alias even when it refused to
+    # register it (`status="skipped"`, e.g. the name is already taken), so the
+    # status is the only truth here. Reading the name alone printed
+    # "Local alias: taken" directly above a next step saying no alias was
+    # registered -- the same trap the service's `next_steps` already avoids.
+    entry = result.registered_projects[0] if result.registered_projects else None
+    alias_line = (
+        f"[bold]Local alias:[/bold] {escape(entry.alias)}"
+        if entry is not None and entry.status in ("registered", "exists")
+        else "[bold]Local alias:[/bold] [yellow]none registered[/yellow]"
+    )
     console.print(
         Panel(
             "\n".join(
@@ -39,7 +49,7 @@ def format_provision_result(console: Console, result: ProvisionProjectResult) ->
                     ),
                     f"[bold]Stack:[/bold] {escape(result.stack_url)}",
                     f"[bold]Backend:[/bold] {escape(result.backend or 'stack default')}",
-                    f"[bold]Local alias:[/bold] {escape(alias)}",
+                    alias_line,
                     (
                         f"[bold]Session:[/bold] {escape(result.session_id)} "
                         f"(access token expires {result.access_expires_at})"
