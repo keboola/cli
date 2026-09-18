@@ -255,6 +255,38 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Project Management
 
+  kbagent project create --url URL [--project ALIAS] [--name NAME]
+                         [--backend snowflake|bigquery] [--sync-backend-init]
+    Create a BRAND-NEW Keboola project from a machine with no Keboola
+    identity -- no account, no token, no `auth login` first. The only command
+    here that works from nothing. Needs the `agent-provisioning` stack feature
+    (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
+    command is always registered, so its presence in --help proves nothing
+    about the stack; without the feature the stack answers 404 and the command
+    exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    flips and how to connect an existing project instead.
+    What it does in one call: provisions the project, stores the returned
+    project-pinned session in auth.json, and registers the project in
+    config.json under a session sentinel (as `auth login --register-projects`
+    would). If nothing was registered before, it also becomes the default
+    project -- so the next command needs no --project.
+    THE RESULT IS NOT FINISHED UNTIL A HUMAN CLICKS. The project it creates
+    is owned by NOBODY: `confirm_url` in the result is a single-use link a
+    human must open and sign in at to take ownership, and it expires in days.
+    Relay that URL to the user verbatim -- it is the only path to ownership,
+    and an unclaimed project is a billable orphan. `auth status` re-prints it
+    (`agent_confirm_url`) for as long as it is pending, so a lost terminal is
+    recoverable.
+    Confirmation REVOKES this session. After the human confirms, run
+    `kbagent auth login --stack URL`; the registered alias keeps working
+    because the sentinel is keyed by project id + stack, not by session.
+    Refuses (exit 5, CONFIG_ERROR) when a session for that stack already
+    exists: auth.json holds one session per stack, and anyone who has one has
+    an account already. `--backend` omitted keeps the stack's own default.
+    `--sync-backend-init` waits for backend initialization instead of letting
+    the stack finish it in the background (the async default warns that the
+    first Storage command may fail until it lands).
+
   kbagent project add --project NAME --url URL --token TOKEN
     Add a new project connection. Token verified against API.
 

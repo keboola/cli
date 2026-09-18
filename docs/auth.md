@@ -32,6 +32,10 @@ token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 ## TL;DR
 
 ```bash
+# 0. No Keboola account at all? Create a project from nothing, then hand the
+#    printed confirmation link to a human to take ownership of it.
+kbagent project create --url https://connection.keboola.com
+
 # 1. Sign in to a stack (a browser opens; finish the login there)
 kbagent auth login --stack https://connection.keboola.com
 
@@ -90,6 +94,70 @@ The reverse direction *is* possible, because it is an explicit request — see
 ---
 
 ## 2. The commands
+
+### `project create` -- starting from nothing
+
+*(since vNEXT)*
+
+```bash
+kbagent project create --url URL [--project ALIAS] [--name NAME] \
+                       [--backend snowflake|bigquery] [--sync-backend-init]
+```
+
+Everything else on this page assumes you already have a Keboola account.
+`kbagent project create` is the one command that does not: it provisions a
+**brand-new project** on a stack where you have no identity at all, and hands
+back a working session for it. It lives in the `project` group but is an auth
+flow, which is why it is documented here.
+
+What one call does:
+
+1. `POST /manage/programmatic-projects` -- unauthenticated by design; the
+   request itself is the credential. Gated by the `agent-provisioning` stack
+   feature.
+2. Stores the returned session (a **project-pinned, Manage-less** access +
+   refresh token pair) in `auth.json`, exactly like `auth login` would.
+3. Registers the new project in `config.json` under the `kbc-session://`
+   sentinel, becoming the default project if nothing else was registered.
+
+**The project it creates is owned by nobody.** The result's `confirm_url` is a
+single-use link, valid for a few days, that a human opens and signs in at to
+take ownership. Until then the project exists, is billable, and has only a
+synthetic admin as a member. The link is the only path to ownership, so:
+
+- Copy it out of the output, or re-read it later from `kbagent auth status`
+  (`agent_confirm_url` under `--json`), which keeps printing it while the
+  claim is outstanding.
+- **Confirming revokes the session `project create` gave you.** That is the
+  design: the synthetic agent identity is retired when a real one takes over.
+  Afterwards, run `kbagent auth login --stack URL` to sign in as yourself. The
+  registered alias survives the switch untouched -- the sentinel keys on
+  project id + stack, never on a session id.
+
+Other behaviour worth knowing:
+
+- **One session per stack.** The command refuses (exit 5, `CONFIG_ERROR`) when
+  `auth.json` already holds a session for that stack: provisioning would
+  replace a real login, and anyone who has one has an account and can create a
+  project in the Keboola UI.
+- **`--url` is required and never inferred.** On a fresh machine there is no
+  default project to infer it from, and provisioning a billable project on a
+  guessed stack is not a mistake worth being able to make.
+- **The command is always available; the capability is not.** It is gated by
+  the `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
+  off on most stacks, so `kbagent project create --help` says nothing about
+  whether this stack will accept it. Without the feature the stack answers 404,
+  surfaced as `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the
+  missing feature, the flag an operator flips, and how to connect an existing
+  project instead -- not a routing bug and not a credential problem.
+- **The call is never retried automatically**, on any status. It is not
+  idempotent: each success creates an organization, a project and a credit
+  grant. A 503 is stack-wide provisioning contention and means nothing was
+  created; retry it yourself if you want to.
+- **`--backend` omitted keeps the stack maintainer's own default.**
+  `--sync-backend-init` waits for backend initialization; without it the stack
+  finishes in the background and the result warns that the first Storage
+  command may fail until it lands.
 
 ### `auth login`
 

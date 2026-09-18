@@ -18,13 +18,16 @@ import pytest
 
 from keboola_agent_cli.auth.environment import BrowserEnvironment
 from keboola_agent_cli.auth.models import (
+    AgentProvisioningResponse,
     AuthProject,
     AuthUser,
     CliTokenResponse,
     DeviceAuthorization,
     IntrospectResponse,
     MfaChallengeResult,
+    ProvisionedProject,
     RevokeResult,
+    StackSession,
 )
 from keboola_agent_cli.auth.pkce import (
     LoopbackCallback,
@@ -73,6 +76,12 @@ class _FakeAuthClient:
         self.login_password_side_effect: Exception | None = None
         self.verify_mfa_response: CliTokenResponse | None = None
         self.verify_mfa_side_effect: Exception | None = None
+        self.provision_response: AgentProvisioningResponse | None = None
+        self.provision_side_effect: Exception | None = None
+        # Runs while `provision_project` is 'in flight', so a test can make
+        # the world change under the call (e.g. another process writing a
+        # session) without reassigning a bound method.
+        self.provision_during_call: Callable[[], None] | None = None
 
     def __enter__(self) -> Self:
         return self
@@ -129,6 +138,15 @@ class _FakeAuthClient:
     def delete_session(self, session_id: str, access_token: str) -> RevokeResult:
         self.calls.append(("delete_session", (session_id, access_token)))
         return self.delete_session_result
+
+    def provision_project(self, **kwargs: Any) -> AgentProvisioningResponse:
+        self.calls.append(("provision_project", kwargs))
+        if self.provision_during_call is not None:
+            self.provision_during_call()
+        if self.provision_side_effect is not None:
+            raise self.provision_side_effect
+        assert self.provision_response is not None
+        return self.provision_response
 
 
 class _FakeCallbackServer:
@@ -1347,3 +1365,243 @@ class TestLoginPassword:
         with pytest.raises(KeboolaApiError) as exc_info:
             service.login_password(stack=STACK_URL, email="svc@example.com", password="s3cr3t")
         assert exc_info.value.error_code == ErrorCode.AUTH_MFA_INVALID
+
+
+# ----------------------------------------------------------------------------
+# Agent provisioning (`kbagent project create`)
+# ----------------------------------------------------------------------------
+
+
+def _provisioned(
+    *,
+    project_id: int = 9840,
+    project_name: str = "Agent Project",
+    backend: str = "snowflake",
+    async_backend: bool = False,
+) -> AgentProvisioningResponse:
+    return AgentProvisioningResponse(
+        project=ProvisionedProject(id=project_id, name=project_name, backend=backend),
+        accessToken="kbc_at_sess9_secret",
+        refreshToken="kbc_rt_sess9_secret",
+        accessTokenExpiresIn=3600,
+        sessionId="sess-9",
+        confirmUrl="https://connection.keboola.com/agent-project/confirm?token=kbc_apc_7_s",
+        claimId="7",
+        backendInitDispatchedAsync=async_backend,
+    )
+
+
+class TestProvisionProject:
+    def test_persists_session_and_registers_alias(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL, backend="snowflake")
+
+        assert result.status == "ok"
+        assert result.project_id == 9840
+        assert result.backend == "snowflake"
+        assert result.confirm_url.endswith("token=kbc_apc_7_s")
+
+        session = state_store.get_session(STACK_URL)
+        assert session is not None
+        assert session.session_id == "sess-9"
+        assert session.refresh_token == "kbc_rt_sess9_secret"
+        # The claim link is unrecoverable once this terminal is gone, and the
+        # project it unlocks is billable and owned by nobody until it is used.
+        assert session.agent_confirm_url == result.confirm_url
+
+        registered = store.get_project("agent-project")
+        assert registered is not None
+        assert registered.token == "kbc-session://9840"
+        assert registered.project_id == 9840
+        assert [p.status for p in result.registered_projects] == ["registered"]
+
+    def test_first_project_becomes_the_default(self, store, state_store) -> None:
+        """The fresh-machine acceptance: one command, then the CLI just works."""
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        service.provision_project(stack=STACK_URL)
+
+        assert store.load().default_project == "agent-project"
+
+    def test_explicit_alias_wins(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL, alias="scratch")
+
+        assert store.get_project("scratch") is not None
+        assert result.registered_projects[0].alias == "scratch"
+
+    def test_passes_options_through_to_the_client(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        service.provision_project(
+            stack=STACK_URL,
+            project_name="My Project",
+            backend="bigquery",
+            sync_backend_init=True,
+        )
+
+        assert client.calls == [
+            (
+                "provision_project",
+                {
+                    "project_name": "My Project",
+                    "backend": "bigquery",
+                    "sync_backend_init": True,
+                },
+            )
+        ]
+
+    def test_next_steps_name_the_confirm_link_and_relogin(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL)
+
+        assert result.confirm_url in result.next_steps[0]
+        # Confirmation revokes this session -- the user must be told what to
+        # run afterwards, not left with a credential that silently dies.
+        assert "auth login" in result.next_steps[1]
+
+    def test_async_backend_init_is_warned_about(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned(async_backend=True)
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL)
+
+        assert any("background" in warning for warning in result.warnings)
+
+    def test_refuses_when_a_session_already_exists(self, store, state_store) -> None:
+        """auth.json holds one session per stack: provisioning here would
+        replace (and orphan) a real user's login."""
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+        service.login(stack=STACK_URL)
+        client.provision_response = _provisioned()
+
+        with pytest.raises(ConfigError) as excinfo:
+            service.provision_project(stack=STACK_URL)
+
+        assert "already exists" in excinfo.value.message
+        assert "auth logout" in excinfo.value.message
+        assert ("provision_project", {}) not in client.calls
+
+    def test_requires_a_stack(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError):
+            service.provision_project(stack="")
+
+    def test_api_failure_leaves_no_session_and_no_alias(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_side_effect = KeboolaApiError(
+            "Creating a Keboola project is not enabled on this stack.",
+            error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+        )
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.provision_project(stack=STACK_URL)
+
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        assert state_store.get_session(STACK_URL) is None
+        assert store.load().projects == {}
+
+    def test_bad_alias_is_rejected_before_the_network_call(self, store, state_store) -> None:
+        """The POST is not idempotent: a typo in --project must not cost an
+        organization, a billable project and a credit grant to discover."""
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        with pytest.raises(ConfigError):
+            service.provision_project(stack=STACK_URL, alias="not a valid alias")
+
+        assert client.calls == []
+        assert state_store.get_session(STACK_URL) is None
+
+    def test_a_session_appearing_mid_flight_is_not_overwritten(self, store, state_store) -> None:
+        """A racing `project create` (or a `login` that finished first) must not
+        have its session clobbered -- and the project this call created must be
+        reported with its claim link, never silently orphaned."""
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        winner = StackSession(
+            stack_url=STACK_URL,
+            session_id="sess-winner",
+            access_token="at-w",
+            refresh_token="rt-w",
+            created_at=datetime.now(UTC),
+        )
+
+        def _another_process_writes_a_session() -> None:
+            state_store.put_session(winner)
+
+        client.provision_during_call = _another_process_writes_a_session
+
+        with pytest.raises(ConfigError) as excinfo:
+            service.provision_project(stack=STACK_URL)
+
+        message = excinfo.value.message
+        assert "9840" in message
+        assert "kbc_apc_7_s" in message  # the claim link, not lost
+        # The session that was already there is still the one on disk.
+        session = state_store.get_session(STACK_URL)
+        assert session is not None
+        assert session.session_id == "sess-winner"
+
+    def test_next_steps_do_not_promise_an_alias_that_was_skipped(self, store, state_store) -> None:
+        """A taken alias comes back as `skipped` while still echoing the name
+        that was asked for -- the next step must not call that registered."""
+        store.add_project(
+            "taken",
+            ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=1, project_name="X"),
+        )
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+
+        result = service.provision_project(stack=STACK_URL, alias="taken")
+
+        assert result.registered_projects[0].status == "skipped"
+        assert "keeps the alias" not in result.next_steps[1]
+        assert "No local alias was registered" in result.next_steps[1]
+        assert "register-projects" in result.next_steps[1]
+
+    def test_status_resurfaces_the_confirm_link(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.provision_response = _provisioned()
+        service = _make_service(store, state_store, client)
+        result = service.provision_project(stack=STACK_URL)
+
+        client.introspect_response = _introspect(
+            [AuthProject(id=9840, name="Agent Project", role="admin")], session_id="sess-9"
+        )
+        status = service.status(stack=STACK_URL)
+
+        assert status.agent_confirm_url == result.confirm_url
+
+    def test_status_of_an_ordinary_login_has_no_confirm_link(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+        service.login(stack=STACK_URL)
+
+        assert service.status(stack=STACK_URL).agent_confirm_url == ""
