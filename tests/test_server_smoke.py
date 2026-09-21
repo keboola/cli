@@ -200,6 +200,21 @@ def test_semantic_layer_items_unknown_kind_post_422(client: TestClient) -> None:
     assert res.status_code == 422
 
 
+@pytest.mark.parametrize("fqn", [None, '"KBC_USE4_5725"."out.c-gold"."FACT_X"'])
+def test_semantic_layer_add_dataset_forwards_fqn(fqn: str | None) -> None:
+    """POST /items/dataset forwards the optional ``fqn`` override to the service."""
+    from unittest.mock import MagicMock
+
+    from keboola_agent_cli.server.routers.semantic_layer import add_item
+
+    registry = MagicMock()
+    body = {"project": "prod", "name": "fact_x", "table_id": "out.c-gold.FACT_X"}
+    if fqn is not None:
+        body["fqn"] = fqn
+    add_item("dataset", body, registry=registry)
+    assert registry.semantic_layer.add_dataset.call_args.kwargs["fqn"] == fqn
+
+
 def test_semantic_layer_items_unknown_kind_put_422(client: TestClient) -> None:
     """PUT /items/{kind}/{name} with an unsupported kind returns 422.
 

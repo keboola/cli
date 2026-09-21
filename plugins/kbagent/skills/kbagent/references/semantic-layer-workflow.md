@@ -92,6 +92,12 @@ filter your jq with these exact values:
   Snowflake STRING column (error).
 - `DEEP_FETCH_FAILED` (`--deep` only) -- couldn't fetch the Snowflake
   schema for a dataset; deep checks for that dataset are skipped (warning).
+- `FQN_MISMATCH` (`--deep` only, since vNEXT) -- a dataset's stored `fqn`
+  is not the table's Storage location (`storage table-detail` ->
+  `sql_path`). Every model built before vNEXT hits this: its fqns name a
+  `"KEBOOLA"` database that exists in no project. Repair recipe in
+  [gotchas.md](gotchas.md) (warning -- an fqn set on purpose with
+  `add dataset --fqn` may point elsewhere).
 
 ---
 
@@ -378,7 +384,8 @@ kbagent semantic-layer add relationship \
 the kbagent AI Service client has no JSON-generation endpoint as of
 v0.41.0. The heuristic synthesises:
 
-- One dataset per `--tables` entry, with FQN derived and `fields[]`
+- One dataset per `--tables` entry, with FQN read from the table's
+  Storage location (bucket `backendPath`) and `fields[]`
   role-classified (PK_/FK_->key, *_DATE/*_DT->timestamp,
   numeric amount/value/rate->measure, else dimension).
 - One `COUNT(*)` metric per dataset.

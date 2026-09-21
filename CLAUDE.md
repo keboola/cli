@@ -563,6 +563,9 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   partition from INFORMATION_SCHEMA.PARTITIONS). `definition` is present on EVERY response
 #   -- untyped tables get one too -- so null means the stack omitted the key, NOT "untyped".
 #   `storage tables` (the LIST endpoint) is unaffected: the API has no `definition` include.
+#   table-detail also returns `backend_path` (the owning bucket's Storage backendPath, verbatim)
+#   and `sql_path` (quoted, directly queryable path; null when Storage reports no location) --
+#   see the semantic-layer dataset fqn note (#761); version gate in gotchas.md.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
@@ -979,7 +982,17 @@ kbagent semantic-layer validate --project P [--model M] [--deep]
 kbagent semantic-layer export --project P [--model M] [--output PATH]
 kbagent semantic-layer diff (--project-a A | --file-a PATH) (--project-b B | --file-b PATH) [--model-a M] [--model-b M]
 kbagent semantic-layer add metric --project P [--model M] --name N --sql SQL --dataset TABLE_ID [--description D] [--yes]
-kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields]
+kbagent semantic-layer add dataset --project P [--model M] --name N --table-id TABLE_ID [--description D] [--grain G] [--primary-key COL ...] [--deep-fields] [--fqn FQN]
+# dataset fqn (#761): `add dataset` and `build` read the fqn from the table's Storage location --
+#   the owning bucket's backendPath, surfaced as `sql_path` / `backend_path` on `storage table-detail`.
+#   They used to hardcode a "KEBOOLA" database that exists in no project, so every consumer pasting
+#   the fqn into SQL failed. A LINKED bucket's path names the SOURCE project's database + schema;
+#   swapping in the consuming project's database does not resolve either. `add dataset` now needs
+#   the table to exist (one table-detail call) unless `--fqn` supplies the value verbatim; a table
+#   whose location Storage does not report fails with VALIDATION_ERROR. `build --types-workspace`
+#   queries INFORMATION_SCHEMA in that same database/schema. `validate --deep` warns FQN_MISMATCH
+#   on stored fqns that differ (pre-fix models); repair via export -> fix fqn + metric sql -> import
+#   --overwrite. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
 kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
 kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]

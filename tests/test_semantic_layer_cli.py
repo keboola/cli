@@ -581,6 +581,31 @@ class TestAddDataset:
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
+        assert mock.add_dataset.call_args.kwargs["fqn"] is None
+
+    def test_fqn_override_passed_through(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.add_dataset.return_value = {"id": "d1", "attributes": {"name": "fact_x"}}
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "add",
+                "dataset",
+                "--project",
+                "prod",
+                "--name",
+                "fact_x",
+                "--table-id",
+                "out.c-gold.FACT_X",
+                "--fqn",
+                '"KBC_USE4_5725"."out.c-gold"."FACT_X"',
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert mock.add_dataset.call_args.kwargs["fqn"] == '"KBC_USE4_5725"."out.c-gold"."FACT_X"'
 
 
 class TestAddRelationship:
