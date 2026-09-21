@@ -619,29 +619,24 @@ jobs:
 
   # ── WinGet: submit a PR to microsoft/winget-pkgs via wingetcreate.
   #
-  # DISABLED (if: false): `wingetcreate update` fails on every tag because the
-  # `Keboola.KeboolaCLI2` package has never had its FIRST submission to
-  # microsoft/winget-pkgs -- there is no manifest to update, so the job has been
-  # red on every release since it was added, masking real failures. Re-enable by
-  # restoring the original condition (kept below) AFTER the bootstrap submission
-  # lands; see the NOTE in the first step for what that submission must contain.
+  # The one-time bootstrap `wingetcreate submit` this job used to be blocked on
+  # has already happened by hand: `Keboola.KeboolaCLI2` has a manifest on
+  # microsoft/winget-pkgs starting at 0.79.0 (winget-pkgs PR #409446). That
+  # manifest is what `wingetcreate update` below now bumps on every release.
   winget:
     needs: [version, chocolatey, publish-s3]
-    # Original condition, restore when re-enabling:
-    #   needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
-    if: false
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     environment: release
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
-      # NOTE for whoever gets this job working: `wingetcreate update` only bumps
-      # the version and installer URL -- it does NOT write locale fields. The
-      # FIRST successful submission must therefore set `License: Apache-2.0`
-      # itself, because every later run inherits whatever that manifest said.
-      # Do not copy the existing `Keboola.KeboolaCLI` manifest: that is the
-      # legacy Go CLI from keboola/keboola-as-code, a different product under a
-      # different (MIT) licence. `Keboola.KeboolaCLI2` has never been submitted.
+      # `wingetcreate update` only bumps the version and installer URL -- it
+      # does NOT write locale fields, so it depends on the bootstrap manifest
+      # (see above) already having set them, e.g. `License: Apache-2.0`. Do
+      # not confuse this with `Keboola.KeboolaCLI`: that is the legacy Go CLI
+      # from keboola/keboola-as-code, a different product under a different
+      # (MIT) licence.
       - name: Submit to winget-pkgs
         shell: bash
         env:
