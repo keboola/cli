@@ -229,6 +229,28 @@ def _format_status_result(console: Console, result: AuthStatusResult) -> None:
         )
     console.print(Panel("\n".join(lines), title="Keboola auth status", expand=False))
 
+    if result.agent_confirm_url:
+        # This session came from `kbagent project create`. Whether the project
+        # is still unclaimed can only be asserted while the session is ALIVE:
+        # claiming it revokes the session, so an expired one most often means
+        # the claim already succeeded -- saying "not claimed yet" there would
+        # assert the opposite of what just happened. On a degraded (offline)
+        # read nothing was verified either. Both get the neutral wording.
+        if result.status in ("live", "refreshed"):
+            console.print(
+                "\n[bold yellow]This session's project has not been claimed yet.[/bold yellow] "
+                "Open this link in a browser and sign in to take ownership:\n"
+            )
+        else:
+            console.print(
+                "\n[bold]Claim link stored for this session's project[/bold] (a revoked or "
+                "expired session usually means it has already been claimed):\n"
+            )
+        # markup=False, not escape(): the URL comes from the stack, so its
+        # markup must not be interpreted -- but escaping would add backslashes
+        # to a string the user has to copy-paste verbatim.
+        console.print(result.agent_confirm_url, markup=False, highlight=False, soft_wrap=True)
+
     _render_accessible_projects_table(console, result.accessible_projects)
 
 

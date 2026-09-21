@@ -154,6 +154,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Read a semantic-layer model (models, metrics, datasets, constraints) | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]`; `model list`; `search-context` / `get-context` for glob/id lookup; `validate [--deep]` before trusting one. The WHOLE `semantic-layer` family needs a MASTER token: a valid non-master token gets `MISSING_MASTER_TOKEN` (0.92.0+, #711; the Metastore's opaque 401 "Failed to create project scope") -- register a master token, do not escalate | -- | hand-rolled `httpx` loops against `metastore.*.keboola.com` (bypasses retry/backoff and the kbagent error envelope) |
 | ANY semantic-layer write (add / edit / remove / import / promote / build) | `kbagent semantic-layer export` FIRST (the metastore has no soft-delete and no version history -- the snapshot is the only restore path), then the write, `--dry-run` where offered. `Read` [semantic-layer-workflow.md](../skills/kbagent/references/semantic-layer-workflow.md) before starting: it carries the per-verb recipes, the rename cascade and the promote classification | `semantic-layer diff` (`--project-a/-b` or `--file-a/-b`) to confirm what a write would change | raw metastore REST (no rollback, no orphan scan, no modelUUID rewrite); a write with no export taken |
 | User asks to "log in" / authenticate via browser / register a session's projects | ATTENDED session + a background shell: run `kbagent auth login --device-code --stack URL --register-projects` in a **BACKGROUND** shell (capture stdout+stderr, human mode -- `--json` puts the panel on stderr), relay the verification URL + user code to the user, then poll `kbagent --json auth status` (exit 0 = signed in, exit 3 = not yet). The human's part is approving in the browser, not typing the command. No background shell -> hand the plain `auth login --stack URL --register-projects` to the user's terminal. To register projects from an EXISTING session, `kbagent auth register-projects --all` or `--project-id ID` is non-interactive and agent-safe | -- | running `auth login` in a FOREGROUND tool shell (~120 s timeout kills it mid-flight); running it unattended (nobody can approve); re-running it blind without checking `auth status` first (orphans a session); the flagless `register-projects` picker unattended; reading the token out of `auth.json`; using a numeric project id as an alias |
+| User has NO Keboola account / project at all and asks to get started | `kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake\|bigquery]` (vNEXT+) -- provisions a real project, stores its session and registers the alias in one call, agent-runnable. **Then relay the result's `confirm_url` to the human verbatim and say the project is owned by nobody until they open it**; after they confirm, the agent session is revoked by design -> `kbagent auth login --stack URL` | the user creating the project in the Keboola UI, then `auth login` / `project add --token` | calling it on a stack where a session already exists (exit 5 -- one session per stack); reporting success without the confirm link (an unclaimed project is a billable orphan); retrying it after a 5xx/429/503 without being asked (each success creates a new organization + project + credit grant) |
 | CI task has account credentials | `kbagent auth login-password --email E (--password-stdin \| --password P) [--totp-secret SEED]` (0.84.0+), agent-runnable | a static Storage token | `auth login` unattended |
 
 If the table does not cover the user's task, **ask clarifying
@@ -394,6 +395,19 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   hand the plain command to the user, then `auth status`/`auth logout` as usual.
   **`auth login-password` (0.84.0+) IS the headless path** -- email + password
   (+ TOTP seed), agent-runnable; WebAuthn-only -> `AUTH_MFA_INVALID`.
+- **`project create` (vNEXT+) is the only command that works from nothing**
+  -- no account, no token, no `auth login` first; it needs the
+  `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
+  which is OFF on most stacks. The COMMAND is always registered, so its
+  presence proves nothing -- a stack without the feature answers 404 ->
+  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 1, whose message names the flag and the
+  fallback; not a routing or credential problem, and not worth retrying. The project it creates is
+  **owned by nobody** until a human opens the single-use `confirm_url`;
+  relay it verbatim, and do not call the task done before they have. `auth
+  status` re-prints it as `agent_confirm_url` while the claim is pending.
+  Confirming **revokes the session it gave you** -- that is the design, not
+  a failure: follow it with `auth login --stack URL`, and note the alias
+  survives (the sentinel keys on project id + stack, never the session).
 - **Aliases derive from the project NAME, never the numeric id** --
   `--project 9840` never resolves. Use `kbagent project list` or
   `auth register-projects` to find/register the real alias; it never overwrites

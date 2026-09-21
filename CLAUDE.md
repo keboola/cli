@@ -449,6 +449,31 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
 #   See docs/web-server.md.
 
+kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
+# project create (since vNEXT, DMD-1940): the ONLY kbagent command that works from nothing --
+#   no account, no token, no `auth login`. POSTs the unauthenticated provisioning endpoint
+#   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
+#   / `STACK_FEATURES__AGENT_PROVISIONING`, off on most stacks -- the COMMAND is always
+#   registered, so `--help` proves nothing about the stack; without the feature the stack 404s
+#   and this exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
+#   stores the returned project-pinned session in auth.json, and registers the project in
+#   config.json under the `kbc-session://` sentinel -- becoming the default project when nothing
+#   else was registered. THE PROJECT IT CREATES IS OWNED BY NOBODY: the result's `confirm_url` is a
+#   single-use, days-limited link a human must open and sign in at to take ownership; relay it
+#   verbatim. `auth status` re-prints it as `agent_confirm_url` while it is pending, so losing the
+#   terminal is recoverable -- losing the claim window is not. Confirming REVOKES this session, so
+#   the documented next step is `kbagent auth login --stack URL`; the alias survives it (the
+#   sentinel keys on project id + stack, never on the session). Refuses with exit 5 when a session
+#   for that stack already exists -- auth.json holds one session per stack, and whoever has one has
+#   an account and should create the project in the UI. `--backend` omitted keeps the stack
+#   maintainer's own default; `--sync-backend-init` waits for backend init instead of the async
+#   default (which warns that the first Storage command may fail until it lands). The provisioning
+#   POST is never auto-retried on 5xx/429 -- it is not idempotent, and each success creates an
+#   organization, a billable project and a credit grant. A timeout is classified rather than
+#   lumped together: a connect timeout never reached the stack (retryable), a READ timeout was
+#   delivered and may have succeeded (retryable:false, message says not to repeat -- check
+#   `auth status`, whose stored session + claim link is the evidence). `--sync-backend-init`
+#   raises that call's read timeout to 300s, which can outlast an agent's foreground shell.
 kbagent project add --project NAME --url URL --token TOKEN
 kbagent project list
 kbagent project remove --project NAME

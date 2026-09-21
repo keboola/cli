@@ -672,6 +672,68 @@ class TestStatus:
         result = _invoke(config_dir, svc, ["--json", "auth", "status"])
         assert result.exit_code == 3, result.output
 
+    def test_pending_claim_link_is_shown_while_the_session_lives(self, tmp_path: Path) -> None:
+        """A `project create` session whose project nobody has claimed yet."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(
+            status="live",
+            agent_confirm_url="https://connection.keboola.com/agent-project/confirm?token=t",
+        )
+
+        result = _invoke(config_dir, svc, ["auth", "status"])
+
+        assert "has not been claimed yet" in result.output
+        assert "token=t" in result.output.replace("\n", "")
+
+    def test_expired_session_does_not_assert_the_project_is_unclaimed(self, tmp_path: Path) -> None:
+        """Claiming the project REVOKES the session, so an expired session is
+        the expected state right after a successful claim -- asserting "not
+        claimed yet" there tells the user the opposite of what happened."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(
+            status="expired",
+            detail="expired",
+            agent_confirm_url="https://connection.keboola.com/agent-project/confirm?token=t",
+        )
+
+        result = _invoke(config_dir, svc, ["auth", "status"])
+
+        assert "has not been claimed yet" not in result.output
+        assert "already been claimed" in result.output
+        # The link is still shown -- an unclaimed project must stay recoverable.
+        assert "token=t" in result.output.replace("\n", "")
+
+    def test_claim_link_markup_is_not_interpreted(self, tmp_path: Path) -> None:
+        """Server-supplied value: its markup must print literally, and it must
+        not be backslash-escaped either (the user copy-pastes it verbatim)."""
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(
+            status="live",
+            agent_confirm_url="https://c.keboola.com/agent-project/confirm?token=[bold]x[/bold]",
+        )
+
+        result = _invoke(config_dir, svc, ["auth", "status"])
+
+        flat = result.output.replace("\n", "")
+        assert "[bold]x[/bold]" in flat
+        assert "\\[bold]" not in flat
+
+    def test_no_claim_banner_for_an_ordinary_session(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.status.return_value = _status_result(status="live")
+
+        result = _invoke(config_dir, svc, ["auth", "status"])
+
+        assert "claimed" not in result.output
+
     def test_stack_option_forwarded(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()
