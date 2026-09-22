@@ -894,8 +894,27 @@ Two GitHub Actions workflows guard the repo:
   advisory database. Deliberately separate and **not** a required check -- its
   result depends on advisories published over time, not on the diff, so a
   finding shows red here for visibility but never blocks a merge. Run it locally
-  with `make audit`. Dependabot stays the automated fix channel.
+  with `make audit`. See **Fixing an audit finding** below.
 - **`build-windows` job**: real `uv build` wheel checks (issue #320).
+
+**Fixing an audit finding.** Dependabot is the named fix channel, but it
+cannot run here. Its bundled uv is 0.12.7, and that uv must satisfy
+`[tool.uv] required-version`. A bound above 0.12.7 makes every Dependabot
+dependency PR fail with `tool_version_not_supported`. Until Dependabot
+bundles a newer uv, fix each finding by hand:
+
+- **Transitive dependency** (not in `[project.dependencies]` or a dependency
+  group): update it in the lockfile only. Run
+  `uv lock --upgrade-package NAME==FIXED_VERSION`. Do not add it to
+  `pyproject.toml` as a direct dependency. We do not own it, and a pin there
+  is debt that someone must maintain. A transitive dependency has no upper
+  bound, so the resolver keeps the new minimum version on its own. A later
+  `uv lock` keeps it.
+- **Direct dependency**: raise the constraint in `pyproject.toml` instead.
+
+Then verify two things. `uv audit --frozen` reports no vulnerabilities, and
+`uv lock --check` passes. Commit only `uv.lock`. For a direct dependency,
+also commit `pyproject.toml`.
 
 `make check` runs the same gates as the `check` + `test` CI jobs locally and is
 slightly *stricter*: its `test` target uses `-m "not e2e"`, so it also runs the
