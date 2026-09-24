@@ -112,8 +112,9 @@ def _default_data_app_type_warning(*, config_path: str, type_: str) -> dict[str,
     """Push-envelope warning for a data app created with no recorded type."""
     message = (
         f"Created data app {config_path or '(new config)'} as '{type_}' (the default): its "
-        f"_config.yml records no _keboola.data_app_type. If the source is a Streamlit app, "
-        f"re-pull the source tree before cloning, or set '_keboola.data_app_type: streamlit'."
+        f"_config.yml records no _keboola.data_app_type. To create a Streamlit app, set "
+        f"'_keboola.data_app_type: streamlit' before pushing; a tree pulled with kbagent "
+        f"0.94.0 or later records the type itself."
     )
     logger.warning("%s", message)
     return {

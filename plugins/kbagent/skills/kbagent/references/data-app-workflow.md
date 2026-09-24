@@ -122,13 +122,13 @@ container.
 ### Public-repo Python/JS app from scratch (no auth gate)
 
 ```bash
-# A repo built from a dataapp-developer template (see above).
+# Keboola's public Python + JS example app.
 # --type defaults to python-js, so it is omitted here.
 kbagent --json data-app create \
   --project prod \
-  --name "Hello App" \
-  --slug hello-app \
-  --git-repo https://github.com/myorg/hello-app \
+  --name "Hello World" \
+  --slug hello-world \
+  --git-repo https://github.com/keboola/data-app-python-js-hello-world \
   --git-public \
   --auth public \
   --wait
