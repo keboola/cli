@@ -8,7 +8,7 @@
 > once, understand what got stored where, and know how to check on / tear
 > down the session later.
 > Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`),
-> vNEXT (`project create` -- no Keboola account needed at all).
+> 0.95.0 (`project create` -- no Keboola account needed at all).
 > Full command reference: `commands-reference.md` > "Programmatic Auth
 > (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
 > login) needs a human to approve; sentinel tokens; session scope" and > "`auth
@@ -81,7 +81,7 @@ path is unchanged by either feature.
 
 ## No Keboola account at all: `project create`
 
-*(since vNEXT, DMD-1940)*
+*(since 0.95.0, DMD-1940)*
 
 Everything else in this file assumes the user already has a Keboola account.
 `kbagent project create --url URL` is the one path that does not: it
