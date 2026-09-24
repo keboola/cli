@@ -97,7 +97,7 @@ The reverse direction *is* possible, because it is an explicit request — see
 
 ### `project create` -- starting from nothing
 
-*(since vNEXT)*
+*(since 0.95.0)*
 
 ```bash
 kbagent project create --url URL [--project ALIAS] [--name NAME] \

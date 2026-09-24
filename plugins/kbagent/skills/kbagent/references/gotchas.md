@@ -13,7 +13,7 @@ Versioning convention:
 
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 
-*(since vNEXT, #761)*
+*(since 0.95.0, #761)*
 
 - **`semantic-layer add dataset` and `semantic-layer build` used to write
   `"KEBOOLA"."<bucket-id>"."<table>"` for every dataset.** No project has a
@@ -160,14 +160,29 @@ Versioning convention:
   counterpart** -- it did not exist when this rule was written and does not
   fall under it.
 - **The device-login panel's one-click link is conditional -- relay only what
-  is actually printed (since 0.92.0).** Alongside the verification URL and
-  code, the panel also prints a pre-filled `verification_uri_complete` link
-  ("Or open this link (code pre-filled):") whenever the stack's device
-  response includes one; a stack that returns an empty
-  `verificationUriComplete` prints neither that line nor the label. Don't
-  promise the user a one-click link unconditionally when relaying the panel
-  -- check what actually came back and relay only those lines. The URL and
-  code lines are always present regardless.
+  is actually printed (since 0.92.0).** The panel prints a pre-filled
+  `verification_uri_complete` link only when the stack's device response
+  includes one; a stack that returns an empty `verificationUriComplete`
+  prints neither the link nor its label. Don't promise the user a one-click
+  link unconditionally when relaying the panel -- check what actually came
+  back and relay only those lines. The verification URL and the code are
+  always present regardless. **The panel's order changed in 0.95.0**: the
+  pre-filled link is now the headline ("Open this link to finish signing in
+  (code already filled in):") and the type-it-yourself URL is the fallback
+  under it ("Or enter the code by hand at this URL:"). It used to be the
+  other way round, with the link last under "Or open this link (code
+  pre-filled):" -- so a relay that keys on that old label, or that assumes
+  the first URL in the panel is the manual one, now picks the wrong line.
+- **`press c to copy` is absent exactly when an agent is driving (since
+  0.95.0).** In a real terminal the device-login panel is followed by
+  `Press c to copy the link`, and the keypress is read inside the wait
+  between device-token polls. The option disables itself -- printing
+  nothing, output byte-for-byte as before -- in `--json` mode, when stdin or
+  stdout is not a TTY, or when no native clipboard command is installed
+  (`pbcopy` on macOS, `clip` on Windows, `wl-copy` / `xclip` / `xsel` /
+  `clip.exe` on Linux and WSL). A background shell is not a TTY, so the
+  login you drive will not offer it: relay the link itself, never "press c",
+  and do not wait for a copy that cannot happen.
 - **PKCE is the default; the device flow is a fallback, not a mode switch.**
   The CLI tries the browser (PKCE authorization-code) flow first and falls
   back to the RFC 8628 device flow ONLY on a *pre-exchange* failure: no
@@ -361,7 +376,7 @@ Versioning convention:
 
 ## `project create` makes a project nobody owns until a human clicks
 
-*(since vNEXT, DMD-1940)*
+*(since 0.95.0, DMD-1940)*
 
 - **It is the only kbagent command that works from nothing** -- no account,
   no token, no `auth login` first: `kbagent project create --url URL

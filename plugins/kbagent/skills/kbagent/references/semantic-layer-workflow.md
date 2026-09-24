@@ -92,9 +92,9 @@ filter your jq with these exact values:
   Snowflake STRING column (error).
 - `DEEP_FETCH_FAILED` (`--deep` only) -- couldn't fetch the Snowflake
   schema for a dataset; deep checks for that dataset are skipped (warning).
-- `FQN_MISMATCH` (`--deep` only, since vNEXT) -- a dataset's stored `fqn`
+- `FQN_MISMATCH` (`--deep` only, since 0.95.0) -- a dataset's stored `fqn`
   is not the table's Storage location (`storage table-detail` ->
-  `sql_path`). Every model built before vNEXT hits this: its fqns name a
+  `sql_path`). Every model built before 0.95.0 hits this: its fqns name a
   `"KEBOOLA"` database that exists in no project. Repair recipe in
   [gotchas.md](gotchas.md) (warning -- an fqn set on purpose with
   `add dataset --fqn` may point elsewhere).

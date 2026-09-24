@@ -450,7 +450,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   See docs/web-server.md.
 
 kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
-# project create (since vNEXT, DMD-1940): the ONLY kbagent command that works from nothing --
+# project create (since 0.95.0, DMD-1940): the ONLY kbagent command that works from nothing --
 #   no account, no token, no `auth login`. POSTs the unauthenticated provisioning endpoint
 #   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
 #   / `STACK_FEATURES__AGENT_PROVISIONING`, off on most stacks -- the COMMAND is always

@@ -706,7 +706,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     0.88.0 column descriptions were readable through --json column_details[].description only.
     Also returns `backend_path` (the owning bucket's Storage backendPath, verbatim) and `sql_path`
     (the quoted, directly queryable table path; null when Storage reports no location) (since
-    vNEXT, #761). A linked bucket's path is the SOURCE project's database + schema.
+    0.95.0, #761). A linked bucket's path is the SOURCE project's database + schema.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -1708,8 +1708,8 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     constraint orphans, severity-suffix). --deep adds parallel Snowflake
     column-existence checks for phantom fields, phantom column refs, and
     AGG-on-STRING via in-process StorageService, plus an FQN_MISMATCH warning
-    for a dataset `fqn` that is not the table's Storage location (since vNEXT;
-    models built before vNEXT carry a nonexistent "KEBOOLA" database).
+    for a dataset `fqn` that is not the table's Storage location (since 0.95.0;
+    models built before 0.95.0 carry a nonexistent "KEBOOLA" database).
 
   kbagent semantic-layer export --project P [--model M] [--output PATH]
     Snapshot the model to a self-describing JSON file. Default path:

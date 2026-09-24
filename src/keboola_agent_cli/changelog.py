@@ -24,6 +24,42 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.95.0": [
+        "New (#775): `kbagent project create --url URL` creates a new Keboola project from a "
+        "machine with no Keboola account and no token (DMD-1940). It stores the session and "
+        "registers the project, so other commands can use the project at once. Nobody owns the "
+        "new project until a person opens the `confirm_url` from the result and signs in. "
+        "`auth status` shows the link again until then. The confirmation revokes the agent "
+        "session, so the next step is `kbagent auth login --stack URL`. The stack must have the "
+        "`agent-provisioning` feature. Without it, the command exits with "
+        "`AUTH_NOT_SUPPORTED_ON_STACK`. The command refuses to run when a session for the stack "
+        "already exists. It never retries the request, because each successful call creates a "
+        "new organization and a billable project.",
+        "New (#772): the `auth login` device-code panel shows `Press c to copy the link`. Press "
+        "`c` to copy the sign-in link to the clipboard. kbagent uses the native clipboard command (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, or "
+        "`clip.exe` on WSL). kbagent does not show the hint in `--json` mode, outside a terminal "
+        "(TTY), or when no clipboard command is installed.",
+        "Fix (#762): `semantic-layer add dataset` and `semantic-layer build` now take the dataset "
+        "`fqn` from the table's real location in Storage (#761). Before, they wrote a "
+        '`"KEBOOLA"` database that exists in no project, so every consumer that used the `fqn` '
+        "in SQL failed (Kai, data apps, AI SQL generation). For a linked bucket, the `fqn` names "
+        "the database and schema of the source project. `add dataset` has a new `--fqn` option "
+        "that stores the given value as-is. `storage table-detail` returns two new keys, "
+        "`backend_path` and `sql_path`. `semantic-layer validate --deep` shows a `FQN_MISMATCH` "
+        "warning for each dataset whose stored `fqn` differs from the table location. Every "
+        "model built before this release gets this warning. kbagent does not change existing "
+        "models. Behavior change: `add dataset` without `--fqn` now fails when the table does "
+        "not exist. `build` stops before its first write when it cannot find the location of a "
+        "table.",
+        "Change (#763): the release pipeline publishes kbagent to WinGet again. The WinGet "
+        "package `Keboola.KeboolaCLI2` stayed at 0.79.0, because the `winget` job stayed "
+        "disabled after the first manual submission. 0.95.0 is the first release with the job "
+        "enabled.",
+        "Note (#768, #781, #782, #773): housekeeping with no user-facing change. The CI "
+        "dependency audit uses `uv audit` instead of `pip-audit`, Dependabot can update "
+        "`uv.lock` again, a dependency update clears an audit finding, and the `_url_copy` tests "
+        "are type-clean.",
+    ],
     "0.94.0": [
         "New (#759): a browser-login session (`auth login`) now works with nearly every command, "
         "not just the Storage and Manage paths (CLI-13). It reaches the Scheduler (`flow schedule` / "
