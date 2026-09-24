@@ -1,7 +1,13 @@
-# Data App Workflow -- Streamlit / Flask / Node Lifecycle
+# Data App Workflow -- Python/JS App Lifecycle
 
 Data apps in Keboola are deployed from a git repo into a managed container
-that auto-suspends after idle. Two API surfaces own them:
+that auto-suspends after idle. **`python-js` is the default and recommended
+runtime type** -- one contract for Python, Node, and mixed Python + Node apps
+(<https://help.keboola.com/data-apps/python-js/>). Build new apps on it.
+`streamlit`, `r`, and the other types still work, but only when you pass
+`--type` explicitly.
+
+Two API surfaces own them:
 
 | Layer | What it owns |
 |---|---|
@@ -113,18 +119,24 @@ container.
 
 ## Quick recipes
 
-### Public-repo Streamlit app from scratch (no auth gate)
+### Public-repo Python/JS app from scratch (no auth gate)
 
 ```bash
+# A repo built from a dataapp-developer template (see above).
+# --type defaults to python-js, so it is omitted here.
 kbagent --json data-app create \
   --project prod \
-  --name "Hello Streamlit" \
-  --slug hello-streamlit \
-  --git-repo https://github.com/streamlit/streamlit-example \
+  --name "Hello App" \
+  --slug hello-app \
+  --git-repo https://github.com/myorg/hello-app \
   --git-public \
   --auth public \
   --wait
 ```
+
+An existing Streamlit repo still deploys, but you must pass `--type streamlit`.
+Without it the app is created as `python-js` and the Streamlit repo fails that
+contract.
 
 Three calls under the hood: `POST /apps` (mint id + configId) → `PUT
 Storage config` (full body with git block + parameters.id back-pointer) →
