@@ -205,6 +205,26 @@ class TestCloneResult:
         )
         assert cr.status == "dry_run" and cr.push is None and cr.ok is True
 
+    def test_bucket_fields(self) -> None:
+        linked = {"bucket_id": "in.c-s", "source_bucket_id": "out.c-o", "source_project_id": 42}
+        cr = CloneResult.model_validate(
+            {
+                "status": "cloned",
+                "buckets_created": 2,
+                "buckets_skipped": 1,
+                "bucket_errors": [{"bucket_id": "in.c-bad", "error": "boom"}],
+                "linked_buckets": [linked],
+            }
+        )
+        assert (cr.buckets_created, cr.buckets_skipped) == (2, 1)
+        assert cr.bucket_errors == [{"bucket_id": "in.c-bad", "error": "boom"}]
+        assert cr.linked_buckets == [linked]
+
+    def test_bucket_fields_default_empty(self) -> None:
+        cr = CloneResult.model_validate({"status": "cloned"})
+        assert (cr.buckets_created, cr.buckets_skipped) == (0, 0)
+        assert cr.bucket_errors == [] and cr.linked_buckets == []
+
 
 class TestBaseConfig:
     def test_all_models_allow_extra(self) -> None:

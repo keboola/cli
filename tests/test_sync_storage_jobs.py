@@ -85,6 +85,7 @@ SAMPLE_BUCKETS_API = [
         "name": "c-data",
         "stage": "in",
         "description": "Input data bucket",
+        "backend": "snowflake",
         "tablesCount": 3,
         "dataSizeBytes": 1024000,
         "metadata": [{"key": "owner", "value": "team-a"}],
@@ -483,9 +484,31 @@ class TestWriteStorageMetadata:
         assert b0["data_size_bytes"] == 1024000
         assert b0["metadata"] == [{"key": "owner", "value": "team-a"}]
 
+        assert b0["backend"] == "snowflake"
+        assert b0["source_bucket"] is None
+
         b1 = buckets[1]
         assert b1["id"] == "out.c-results"
         assert b1["tables_count"] == 1
+        assert b1["backend"] == ""
+
+    def test_linked_bucket_records_its_source(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """A linked bucket's export keeps its source, so clone can skip it."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        linked = {
+            "id": "in.c-shared",
+            "name": "c-shared",
+            "stage": "in",
+            "backend": "snowflake",
+            "sourceBucket": {"id": "out.c-origin", "project": {"id": 42, "name": "Origin"}},
+        }
+
+        write_storage_metadata(project_root, [linked], [], {})
+
+        buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
+        buckets = json.loads(buckets_file.read_text(encoding="utf-8"))
+        assert buckets[0]["source_bucket"] == {"bucket_id": "out.c-origin", "project_id": 42}
 
     def test_table_metadata_format(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Per-table JSON files contain correct metadata fields."""
