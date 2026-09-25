@@ -1167,6 +1167,12 @@ def sync_clone(
         "--branch",
         help="Target dev branch id (defaults to the target project's production branch)",
     ),
+    create_buckets: bool = typer.Option(
+        True,
+        "--create-buckets/--no-create-buckets",
+        help="Create the reference tree's storage buckets in the target -- on by "
+        "default, --no-create-buckets skips it. Tables and their data are never copied.",
+    ),
 ) -> None:
     """Clone a reference project into a fresh target, parameterised by overrides.
 
@@ -1187,6 +1193,7 @@ def sync_clone(
             overrides["variable_values"] = _load_override_file(variable_values)
         if instance_rename is not None:
             overrides["instance_rename"] = _load_override_file(instance_rename)
+        overrides["create_buckets"] = create_buckets
 
         result = service.clone_project(
             source=source,
@@ -1215,6 +1222,23 @@ def sync_clone(
         _format_clone_result(formatter, result)
 
 
+def _print_clone_buckets(formatter: Any, result: dict[str, Any]) -> None:
+    """Print the ``--create-buckets`` outcome (a no-op when it was not used)."""
+    links = result.get("linked_buckets", [])
+    if result.get("buckets_created") or result.get("buckets_skipped") or links:
+        formatter.console.print(
+            f"  Buckets: {result.get('buckets_created', 0)} created, {len(links)} linked, "
+            f"{result.get('buckets_skipped', 0)} already present"
+        )
+    for link in links:
+        formatter.console.print(
+            f"  Linked {link.get('bucket_id')} -> project {link.get('source_project_id')} "
+            f"bucket {link.get('source_bucket_id')}"
+        )
+    for berr in result.get("bucket_errors", []):
+        formatter.warning(f"  Bucket error: {berr.get('bucket_id')}: {berr.get('error')}")
+
+
 def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
     """Human-mode rendering for ``sync clone``."""
     status = result.get("status", "")
@@ -1237,11 +1261,13 @@ def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
             f"[green]Already cloned[/green] -- no changes to push into "
             f"[cyan]{result.get('target_alias')}[/cyan]."
         )
+        _print_clone_buckets(formatter, result)
         return
     formatter.success(
         f"Cloned into {result.get('target_alias')}: {result.get('created', 0)} created "
         f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})"
     )
+    _print_clone_buckets(formatter, result)
     for err in result.get("errors", []):
         formatter.warning(
             f"  Error: {err.get('change_type')} "

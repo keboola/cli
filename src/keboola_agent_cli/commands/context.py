@@ -1631,13 +1631,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     tracked on another branch's tree are never planned as creates -- they ride along on
     the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 
-  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
+  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
     reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
     Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
     value -> CONFIG_ERROR naming the key + type.
+    Clone recreates the reference's storage buckets in the target from
+    storage/buckets.json BY DEFAULT (--no-create-buckets skips it; buckets only,
+    not tables/data). A linked (shared) bucket is linked to the same source as in
+    the reference (listed in linked_buckets; a refused link -> bucket_errors).
     Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
     but does not push.
 

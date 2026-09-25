@@ -222,6 +222,19 @@ class CloneResult(_ApiResultModel):
     flow_task_remaps: int = Field(
         default=0, description="keboola.flow task configIds remapped reference->ULID."
     )
+    buckets_created: int = Field(
+        default=0, description="Storage buckets created in the target (--create-buckets)."
+    )
+    buckets_skipped: int = Field(
+        default=0, description="Buckets that already existed in the target and were skipped."
+    )
+    bucket_errors: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-bucket create failures, if any."
+    )
+    linked_buckets: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Linked (shared) buckets linked in the target to the reference's source.",
+    )
     push: SyncPushResult | None = Field(
         default=None, description="The underlying sync push result (None for dry_run)."
     )

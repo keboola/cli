@@ -23,6 +23,7 @@ from ..sync.clone import (
     repoint_manifest_project,
 )
 from ..sync.manifest import load_manifest, save_manifest
+from ._sync_storage import create_buckets_from_export
 from .base import find_default_branch_id
 
 if TYPE_CHECKING:
@@ -77,8 +78,11 @@ def clone_project(
             the first clone).
         target_dir: Where to materialise the clone.
         overrides: Optional dict with ``bucket_map`` (old->new bucket id),
-            ``variable_values`` (var name->value), and ``instance_rename`` (old
-            path prefix->new path prefix) keys.
+            ``variable_values`` (var name->value), ``instance_rename`` (old
+            path prefix->new path prefix), and ``create_buckets`` (bool,
+            default True: also create the reference tree's storage buckets in
+            the target from ``storage/buckets.json`` -- tables and their data
+            are not copied) keys.
         dry_run: Apply overrides + report the diff without pushing.
         branch_override: Optional target branch id.
 
@@ -98,6 +102,7 @@ def clone_project(
     bucket_map = overrides.get("bucket_map") or {}
     variable_values = overrides.get("variable_values") or {}
     instance_rename = overrides.get("instance_rename") or {}
+    create_buckets = bool(overrides.get("create_buckets", True))
     source_dir = Path(source)
     target_path = Path(target_dir)
 
@@ -195,6 +200,12 @@ def clone_project(
                 "project, or remove the existing configs first."
             )
 
+    bucket_result = None
+    if create_buckets:
+        bucket_client = service._client_factory(target_project.stack_url, target_project.token)
+        with bucket_client:
+            bucket_result = create_buckets_from_export(bucket_client, target_path, bucket_map)
+
     push_result = service.push(target_alias, target_path, branch_override=branch_override)
     status = "no_changes" if push_result.get("status") == "no_changes" else "cloned"
     return {
@@ -203,6 +214,10 @@ def clone_project(
         "target_dir": str(target_path),
         "created": push_result.get("created", 0),
         "flow_task_remaps": push_result.get("flow_task_remaps", 0),
+        "buckets_created": len(bucket_result.created) if bucket_result else 0,
+        "buckets_skipped": len(bucket_result.skipped) if bucket_result else 0,
+        "bucket_errors": bucket_result.errors if bucket_result else [],
+        "linked_buckets": bucket_result.linked if bucket_result else [],
         "push": push_result,
         "errors": push_result.get("errors", []),
         **override_counts,

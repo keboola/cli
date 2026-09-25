@@ -939,6 +939,16 @@ A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) li
 
 The DS `/apps` list also returns sandbox and workspace records. Each carries a parent component's id and a backend `type` such as `snowflake`. So kbagent builds the type map from `componentId == keboola.data-apps` records only.
 
+## `sync clone` recreates the reference's storage buckets
+
+`sync clone` copies component configs, not storage. The pulled `storage/` tree is a read-only snapshot, so a cloned config's input/output mappings point at buckets a fresh target project does not have. Clone *(since vNEXT)* closes that gap for the buckets **by default**: it reads the `storage/buckets.json` pull export, maps each bucket id through `--bucket-map` (so a created bucket matches what the config refs were rewritten to), and creates the ones the target is missing. Pass `--no-create-buckets` to skip it -- a clone is a complete clone by default, so this is opt-out, never opt-in.
+
+Idempotent by design -- an existing bucket is skipped, and a per-bucket API failure is collected in the result's `bucket_errors` rather than aborting the clone. It runs even on an idempotent re-run (existing `--target-dir`), so a re-clone fills in any bucket the target is still missing. Bucket creation happens before the config push, and buckets are created at production level (no branch scoping). Each bucket is created on the backend the export recorded. If the target cannot list its buckets, clone records one `bucket_errors` entry, creates no bucket, and still pushes the configs.
+
+A linked (shared) bucket is **linked** in the target to the same source as in the reference, under the same id (or its `--bucket-map` id), with the stage taken from that id. It is not created as an empty bucket: nothing in the project writes into a linked bucket, so an empty one would stay empty. The source project's sharing settings decide whether the target may link it. A refused link lands in `bucket_errors` and the clone continues. Each link is listed in `linked_buckets` (`bucket_id`, `source_bucket_id`, `source_project_id`) and printed with its source project, so a link to an unexpected source is visible. A pull by an older version does not record the link, so clone cannot tell its linked buckets apart. Creating them empty would be permanent, because every later re-clone skips an existing bucket. So clone creates no bucket from such an export and records one `bucket_errors` entry. Re-pull the reference, or pass `--no-create-buckets`.
+
+Only the buckets are created, never their tables or their data -- the pull export carries table metadata (columns / primary key) but no table data, only truncated samples. Move the actual data by bucket sharing, `storage upload-table`, or by running the flows that populate the output tables. The old Go CLI `kbc` did not materialize storage into the tree at all, so this is strictly more than parity.
+
 ## `semantic-layer search-context` + `get-context` cover the upstream `search_semantic_context` / `get_semantic_context` parity
 
 `kbagent semantic-layer search-context --project P [--pattern G ...] [--type T] [--limit N]`

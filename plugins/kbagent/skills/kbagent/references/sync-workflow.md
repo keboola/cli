@@ -550,6 +550,26 @@ nested mapping, list, or empty (`null`) value is rejected with `CONFIG_ERROR`
 (exit 5) naming the offending key and its actual type, instead of being
 silently stringified into a bogus ID.
 
+**Storage buckets (since vNEXT):** clone copies configs, not storage — a cloned
+config's input/output mappings point at buckets a fresh target does not have. By
+default clone reads the `storage/buckets.json` pull export and creates the missing
+buckets in the target. Pass `--no-create-buckets` to skip it — a clone is a
+complete clone by default, so bucket creation is opt-out, not opt-in. It is
+idempotent: an existing bucket is skipped, a per-bucket API failure is collected
+in `bucket_errors`, and the created id is `--bucket-map`-remapped so it matches the
+rewritten refs. Each bucket is created on the backend the export recorded. A
+**linked (shared) bucket is linked** to the same source as in the reference, under
+the same id: nothing in the project writes into a linked bucket, so an empty bucket
+in its place would stay empty. The source project's sharing settings decide whether
+the target may link it — a refused link is collected in `bucket_errors`. Each link
+is listed in `linked_buckets` with its source project and bucket id. A tree pulled
+by an older version does not record which buckets are linked, so clone creates no
+bucket from it and records one `bucket_errors` entry — re-pull the reference, or
+pass `--no-create-buckets`. Only the buckets are created — their **tables and data are not** in
+the export, so populate tables by bucket sharing, `storage upload-table`, or by
+running the flows. Pull the source **with** its storage (`sync pull` without
+`--no-storage`) so `buckets.json` exists in the reference tree.
+
 **Why it just works on a fresh target:** the reference's config ids do not exist
 in the target project, so the push diff classifies every config as `added` and
 assigns new ULIDs. Because the push's `created_id_map` is keyed by the reference

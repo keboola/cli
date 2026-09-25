@@ -5,6 +5,7 @@ declarative overrides (bucket_map, variable_values, instance_rename) plus the
 tree copy and manifest re-point -- no API client involved.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -13,9 +14,10 @@ import pytest
 import yaml
 
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services._sync_bindings import resolve_flow_task_bindings
+from keboola_agent_cli.services._sync_storage import _parse_bucket_id, create_buckets_from_export
 from keboola_agent_cli.services.sync_service import CreatedConfig, SyncService
 from keboola_agent_cli.sync.clone import (
     _config_dir,
@@ -986,6 +988,15 @@ class TestSyncCloneCLI:
                 "variable_overrides": 0,
                 "renamed_instances": 0,
                 "flow_task_remaps": 1,
+                "buckets_created": 1,
+                "buckets_skipped": 0,
+                "linked_buckets": [
+                    {
+                        "bucket_id": "in.c-shared",
+                        "source_bucket_id": "out.c-origin",
+                        "source_project_id": 42,
+                    }
+                ],
                 "errors": [],
             }
             MockSync.return_value = svc
@@ -1010,7 +1021,43 @@ class TestSyncCloneCLI:
         call = svc.clone_project.call_args.kwargs
         assert call["target_alias"] == "target"
         assert call["overrides"]["bucket_map"] == {"in.c-ref": "in.c-prod"}
+        assert call["overrides"]["create_buckets"] is True
         assert "Cloned into target" in result.output
+        assert "Buckets: 1 created, 1 linked, 0 already present" in result.output
+        assert "Linked in.c-shared -> project 42 bucket out.c-origin" in result.output
+
+    def test_no_create_buckets_forwards_false(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from keboola_agent_cli.cli import app
+
+        runner = CliRunner()
+        source = tmp_path / "golden"
+        _golden_source(source)
+
+        with patch("keboola_agent_cli.cli.SyncService") as MockSync:
+            svc = MagicMock()
+            svc.clone_project.return_value = {"status": "cloned", "errors": []}
+            MockSync.return_value = svc
+            result = runner.invoke(
+                app,
+                [
+                    "sync",
+                    "clone",
+                    "--source",
+                    str(source),
+                    "--target",
+                    "target",
+                    "--target-dir",
+                    str(tmp_path / "clone"),
+                    "--no-create-buckets",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert svc.clone_project.call_args.kwargs["overrides"]["create_buckets"] is False
 
     def test_nested_override_value_errors(self, tmp_path: Path) -> None:
         """A non-scalar override value (fat-fingered colon) is rejected, not stringified."""
@@ -1078,3 +1125,307 @@ class TestSyncCloneCLI:
                 ],
             )
         assert result.exit_code == 5
+
+
+def _write_buckets_export(root: Path, buckets: list[dict[str, Any]]) -> None:
+    """Write a current-format export: every record carries ``source_bucket`` (None if unset)."""
+    storage_dir = root / "storage"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    records = [{"source_bucket": None, **b} for b in buckets]
+    (storage_dir / "buckets.json").write_text(json.dumps(records), encoding="utf-8")
+
+
+class TestParseBucketId:
+    def test_in_and_out_buckets_parse(self) -> None:
+        assert _parse_bucket_id("in.c-foo") == ("in", "foo")
+        assert _parse_bucket_id("out.c-bar") == ("out", "bar")
+
+    def test_non_creatable_ids_return_none(self) -> None:
+        assert _parse_bucket_id("sys.foo") is None
+        assert _parse_bucket_id("in") is None
+        assert _parse_bucket_id("in.c-") is None
+
+
+class TestCreateBucketsFromExport:
+    def test_creates_missing_and_skips_existing(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path,
+            [
+                {
+                    "id": "in.c-new",
+                    "name": "new",
+                    "stage": "in",
+                    "description": "d",
+                    "backend": "snowflake",
+                },
+                {"id": "in.c-existing", "name": "existing", "stage": "in", "description": ""},
+            ],
+        )
+        client = MagicMock()
+        client.list_buckets.return_value = [{"id": "in.c-existing"}]
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        assert result.created == ["in.c-new"]
+        assert result.skipped == ["in.c-existing"]
+        assert result.errors == []
+        client.create_bucket.assert_called_once_with(
+            stage="in", name="new", description="d", backend="snowflake"
+        )
+
+    def test_bucket_map_is_applied_to_created_id(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path, [{"id": "in.c-foo", "name": "foo", "stage": "in", "description": ""}]
+        )
+        client = MagicMock()
+        client.list_buckets.return_value = []
+
+        result = create_buckets_from_export(client, tmp_path, {"in.c-foo": "out.c-bar"})
+
+        assert result.created == ["out.c-bar"]
+        client.create_bucket.assert_called_once_with(
+            stage="out", name="bar", description="", backend=None
+        )
+
+    def test_per_bucket_error_is_collected_not_raised(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path,
+            [
+                {"id": "in.c-ok", "name": "ok", "stage": "in", "description": ""},
+                {"id": "in.c-bad", "name": "bad", "stage": "in", "description": ""},
+            ],
+        )
+        client = MagicMock()
+        client.list_buckets.return_value = []
+
+        def _create(
+            *, stage: str, name: str, description: str = "", backend: str | None = None
+        ) -> dict[str, Any]:
+            if name == "bad":
+                raise KeboolaApiError(
+                    message="boom", status_code=400, error_code=ErrorCode.API_ERROR
+                )
+            return {"id": f"{stage}.c-{name}"}
+
+        client.create_bucket.side_effect = _create
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        assert result.created == ["in.c-ok"]
+        assert result.errors == [{"bucket_id": "in.c-bad", "error": "boom"}]
+
+    def test_linked_bucket_is_linked_to_its_source(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path,
+            [
+                {
+                    "id": "in.c-shared",
+                    "name": "shared",
+                    "stage": "in",
+                    "description": "",
+                    "source_bucket": {"bucket_id": "out.c-origin", "project_id": 42},
+                }
+            ],
+        )
+        client = MagicMock()
+        client.list_buckets.return_value = []
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        client.create_bucket.assert_not_called()
+        client.link_bucket.assert_called_once_with(
+            source_project_id=42, source_bucket_id="out.c-origin", name="shared", stage="in"
+        )
+        assert result.created == []
+        assert result.linked == [
+            {
+                "bucket_id": "in.c-shared",
+                "source_bucket_id": "out.c-origin",
+                "source_project_id": 42,
+            }
+        ]
+
+    def test_refused_link_is_collected_not_raised(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path,
+            [
+                {
+                    "id": "in.c-shared",
+                    "name": "shared",
+                    "stage": "in",
+                    "description": "",
+                    "source_bucket": {"bucket_id": "out.c-origin", "project_id": 42},
+                }
+            ],
+        )
+        client = MagicMock()
+        client.list_buckets.return_value = []
+        client.link_bucket.side_effect = KeboolaApiError(
+            message="not shared", status_code=500, error_code=ErrorCode.STORAGE_JOB_FAILED
+        )
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        client.create_bucket.assert_not_called()
+        assert result.linked == []
+        assert result.errors == [{"bucket_id": "in.c-shared", "error": "not shared"}]
+
+    def test_list_failure_is_collected_not_raised(self, tmp_path: Path) -> None:
+        _write_buckets_export(
+            tmp_path, [{"id": "in.c-foo", "name": "foo", "stage": "in", "description": ""}]
+        )
+        client = MagicMock()
+        client.list_buckets.side_effect = KeboolaApiError(
+            message="denied", status_code=403, error_code=ErrorCode.API_ERROR
+        )
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        client.create_bucket.assert_not_called()
+        assert result.errors == [{"bucket_id": "", "error": "Cannot list buckets: denied"}]
+
+    def test_legacy_export_creates_nothing(self, tmp_path: Path) -> None:
+        # An older pull wrote no source_bucket key: a linked bucket would be
+        # created empty and every later re-clone would skip it.
+        storage_dir = tmp_path / "storage"
+        storage_dir.mkdir()
+        (storage_dir / "buckets.json").write_text(
+            json.dumps([{"id": "in.c-foo", "name": "foo", "stage": "in", "description": ""}]),
+            encoding="utf-8",
+        )
+        client = MagicMock()
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        client.list_buckets.assert_not_called()
+        client.create_bucket.assert_not_called()
+        assert result.created == []
+        assert len(result.errors) == 1
+        assert "older kbagent pull" in result.errors[0]["error"]
+
+    def test_no_export_returns_empty_without_listing(self, tmp_path: Path) -> None:
+        client = MagicMock()
+
+        result = create_buckets_from_export(client, tmp_path, {})
+
+        assert (result.created, result.skipped, result.errors) == ([], [], [])
+        client.list_buckets.assert_not_called()
+
+
+def _golden_source_with_buckets(root: Path) -> None:
+    """A golden reference tree plus a one-bucket ``storage/buckets.json`` export."""
+    _golden_source(root)
+    storage_dir = root / "storage"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    (storage_dir / "buckets.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "in.c-ref",
+                    "name": "ref",
+                    "stage": "in",
+                    "description": "",
+                    "source_bucket": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+class TestCloneCreatesBuckets:
+    """clone_project wires the storage-bucket create step (diff/push mocked)."""
+
+    def _svc(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[SyncService, MagicMock]:
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]
+        client.list_buckets.return_value = []
+        svc = _service(tmp_config_dir, client)
+        monkeypatch.setattr(
+            svc,
+            "diff",
+            MagicMock(
+                return_value={
+                    "changes": [{"change_type": "added", "component_id": "keboola.ex-db"}]
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            svc, "push", MagicMock(return_value={"status": "pushed", "created": 1, "errors": []})
+        )
+        return svc, client
+
+    def test_clone_creates_missing_buckets(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / "golden"
+        _golden_source_with_buckets(source)
+        svc, client = self._svc(tmp_config_dir, monkeypatch)
+
+        result = svc.clone_project(
+            source=source,
+            target_alias="target",
+            target_dir=tmp_path / "clone",
+            overrides={"create_buckets": True},
+        )
+
+        client.create_bucket.assert_called_once_with(
+            stage="in", name="ref", description="", backend=None
+        )
+        assert result["buckets_created"] == 1
+        assert result["bucket_errors"] == []
+
+    def test_clone_creates_buckets_at_production_level_with_branch(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Buckets are project-level: an explicit --branch scopes the push only.
+        source = tmp_path / "golden"
+        _golden_source_with_buckets(source)
+        svc, client = self._svc(tmp_config_dir, monkeypatch)
+
+        svc.clone_project(
+            source=source,
+            target_alias="target",
+            target_dir=tmp_path / "clone",
+            overrides={"create_buckets": True},
+            branch_override=52099,
+        )
+
+        client.create_bucket.assert_called_once()
+        assert "branch_id" not in client.create_bucket.call_args.kwargs
+        client.list_buckets.assert_called_once_with()
+
+    def test_clone_opt_out_skips_bucket_creation(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / "golden"
+        _golden_source_with_buckets(source)
+        svc, client = self._svc(tmp_config_dir, monkeypatch)
+
+        result = svc.clone_project(
+            source=source,
+            target_alias="target",
+            target_dir=tmp_path / "clone",
+            overrides={"create_buckets": False},
+        )
+
+        client.create_bucket.assert_not_called()
+        assert result["buckets_created"] == 0
+
+    def test_service_default_creates_buckets(
+        self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The service default matches the CLI default, so a caller that passes
+        # no create_buckets key still gets a complete clone.
+        source = tmp_path / "golden"
+        _golden_source_with_buckets(source)
+        svc, client = self._svc(tmp_config_dir, monkeypatch)
+
+        result = svc.clone_project(
+            source=source, target_alias="target", target_dir=tmp_path / "clone"
+        )
+
+        client.create_bucket.assert_called_once()
+        assert result["buckets_created"] == 1
