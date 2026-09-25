@@ -21,6 +21,19 @@ from keboola_agent_cli.services.version_service import (
 )
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
+VS = "keboola_agent_cli.services.version_service"
+
+
+@pytest.fixture(autouse=True)
+def _pin_uv_link_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep exact-command assertions host-independent (#786).
+
+    On Windows the builders append ``--link-mode copy`` unless ``UV_LINK_MODE``
+    is set, which would break the byte-exact POSIX command assertions on the
+    Windows CI runner. The dedicated link-mode tests override this.
+    """
+    monkeypatch.setenv("UV_LINK_MODE", "hardlink")
+
 
 class TestIsUpToDate:
     """Tests for _is_up_to_date()."""
@@ -714,6 +727,107 @@ class TestBuildKbagentUpgradeCommand:
         assert recovery.startswith("uv tool install")
         assert "--prerelease=allow" in recovery
         assert "'keboola-cli" not in recovery
+
+
+class TestWindowsUvLinkMode:
+    """Issue #786: Windows self-update must not rely on uv hardlinks.
+
+    On a cloud-synced volume (OneDrive) hardlinking fails with os error 396
+    after uv already removed the old tool venv, stranding the user without
+    kbagent. Every uv command kbagent builds or prints on Windows carries
+    ``--link-mode copy`` unless the user set ``UV_LINK_MODE`` themselves.
+    """
+
+    WHEEL = "https://example.test/keboola_cli-1.2.3-py3-none-any.whl"
+
+    @pytest.fixture
+    def windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{VS}.os.name", "nt")
+        monkeypatch.delenv("UV_LINK_MODE", raising=False)
+        monkeypatch.setattr(f"{VS}.has_server_extras", _no_server_extras)
+
+    @staticmethod
+    def _uv_only(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{VS}.shutil.which", _which_uv_only)
+
+    def test_exact_install_command_uses_copy_mode(
+        self, windows: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._uv_only(monkeypatch)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
+        assert cmd == [
+            r"C:\uv\uv.exe",
+            "tool",
+            "install",
+            "--force",
+            "--reinstall",
+            "--link-mode",
+            "copy",
+            f"keboola-cli @ {self.WHEEL}",
+        ]
+
+    def test_legacy_install_command_uses_copy_mode(
+        self, windows: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._uv_only(monkeypatch)
+        cmd = build_kbagent_upgrade_command(prerelease=True)
+        assert cmd is not None
+        idx = cmd.index("--link-mode")
+        assert cmd[idx + 1] == "copy"
+
+    def test_user_uv_link_mode_is_respected(
+        self, windows: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._uv_only(monkeypatch)
+        monkeypatch.setenv("UV_LINK_MODE", "symlink")
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
+        assert cmd is not None
+        assert "--link-mode" not in cmd
+        recovery = _recovery_command(None, "1.2.3")
+        assert recovery is not None
+        assert "--link-mode" not in recovery
+
+    def test_recovery_from_uv_command_keeps_copy_mode(
+        self, windows: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._uv_only(monkeypatch)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
+        assert cmd is not None
+        recovery = _recovery_command(tuple(cmd), "1.2.3")
+        assert recovery is not None
+        assert recovery.startswith("uv tool install --force --reinstall --link-mode copy ")
+        assert recovery.count("--link-mode") == 1
+
+    def test_recovery_from_pip_command_uses_copy_mode(self, windows: None) -> None:
+        pip_cmd = ("C:\\py\\pip.exe", "install", "--upgrade", f"keboola-cli @ {self.WHEEL}")
+        recovery = _recovery_command(pip_cmd, "1.2.3")
+        assert recovery is not None
+        assert recovery.startswith("uv tool install --force --reinstall --link-mode copy ")
+
+    def test_recovery_without_command_uses_copy_mode(self, windows: None) -> None:
+        recovery = _recovery_command(None, "1.2.3")
+        assert recovery is not None
+        assert "--link-mode copy" in recovery
+
+    def test_posix_commands_have_no_link_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{VS}.os.name", "posix")
+        monkeypatch.delenv("UV_LINK_MODE", raising=False)
+        monkeypatch.setattr(f"{VS}.has_server_extras", _no_server_extras)
+        monkeypatch.setattr(f"{VS}.shutil.which", _which_uv_only)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
+        assert cmd is not None
+        assert "--link-mode" not in cmd
+        recovery = _recovery_command(None, "1.2.3")
+        assert recovery is not None
+        assert "--link-mode" not in recovery
+
+
+def _no_server_extras() -> bool:
+    return False
+
+
+def _which_uv_only(name: str) -> str | None:
+    return r"C:\uv\uv.exe" if name == "uv" else None
 
 
 class TestComposeUpdateSummary:

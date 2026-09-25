@@ -139,6 +139,27 @@ def get_update_timeout() -> float:
     return float(UPDATE_TIMEOUT_SECONDS)
 
 
+def _uv_link_mode_args() -> tuple[str, ...]:
+    """Extra ``uv tool install`` args forcing copy link mode on Windows.
+
+    Issue #786: when the uv cache or the tool directory sits on a cloud-synced
+    volume (OneDrive Files-On-Demand and similar), uv's default hardlink mode
+    fails with ``os error 396`` (ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS).
+    By then ``--force --reinstall`` has already removed the old tool venv, so
+    kbagent disappears entirely -- the reporter hit this on three consecutive
+    background updates, and the printed recovery command failed identically
+    until run with ``UV_LINK_MODE=copy``. Copy mode is slower than hardlinks,
+    but a self-update is a one-off, so correctness wins.
+
+    Windows only: POSIX command lines stay byte-identical (hardlinks/clones
+    are fine there). A user-set ``UV_LINK_MODE`` is respected -- uv reads it
+    itself, and an explicit flag would override the user's choice.
+    """
+    if os.name != "nt" or os.environ.get("UV_LINK_MODE"):
+        return ()
+    return ("--link-mode", "copy")
+
+
 def build_kbagent_upgrade_command(
     *, prerelease: bool = False, target_version: str | None = None, wheel_url: str | None = None
 ) -> list[str] | None:
@@ -194,6 +215,7 @@ def build_kbagent_upgrade_command(
                 cmd = [uv_path, "tool", "install", "--force", "--with", "keboola-cli[server]"]
             else:
                 cmd = [uv_path, "tool", "install", "--upgrade"]
+            cmd.extend(_uv_link_mode_args())
             if prerelease:
                 cmd.append("--prerelease=allow")
             cmd.append(legacy_spec if wheel_url else legacy_source)
@@ -214,7 +236,7 @@ def build_kbagent_upgrade_command(
     spec = f"keboola-cli{'[server]' if has_server_extras() else ''} @ {install_source}"
     uv_path = shutil.which("uv")
     if uv_path:
-        cmd = [uv_path, "tool", "install", "--force", "--reinstall"]
+        cmd = [uv_path, "tool", "install", "--force", "--reinstall", *_uv_link_mode_args()]
         if prerelease:
             cmd.append("--prerelease=allow")
         cmd.append(spec)
@@ -243,16 +265,29 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
     if command is not None:
         executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].casefold()
         if executable in {"uv", "uv.exe"}:
+            # A uv install command built above already carries the Windows
+            # link-mode args (#786), so it is reused verbatim.
             recovery = ("uv", *command[1:])
         else:
             prerelease = ("--prerelease=allow",) if "--pre" in command else ()
-            recovery = ("uv", "tool", "install", "--force", "--reinstall", *prerelease, command[-1])
+            recovery = (
+                "uv",
+                "tool",
+                "install",
+                "--force",
+                "--reinstall",
+                *_uv_link_mode_args(),
+                *prerelease,
+                command[-1],
+            )
         return _render_command(recovery)
     if target_version is None:
         return None
     extras = "[server]" if has_server_extras() else ""
     source = f"keboola-cli{extras} @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
-    return _render_command(("uv", "tool", "install", "--force", "--reinstall", source))
+    return _render_command(
+        ("uv", "tool", "install", "--force", "--reinstall", *_uv_link_mode_args(), source)
+    )
 
 
 def _fetch_kbagent_latest_version(
