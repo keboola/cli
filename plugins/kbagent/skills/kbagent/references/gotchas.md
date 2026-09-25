@@ -4296,6 +4296,35 @@ applied. `kbagent update` printed `(scheduled)` and every later launch printed
   redirected-output encoding all landed there.
 - POSIX was never affected; it uses the inline install plus re-exec.
 
+## Windows self-update on a OneDrive / cloud-synced profile can delete kbagent
+
+*(since vNEXT, #786)*
+
+If a Windows user reports that `kbagent` vanished after a background update,
+check `%LOCALAPPDATA%\keboola-agent-cli\keboola-agent-cli\pending_update.log`
+for `os error 396` ("The cloud operation cannot be performed on a file with
+incompatible hardlinks"). The uv cache or tool directory sits on a
+cloud-synced volume that cannot hardlink, and `uv tool install --force
+--reinstall` had already removed the old tool venv when the install failed.
+
+- **Fixed:** the Windows self-update keeps uv's default hardlink mode. When the
+  install fails and uv reports a hardlink failure, the background helper runs
+  the same install once more with `--link-mode copy`; `pending_update.log`
+  holds both attempts. The recovery command kbagent prints after a failure
+  also passes `--link-mode copy`. A `UV_LINK_MODE` the user set is respected
+  (no retry, no flag). POSIX command lines are unchanged. The in-place path
+  (`KBAGENT_DEFER_UPDATE=0`) gets no retry.
+- **The update into the fixed release still runs the old code**, which has no
+  retry. An affected user can set the variable permanently before that update
+  (PowerShell, then open a new shell):
+  `[Environment]::SetEnvironmentVariable('UV_LINK_MODE', 'copy', 'User')`.
+- **A user stranded by an older version** must reinstall with copy mode; the
+  printed recovery command fails identically without it. PowerShell:
+
+      $env:UV_LINK_MODE="copy"; uv tool install --force --reinstall "keboola-cli @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"
+
+  POSIX-style shells (Git Bash): `UV_LINK_MODE=copy uv tool install ...`.
+
 ## Source files are read as UTF-8, not the host codepage (since v0.80.3)
 
 `lineage build` reads `transform.sql` / `code.py` as UTF-8 regardless of the

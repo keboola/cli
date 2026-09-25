@@ -34,6 +34,7 @@ from .services.version_service import (
     KbagentUpdatePlan,
     _fetch_kbagent_latest_version,
     _is_up_to_date,
+    build_hardlink_retry_command,
     build_kbagent_upgrade_command,
     get_update_timeout,
     prepare_kbagent_update_plan,
@@ -414,6 +415,7 @@ def _schedule_deferred_update(plan: KbagentUpdatePlan) -> None:
         target_version=target,
         install_command=plan.command,
         recovery_command=plan.recovery_command,
+        hardlink_retry_command=build_hardlink_retry_command(plan.command),
     )
     if request_deferred_update(request):
         sys.stderr.write(

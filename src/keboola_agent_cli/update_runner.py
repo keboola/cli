@@ -50,6 +50,7 @@ import platformdirs
 from .constants import (
     DEFERRED_UPDATE_ABANDONED_MARKER,
     DEFERRED_UPDATE_EXIT_FILENAME,
+    DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT,
     DEFERRED_UPDATE_LOG_FILENAME,
     DEFERRED_UPDATE_LOG_MAX_BYTES,
     DEFERRED_UPDATE_MARKER_FILENAME,
@@ -124,6 +125,9 @@ class DeferredUpdateRequest:
     target_version: str
     install_command: tuple[str, ...]
     recovery_command: str | None
+    #: ``install_command`` in copy link mode, run once only when the first
+    #: install fails on a uv hardlink error (issue #786). ``None`` = no retry.
+    hardlink_retry_command: tuple[str, ...] | None = None
 
 
 class DeferredUpdateStatus(Enum):
@@ -309,6 +313,30 @@ def quote_for_powershell(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _hardlink_retry_lines(request: DeferredUpdateRequest) -> list[str]:
+    """PowerShell lines that retry the install once in copy link mode (issue #786).
+
+    They run only when the first install failed and its output carries uv's
+    hardlink error (case-sensitive ``-cmatch``, so uv's successful-fallback
+    warning does not count). A host that can hardlink keeps uv's faster
+    default. Both outputs go to the same log, with a notice between them.
+    """
+    if request.hardlink_retry_command is None:
+        return []
+    quoted_retry = " ".join(quote_for_powershell(part) for part in request.hardlink_retry_command)
+    failure_text = quote_for_powershell(DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT)
+    notice = quote_for_powershell(
+        "kbagent: the install failed on a hardlink error; retrying with --link-mode copy"
+    )
+    return [
+        f"  if (($code -ne 0) -and ($output -cmatch [regex]::Escape({failure_text}))) {{",
+        f"    $output += {notice} + [Environment]::NewLine",
+        f"    $output += (& {quoted_retry} 2>&1 | Out-String -Width 4096)",
+        "    $code = $LASTEXITCODE",
+        "  }",
+    ]
+
+
 def build_waiter_script(
     request: DeferredUpdateRequest,
     *,
@@ -371,6 +399,7 @@ def build_waiter_script(
             f"  $output = (& {quoted_argv} 2>&1 | Out-String -Width 4096)",
             # Captured before anything else runs, so nothing can clobber it.
             "  $code = $LASTEXITCODE",
+            *_hardlink_retry_lines(request),
             (
                 "  [System.IO.File]::AppendAllText("
                 "$logFile, $output, (New-Object System.Text.UTF8Encoding $false))"
