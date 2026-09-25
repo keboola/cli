@@ -146,18 +146,42 @@ def _uv_link_mode_args() -> tuple[str, ...]:
     volume (OneDrive Files-On-Demand and similar), uv's default hardlink mode
     fails with ``os error 396`` (ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS).
     By then ``--force --reinstall`` has already removed the old tool venv, so
-    kbagent disappears entirely -- the reporter hit this on three consecutive
-    background updates, and the printed recovery command failed identically
-    until run with ``UV_LINK_MODE=copy``. Copy mode is slower than hardlinks,
-    but a self-update is a one-off, so correctness wins.
+    kbagent disappears entirely.
 
-    Windows only: POSIX command lines stay byte-identical (hardlinks/clones
-    are fine there). A user-set ``UV_LINK_MODE`` is respected -- uv reads it
+    Used only on the failure path: the one-time retry after a hardlink error
+    (:func:`build_hardlink_retry_command`) and the printed recovery command.
+    The regular install keeps uv's default, so users whose disks can hardlink
+    do not pay for the slower copy. Windows only: POSIX command lines stay
+    byte-identical. A user-set ``UV_LINK_MODE`` is respected -- uv reads it
     itself, and an explicit flag would override the user's choice.
     """
     if os.name != "nt" or os.environ.get("UV_LINK_MODE"):
         return ()
     return ("--link-mode", "copy")
+
+
+def _is_uv_command(command: tuple[str, ...]) -> bool:
+    """Whether ``command`` runs uv (as opposed to the pip fallback)."""
+    executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].casefold()
+    return executable in {"uv", "uv.exe"}
+
+
+def build_hardlink_retry_command(command: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """Return ``command`` in copy link mode, for one retry after a hardlink error.
+
+    The deferred Windows helper runs this only when the first install failed
+    and uv's output reports a hardlink failure (issue #786).
+
+    Returns:
+        The retry argv, or ``None`` when no retry applies: no command, a pip
+        command, a non-Windows host, or a user-set ``UV_LINK_MODE``.
+    """
+    if command is None or not _is_uv_command(command):
+        return None
+    link_mode = _uv_link_mode_args()
+    if not link_mode:
+        return None
+    return (*command[:-1], *link_mode, command[-1])
 
 
 def build_kbagent_upgrade_command(
@@ -215,7 +239,6 @@ def build_kbagent_upgrade_command(
                 cmd = [uv_path, "tool", "install", "--force", "--with", "keboola-cli[server]"]
             else:
                 cmd = [uv_path, "tool", "install", "--upgrade"]
-            cmd.extend(_uv_link_mode_args())
             if prerelease:
                 cmd.append("--prerelease=allow")
             cmd.append(legacy_spec if wheel_url else legacy_source)
@@ -236,7 +259,7 @@ def build_kbagent_upgrade_command(
     spec = f"keboola-cli{'[server]' if has_server_extras() else ''} @ {install_source}"
     uv_path = shutil.which("uv")
     if uv_path:
-        cmd = [uv_path, "tool", "install", "--force", "--reinstall", *_uv_link_mode_args()]
+        cmd = [uv_path, "tool", "install", "--force", "--reinstall"]
         if prerelease:
             cmd.append("--prerelease=allow")
         cmd.append(spec)
@@ -263,11 +286,10 @@ def _render_command(command: tuple[str, ...]) -> str:
 def _recovery_command(command: tuple[str, ...] | None, target_version: str | None) -> str | None:
     """Render an exact forced-reinstall command safe to copy after failure."""
     if command is not None:
-        executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].casefold()
-        if executable in {"uv", "uv.exe"}:
-            # A uv install command built above already carries the Windows
-            # link-mode args (#786), so it is reused verbatim.
-            recovery = ("uv", *command[1:])
+        if _is_uv_command(command):
+            # The regular install keeps uv's default link mode; the recovery
+            # runs after a failure, so it gets copy mode on Windows (#786).
+            recovery = ("uv", *command[1:-1], *_uv_link_mode_args(), command[-1])
         else:
             prerelease = ("--prerelease=allow",) if "--pre" in command else ()
             recovery = (
@@ -766,6 +788,7 @@ class VersionService:
                     target_version=kbagent_latest or old_version,
                     install_command=plan.command,
                     recovery_command=plan.recovery_command,
+                    hardlink_retry_command=build_hardlink_retry_command(plan.command),
                 )
             )
             if scheduled:

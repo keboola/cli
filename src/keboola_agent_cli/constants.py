@@ -456,6 +456,13 @@ DEFERRED_UPDATE_MAX_WAIT_SECONDS: int = 900
 # A marker older than this whose helper never wrote an exit file is treated as
 # lost (helper killed, machine rebooted mid-wait) and reported once.
 DEFERRED_UPDATE_STALE_SECONDS: int = 86400
+# Text in uv's error chain when a hardlink failed and uv did not fall back
+# ("Caused by: failed to hardlink file from ... (os error 396)", issue #786,
+# OneDrive / cloud-synced volume). The helper retries the install once in copy
+# link mode only when a failed install printed this. Matched case-sensitively:
+# uv's warning "Failed to hardlink files; falling back to full copy" means the
+# fallback worked, so it must not trigger a retry.
+DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT: str = "failed to hardlink file"
 
 # --- Native (frozen / PyInstaller) distribution ---
 # kbagent also ships as a self-contained PyInstaller binary with NO Python

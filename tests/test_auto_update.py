@@ -983,8 +983,12 @@ class TestStartupDefersTheReinstall:
     @patch("keboola_agent_cli.auto_update.request_deferred_update", return_value=True)
     @patch("keboola_agent_cli.auto_update._perform_update")
     @patch("keboola_agent_cli.auto_update._re_exec")
+    @patch(
+        "keboola_agent_cli.auto_update.build_hardlink_retry_command",
+        return_value=("uv", "retry-in-copy-mode"),
+    )
     def test_schedules_instead_of_installing_in_place(
-        self, mock_reexec, mock_perform, mock_request, mock_defer, capsys
+        self, mock_retry, mock_reexec, mock_perform, mock_request, mock_defer, capsys
     ):
         maybe_auto_update()
 
@@ -993,6 +997,9 @@ class TestStartupDefersTheReinstall:
         request = mock_request.call_args.args[0]
         assert request.from_version == "1.0.0"
         assert request.target_version == "2.0.0"
+        # The hardlink retry (#786) is derived from the same install command.
+        mock_retry.assert_called_once_with(request.install_command)
+        assert request.hardlink_retry_command == ("uv", "retry-in-copy-mode")
         assert "background" in capsys.readouterr().err
 
     @patch("keboola_agent_cli.auto_update.should_defer", return_value=True)

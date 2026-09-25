@@ -4297,10 +4297,17 @@ incompatible hardlinks"). The uv cache or tool directory sits on a
 cloud-synced volume that cannot hardlink, and `uv tool install --force
 --reinstall` had already removed the old tool venv when the install failed.
 
-- **Fixed:** on Windows every self-update install -- and the recovery command
-  kbagent prints -- now passes `--link-mode copy`. Slower than hardlinks, but a
-  self-update is one-off. A `UV_LINK_MODE` the user set is respected (no flag
-  added). POSIX command lines are unchanged.
+- **Fixed:** the Windows self-update keeps uv's default hardlink mode. When the
+  install fails and uv reports a hardlink failure, the background helper runs
+  the same install once more with `--link-mode copy`; `pending_update.log`
+  holds both attempts. The recovery command kbagent prints after a failure
+  also passes `--link-mode copy`. A `UV_LINK_MODE` the user set is respected
+  (no retry, no flag). POSIX command lines are unchanged. The in-place path
+  (`KBAGENT_DEFER_UPDATE=0`) gets no retry.
+- **The update into the fixed release still runs the old code**, which has no
+  retry. An affected user can set the variable permanently before that update
+  (PowerShell, then open a new shell):
+  `[Environment]::SetEnvironmentVariable('UV_LINK_MODE', 'copy', 'User')`.
 - **A user stranded by an older version** must reinstall with copy mode; the
   printed recovery command fails identically without it. PowerShell:
 
