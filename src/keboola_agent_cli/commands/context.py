@@ -1799,6 +1799,62 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --encrypt is currently required; other modes refused with USAGE_ERROR.
 
 
+### Row-Level Security (RLS)
+
+Author `rls-policy` metastore objects: one object per protected table, a
+declarative condition primitive per principal (never free-text SQL). Same
+metastore/master-token requirements as Semantic Layer above.
+**Org-admin-only, structurally**: every write is authored at `organization`
+scope (default) or `targeted` scope (with --target-project) -- there is NO
+`--scope project` option anywhere in this group, matching the backend's own
+restriction that a project's own admin can never author policy for its own
+tables. The metastore backend does not register the `rls-policy` object type
+yet on any deployed stack (a companion go-monorepo change, tracked
+separately) -- every command here answers with a clean, classified error
+against a real project until that lands; a NOT_FOUND/schema-fetch failure is
+expected, not a kbagent bug. Enforcement (the actual SQL rewrite) happens in
+`keboola-mcp-server`'s `query_data`, not here -- kbagent only authors
+policies, it never executes queries against them.
+
+  kbagent rls list --project P
+    List RLS policies visible to a project (id, table, dialect, rule_count,
+    scope, source_project_id, target_project_ids).
+
+  kbagent rls detail --project P --policy-id ID
+    Full rule set for one policy.
+
+  kbagent rls schema --project P
+    Live rls-policy JSON Schema fetched from the metastore. No offline
+    bundled snapshot (unlike `flow schema`) -- always live-only.
+
+  kbagent rls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+    Create one policy for one table. --rules is a JSON array of
+    {{principal|principals, condition}} objects -- condition is a primitive
+    tree (column/op/value, in/not_in, is_null/is_not_null, and/or nesting,
+    or a `{{"true": true}}` sentinel), never a raw predicate string.
+    --target-project (repeatable) shifts scope from organization to
+    targeted and registers the grant. --dry-run previews the compiled
+    condition (kbagent's OWN preview renderer -- NOT the enforcement
+    engine, which lives in keboola-mcp-server; the two may render
+    differently, only the enforcement engine's output governs actual
+    filtering) without writing anything.
+
+  kbagent rls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+    Fetch-then-merge: an omitted flag keeps its current value, never
+    silently blanked (unlike a naive full-record PUT).
+
+  kbagent rls delete --project P --policy-id ID [--yes]
+    Delete a policy, un-protecting its table.
+
+  kbagent rls setup --project P [--dialect D] [--rules JSON|@file|-] [--target-project ID ...] [--yes]
+    Guided, INTERACTIVE-TERMINAL-ONLY wizard: checkbox table picker (reuses
+    `storage tables`), then either the interactive column/op/value condition
+    builder or the same --rules escape hatch `create` takes, then a preview
+    + confirm, then one `rls create` call per selected table. Refuses under
+    --json or a non-TTY stdout with a one-line hint to use `rls create`
+    directly -- there is no non-interactive path through `setup` itself.
+
+
 ### Self-call HTTP (inside `kbagent serve` subprocesses)
 
   kbagent http get PATH [--timeout SECONDS]

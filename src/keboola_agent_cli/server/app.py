@@ -60,6 +60,7 @@ from .routers import (
     notifications,
     org,
     projects,
+    rls,
     schedules,
     search,
     semantic_layer,
@@ -332,6 +333,18 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "semantic layer artifacts (datasets, metrics, "
             "relationships, constraints, glossary). "
             "Mirrors `kbagent semantic-layer *`."
+        ),
+    },
+    {
+        "name": "rls",
+        "description": (
+            "**Development.** "
+            "Row-level security policies (metastore-backed `rls-policy` "
+            "objects), always authored at `organization`/`targeted` scope -- "
+            "never `project` scope. Mirrors `kbagent rls list|detail|schema|"
+            "create|update|delete` (`rls setup`'s interactive picker has no "
+            "endpoint of its own, same carve-out as "
+            "`auth register-projects`)."
         ),
     },
     # ---- AI & Tools ----
@@ -984,6 +997,7 @@ def create_app(
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
+    app.include_router(rls.router)
     app.include_router(transformation.router)
     app.include_router(docs.router)
     app.include_router(org.router)
