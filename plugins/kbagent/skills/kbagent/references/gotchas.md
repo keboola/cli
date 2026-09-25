@@ -4775,11 +4775,11 @@ maximum as `job detail`'s.
 
 Fixed (since vNEXT). A job inside a flow, or a child row job of a row-based component, has a
 dotted Queue `runId` (`<parent>.<child>.<job id>`). The Storage Events API
-returns zero events for that dotted value, so `job detail --log-tail-lines`,
-`job run --wait` failure tails and the `serve` job log stream all came back
-with `logTail: []` for such jobs (issue #787). kbagent now queries events by
-the job's own `id` (last `runId` segment as a fallback). Top-level jobs,
-where `runId == id`, are unaffected.
+returns zero events for that dotted value, so `job detail --log-tail-lines`
+and the `serve` job log stream came back with `logTail: []` for such jobs
+(issue #787). kbagent now queries events by the job's own `id` (last `runId`
+segment as a fallback). Top-level jobs, where `runId == id`, are unaffected.
+`job run` starts only top-level jobs, so its failure tail was never affected.
 
 ## A scaffolded `keboola.flow` config can now be pushed from disk (since v0.89.0)
 

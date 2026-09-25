@@ -3780,7 +3780,6 @@ class TestJobServiceQueuePollingParity:
         assert len(result["logTail"]) == 100
         assert result["logTail"][0]["id"] == 249
         assert result["logTail"][-1]["id"] == 150
-        # runId (not raw id) must have been the query key.
         mock_client.fetch_job_events.assert_called_once_with(
             "702", limit=100
         )  # job id wins over runId (#787)
@@ -3882,7 +3881,6 @@ class TestJobServiceQueuePollingParity:
         details = exc_info.value.details
         assert details["job"]["status"] == "terminated"
         assert details["logTail"] == [{"uuid": "u1", "message": "x"}]
-        # runId from the terminated job detail used as the lookup key.
         mock_client.fetch_job_events.assert_called_once_with(
             "705", limit=200
         )  # job id wins over runId (#787)
