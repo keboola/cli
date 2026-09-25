@@ -2521,7 +2521,7 @@ unknown -- do not try to parse a fallback message.
 - `--timeout N` is a **local** deadline. When it elapses, kbagent issues `POST /jobs/{id}/kill` against the Queue API. Two outcomes:
   - Kill succeeded -> exit **7** with `details.job` + `details.logTail`. The remote is definitely cancelled.
   - Kill failed -> exit **4** with `details.logTail`, `retryable=True`. The remote **may still be running**; investigate before retrying.
-- Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N` does not fetch the log tail. To get the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<runId>`) with the project token.
+- Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N --log-tail-lines N` (since v0.88.0). For the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<job id>`) with the project token -- pass the plain job **id**, not the job's `runId`: a nested job (inside a flow, or a child row job) has a dotted `runId` (`<parent>.<child>.<id>`) that matches zero events.
 
 ## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
 
@@ -4809,6 +4809,16 @@ The log tail is off by default so a plain `job detail` stays one API call.
 `job run --wait` still attaches a tail on its own for terminal failures --
 that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
 maximum as `job detail`'s.
+
+## `logTail` was empty for nested jobs
+
+Fixed (since vNEXT). A job inside a flow, or a child row job of a row-based component, has a
+dotted Queue `runId` (`<parent>.<child>.<job id>`). The Storage Events API
+returns zero events for that dotted value, so `job detail --log-tail-lines`
+and the `serve` job log stream came back with `logTail: []` for such jobs
+(issue #787). kbagent now queries events by the job's own `id` (last `runId`
+segment as a fallback). Top-level jobs, where `runId == id`, are unaffected.
+`job run` starts only top-level jobs, so its failure tail was never affected.
 
 ## A scaffolded `keboola.flow` config can now be pushed from disk (since v0.89.0)
 
