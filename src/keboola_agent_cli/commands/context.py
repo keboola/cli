@@ -1369,9 +1369,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace gc [--project NAME] [--dry-run] [--yes]
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
 
-### Data Apps (Streamlit / Flask / Node deployments)
+### Data Apps (Python/JS by default; Streamlit via --type)
 
-Lifecycle for `keboola.data-apps`. Combines the Storage API (config body --
+Lifecycle for `keboola.data-apps`. New apps default to `--type python-js`
+(Python, Node, or both), the recommended runtime. Combines the Storage API (config body --
 git block, slug, runtime size, encrypted secrets) with the Data Science API
 (/apps -- deployment record, state, URL, configVersion). Encapsulates the
 §9 redeploy contract so callers cannot pin to the empty-shell v2.

@@ -13,7 +13,7 @@ description: >
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   merge request,
-  data app, streamlit deploy, semantic layer, sl, dev-portal,
+  data app, python-js app, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,

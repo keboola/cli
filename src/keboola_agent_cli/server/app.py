@@ -270,7 +270,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "data-apps",
         "description": (
             "**Execution.** "
-            "Streamlit / R / Python data apps -- create, deploy, "
+            "Python/JS (default), Streamlit and R data apps -- create, deploy, "
             "start/stop, manage secrets. "
             "Mirrors `kbagent data-app *`."
         ),

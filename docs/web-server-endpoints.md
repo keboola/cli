@@ -294,7 +294,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 
 ### `data-apps` (18 operations)
 
-Streamlit / R / Python data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
+Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
 | Method | Path | Summary |
 |---|---|---|

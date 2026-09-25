@@ -353,9 +353,13 @@ def test_push_create_data_app_sends_type(tmp_config_dir: Path, tmp_path: Path) -
     assert _find_config(project_root, DATA_APP_COMPONENT)["parameters"]["id"] == "77777"
 
 
-def test_push_create_data_app_without_type_falls_back(tmp_config_dir: Path, tmp_path: Path) -> None:
-    """A tree pulled before the fix (no recorded type) keeps the old behavior:
-    a plain create_config, no DS record -- no regression, no wrong type sent."""
+def test_push_create_data_app_without_type_defaults_to_python_js(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """No recorded type (a hand-authored config, or a tree pulled before 0.94.0)
+    creates the app as python-js through the DS client -- never a plain
+    create_config, which leaves the platform to pick its own default
+    (streamlit). The default is recorded locally and surfaced as a warning."""
     project_root = tmp_path / "project"
     api = FakeApi(_sql_components(["SELECT 1;"]))
     store = _init_and_pull(tmp_config_dir, project_root, api)
@@ -366,16 +370,31 @@ def test_push_create_data_app_without_type_falls_back(tmp_config_dir: Path, tmp_
 
     assert result["errors"] == []
     assert result["created"] == 1
-    # No type recorded => DS is never asked to create the app.
-    assert ds.create_app_calls == []
-    # It went through the plain Storage create instead (FakeApi mints "cfg-new").
-    created = next(
-        c
-        for comp in api.components
-        if comp["id"] == DATA_APP_COMPONENT
-        for c in comp["configurations"]
+    assert len(ds.create_app_calls) == 1
+    assert ds.create_app_calls[0]["type_"] == "python-js"
+    # The default is written to the local file, so the tree states the type.
+    assert (
+        _find_config(project_root, DATA_APP_COMPONENT)["_keboola"]["data_app_type"] == "python-js"
     )
-    assert created["id"] == "cfg-new"
+    type_warnings = [w for w in result["warnings"] if w["change_type"] == "data_app_type_default"]
+    assert len(type_warnings) == 1
+    assert type_warnings[0]["data_app_type"] == "python-js"
+    assert "streamlit" in type_warnings[0]["message"]
+
+
+def test_push_create_data_app_with_type_emits_no_default_warning(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """A recorded type is used as-is and raises no default-type warning."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    _author_data_app(project_root, with_type=True)
+
+    result = _service(store, api, FakeDs(api)).push(alias="prod", project_root=project_root)
+
+    warnings = result.get("warnings", [])
+    assert not [w for w in warnings if w["change_type"] == "data_app_type_default"]
 
 
 # ===================================================================
