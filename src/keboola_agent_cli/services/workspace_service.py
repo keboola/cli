@@ -315,15 +315,21 @@ class WorkspaceService(BaseService):
             )
             config_id = sandbox_config.get("id", "")
 
-            if ui_mode:
-                return self._create_workspace_via_job(
-                    client,
-                    alias,
-                    effective_name,
-                    config_id,
-                    effective_backend,
-                )
-            else:
+            # Step 2: back the config with a Storage workspace. If that fails
+            # for ANY reason the config from step 1 is debris nobody asked for
+            # (issue #755: three failed --ui attempts left three orphaned
+            # keboola.sandboxes configs, invisible to `workspace gc` because
+            # gc detects the inverse -- a workspace whose config is gone).
+            try:
+                if ui_mode:
+                    return self._create_workspace_via_job(
+                        client,
+                        alias,
+                        effective_name,
+                        config_id,
+                        branch_id,
+                        effective_backend,
+                    )
                 return self._create_workspace_direct(
                     client,
                     alias,
@@ -333,8 +339,42 @@ class WorkspaceService(BaseService):
                     effective_backend,
                     read_only,
                 )
+            except KeboolaApiError as exc:
+                self._rollback_sandbox_config(client, exc, config_id, branch_id)
+                raise
         finally:
             client.close()
+
+    @staticmethod
+    def _rollback_sandbox_config(
+        client: Any, exc: KeboolaApiError, config_id: str, branch_id: int
+    ) -> None:
+        """Trash the sandbox config a failed create left behind; annotate ``exc``.
+
+        Soft delete (Storage trash, restorable via ``config restore``) -- the
+        same cleanup ``delete_workspace`` performs. The outcome is recorded on
+        the ORIGINAL error so the caller learns both what failed and whether
+        anything is left to clean up by hand; a failed cleanup never masks
+        the failure that triggered it.
+        """
+        exc.details.update({"sandbox_config_id": config_id, "branch_id": branch_id})
+        try:
+            client.delete_config("keboola.sandboxes", config_id, branch_id=branch_id)
+        except KeboolaApiError as cleanup_exc:
+            logger.debug("Could not roll back sandbox config %s", config_id)
+            exc.details["sandbox_config_rolled_back"] = False
+            exc.details["sandbox_config_cleanup_error"] = cleanup_exc.message
+            exc.message = (
+                f"{exc.message} The keboola.sandboxes config {config_id} created for this "
+                f"attempt could not be cleaned up ({cleanup_exc.message}); remove it with "
+                f"'kbagent config delete --component-id keboola.sandboxes --config-id {config_id}'."
+            )
+            return
+        exc.details["sandbox_config_rolled_back"] = True
+        exc.message = (
+            f"{exc.message} The keboola.sandboxes config {config_id} created for this attempt "
+            "was moved to the trash (restorable via 'config restore')."
+        )
 
     def _create_workspace_direct(
         self,
@@ -386,12 +426,18 @@ class WorkspaceService(BaseService):
         alias: str,
         name: str,
         config_id: str,
+        branch_id: int,
         backend: str,
     ) -> dict[str, Any]:
         """Create workspace via Queue job (slower, visible in UI)."""
         # The Queue job path does not expose a publicKey/loginType input. Keep
         # returning a reset password here; headless Snowflake creates use the
         # key-pair path in _create_workspace_direct().
+        #
+        # branch_id MUST reach the Queue: the config was created in that
+        # branch (step 1), and a job queued without branchId resolves it on
+        # the default branch -- on a dev branch that was a 400 "Cannot resolve
+        # job parameters: Configuration ... not found" (issue #755).
         job = client.create_job(
             component_id="keboola.sandboxes",
             config_id=config_id,
@@ -402,25 +448,42 @@ class WorkspaceService(BaseService):
                     "shared": False,
                 },
             },
+            branch_id=branch_id,
         )
         job_id = str(job.get("id", ""))
 
         # Wait for the job to complete
         client.wait_for_queue_job(job_id)
 
-        # Find the workspace created by the job
+        # Find the workspace created by the job. Look it up on the branch we
+        # resolved ourselves -- the job's own branchId echo is null on the
+        # default branch, and int(None) used to crash here.
         workspaces = client.list_config_workspaces(
-            branch_id=int(job.get("branchId", 0)),
+            branch_id=branch_id,
             component_id="keboola.sandboxes",
             config_id=config_id,
         )
 
         if not workspaces:
+            # A green job with nothing behind it is not a race to poll away:
+            # the keboola.sandboxes component dropped Snowflake/BigQuery
+            # workspace provisioning in March 2026 (its `create` task now only
+            # registers a sandbox-service record and writes parameters.id back
+            # into the config), and the Keboola UI creates SQL workspaces
+            # through SQL Editor sessions instead. Say so, name the job.
             raise KeboolaApiError(
-                message=f"Sandbox job completed but no workspace found for config {config_id}",
+                message=(
+                    f"Sandbox job {job_id} completed but no Storage workspace is attached to "
+                    f"config {config_id}. The keboola.sandboxes 'create' task no longer "
+                    f"provisions {backend} workspaces on this stack (the Keboola UI creates SQL "
+                    "workspaces through SQL Editor sessions, which kbagent does not drive), so "
+                    "'--ui' cannot produce a UI-visible workspace here. Create the workspace "
+                    "without '--ui' (headless), or create it in the Keboola UI."
+                ),
                 status_code=500,
                 error_code=ErrorCode.WORKSPACE_NOT_FOUND,
                 retryable=False,
+                details={"job_id": job_id},
             )
 
         ws_data = workspaces[0]
