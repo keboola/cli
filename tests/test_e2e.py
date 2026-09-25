@@ -13548,7 +13548,7 @@ class TestE2EDataAppManagedRepo:
         return _json_ok(self._run(*args))
 
     def test_managed_repo_lifecycle(self) -> None:
-        """create --use-managed-git-repo -> git-repo -> runs, then delete."""
+        """create --use-managed-git-repo -> git-repo -> deploy -> runs, then delete."""
         slug = f"e2e-managed-{int(time.time())}"
 
         _step(1, "create a managed-repo data app (empty repo, forced --no-deploy)")
@@ -13580,7 +13580,20 @@ class TestE2EDataAppManagedRepo:
         assert repo["is_managed_git_repo"] is True
         assert repo["https_url"], f"expected an https clone URL, got {repo}"
 
-        _step(3, "runs lists deployment attempts (empty for a never-deployed app)")
+        _step(
+            3,
+            "deploy backfills parameters.dataApp.git before pinning (CLI-15) -- "
+            "the repo is still empty, so this only proves the Storage write, not "
+            "a successful container start",
+        )
+        self._run_ok("data-app", "deploy", "--project", self.alias, "--app-id", app_id)
+        detail = self._run_ok("data-app", "detail", "--project", self.alias, "--app-id", app_id)[
+            "data"
+        ]
+        assert detail["git"], f"expected deploy to backfill the git block, got {detail['git']!r}"
+        assert detail["git"]["repository"] == repo["https_url"]
+
+        _step(4, "runs lists the deploy attempt just made")
         runs = self._run_ok(
             "data-app", "runs", "--project", self.alias, "--app-id", app_id, "--limit", "5"
         )["data"]
@@ -13588,7 +13601,7 @@ class TestE2EDataAppManagedRepo:
         assert isinstance(runs["runs"], list)
         assert runs["count"] == len(runs["runs"])
 
-        _step(4, "delete the managed app (cascades the managed repo)")
+        _step(5, "delete the managed app (cascades the managed repo)")
         self._run_ok("data-app", "delete", "--project", self.alias, "--app-id", app_id, "--yes")
         self._created_app_ids.remove(app_id)
 

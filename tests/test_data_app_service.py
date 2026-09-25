@@ -1096,9 +1096,13 @@ class TestDataAppDeploy:
         kwargs = ds_mock.patch_app.call_args.kwargs
         assert "config" not in kwargs
 
-    def test_deploy_pure_managed_omits_config_version(self, tmp_path: Path) -> None:
-        """A managed-repo app with NO git block deploys from managedGitRepoId,
-        so configVersion is omitted (matches keboola-mcp-server)."""
+    def test_deploy_pure_managed_backfills_git_block_and_pins_new_version(
+        self, tmp_path: Path
+    ) -> None:
+        """A managed-repo app with NO git block does not get a workspace just from
+        omitting configVersion (CLI-15) -- provisioning is gated on
+        parameters.dataApp.git being present in Storage config. Backfill it from
+        the managed repo's URL and pin the resulting version."""
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
@@ -1106,12 +1110,74 @@ class TestDataAppDeploy:
             "version": 4,
             "configuration": {"parameters": {"dataApp": {"slug": "x"}}},  # no git block
         }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": None,
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+        storage_mock.update_config.return_value = {"version": "5"}
         ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
-        kwargs = ds_mock.patch_app.call_args.kwargs
-        assert kwargs["config_version"] is None  # omitted
+        ds_mock.get_git_repo.assert_called_once_with("42")
+        update_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = update_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block == {
+            "repository": "https://git.example.com/keboola/app-42.git",
+            "branch": "main",
+            "private": True,
+        }
+        # slug survives the merge -- we mutate the fetched config, not replace it
+        assert update_kwargs["configuration"]["parameters"]["dataApp"]["slug"] == "x"
+
+        patch_kwargs = ds_mock.patch_app.call_args.kwargs
+        assert patch_kwargs["config_version"] == "5"  # the newly-written version, pinned
+
+    def test_deploy_pure_managed_falls_back_to_ssh_url(self, tmp_path: Path) -> None:
+        """httpsUrl is preferred but sshUrl works when it's the only one set."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 1,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": "ssh://git@git.example.com/keboola/app-42.git",
+            "httpsUrl": None,
+            "isManagedGitRepo": True,
+        }
+        storage_mock.update_config.return_value = {"version": "2"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        update_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = update_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block["repository"] == "ssh://git@git.example.com/keboola/app-42.git"
+
+    def test_deploy_pure_managed_raises_when_git_repo_lookup_empty(self, tmp_path: Path) -> None:
+        """Neither URL set on the git-repo lookup -- fail loudly rather than
+        deploy with no source pointer."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 1,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": None,
+            "httpsUrl": None,
+            "isManagedGitRepo": True,
+        }
+
+        with pytest.raises(KeboolaApiError):
+            service.deploy_data_app(alias="prod", app_id="42")
+
+        storage_mock.update_config.assert_not_called()
+        ds_mock.patch_app.assert_not_called()
 
     def test_deploy_managed_with_git_block_pins_latest(self, tmp_path: Path) -> None:
         """Once a credential is wired (parameters.dataApp.git present), the source

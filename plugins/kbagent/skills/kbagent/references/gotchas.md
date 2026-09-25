@@ -3829,6 +3829,10 @@ Other behaviors of this family:
 
 ## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
 
+**A workspace-provisioning gap in the guidance below was fixed in vNEXT
+(CLI-15)** -- see the correction bullet at the end of this section before
+relying on anything above it about workspace access.
+
 `--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
 (POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It
 writes **no** `parameters.dataApp.git` block at create and **forces `--no-deploy`**
@@ -3872,6 +3876,20 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   command on the misdiagnosis that a credential had to be wired into the config.
   It was removed in 0.65.1 -- it is unnecessary because no platform-injection gap
   exists.
+- **Correction (vNEXT/CLI-15): omitting configVersion alone does NOT provision a
+  workspace.** The 0.65.0 fix above solves the "could not read Username" crash,
+  but a *pure* managed repo (no git block yet) still deployed with no
+  `WORKSPACE_ID`/`KBC_WORKSPACE_MANIFEST_PATH`, even with
+  `runtime.workspace.enabled: true` and `state: running` -- the same
+  no-platform-diagnostic failure mode as the `--workspace` gotcha above. Root
+  cause: workspace grant provisioning is gated on `parameters.dataApp.git` being
+  present in Storage config, independent of `managedGitRepoId`/
+  `hasManagedGitRepo`/`configVersion`. Fixed in vNEXT: `data-app deploy` now
+  resolves the managed repo's URL and backfills that git block *before* pinning
+  a version, for any pure managed repo -- no manual `config update --merge` step
+  needed. `data-app detail`'s `Git: {}` (empty) on a `running` app is the tell
+  for this on an older kbagent version; the workaround there is to merge the
+  block manually, then redeploy.
 
 ## Core platform gotchas (version-independent)
 
