@@ -324,21 +324,6 @@ def changes(d: dict) -> list[tuple[str, str]]:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 A: pull's stale-entry sweep (sync_service.py ~1062-1094) runs "
-        "AFTER the fetch loop has written the new config to the same path "
-        "(paths are per-pull, not globally unique). When a remote actor "
-        "deletes a config and creates a new one of the same name, the new "
-        "config lands on the old path, then the sweep rmtree's that same "
-        "path for the vanished old id -- deleting the new files. The next "
-        "push then classifies the (still manifest-tracked) new config as "
-        "DELETED and destroys it on the remote. Confirmed live via "
-        "Lean F8 + TLA I2 (independently found) and replayed against the "
-        "real SyncService (scratchpad/replay/r_stale_sweep.py)."
-    ),
-)
 def test_a_recreate_under_same_name_does_not_delete_new_config(tmp_path: Path) -> None:
     """Invariant: a config that a pull just fetched and wrote to disk must
     never be deleted -- locally or remotely -- by that same pull's stale-entry
@@ -445,20 +430,6 @@ def test_b_pull_never_overwrites_local_sql_edit(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 C: pull's stale-entry sweep (sync_service.py:1062-1094) runs "
-        "an unconditional rmtree for every manifest entry whose remote key "
-        "vanished -- it never checks pull_hash against the current file "
-        "content. A config edited locally and then deleted remotely is "
-        "silently rmtree'd by the next pull (plain or --force), with no "
-        "conflict raised even under --force (detect_force_pull_conflicts "
-        "only iterates remote configs, _sync_baseline.py:485). Confirmed "
-        "via Lean F7 + TLA I5 (independently found) and replayed "
-        "(scratchpad/replay/r_misc.py)."
-    ),
-)
 def test_c_pull_never_deletes_locally_edited_dir_on_remote_delete(tmp_path: Path) -> None:
     """Invariant: pull must never destroy a directory carrying an unpushed
     local edit just because the remote config was deleted in the meantime --
@@ -482,6 +453,71 @@ def test_c_pull_never_deletes_locally_edited_dir_on_remote_delete(tmp_path: Path
 
     assert config_dir.exists(), "pull deleted a directory carrying an unpushed local edit"
     assert "MY-UNPUSHED-EDIT" in edited_file.read_text()
+
+    # Plain pull reports the preserved dir and keeps it tracked (manifest == disk).
+    assert "cfg-1" in [c for _, c, _ in w.manifest()]
+
+
+def _edit_then_delete_remote(w: World) -> Path:
+    w.api.put(PROD, "cfg-1", "Orders", "a")
+    w.init()
+    w.pull()
+    edited_file = w.config_dir("orders") / CONFIG_FILENAME
+    data = yaml.safe_load(edited_file.read_text())
+    data["parameters"]["value"] = "MY-UNPUSHED-EDIT"
+    edited_file.write_text(yaml.dump(data, default_flow_style=False))
+    w.api.remote[PROD].pop("cfg-1")
+    return edited_file
+
+
+def test_c_plain_pull_reports_preserved_dir_as_skipped(tmp_path: Path) -> None:
+    """#792 C: the preserved dir surfaces as ``skipped`` (not ``removed``)."""
+    w = World(tmp_path)
+    _edit_then_delete_remote(w)
+    result = w.pull()
+    actions = [(d["action"], d.get("reason", "")) for d in result["details"]]
+    assert ("skipped", "locally modified, deleted on remote") in actions
+    assert not any(a == "removed" for a, _ in actions)
+
+
+def test_c_force_pull_raises_conflict_for_edited_dir_deleted_remotely(tmp_path: Path) -> None:
+    """#792 C: ``--force`` aborts with SYNC_CONFLICT instead of deleting the edit."""
+    from keboola_agent_cli.errors import SyncConflictError
+
+    w = World(tmp_path)
+    edited_file = _edit_then_delete_remote(w)
+    with pytest.raises(SyncConflictError) as exc:
+        w.pull(force=True)
+    assert [(c["config_id"], c.get("reason")) for c in exc.value.conflicts] == [
+        ("cfg-1", "deleted on remote")
+    ]
+    assert "MY-UNPUSHED-EDIT" in edited_file.read_text()
+
+
+def test_c_theirs_pull_still_deletes_edited_dir(tmp_path: Path) -> None:
+    """#792 C: ``--theirs`` keeps remote-wins -- the deleted config's dir goes."""
+    w = World(tmp_path)
+    edited_file = _edit_then_delete_remote(w)
+    w.pull(theirs=True)
+    assert not edited_file.parent.exists()
+    assert w.manifest() == []
+
+
+def test_a_unedited_stale_dir_is_still_swept(tmp_path: Path) -> None:
+    """#792 A: the old dir of a re-created config is removed, the new one kept
+    and tracked -- the manifest matches disk after the pull."""
+    w = World(tmp_path)
+    w.api.put(PROD, "cfg-1", "Orders", "a")
+    w.init()
+    w.pull()
+    w.api.remote[PROD].pop("cfg-1")
+    w.api.put(PROD, "cfg-2", "Orders", "b")
+    w.pull()
+    tracked = w.manifest()
+    assert [c for _, c, _ in tracked] == ["cfg-2"]
+    assert sorted(p for _, _, p in tracked) == [f.split("/", 1)[1] for f in w.files()], (
+        "manifest does not match disk"
+    )
 
 
 # ===========================================================================
