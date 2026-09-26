@@ -22,8 +22,9 @@ from rich.markup import escape
 from rich.syntax import Syntax
 
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import get_formatter, get_service, resolve_branch
+from ._helpers import get_formatter, get_service
 from .config import _handle_config_service_error, _parse_json_input, config_app
 
 
@@ -54,7 +55,7 @@ def config_state_get(
     """
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
     service = get_service(ctx, "config_service")
 
     try:
@@ -119,7 +120,7 @@ def config_state_set(
         )
         raise typer.Exit(code=2) from None
 
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not dry_run and not yes and not formatter.json_mode:
         target = f"{component_id}/{config_id}" + (f" row [{row_id}]" if row_id else "")

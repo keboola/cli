@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .effective_branch import BranchTarget, recorded_targets
 from .models import ErrorResponse, SuccessResponse
 
 
@@ -64,6 +65,42 @@ def force_utf8_when_redirected() -> None:
             # Not reconfigurable (pytest capture, a custom stream). The caller
             # is no worse off than before.
             continue
+
+
+def success_json(data: Any) -> str:
+    """The ``--json`` success envelope; ``targets`` only when the command recorded one."""
+    targets = [target.to_dict() for target in recorded_targets()]
+    response = SuccessResponse(status="ok", targets=targets or None, data=data)
+    return response.model_dump_json(indent=2, exclude=None if targets else {"targets"})
+
+
+_TARGET_REASONS = {
+    "explicit": "from the command line",
+    "active_branch": "from 'kbagent branch use'",
+    "git_mapping": "from .keboola/branch-mapping.json",
+    "manifest": "from .keboola/manifest.json",
+    "merge_request": "from the merge request",
+    "production": "",
+}
+
+
+def format_target_line(target: BranchTarget) -> str:
+    """One human line that names the project and branch a command uses."""
+    if target.branch_source == "production":
+        where = (
+            "production" if target.branch_id is None else f"production branch {target.branch_id}"
+        )
+    else:
+        name = f" '{target.branch_name}'" if target.branch_name else ""
+        where = f"branch {target.branch_id}{name}"
+    notes = [_TARGET_REASONS[target.branch_source]] if _TARGET_REASONS[target.branch_source] else []
+    active = target.active_id
+    if active is not None and active != target.branch_id and target.branch_source != "explicit":
+        name = f" '{target.active_name}'" if target.active_name else ""
+        notes.append(f"active branch {active}{name} not used; pass --branch {active} to use it")
+    suffix = f" ({'; '.join(notes)})" if notes else ""
+    label = "Source" if target.role == "source" else "Target"
+    return f"{label}: project '{target.project_alias}', {where}{suffix}"
 
 
 def write_machine_output(text: str) -> None:
@@ -132,8 +169,7 @@ class OutputFormatter:
                            human-friendly output. If None in human mode, prints repr.
         """
         if self.json_mode:
-            response = SuccessResponse(status="ok", data=data)
-            write_machine_output(response.model_dump_json(indent=2))
+            write_machine_output(success_json(data))
         else:
             if human_formatter is not None:
                 human_formatter(self.console, data)
@@ -174,10 +210,11 @@ class OutputFormatter:
                 retryable=retryable,
                 details=details if details else None,
             )
-            error_envelope = {
-                "status": "error",
-                "error": err.model_dump(exclude_none=True),
-            }
+            error_envelope: dict[str, Any] = {"status": "error"}
+            targets = [target.to_dict() for target in recorded_targets()]
+            if targets:
+                error_envelope["targets"] = targets
+            error_envelope["error"] = err.model_dump(exclude_none=True)
             write_machine_output(json.dumps(error_envelope, indent=2))
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")
@@ -189,10 +226,20 @@ class OutputFormatter:
             message: The success message to display.
         """
         if self.json_mode:
-            response = SuccessResponse(status="ok", data={"message": message})
-            write_machine_output(response.model_dump_json(indent=2))
+            write_machine_output(success_json({"message": message}))
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
+
+    def report_target(self, target: BranchTarget) -> None:
+        """Print the project and branch a command uses, on stderr (human mode only)."""
+        if not self.json_mode:
+            self.err_console.print(
+                format_target_line(target),
+                style="dim",
+                markup=False,
+                highlight=False,
+                soft_wrap=True,
+            )
 
     def warning(self, message: str) -> None:
         """Output a warning message to stderr (human mode only).

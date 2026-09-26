@@ -8,6 +8,7 @@ from pathlib import Path
 
 import typer
 
+from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
 from ._helpers import (
@@ -285,6 +286,7 @@ def branch_metadata_list(
     arbitrary strings like ``KBC.projectDescription``.
     """
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "branch_service")
 
     try:
@@ -319,6 +321,7 @@ def branch_metadata_get(
     Exits with code 1 (NOT_FOUND) if the key is not present on the branch.
     """
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "branch_service")
 
     try:
@@ -365,6 +368,7 @@ def branch_metadata_set(
     The value is taken from exactly one of --text, --file, or --stdin.
     """
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
 
     try:
         value = resolve_text_input(text=text, file=file, stdin=stdin)
@@ -412,6 +416,7 @@ def branch_metadata_delete(
 ) -> None:
     """Delete a branch metadata entry by its numeric ID."""
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "branch_service")
 
     if (

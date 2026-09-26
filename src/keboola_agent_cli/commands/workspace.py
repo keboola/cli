@@ -11,12 +11,12 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from ..config_store import ConfigStore
 from ..constants import (
     QUERY_RESULTS_DEFAULT_LIMIT,
     WORKSPACE_LOAD_JOB_MAX_WAIT,
     WORKSPACE_LOAD_TYPES,
 )
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_query_results, format_workspaces_table
 from ..services._workspace_load_plan import LoadTablePlan
@@ -26,7 +26,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
@@ -166,9 +165,8 @@ def workspace_list(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID. Read-only command -- ignores the alias's active branch "
-        "by default (mirrors `storage buckets`); pass --branch to opt in. "
-        "Requires exactly one --project.",
+        help="Dev branch ID. Defaults to each project's active branch "
+        "(`kbagent branch use`), else production. Requires exactly one --project.",
     ),
     qs_compatible: bool = typer.Option(
         False,
@@ -179,11 +177,9 @@ def workspace_list(
 ) -> None:
     """List workspaces from connected projects.
 
-    Branch handling: this is a read command and follows the same pattern as
-    `storage buckets` / `config list` -- when an alias is pinned to a dev
-    branch via `branch use`, the production endpoint is used (with a visible
-    `Info: ...` banner) instead of silently scoping the listing to the
-    pinned branch. Pass `--branch ID` to query a specific dev branch.
+    Branch handling: without `--branch`, each project's active branch (`branch
+    use`) is used, else production. The `Target:` line on stderr (`targets` in
+    --json) names the branch of each project.
 
     Each workspace entry exposes `login_type`, `read_only` and
     `qs_compatible` so data-app developers can pick a Query-Service-compatible
@@ -191,7 +187,6 @@ def workspace_list(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
 
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
@@ -200,17 +195,11 @@ def workspace_list(
         )
         raise typer.Exit(code=2)
 
-    effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(
-            config_store, formatter, project[0], None, ignore_active_branch=True
-        )
-
     try:
         result = service.list_workspaces(
             aliases=project,
             orphaned_only=orphaned,
-            branch_id=effective_branch,
+            branch_id=branch,
             qs_compatible_only=qs_compatible,
         )
     except KeboolaApiError as exc:
@@ -244,8 +233,8 @@ def workspace_detail(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID. Read-only command -- ignores the alias's active branch "
-        "by default (mirrors `storage bucket-detail`); pass --branch to opt in.",
+        help="Dev branch ID. Defaults to the alias's active branch "
+        "(`kbagent branch use`), else production.",
     ),
 ) -> None:
     """Show workspace details (password NOT included).
@@ -256,16 +245,9 @@ def workspace_detail(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
-
-    _, effective_branch = resolve_branch(
-        config_store, formatter, project, branch, ignore_active_branch=True
-    )
 
     try:
-        result = service.get_workspace(
-            alias=project, workspace_id=workspace_id, branch_id=effective_branch
-        )
+        result = service.get_workspace(alias=project, workspace_id=workspace_id, branch_id=branch)
         formatter.output(
             result,
             lambda c, d: (
@@ -618,6 +600,14 @@ def workspace_gc(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
+
+    # Name each project's branch before the prompt; the service resolves the same one.
+    try:
+        selected = service.resolve_projects(project)
+    except ConfigError:
+        selected = {}  # gc_workspaces below reports the unknown alias
+    for alias in selected:
+        resolve_branch(ctx.obj["config_store"], alias, None)
 
     if (
         not dry_run

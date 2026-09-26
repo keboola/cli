@@ -151,6 +151,49 @@ class TestCloneSameProject:
         # The sibling that #587 is about survives the override step.
         assert patched["runtime"] == {"parallelism": "20"}
 
+    def test_branch_flag_under_an_active_branch_copies_into_that_branch(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Within one project the copy lands in the source's branch (#766).
+
+        The target branch used to fall back to the active branch, so `--branch 777`
+        under `branch use 456` was refused as a --target-branch the caller never gave.
+        """
+        service, client = _make_service(tmp_config_dir)
+        service._config_store.set_project_branch("prod", 456)
+
+        result = service.clone_config(
+            alias="prod",
+            component_id="keboola.wr-db-snowflake",
+            config_id="src-1",
+            name="copy",
+            branch_id=777,
+        )
+
+        assert result["mode"] == "same-project"
+        assert client.create_config_copy.call_args.kwargs["branch_id"] == 777
+
+    def test_a_second_alias_of_the_project_keeps_its_own_active_branch(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """Only one alias copies into the source branch; a second alias resolves its own."""
+        service, client = _make_service(tmp_config_dir)
+        store = service._config_store
+        source = store.get_project("prod")
+        assert source is not None
+        store.add_project("prod2", source.model_copy())
+        store.set_project_branch("prod2", 888)
+
+        with pytest.raises(ConfigError, match="--target-branch 888 cannot be honoured"):
+            service.clone_config(
+                alias="prod",
+                target_alias="prod2",
+                component_id="keboola.wr-db-snowflake",
+                config_id="src-1",
+                name="copy",
+            )
+        client.create_config_copy.assert_not_called()
+
     def test_no_overrides_means_no_update_call(self, tmp_config_dir: Path) -> None:
         """Without --set the copy is already final; no pointless second write."""
         service, client = _make_service(tmp_config_dir)

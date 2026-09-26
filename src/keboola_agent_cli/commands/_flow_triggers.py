@@ -28,12 +28,12 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 NOT_COVERED_NOTE = (
@@ -119,7 +119,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "flow_service")
         config_store = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         try:
             result = service.get_flow_triggers(

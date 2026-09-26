@@ -25,6 +25,7 @@ from typing import Any
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
 from ..scheduler_client import SchedulerClient
@@ -360,7 +361,7 @@ class FlowService(BaseService):
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
             client = self._client_factory(project.stack_url, project.token)
-            effective_branch = branch_id or project.active_branch_id
+            effective_branch = resolve_branch(self._config_store, alias, branch_id)
             try:
                 flows: list[dict[str, Any]] = []
                 try:
@@ -447,7 +448,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -500,7 +501,7 @@ class FlowService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         fetch = self._fetch_flow_schema(project)
         warnings: list[str] = []
@@ -565,7 +566,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         warnings: list[str] = []
         client = self._client_factory(project.stack_url, project.token)
@@ -635,7 +636,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -670,7 +671,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -738,7 +739,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         schedules = self.list_flow_schedules(alias, config_id, branch_id=branch_id)["schedules"]
 
@@ -816,7 +817,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -943,7 +944,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:

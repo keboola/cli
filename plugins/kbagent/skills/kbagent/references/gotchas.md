@@ -11,6 +11,73 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Every command that picks a branch names it: `Target:` line and `targets` key
+
+*(since vNEXT, #766)*
+
+- **`kbagent branch use` sets an active branch per project, and commands
+  apply it when `--branch` is omitted.** Before, some commands printed an
+  `Info:` line in human mode only, and others applied the active branch with
+  no notice (for example `workspace create`). A write could land on a
+  development branch and the caller did not know.
+- **Human mode prints one line on stderr** before the first API call to the
+  project and before any confirmation prompt:
+  - `Target: project 'prod', branch 456 'feature-x' (from 'kbagent branch use')`
+  - `Target: project 'prod', branch 789 (from the command line)`
+  - `Target: project 'prod', production (active branch 456 'feature-x' not
+    used; pass --branch 456 to use it)` -- storage reads, Data Streams,
+    data apps, branch metadata and git-branching `sync` do not use the
+    active branch.
+  - `Target: project 'prod', branch 388 (from .keboola/branch-mapping.json)`
+    or `(from .keboola/manifest.json)` -- `sync` without an active branch.
+  - `Source:` names the branch that a command reads from or merges from:
+    the source project of `config clone`, the branch of a merge request
+    (`merge-request *`, `branch merge`), the branch notification commands
+    read config names from, and the source table branch of `storage
+    create-table --source-branch-id` / `storage clone-table` (production).
+    `merge-request merge` and an armed `merge-request auto-merge` also print
+    `Target: project 'prod', production`.
+  - A command that uses two branches prints a line for each:
+    - `workspace create --ui` creates the config in the active branch but
+      runs its job on production.
+    - `workspace from-transformation` reads the transformation from
+      production.
+    - `sync clone` creates the buckets in production.
+- **`--json` adds `targets` to the success AND the error envelope**, before
+  `data` / `error`, which do not change. Each entry is
+  `{role, project_alias, branch_id, branch_name, branch_source, active_branch}`:
+  - `branch_source`: `explicit` (`--branch` or `--target-branch`),
+    `active_branch` (`branch use`), `git_mapping`
+    (`.keboola/branch-mapping.json`), `manifest` (the first branch of
+    `.keboola/manifest.json`), `merge_request` (the branch of the merge
+    request given by `--merge-request-id`) or `production`.
+  - `production` can carry a numeric `branch_id` when the command read the
+    default branch ID from the API (workspaces, config metadata).
+  - `active_branch` is the project's `branch use` choice
+    (`{branch_id, branch_name}` or null), also when the command did not use it.
+  - `role` is `source` for the `Source:` cases above, else `target`.
+- **No `targets` key means the command chose no branch**: it has no
+  `--branch` and never uses the active branch (`project list`, `token list`,
+  storage listings without `--project`), it failed on an unknown alias, or it
+  refused to run because it needs a branch and got none. It does not mean
+  production.
+- **`--branch 0` means production.** The API clients always sent 0 to the
+  production endpoint. Before vNEXT the config, flow, schedule and
+  notification commands used the active branch for `--branch 0` instead.
+- **`--dry-run` reports the same target as the real run.** `flow delete
+  --dry-run` and `flow schedule-remove --dry-run` now put the resolved branch
+  in `would_delete.branch_id` (before: the raw `--branch` value, so null under
+  an active branch).
+- **`workspace list` / `workspace detail` use the active branch.** The
+  `Info: Using production branch for read` line they printed was wrong: the
+  workspace service has used the active branch since v0.42.0. They now print
+  `Target:` with the branch they use.
+- **`branch use` and `branch create` save the branch name** next to the ID
+  (`active_branch_name` in `config.json`). It shows in `Target:` and in
+  `branch_name`. A branch renamed later keeps the saved name until the next
+  `branch use`. An active branch set by an older version has no name.
+- `kbagent serve` responses do not carry `targets` (REST reporting: #791).
+
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 
 *(since 0.95.0, #761)*
@@ -1130,17 +1197,16 @@ kbagent --json workspace list --project prod --qs-compatible
 # returns only workspaces with login_type ∈ whitelist AND read_only=true
 ```
 
-**Branch behaviour (read-command parity with `storage buckets`):**
+**Branch behaviour:**
 
-`workspace list` / `workspace detail` now follow the same pattern as
-`storage buckets` / `storage tables` / `config list`: when an alias is
-pinned to a dev branch via `branch use`, the production endpoint is used
-with an `Info: Using production branch for read (active dev branch X
-ignored; pass --branch X to override)` banner. Before v0.42.0 these
-commands silently scoped to the pinned branch, returning a different
-workspace set than the same alias one shell ago. Pass `--branch ID` to
-opt back into the dev-branch endpoint. `--branch` requires exactly one
-`--project`.
+`workspace list` / `workspace detail` use the alias's active branch
+(`branch use`) when `--branch` is omitted, like `config list`. Up to vNEXT
+they printed `Info: Using production branch for read (active dev branch X
+ignored; pass --branch X to override)`, but the workspace service used the
+active branch: the line was wrong, the listing was not. Since vNEXT they
+print `Target:` with the branch they use (see the #766 entry at the top).
+`storage buckets` / `storage tables` are the reads that use production
+under an active branch. `--branch` requires exactly one `--project`.
 
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 

@@ -526,7 +526,7 @@ class SyncService(BaseService):
 
         # Determine branch to pull from (git-branching aware)
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Fetch all components with configs from API (+ storage metadata + jobs)
@@ -1254,7 +1254,7 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Fetch remote state
@@ -1657,7 +1657,7 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Detect name drift: local dir name doesn't match config name
@@ -2160,9 +2160,9 @@ class SyncService(BaseService):
             logger.warning("config-folder metadata lookup failed", exc_info=True)
             return None
 
-    @staticmethod
     def _resolve_branch_id(
-        project: Any,
+        self,
+        alias: str,
         manifest: "Manifest",
         project_root: Path,
         branch_override: int | None = None,
@@ -2183,6 +2183,7 @@ class SyncService(BaseService):
         guarantees there is always a recovery path when the mapping file is
         lost (issue #267, Bug E).
         """
+        from ..effective_branch import record_branch, resolve_branch
         from ..sync.branch_mapping import load_branch_mapping
         from ..sync.git_utils import get_current_branch
 
@@ -2190,7 +2191,7 @@ class SyncService(BaseService):
         # dev branch from a clean git workspace without first running
         # `branch use` or `branch-link`.
         if branch_override is not None:
-            return branch_override
+            return record_branch(self._config_store, alias, branch_override, "explicit")
 
         if manifest.git_branching.enabled:
             git_branch = get_current_branch(project_root)
@@ -2203,7 +2204,7 @@ class SyncService(BaseService):
                     # Mapping missing -- auto-recover for the default branch
                     # so the user is never locked out of production.
                     if is_default:
-                        return None
+                        return record_branch(self._config_store, alias, None, "production")
                     raise ConfigError(
                         f"Git branch '{git_branch}' is not linked to a Keboola "
                         f"branch (branch-mapping.json missing). "
@@ -2212,20 +2213,18 @@ class SyncService(BaseService):
                 entry = mapping.get(git_branch)
                 if entry is not None:
                     # entry.keboola_id is None for production (default branch)
-                    return entry.keboola_id
+                    return record_branch(self._config_store, alias, entry.keboola_id, "git_mapping")
                 # No entry for current branch -- default branch is always production
                 if is_default:
-                    return None
+                    return record_branch(self._config_store, alias, None, "production")
                 raise ConfigError(
                     f"Git branch '{git_branch}' is not linked to a Keboola branch. "
                     f"Run 'kbagent sync branch-link --project ALIAS' first."
                 )
 
         # Non git-branching: use active_branch_id or manifest fallback
-        branch_id = project.active_branch_id if project is not None else None
-        if not branch_id and manifest.branches:
-            branch_id = manifest.branches[0].id
-        return branch_id
+        fallback = manifest.branches[0].id if manifest.branches else None
+        return resolve_branch(self._config_store, alias, None, manifest_branch_id=fallback)
 
     # ------------------------------------------------------------------
     # Storage metadata / jobs / samples helpers

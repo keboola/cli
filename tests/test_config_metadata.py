@@ -583,7 +583,7 @@ class TestConfigServiceMetadata:
         store = ConfigStore(config_dir=config_dir)
         store.add_project(
             "prod",
-            # active_branch_id set so _resolve_metadata_branch_id skips the API call
+            # active_branch_id set so _metadata_branch_id skips the API call
             ProjectConfig(
                 stack_url=TEST_URL,
                 token=TEST_TOKEN,

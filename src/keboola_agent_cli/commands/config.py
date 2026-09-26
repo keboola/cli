@@ -17,6 +17,7 @@ from rich.syntax import Syntax
 
 from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ..services.component_service import materialize_pushed_config, stamp_scaffold_config_id
@@ -28,7 +29,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,6 @@ def config_list(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires --project (branch ID is per-project)
     # For list with multiple projects, only validate if explicit --branch given
@@ -104,10 +103,7 @@ def config_list(
         raise typer.Exit(code=2)
 
     # Resolve active branch (only for single-project queries)
-    effective_branch: int | None = branch
     effective_project = project
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     # Validate component_type if provided
     if component_type and component_type not in VALID_COMPONENT_TYPES:
@@ -123,7 +119,7 @@ def config_list(
             aliases=effective_project,
             component_type=component_type,
             component_id=component_id,
-            branch_id=effective_branch,
+            branch_id=branch,
             include_rows=include_rows,
         )
     except ConfigError as exc:
@@ -206,7 +202,6 @@ def config_detail(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
 
     # --project is required (zero, one, or many)
     if not project:
@@ -247,9 +242,6 @@ def config_detail(
         raise typer.Exit(code=2)
 
     # Resolve active branch when only one --project was passed
-    effective_branch: int | None = branch
-    if branch is None and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     try:
         if config_id is not None:
@@ -262,7 +254,7 @@ def config_detail(
                 alias=project[0],
                 component_id=component_id,
                 config_id=config_id,
-                branch_id=effective_branch,
+                branch_id=branch,
                 with_state=with_state,
                 include_sandbox_annotation=True,
             )
@@ -276,7 +268,7 @@ def config_detail(
                 alias=project[0],
                 component_id=component_id,
                 config_id=None,
-                branch_id=effective_branch,
+                branch_id=branch,
                 with_state=with_state,
                 aliases=project,
             )
@@ -504,7 +496,6 @@ def config_search(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
-    config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires exactly one --project
     if branch is not None and (not project or len(project) != 1):
@@ -515,9 +506,6 @@ def config_search(
         raise typer.Exit(code=2)
 
     # Resolve active branch (only for single-project queries)
-    effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
 
     # Validate component_type
     if component_type and component_type not in VALID_COMPONENT_TYPES:
@@ -547,7 +535,7 @@ def config_search(
             component_id=component_id,
             ignore_case=ignore_case,
             use_regex=use_regex,
-            branch_id=effective_branch,
+            branch_id=branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1636,7 +1624,7 @@ def config_metadata_list(
     """List all metadata entries on a configuration."""
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
     service = get_service(ctx, "config_service")
     try:
         result = service.list_config_metadata(
@@ -1678,7 +1666,7 @@ def config_get_metadata(
     """
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
     service = get_service(ctx, "config_service")
     try:
         result = service.get_config_metadata_value(
@@ -1708,7 +1696,7 @@ def config_set_metadata(
     """Set a metadata key/value on a configuration (upsert)."""
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
     service = get_service(ctx, "config_service")
     try:
         result = service.set_config_metadata(
@@ -1741,7 +1729,7 @@ def config_delete_metadata(
     """Delete a configuration metadata entry by its numeric ID."""
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if (
         not yes
@@ -1785,7 +1773,7 @@ def config_set_folder(
     """
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
     service = get_service(ctx, "config_service")
     try:
         result = service.set_config_folder(
@@ -1882,7 +1870,7 @@ def config_variables_set(
             raise typer.Exit(code=2) from None
         variables_dict[key] = value
 
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     service = get_service(ctx, "variables_service")
 
@@ -1970,7 +1958,7 @@ def config_variables_get(
     """Read the current variable values attached to a config."""
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     service = get_service(ctx, "variables_service")
     try:
@@ -2018,7 +2006,7 @@ def config_variables_clear(
     """Unlink variables from a config (does NOT delete the underlying keboola.variables)."""
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not yes and not formatter.json_mode:
         confirmed = typer.confirm(
@@ -2506,6 +2494,8 @@ def config_row_delete(
       kbagent config row-delete --project P --component-id C --config-id ID --row-id ROW --yes
     """
     formatter = get_formatter(ctx)
+    config_store = ctx.obj["config_store"]
+    branch = resolve_branch(config_store, project, branch)
 
     if (
         not yes

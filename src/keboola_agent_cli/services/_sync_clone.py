@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from ..effective_branch import record_branch
 from ..errors import ConfigError
 from ..sync.clone import (
     apply_bucket_map,
@@ -155,7 +156,7 @@ def clone_project(
         # clone (resolves to None -> 0), a plain clone (the numeric default),
         # and --branch (the override) -- keeping gotchas.md's promise (CLI-9).
         push_branch_id = service._resolve_branch_id(
-            target_project, manifest, target_path, branch_override=branch_override
+            target_alias, manifest, target_path, branch_override=branch_override
         )
         repoint_default_branch_configs(
             manifest,
@@ -203,6 +204,8 @@ def clone_project(
     bucket_result = None
     if create_buckets:
         bucket_client = service._client_factory(target_project.stack_url, target_project.token)
+        # The buckets are created without a branch: in production.
+        record_branch(service._config_store, target_alias, None, "production", fixed=True)
         with bucket_client:
             bucket_result = create_buckets_from_export(bucket_client, target_path, bucket_map)
 
