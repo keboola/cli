@@ -245,97 +245,77 @@ class TestFullWorkflow:
 
 
 # ===========================================================================
-# CI guard: check_error_codes.py catches planted raw strings
+# CI guard: check_error_codes.py self-tests
+#
+# Pure offline checks of scripts/check_error_codes.py -- no network, no
+# credentials -- so they are deliberately NOT marked `integration` and run in
+# the normal CI suite (which deselects `-m integration`).
 # ===========================================================================
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_GUARD_SCRIPT = _REPO_ROOT / "scripts" / "check_error_codes.py"
 
-@pytest.mark.integration
+
+def _load_guard_script():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_error_codes", _GUARD_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class TestCheckErrorCodesGuard:
     """Verify the CI guard script rejects raw error_code string literals."""
 
     def test_guard_passes_on_clean_source(self) -> None:
         """scripts/check_error_codes.py exits 0 on the current (clean) source."""
         result = subprocess.run(
-            [sys.executable, "scripts/check_error_codes.py"],
+            [sys.executable, str(_GUARD_SCRIPT)],
             capture_output=True,
             check=False,
             text=True,
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0, (
             f"Guard failed on clean source:\n{result.stdout}\n{result.stderr}"
         )
 
     def test_guard_catches_planted_literal(self, tmp_path: Path) -> None:
-        """Guard exits 1 when a raw string literal is planted in a temp source file."""
-        # Write a minimal Python file that uses a raw error_code string
+        """The guard's own scanner flags a raw error_code string literal."""
         planted = tmp_path / "planted.py"
         planted.write_text(
             "from keboola_agent_cli.errors import KeboolaApiError\n"
             'raise KeboolaApiError("oops", error_code="QUEUE_JOB_FAILED")\n',
             encoding="utf-8",
         )
-        # Run the guard against only this file by patching SRC_ROOT via env isn't
-        # practical; instead verify the guard script's logic directly via import.
-        import ast
-
-        source = planted.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        violations = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            for kw in node.keywords:
-                if kw.arg == "error_code" and isinstance(kw.value, ast.Constant):
-                    violations.append(kw.value.value)
-
-        assert violations == ["QUEUE_JOB_FAILED"], (
-            "Guard logic should detect the planted raw string literal"
-        )
+        mod = _load_guard_script()
+        assert mod._collect_violations(planted) == [(2, "QUEUE_JOB_FAILED")]
 
     def test_guard_ignores_enum_usage(self, tmp_path: Path) -> None:
-        """Guard logic does NOT flag error_code=ErrorCode.X (non-Constant node)."""
-        import ast
-
-        source = (
+        """The guard's scanner does NOT flag error_code=ErrorCode.X."""
+        clean = tmp_path / "clean.py"
+        clean.write_text(
             "from keboola_agent_cli.errors import ErrorCode, KeboolaApiError\n"
-            'raise KeboolaApiError("oops", error_code=ErrorCode.QUEUE_JOB_FAILED)\n'
+            'raise KeboolaApiError("oops", error_code=ErrorCode.QUEUE_JOB_FAILED)\n',
+            encoding="utf-8",
         )
-        tree = ast.parse(source)
-        violations = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            for kw in node.keywords:
-                if kw.arg == "error_code" and isinstance(kw.value, ast.Constant):
-                    violations.append(kw.value.value)
-
-        assert violations == [], "Enum usage should not be flagged as a violation"
+        mod = _load_guard_script()
+        assert mod._collect_violations(clean) == []
 
 
-@pytest.mark.integration
 class TestErrorCodesDocCompleteness:
     """Verify the enum-vs-docs/error-codes.md completeness guard."""
 
-    @staticmethod
-    def _load_script():
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "check_error_codes", Path("scripts") / "check_error_codes.py"
-        )
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
     def test_doc_matches_enum(self) -> None:
         """docs/error-codes.md documents exactly the ErrorCode members."""
-        mod = self._load_script()
+        mod = _load_guard_script()
         assert mod._enum_members() == mod._documented_codes()
 
     def test_detects_missing_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Removing one documented code from the doc makes the check fail."""
-        mod = self._load_script()
+        mod = _load_guard_script()
         doc_lines = mod.DOC_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
         pruned = [line for line in doc_lines if not line.startswith("| `INVALID_TOKEN` |")]
         assert len(pruned) == len(doc_lines) - 1
@@ -346,7 +326,7 @@ class TestErrorCodesDocCompleteness:
 
     def test_detects_stale_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A doc row for a code that is not in the enum makes the check fail."""
-        mod = self._load_script()
+        mod = _load_guard_script()
         doc = mod.DOC_PATH.read_text(encoding="utf-8")
         doc += "| `NO_SUCH_CODE_EVER` | Planted stale row |\n"
         stale_doc = tmp_path / "error-codes.md"

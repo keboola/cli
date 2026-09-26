@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
+from keboola_agent_cli.errors import PermissionDeniedError
 from keboola_agent_cli.models import PermissionPolicy
 from keboola_agent_cli.permissions import (
     OPERATION_REGISTRY,
@@ -190,8 +191,11 @@ class TestRequirePermissionDependency:
         app = FastAPI()
         install_auth(app, AuthSettings(token=TOKEN))
         _install_probes(app)
-        resp = TestClient(app, raise_server_exceptions=False).get(READ_PROBE, headers=AUTH)
-        assert resp.status_code != 200
+        # The bare app has no PermissionDeniedError -> 403 handler, so any
+        # crash would also be "not 200". Let the exception surface and pin it
+        # to the deliberate refusal, not an accidental AttributeError.
+        with pytest.raises(PermissionDeniedError, match="not built by create_app"):
+            TestClient(app).get(READ_PROBE, headers=AUTH)
 
 
 class TestRegistryWiring:
