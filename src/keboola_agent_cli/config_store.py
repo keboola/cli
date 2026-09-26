@@ -647,12 +647,15 @@ class ConfigStore:
         config = self.load()
         return config.projects.get(alias)
 
-    def set_project_branch(self, alias: str, branch_id: int | None) -> None:
+    def set_project_branch(
+        self, alias: str, branch_id: int | None, branch_name: str | None = None
+    ) -> None:
         """Set or clear the active development branch for a project.
 
         Args:
             alias: The project alias.
             branch_id: Branch ID to activate, or None to reset to main.
+            branch_name: The branch name, saved to show next to the ID.
 
         Raises:
             ConfigError: If the alias does not exist.
@@ -663,6 +666,7 @@ class ConfigStore:
                 raise self.project_not_found_error(alias)
             self._reject_ephemeral_mutation(config, alias, "modified")
             config.projects[alias].active_branch_id = branch_id
+            config.projects[alias].active_branch_name = branch_name or None
             self.save(config)
 
     @staticmethod

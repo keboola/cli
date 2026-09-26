@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._data_app_git import register_git_commands
 from ._data_app_runtime import register_secrets_commands
@@ -108,6 +109,13 @@ def data_app_list(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
+        if project and len(project) == 1:
+            branch = resolve_branch(
+                ctx.obj["config_store"],
+                project[0],
+                branch,
+                ignore_active_branch=True,
+            )
         result = service.list_data_apps(aliases=project, branch_id=branch)
     except KeboolaApiError as exc:
         formatter.error(
@@ -148,6 +156,7 @@ def data_app_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
+        branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
         result = service.get_data_app(alias=project, app_id=app_id, branch_id=branch)
     except KeboolaApiError as exc:
         formatter.error(
@@ -319,6 +328,7 @@ def data_app_create(
 ) -> None:
     """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy)."""
     formatter = get_formatter(ctx)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
     # Mutual exclusion: --description vs --description-file
@@ -512,6 +522,7 @@ def data_app_deploy(
     ),
 ) -> None:
     """Deploy the latest Storage config (the §9 redeploy contract)."""
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     _run_lifecycle(
         ctx,
         "deploy_data_app",

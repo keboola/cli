@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
@@ -153,6 +154,7 @@ def stream_list(
 ) -> None:
     """List Data Streams sources in a project."""
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "stream_service")
     try:
         result = service.list_sources(alias=project, branch_id=branch)
@@ -189,6 +191,7 @@ def stream_create_source(
     --no-sinks to create a bare source without them.
     """
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "stream_service")
     try:
         result = service.create_source(
@@ -218,6 +221,7 @@ def stream_detail(
 ) -> None:
     """Show a source's endpoints, protocol, and destination tables."""
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "stream_service")
     try:
         result = service.get_source_detail(
@@ -246,6 +250,7 @@ def stream_delete(
 ) -> None:
     """Delete a Data Streams source (destructive)."""
     formatter = get_formatter(ctx)
+    report_branch_ref(ctx.obj["config_store"], project, branch)
     if (
         not dry_run
         and not formatter.json_mode

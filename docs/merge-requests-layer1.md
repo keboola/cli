@@ -143,7 +143,7 @@ decisions, derive facts.
 Every implicit resolution is reported, on stderr in human mode and in the payload always:
 
 ```
-Info: Using active branch (ID: 123) for project 'acme'
+Source: project 'acme', branch 123 (from 'kbagent branch use')
 Info: Resolved merge request #7 from branch 123
 ```
 

@@ -34,6 +34,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -354,7 +355,7 @@ class NotificationService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id, role="source")
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -406,7 +407,7 @@ class NotificationService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id, role="source")
 
         recipient = _build_recipient(channel, address)
         filters = _build_filters(component_id, config_id, branch_id)
@@ -511,7 +512,7 @@ class NotificationService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, None, role="source")
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -597,7 +598,7 @@ class NotificationService(BaseService):
         the discriminator -- ``_run_parallel`` sorts on ``len(result) == 2``
         -- so neither shape may grow or shrink independently of the other.
         """
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id, role="source")
 
         client = self._client_factory(project.stack_url, project.token)
         try:

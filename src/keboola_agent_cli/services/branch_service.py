@@ -10,6 +10,7 @@ the ``KBC.projectDescription`` metadata key on the default branch.
 from typing import Any
 
 from ..constants import METADATA_NOT_FOUND
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -165,7 +166,7 @@ class BranchService(BaseService):
         branch_id = int(branch_data["id"])
 
         # Auto-activate the created branch
-        self._config_store.set_project_branch(alias, branch_id)
+        self._config_store.set_project_branch(alias, branch_id, branch_data.get("name", name))
 
         return {
             "project_alias": alias,
@@ -197,6 +198,7 @@ class BranchService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -217,9 +219,9 @@ class BranchService(BaseService):
                 f"Use 'kbagent branch list --project {alias}' to see available branches."
             )
 
-        self._config_store.set_project_branch(alias, branch_id)
-
         branch_name = target_branch.get("name", "")
+        self._config_store.set_project_branch(alias, branch_id, branch_name)
+
         return {
             "project_alias": alias,
             "branch_id": branch_id,
@@ -275,6 +277,7 @@ class BranchService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -326,7 +329,9 @@ class BranchService(BaseService):
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
-        effective_branch_id = branch_id if branch_id is not None else project.active_branch_id
+        effective_branch_id = resolve_branch(
+            self._config_store, alias, branch_id, required=True, role="source"
+        )
         if effective_branch_id is None:
             raise ConfigError(
                 f"No branch specified and no active branch set for project '{alias}'. "

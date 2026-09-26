@@ -36,6 +36,7 @@ import logging
 import re
 from typing import Any, Protocol
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, KeboolaApiError
 from ..json_utils import set_nested_value
 from ..models import ProjectConfig
@@ -514,11 +515,20 @@ def clone_config_method(
     # reusing the source client for what the flow treats as a
     # cross-project write would create the configuration in the source
     # project while reporting the target.
+    same_project = is_same_project(source_project, target_project)
     target_client = (
         source_client
-        if is_same_project(source_project, target_project)
+        if same_project
         else self._client_factory(target_project.stack_url, target_project.token)
     )
+    source_branch_id = resolve_branch(self._config_store, alias, branch_id, role="source")
+    if target_alias in (None, alias) and target_branch_id is None:
+        # One alias: the copy lands in the source's branch, not in the active one again.
+        resolve_branch(self._config_store, alias, branch_id)
+    else:
+        target_branch_id = resolve_branch(
+            self._config_store, target_alias or alias, target_branch_id
+        )
     try:
         return clone_config(
             source_client=source_client,
@@ -533,8 +543,8 @@ def clone_config_method(
             description=description,
             set_overrides=set_overrides,
             secret_overrides=secret_overrides,
-            branch_id=branch_id or source_project.active_branch_id,
-            target_branch_id=target_branch_id or target_project.active_branch_id,
+            branch_id=source_branch_id,
+            target_branch_id=target_branch_id,
             dry_run=dry_run,
             allow_plaintext_fallback=allow_plaintext_fallback,
             encrypt_fn=self._encrypt_secrets_before_write,

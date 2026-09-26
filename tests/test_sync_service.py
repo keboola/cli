@@ -2718,12 +2718,13 @@ class TestIssue267Regressions:
         (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
 
         manifest = load_manifest(project_root)
-        project = store.get_project("prod")
         with patch(
             "keboola_agent_cli.sync.git_utils.get_current_branch",
             return_value="main",
         ):
-            resolved = SyncService._resolve_branch_id(project, manifest, project_root)
+            resolved = SyncService(config_store=store)._resolve_branch_id(
+                "prod", manifest, project_root
+            )
         assert resolved is None
 
     def test_resolve_branch_id_dev_branch_without_mapping_still_errors(
@@ -2739,7 +2740,6 @@ class TestIssue267Regressions:
         (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
 
         manifest = load_manifest(project_root)
-        project = store.get_project("prod")
         with (
             patch(
                 "keboola_agent_cli.sync.git_utils.get_current_branch",
@@ -2747,7 +2747,7 @@ class TestIssue267Regressions:
             ),
             pytest.raises(ConfigError, match="not linked"),
         ):
-            SyncService._resolve_branch_id(project, manifest, project_root)
+            SyncService(config_store=store)._resolve_branch_id("prod", manifest, project_root)
 
 
 # ===================================================================
@@ -3818,15 +3818,16 @@ class TestBranchOverrideAndNameDriftFlag:
     """Cover the `--branch` override (push / pull / diff) and the
     `--no-name-drift-warnings` opt-out at the service boundary."""
 
-    def test_resolve_branch_id_override_wins(self, tmp_path: Path) -> None:
+    def test_resolve_branch_id_override_wins(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         from keboola_agent_cli.sync.manifest import (
             ManifestBranch,
             ManifestNaming,
             ManifestProject,
         )
 
-        project = MagicMock()
-        project.active_branch_id = 12345
+        store = setup_single_project(tmp_config_dir)
+        store.set_project_branch("prod", 12345)
+        service = SyncService(config_store=store)
         manifest = Manifest.model_construct(
             project=ManifestProject(id=1, apiHost="connection.keboola.com"),
             naming=ManifestNaming(),
@@ -3834,14 +3835,10 @@ class TestBranchOverrideAndNameDriftFlag:
         )
 
         # Without override -> falls back to active_branch_id (priority 2).
-        assert (
-            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=None)
-            == 12345
-        )
+        assert service._resolve_branch_id("prod", manifest, tmp_path, branch_override=None) == 12345
         # Override wins (priority 0).
         assert (
-            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=388071)
-            == 388071
+            service._resolve_branch_id("prod", manifest, tmp_path, branch_override=388071) == 388071
         )
 
     def test_push_branch_override_reaches_client(

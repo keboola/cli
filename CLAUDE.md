@@ -68,6 +68,8 @@ src/keboola_agent_cli/
   constants.py          # Shared constants + dynamic APP_NAME resolution (retry params, timeouts, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   models.py             # Pydantic models shared across layers
+  effective_branch.py   # resolve_branch(): the ONLY code that applies the `branch use` active branch;
+                        #   records project + branch for the `Target:` line / `targets` key (#766)
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
@@ -292,6 +294,14 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     (`services/_auth_registration.py`) -- the tuple `auth login` /
     `auth register-projects` disclose and every doc surface defers to. Run
     `python scripts/check_sentinel_guards.py --list` to see the inventory.
+
+19. **Only `effective_branch.resolve_branch()` applies the active branch.**
+    Commands and services get the branch ID from it and never read
+    `ProjectConfig.active_branch_id` themselves: the function records the
+    project and branch, and `OutputFormatter` reports them (a `Target:` line
+    on stderr, `targets` in the `--json` envelope, also for `--dry-run`).
+    `tests/test_effective_branch.py` fails on a new direct read. A read that
+    only shows or manages the active branch must be on its list, with a reason.
 
 ## Claude Code Plugin
 
@@ -760,6 +770,8 @@ kbagent permissions check OPERATION
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
 kbagent branch use --project ALIAS --branch ID
+# branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
+#   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production). Version gate in gotchas.md (#766).
 kbagent branch reset --project ALIAS
 kbagent branch delete --project ALIAS --branch ID
 kbagent branch merge --project ALIAS [--branch ID]
