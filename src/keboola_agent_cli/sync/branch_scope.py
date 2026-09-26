@@ -136,6 +136,7 @@ def scope_manifest(
     source_branch_path: str,
     remote_keys: set[str],
     ignored_components: frozenset[str] = frozenset(),
+    target_branch_id: int | None = None,
 ) -> TreeScope:
     """Partition ``manifest.configurations`` around *source_branch_path*.
 
@@ -151,6 +152,9 @@ def scope_manifest(
             (``ALWAYS_IGNORED_COMPONENTS`` plus the manifest's
             ``ignoredComponents``). Entries for these components are dropped
             from EVERY partition -- see below.
+        target_branch_id: Branch the API writes go to. Only consulted on the
+            promote path (the target's own tree is not *source_branch_path*),
+            see :func:`_promoted_paths`.
 
     Returns:
         A :class:`TreeScope`.
@@ -159,6 +163,7 @@ def scope_manifest(
     never_fetched: list[dict[str, str]] = []
     orphaned: list[dict[str, Any]] = []
     claims: dict[str, list[Claim]] = {}
+    promoted = _promoted_paths(manifest, project_root, source_branch_path, target_branch_id)
 
     for cfg in manifest.configurations:
         # Ignored-component guard (issue #689). The remote side of the diff
@@ -195,6 +200,18 @@ def scope_manifest(
 
         claims.setdefault(key, []).append(Claim(branch_id=cfg.branch_id, tree_path=tree_path))
 
+        # Promote path (issue #792 D): the target-branch entry a previous
+        # promote push recorded for a source-tree dir IS that dir's config on
+        # the target, and it shadows the source tree's own (production) entry
+        # for the same dir. Without this the production entry kept diffing as
+        # ``added`` against the target and every promote push created another
+        # copy of the same config.
+        promote_key = (cfg.component_id, cfg.path)
+        if promote_key in promoted:
+            if cfg.branch_id == target_branch_id:
+                in_tree.append(cfg)
+            continue
+
         if tree_path == source_branch_path:
             in_tree.append(cfg)
             continue
@@ -209,6 +226,34 @@ def scope_manifest(
         orphaned=orphaned,
         claims=claims,
     )
+
+
+def _promoted_paths(
+    manifest: Manifest,
+    project_root: Path,
+    source_branch_path: str,
+    target_branch_id: int | None,
+) -> set[tuple[str, str]]:
+    """Return ``(component_id, path)`` of source-tree dirs already promoted.
+
+    Only non-empty on the KFR-07 promote path: the push target branch has no
+    materialized tree of its own, so ``main/`` is the source. A promote push
+    CREATEs each config the target lacks and records the new id under the
+    target branch with the SAME relative path -- files stay in ``main/``. Such
+    an entry maps one source dir to one config on the target, so the next
+    diff/push must compare that dir against it rather than against the
+    production entry (one local dir -> at most one remote config per branch).
+    """
+    if target_branch_id is None:
+        return set()
+    if branch_tree_path(manifest, target_branch_id) == source_branch_path:
+        return set()
+    return {
+        (cfg.component_id, cfg.path)
+        for cfg in manifest.configurations
+        if cfg.branch_id == target_branch_id
+        and (project_root / source_branch_path / cfg.path / CONFIG_FILENAME).exists()
+    }
 
 
 def _other_branch_record(

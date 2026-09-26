@@ -1308,6 +1308,7 @@ class SyncService(BaseService):
             source_branch_path,
             remote_keys,
             ignored_components=ignored_components,
+            target_branch_id=branch_id,
         )
         never_fetched = scope.never_fetched
         never_fetched_keys = scope.never_fetched_keys
