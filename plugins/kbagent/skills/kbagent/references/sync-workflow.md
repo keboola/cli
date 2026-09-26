@@ -414,6 +414,10 @@ Stored in `.keboola/branch-mapping.json`:
 
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
 - **Pull protects local edits**: locally-modified files are skipped by default
+  -- and "locally modified" covers the whole config, not only `_config.yml`:
+  an edit to a companion file (`transform.sql`, `code.py`, `_description.md`,
+  ...) protects the config the same way *(since vNEXT, #792)*. Before, such an
+  edit was silently overwritten whenever the remote changed, plain or `--force`
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
@@ -472,7 +476,10 @@ internal state:
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 
 `--force` no longer blindly overwrites locally-modified configs. It branches on
-the 3-way diff state per config (and per row):
+the 3-way diff state per config (and per row). "Local edited" means any file
+of the config -- `_config.yml` or a companion file such as `transform.sql`
+*(since vNEXT, #792)*; before, a companion-only edit was never a conflict and
+was overwritten:
 
 - **Local edited, remote UNCHANGED** -> the file and its sync baseline are
   **preserved**. The pending delta stays visible to `sync diff` / `sync push`.
@@ -487,7 +494,10 @@ the 3-way diff state per config (and per row):
 > Safe to run `sync pull --force` to refresh an unrelated config even while you
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
-> delete the file (or the config directory) and pull.
+> run `sync pull --theirs`, or delete the whole config directory and pull.
+> Deleting only a companion file (`transform.sql`, ...) counts as a local edit
+> *(since vNEXT, #792)* -- `sync diff` / `sync push` read it that way too -- so
+> plain pull keeps it deleted.
 
 ## Migrating a legacy sync tree (#686)
 

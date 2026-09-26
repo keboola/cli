@@ -370,24 +370,13 @@ def test_a_recreate_under_same_name_does_not_delete_new_config(tmp_path: Path) -
 
 
 # ===========================================================================
-# B -- pull compares only _config.yml; edits to companion files (SQL/code)
-#      are silently overwritten, plain or --force, with no conflict.
+# B -- pull compared only _config.yml; edits to companion files (SQL/code)
+#      were silently overwritten, plain or --force, with no conflict.
+#      FIXED: now an ordinary regression guard (more cases in
+#      tests/test_sync_pull_companion_files.py).
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 B: pull's 'locally modified' guard (sync_service.py:766-790, "
-        "_sync_baseline.py:423-445) hashes only _config.yml. A companion "
-        "file (transform.sql / code.py / _description.md) that was edited "
-        "locally is not detected as modified, so a remote change to the same "
-        "transformation silently overwrites the local SQL edit -- plain pull "
-        "AND `pull --force` -- with no 'skipped' entry and no SYNC_CONFLICT. "
-        "Confirmed via Lean F6 and replayed live (scratchpad/repro/"
-        "test_lean_refutations.py::test_R1)."
-    ),
-)
 def test_b_pull_never_overwrites_local_sql_edit(tmp_path: Path) -> None:
     """Invariant: a locally-edited companion file (here: transform.sql on a
     tracked SQL transformation) must never be silently overwritten by pull

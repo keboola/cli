@@ -73,10 +73,9 @@ from ._encryption import (
     find_plaintext_secret_keys,
 )
 from ._sync_baseline import (
+    config_locally_modified,
     detect_force_pull_conflicts,
     effective_stored_hash,
-    extras_modified,
-    needs_shape_migration,
     raise_on_legacy_boundary,
 )
 from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
@@ -764,30 +763,19 @@ class SyncService(BaseService):
                 # would silently strand the un-pushed edits.  Preserving keeps
                 # the pending delta visible to ``sync push``.
                 # ``--theirs`` disables the preserve entirely: remote wins.
+                # The check covers every file the config's local
+                # representation consists of -- ``_config.yml`` plus the
+                # companion files recorded in ``pull_extra_hashes`` (the set
+                # diff/push merge back) -- so an edited ``transform.sql`` is
+                # protected like an edited ``_config.yml`` (issue #792 B).
                 locally_modified = False
                 if not is_new and not theirs:
-                    old_file_hash = existing_file_hashes.get(lookup_key, "")
-                    if old_file_hash:
-                        config_file = config_dir / CONFIG_FILENAME
-                        if config_file.exists():
-                            current_file_hash = self._file_hash(config_file)
-                            locally_modified = current_file_hash != old_file_hash
-                    # Shape migration (issue #686): the remote is unchanged, only
-                    # the recorded hash shape is old, so this pull re-extracts
-                    # (writing the boundary markers) and re-stamps. Because the
-                    # rewrite is not driven by a remote change, an edited
-                    # companion file must be preserved too -- the ordinary
-                    # overwrite-guard above only ever looks at ``_config.yml``.
-                    if not locally_modified and needs_shape_migration(
-                        existing_metadata.get(lookup_key, {}),
-                        component_id=component_id,
-                        config_id=config_id,
-                        raw_remote=cfg,
-                        api_cfg_hash=api_cfg_hash,
-                    ):
-                        locally_modified = extras_modified(
-                            self, config_dir, existing_extra_hashes.get(lookup_key, {})
-                        )
+                    locally_modified = config_locally_modified(
+                        self,
+                        config_dir,
+                        existing_file_hashes.get(lookup_key, ""),
+                        existing_extra_hashes.get(lookup_key, {}),
+                    )
 
                 remote_unchanged = False  # set in else branch; default for locally_modified path
                 if locally_modified and not dry_run:
@@ -994,6 +982,10 @@ class SyncService(BaseService):
                     cfg_metadata = {
                         "pull_hash": old_pull_hash,
                         "pull_config_hash": old_cfg_hash,
+                        # Carry the companion baseline over too: dropping it
+                        # would make diff/push read an edited transform.sql
+                        # as unchanged (issue #792 B).
+                        "pull_extra_hashes": existing_extra_hashes.get(lookup_key, {}),
                     }
                     # The preserved hash was NOT produced by the current
                     # producer, so its version marker is carried over verbatim
