@@ -79,7 +79,7 @@ explores traces of up to 5 actions. BFS returns the shortest counterexample.
 | I2 push deletes only user-removed dirs | violated: **pull's stale-entry sweep deletes a directory the same pull just wrote, and the next push deletes the live remote config** |
 | I2b delete requires `--force` | violated: `push()` never reads `force` (S1) |
 | I5 pull keeps local work | violated: a remote delete plus a local edit ends with plain or `--force` pull deleting the edited directory silently |
-| I6 push then diff is clean | violated on `--branch` promote. Holds on production only (30,334 states) |
+| I6 push then diff is clean | violated on `--branch` promote (finding D, since fixed in the engine; the TLA model is unchanged). Holds on production only (30,334 states) |
 | I8 manifest matches disk | violated: the stale sweep, and a promote write-back that records a `devt/` entry for a file in `main/` |
 | I9 an aborted push is atomic | violated (strong reading): the changes before the failing one reached the API and the manifest was never saved |
 | I11 no lost remote update | violated: an adopted file with a config id is diffed 2-way, so push reverts a UI edit |
@@ -102,7 +102,7 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 | A | Remote delete + recreate under the same name: pull writes the new config into the old directory, the stale sweep then deletes that directory; the next push DELETEs the live new config | Lean F8, TLA I2 | HIGH | `test_a_recreate_under_same_name_does_not_delete_new_config` |
 | B | Pull compares only `_config.yml`: local edits in `transform.sql`/`code.py`/`_description.md` are silently overwritten when the remote changed, no SYNC_CONFLICT | Lean F6 | HIGH | `test_b_pull_never_overwrites_local_sql_edit` |
 | C | Remote delete + local edit: pull (plain/`--force`) deletes the locally-edited directory with no conflict | Lean F7, TLA I5 | HIGH | `test_c_pull_never_deletes_locally_edited_dir_on_remote_delete` |
-| D | `sync push --branch dev` (promote) creates another dev copy of a prod-only config on every push | TLA I6/I1 | HIGH | `test_d_promote_push_is_idempotent` |
+| D | `sync push --branch dev` (promote) creates another dev copy of a prod-only config on every push. **Fixed** (fix/792-dev-promote-duplicates): on the promote path the target-branch entry shadows the production entry for the same `main/` dir (`sync/branch_scope.py::_promoted_paths`) | TLA I6/I1 | HIGH | `test_d_promote_push_is_idempotent`, `test_d_promote_push_diff_is_clean_and_edits_update_the_dev_copy` (regression guards) |
 | E | An untracked file carrying a config id (`config new --push --output-dir` scaffold / adopted orphan) is diffed 2-way: push overwrites a UI edit made after the scaffold was written | TLA I11 | MED | `test_e_adopted_scaffold_push_does_not_overwrite_remote_edit` |
 | F | A push aborted by `ENCRYPTION_FAILED` leaves the manifest unsaved; the retry duplicates the change(s) the aborted push already applied | TLA I1b (model trace only; replayed live for this pilot) | MED | `test_f_aborted_push_does_not_duplicate_already_created_config` |
 | G | `sync push` deletes remote configs with no `--force`; the CLI help text says `--force` gates deletion (soft delete to trash since 0.89.0, restorable) | Spec S1, Lean F1, TLA I2b | MED (product decision) | `test_g_push_without_force_does_not_delete_remote_config` |
@@ -111,7 +111,7 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 | J | `sync pull --branch dev` reports untouched production configs as "removed" | Spec S4 | LOW | `test_j_branch_scoped_pull_does_not_report_other_branch_configs_removed` |
 | K | A cosmetic local edit (raw vs normalized hash) blocks pull from ever applying a real remote change; `--force` raises a conflict | Spec S3, TLA I12 | LOW (documented, conservative behavior) | `test_k_cosmetic_edit_is_conservative_not_unsafe` (unmarked regression guard, not xfail) |
 
-A..F, H and I reproduce on current code and are `xfail(strict=True)` --
+A..C, E, F, H and I reproduce on current code and are `xfail(strict=True)` (D is fixed) --
 flipping to a hard failure the moment a fix lands is the point: delete the
 `xfail` marker to adopt the fix. G is kept `xfail` too even though the fix
 direction is a product decision (see the test's docstring). J reproduces and

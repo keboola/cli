@@ -490,23 +490,6 @@ def test_c_pull_never_deletes_locally_edited_dir_on_remote_delete(tmp_path: Path
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 D: when the target dev branch has no materialized subtree, "
-        "push promotes main/ as the read source (KFR-07), but "
-        "stamp_created_config's writeback only matches an existing manifest "
-        "entry by (branch_id, component_id, path) (_sync_writeback.py:"
-        "147-151). The promoted config's entry is written with branchId=dev, "
-        "leaving the ORIGINAL main-branch entry (branchId=prod) untouched -- "
-        "so it never resolves on dev and stays 'added' forever. Every "
-        "`sync push --branch dev` after the first creates ANOTHER dev copy "
-        "of the same config. Found via TLA I6/I1 and replayed "
-        "(scratchpad/replay/r_misc.py). Whether the intent is 'promote once, "
-        "then track on dev' is a product decision (see the finding's action "
-        "column), but duplicating on every push is not intended."
-    ),
-)
 def test_d_promote_push_is_idempotent(tmp_path: Path) -> None:
     """Invariant: promoting a production-only config to a dev branch via
     `sync push --branch <dev>` must be idempotent -- a second promote push
@@ -527,6 +510,33 @@ def test_d_promote_push_is_idempotent(tmp_path: Path) -> None:
     second = w.push(branch=DEV)
     assert second.get("created", 0) == 0, "a second promote push created another dev copy"
     assert len(w.api.remote[DEV]) == 1, "dev branch now holds more than one copy of the same config"
+
+
+def test_d_promote_push_diff_is_clean_and_edits_update_the_dev_copy(tmp_path: Path) -> None:
+    """After a promote push, `sync diff --branch dev` is clean (TLA I6), a
+    third push still creates nothing, and a later local edit UPDATES the dev
+    copy the first push created -- never production, never a new copy.
+
+    Issue #792 finding D.
+    """
+    w = World(tmp_path)
+    w.api.put(PROD, "cfg-1", "Orders", "a")
+    w.init()
+    w.pull()
+
+    w.push(branch=DEV)
+    (dev_id,) = w.api.ids(DEV)
+    assert w.diff(branch=DEV)["summary"]["added"] == 0
+    assert w.push(branch=DEV).get("created", 0) == 0
+
+    cfg_file = w.config_dir("orders") / "_config.yml"
+    cfg_file.write_text(cfg_file.read_text().replace("value: a", "value: b"))
+    third = w.push(branch=DEV)
+    assert third.get("created", 0) == 0
+    assert third.get("updated", 0) == 1
+    assert w.api.ids(DEV) == [dev_id]
+    assert w.api.remote[DEV][dev_id]["configuration"]["parameters"]["value"] == "b"
+    assert w.api.remote[PROD]["cfg-1"]["configuration"]["parameters"]["value"] == "a"
 
 
 # ===========================================================================

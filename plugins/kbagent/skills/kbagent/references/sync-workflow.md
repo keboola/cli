@@ -145,6 +145,12 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
+Promoting is idempotent (since vNEXT): a config the dev branch lacks is created
+there once, and the manifest records that dev copy for the same `main/`
+directory. Re-running the same push creates nothing; a later edit in `main/`
+updates the dev copy, never production. Older versions created another dev copy
+on every push (see gotchas.md).
+
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the

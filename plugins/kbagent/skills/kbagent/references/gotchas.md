@@ -858,6 +858,23 @@ erroring with `Config file not found`. Source (where files are read) and target
 (where the API writes) are decoupled; API calls still target the branch id. When a
 per-branch subtree *does* exist, behaviour is unchanged.
 
+## Repeating a promote `sync push --branch <dev>` no longer duplicates configs
+
+*(since vNEXT)*
+
+When the dev branch lacks a production config (typically one created in
+production after the branch was cut), the promote push above CREATEs a dev copy
+under a new id. Before vNEXT the next `sync diff --branch <dev>` still reported
+that config as `added`, and every further `sync push --branch <dev>` created
+**another** dev copy -- N pushes, N copies of the same config on the branch.
+Now the dev entry the first push recorded is what the `main/` directory is
+compared against on that branch: a repeated push with no local change creates
+nothing, and a later local edit UPDATEs that one dev copy (production is never
+touched). Configs the dev branch already has under the production id (the
+normal case: a branch starts as a copy of production) were never affected.
+Cleanup on an older kbagent: list the branch's configs and delete the extra
+copies with `kbagent config delete --branch <dev>`.
+
 ## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting
 
 The `--branch` override wins over every other branch source: `manifest.branches[0]`,
