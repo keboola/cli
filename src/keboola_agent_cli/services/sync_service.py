@@ -102,6 +102,12 @@ from ._sync_clone import clone_project as _clone_project_impl
 from ._sync_data_app import load_data_app_types, resolve_pull_type, type_needs_rewrite
 from ._sync_models import CreatedConfig, LocalConfigHashes
 from ._sync_push_ops import push_create, push_row_change, push_update
+from ._sync_stale import (
+    apply_stale_sweep,
+    find_stale_entries,
+    remote_deleted_conflicts,
+    reserved_paths,
+)
 from ._sync_storage import (
     fetch_jobs_per_config,
     fetch_samples,
@@ -638,6 +644,12 @@ class SyncService(BaseService):
         # Resolved once and shared by the conflict guard, the fetch loop and
         # the stale-entry sweep below -- see ``_effective_ignored_components``.
         ignored_components = self._effective_ignored_components(manifest)
+        # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
+        # reserved so a same-named new config cannot land in one.
+        stale = find_stale_entries(
+            self, manifest.configurations, components, branch_dir, ignored_components
+        )
+        used_paths |= reserved_paths(stale, branch_dir)
 
         # Force-pull conflict guard (force-pull baseline corruption fix).
         # ``--force`` bypasses the "preserve locally-modified files" guard
@@ -662,7 +674,7 @@ class SyncService(BaseService):
                 existing_file_hashes=existing_file_hashes,
                 existing_metadata=existing_metadata,
                 existing_rows=existing_rows,
-            )
+            ) + remote_deleted_conflicts(stale)
             if conflicts:
                 raise SyncConflictError(conflicts)
 
@@ -1050,48 +1062,17 @@ class SyncService(BaseService):
                     )
                 )
 
-        # Detect configs dropped from the manifest (in old manifest but not in
-        # new). Two distinct causes, reported apart (issue #689): the config was
-        # deleted on the remote ("removed"), or its component is now ignored
-        # ("ignored" -- the fetch loop above never produced an entry for it).
-        # Conflating them would report a live production config as gone from
-        # the remote, which is exactly the wrong thing to tell a user deciding
-        # whether to restore it. The on-disk cleanup is identical either way:
-        # an ignored config has no business sitting in the tree, and git keeps
-        # the removal reviewable.
-        new_keys = {f"{c.component_id}/{c.id}" for c in new_configurations}
-        for old_cfg in manifest.configurations:
-            old_key = f"{old_cfg.component_id}/{old_cfg.id}"
-            if old_key not in new_keys:
-                stale_action = (
-                    "ignored" if old_cfg.component_id in ignored_components else "removed"
-                )
-                pull_details.append(
-                    {
-                        "action": stale_action,
-                        "component_id": old_cfg.component_id,
-                        "config_name": "",
-                        "path": old_cfg.path,
-                    }
-                )
-
-        # Delete orphaned directories for removed / newly-ignored configurations
-        if not dry_run:
-            for detail in pull_details:
-                if detail["action"] in ("removed", "ignored") and detail.get("path"):
-                    orphan_dir = branch_dir / detail["path"]
-                    if orphan_dir.exists() and orphan_dir.is_dir():
-                        shutil.rmtree(orphan_dir)
-                        logger.info("Removed orphaned directory: %s", orphan_dir)
-                        # Clean up empty parent dirs up to (but not including) branch_dir
-                        parent = orphan_dir.parent
-                        while parent != branch_dir and parent.exists():
-                            if not any(parent.iterdir()):
-                                parent.rmdir()
-                                logger.info("Removed empty parent directory: %s", parent)
-                                parent = parent.parent
-                            else:
-                                break
+        # Report configs dropped from the manifest ("removed" from the remote vs
+        # "ignored" component, issue #689) and delete their directories --
+        # except a locally edited one (#792 C) or one this pull owns (#792 A).
+        apply_stale_sweep(
+            stale,
+            branch_dir,
+            theirs=theirs,
+            dry_run=dry_run,
+            new_configurations=new_configurations,
+            pull_details=pull_details,
+        )
 
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}

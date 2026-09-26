@@ -5323,3 +5323,24 @@ It carries the command name, the outcome, and the duration -- never argument val
   Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
 - **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
   builds a UI URL and resets the active branch.
+
+## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
+
+*(since vNEXT)* Two data-loss paths in pull's stale-entry sweep (the step that
+drops manifest entries whose config is gone from the remote) are closed:
+
+- **Remote delete + re-create under the same name.** Before, the new config was
+  written into the old config's directory and the sweep then deleted that same
+  directory; the next `sync push` DELETEd the live new config. Now the new
+  config lands in a suffixed directory (`<name>-<config id prefix>`), the old
+  one is removed, and the manifest matches disk. The next pull renames the
+  directory back to the plain name.
+- **Remote delete + local edit.** Before, plain pull and `pull --force` deleted
+  the edited directory silently. Now plain pull **keeps** it (manifest entry
+  kept, pull action `skipped`, reason `locally modified, deleted on remote`);
+  `pull --force` aborts with `SYNC_CONFLICT` and the conflict carries
+  `reason: "deleted on remote"`. Only `pull --theirs` still deletes it (remote
+  wins). "Edited" covers `_config.yml`, companion files (`transform.sql`,
+  `code.py`, `_description.md`, ...) and row files. A kept directory is still
+  tracked, so the next `sync push` re-creates the config remotely -- delete the
+  directory if the remote delete was intended.

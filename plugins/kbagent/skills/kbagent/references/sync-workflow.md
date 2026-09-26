@@ -483,6 +483,17 @@ the 3-way diff state per config (and per row):
   error code `SYNC_CONFLICT`, listing every conflicting config/row. Resolve with
   `sync diff`, then `sync push` your edits (or discard them), then pull again.
 - **Local untouched, remote changed** -> `--force` takes remote as before.
+- **Local edited, remote DELETED** *(since vNEXT, #792)* -> `--force` aborts
+  with `SYNC_CONFLICT` (conflict `reason: "deleted on remote"`). Plain pull
+  keeps the edited directory and its manifest entry and reports it as
+  `skipped` (`locally modified, deleted on remote`). Only `--theirs` deletes it.
+  A kept directory stays tracked, so the next `sync push` re-creates the config;
+  delete the directory if the remote delete was intended.
+
+> A config deleted and re-created remotely under the same name *(since vNEXT,
+> #792)* is written to a suffixed directory while the old one is removed; the
+> next pull renames it back. Before, the sweep deleted the new config's files
+> and the next push deleted the new config remotely.
 
 > Safe to run `sync pull --force` to refresh an unrelated config even while you
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
