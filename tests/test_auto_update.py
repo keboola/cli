@@ -879,8 +879,12 @@ class TestProcessLevelSentinel:
         with patch(
             "keboola_agent_cli.auto_update._should_skip_all",
             side_effect=RuntimeError("kaboom"),
-        ):
+        ) as mock_skip_all:
             maybe_auto_update()  # blanket try/except swallows the RuntimeError
+            assert auto_update_module._AUTO_UPDATE_RAN is True
+            maybe_auto_update()  # must short-circuit on the sentinel
+        # The crashing body ran once; the re-entry never reached it again.
+        assert mock_skip_all.call_count == 1
 
 
 class TestSafeStartupUpdateOrder:

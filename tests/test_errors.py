@@ -113,10 +113,17 @@ class TestErrorCode:
 
         assert json.dumps(ErrorCode.UPLOAD_FAILED) == '"UPLOAD_FAILED"'
 
-    def test_no_duplicate_values(self) -> None:
-        """Every ErrorCode member has a unique string value."""
-        values = [c.value for c in ErrorCode]
-        assert len(values) == len(set(values)), "Duplicate ErrorCode values detected"
+    def test_no_aliased_members(self) -> None:
+        """No ErrorCode name is an alias of another member.
+
+        A duplicate value does not create a second member -- Enum turns the
+        later name into an alias, and iterating the enum skips aliases, so a
+        comparison over ``list(ErrorCode)`` can never see it. ``__members__``
+        does include aliases. ``@enum.unique`` on the class rejects them at
+        import time; this pins that the decorator stays.
+        """
+        aliases = [name for name, member in ErrorCode.__members__.items() if member.name != name]
+        assert aliases == [], f"ErrorCode aliases (duplicate values): {aliases}"
 
     def test_known_codes_present(self) -> None:
         """Spot-check that key codes defined in the spec are present."""

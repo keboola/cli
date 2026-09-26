@@ -93,10 +93,11 @@ class TestResolveApiTypes:
         assert _resolve_api_types(["flow"]) == ["flow"]
 
     def test_multiple_types_deduped(self) -> None:
-        result = _resolve_api_types(["table", "bucket"])
-        assert "table" in result
-        assert "bucket" in result
-        assert len(result) == 2
+        # A repeated type, plus two spellings ("config" and the raw API
+        # "configuration") that resolve to the same API value. Each API type
+        # appears once, in first-seen order.
+        result = _resolve_api_types(["table", "config", "bucket", "table", "configuration"])
+        assert result == ["table", "configuration", "bucket"]
 
     def test_unknown_type_passed_through(self) -> None:
         # Unknown types are passed directly to the API.

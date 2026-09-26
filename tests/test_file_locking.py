@@ -44,10 +44,18 @@ class TestTryFlock:
             _try_flock(42, fcntl.LOCK_EX)
 
     def test_flock_skipped_when_no_fcntl(self) -> None:
-        """_try_flock does nothing when _HAS_FCNTL is False."""
-        with patch("keboola_agent_cli.config_store._HAS_FCNTL", False):
-            # Should not raise, should not call fcntl
+        """_try_flock never touches fcntl when _HAS_FCNTL is False.
+
+        fcntl is replaced by a mock so the assertion is on the call itself:
+        a real flock on a bogus fd raises OSError, which _try_flock suppresses,
+        so "does not raise" alone would pass even without the guard.
+        """
+        with (
+            patch("keboola_agent_cli.config_store._HAS_FCNTL", False),
+            patch("keboola_agent_cli.config_store.fcntl", create=True) as mock_fcntl,
+        ):
             _try_flock(42, 0)
+        mock_fcntl.flock.assert_not_called()
 
 
 class TestFileLockingIntegration:
