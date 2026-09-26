@@ -701,6 +701,31 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
+
+*(since vNEXT, #792)*
+
+`sync pull` decided "locally modified" from `_config.yml` alone. An edit that
+lived only in a companion file -- `transform.sql`, `transform.py`, `code.py`,
+`pyproject.toml`, `_description.md` -- was invisible to it, so when the remote
+had also changed, the edit was **silently overwritten**: plain pull wrote the
+remote version, and `pull --force` wrote it too instead of raising
+`SYNC_CONFLICT`. `sync diff` / `sync push` always counted those files.
+
+Now pull checks every file recorded in the manifest's `pull_extra_hashes`
+(the same set diff/push merge back into the config):
+
+- Plain pull: the config is `skipped` with reason `locally modified`, the edit
+  stays, and it is still pending for `sync push`.
+- `pull --force`: remote changed too -> exit 1, `SYNC_CONFLICT`, nothing written;
+  remote unchanged -> preserved.
+- `pull --theirs`: remote wins, as before.
+
+Behavior change: deleting only a companion file now counts as a local edit, so
+plain pull no longer re-creates it when the remote changed (diff/push already
+treated it as a change). To drop local edits, use `sync pull --theirs` or delete
+the whole config directory and pull.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*

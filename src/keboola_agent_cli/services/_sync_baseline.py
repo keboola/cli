@@ -262,44 +262,46 @@ def effective_stored_hash(
     return stored
 
 
-def needs_shape_migration(
-    metadata: dict[str, Any],
-    *,
-    component_id: str,
-    config_id: str,
-    raw_remote: dict[str, Any],
-    api_cfg_hash: str,
-) -> bool:
-    """True iff this entry's baseline is a pre-#686 hash of the same remote.
-
-    The pull-side counterpart of :func:`effective_stored_hash`: the remote is
-    unchanged, only the recorded shape is old, so the pull must re-run
-    extraction (to write the boundary markers) and re-stamp -- unless the
-    local files were edited, in which case they are preserved untouched.
-    """
-    stored = str(metadata.get("pull_config_hash", "") or "")
-    if not stored or metadata.get(CONFIG_HASH_VERSION_KEY) or stored == api_cfg_hash:
-        return False
-    return is_legacy_hash(
-        stored, component_id=component_id, config_id=config_id, raw_remote=raw_remote
-    )
-
-
 def extras_modified(service: SyncService, config_dir: Path, extra_hashes: dict[str, str]) -> bool:
-    """True iff any companion file recorded at pull time changed on disk.
+    """True iff any companion file recorded at pull time changed or vanished.
 
-    The pull overwrite-guard has only ever compared ``_config.yml``, so an
-    edited ``transform.sql`` beside an untouched ``_config.yml`` was
-    overwritten. That is pre-existing behaviour everywhere EXCEPT the shape
-    migration, which rewrites code files for a remote that did not change --
-    there, silently discarding a local edit would be new damage, so the
-    migration checks the companions too.
+    Companion files are the ``pull_extra_hashes`` entries (``transform.sql``,
+    ``code.py``, ``_description.md``, ...): the same set ``sync diff`` /
+    ``sync push`` merge back into the config, so they are part of the
+    config's local representation exactly like ``_config.yml``.
     """
     for fname, stored_hash in (extra_hashes or {}).items():
         fpath = config_dir / fname
         if not fpath.exists() or service._file_hash(fpath) != stored_hash:
             return True
     return False
+
+
+def config_locally_modified(
+    service: SyncService,
+    config_dir: Path,
+    pull_hash: str,
+    extra_hashes: dict[str, str],
+) -> bool:
+    """True iff the config's local representation differs from the pull state.
+
+    Covers ``_config.yml`` AND every companion file recorded at pull time
+    (issue #792 finding B): pull used to hash ``_config.yml`` only, so an
+    edited ``transform.sql`` beside an untouched ``_config.yml`` was silently
+    overwritten by a remote change -- plain pull and ``--force`` alike.
+
+    Without a recorded ``pull_hash`` nothing can be proven (False, as
+    before). A missing ``_config.yml`` means the config dir is gone, which
+    pull re-materializes (#472) -- not a local edit to protect.
+    """
+    if not pull_hash:
+        return False
+    config_file = config_dir / CONFIG_FILENAME
+    if not config_file.exists():
+        return False
+    if service._file_hash(config_file) != pull_hash:
+        return True
+    return extras_modified(service, config_dir, extra_hashes)
 
 
 def _scripts_by_code(config_data: dict[str, Any]) -> list[list[Any]] | None:
@@ -426,22 +428,24 @@ def _is_conflict(
     old_pull_hash: str,
     old_cfg_hash: str,
     api_cfg_hash: str,
+    extra_hashes: dict[str, str] | None = None,
 ) -> bool:
-    """True iff the file is locally modified AND the remote also changed.
+    """True iff the local files are modified AND the remote also changed.
 
     A 3-way conflict needs both a stored ``pull_hash`` (the synced file
     state) and a stored ``pull_config_hash`` (the synced remote state);
     without either we cannot prove a conflict, so return False -- be
     conservative, ``--force`` must not abort on incomplete bookkeeping.
     A missing local file is not a content conflict (nothing to lose).
+    ``extra_hashes`` (configs only; rows have no companion files) extends
+    the local check to the companion files (issue #792 finding B).
     """
-    if not old_pull_hash or not old_cfg_hash:
+    if not old_cfg_hash:
         return False
-    if not config_file.exists():
-        return False
-    locally_modified = service._file_hash(config_file) != old_pull_hash
-    remote_changed = api_cfg_hash != old_cfg_hash
-    return locally_modified and remote_changed
+    locally_modified = config_locally_modified(
+        service, config_file.parent, old_pull_hash, extra_hashes or {}
+    )
+    return locally_modified and api_cfg_hash != old_cfg_hash
 
 
 def detect_force_pull_conflicts(
@@ -459,7 +463,8 @@ def detect_force_pull_conflicts(
     """Return configs/rows a ``--force`` pull would clobber as conflicts.
 
     A *conflict* is a config (or row) that is BOTH locally modified (its
-    on-disk ``_config.yml`` hash differs from the manifest ``pull_hash``)
+    on-disk ``_config.yml`` hash differs from the manifest ``pull_hash``,
+    or one of its companion files differs from ``pull_extra_hashes``)
     AND changed on the remote since the last pull (the freshly fetched
     config hash differs from ``pull_config_hash``).  That is the only case
     where ``--force`` must stop: local and remote have diverged, so neither
@@ -506,6 +511,7 @@ def detect_force_pull_conflicts(
                     remote_local=remote_local,
                 ),
                 config_hash(remote_local),
+                existing_metadata.get(lookup_key, {}).get("pull_extra_hashes") or {},
             ):
                 conflicts.append(
                     {
