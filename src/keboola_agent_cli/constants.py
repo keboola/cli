@@ -710,6 +710,14 @@ QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
 QUERY_RESULTS_DEFAULT_LIMIT: int = 500  # default --limit for `workspace query` fast path
 QUERY_RESULTS_PAGE_SIZE: int = 500  # rows per /results page (API requires 100..100000)
 
+# --- Data Science API (data apps) ---
+# GET /apps is paginated (default page = 100 items) and mixes workspace
+# deployments with data apps, so list_apps() pages with limit/offset until a
+# short page (#798). MAX_PAGES only guards against a server that ignores
+# ``offset`` (500 * 200 = 100k deployments, far beyond any real project).
+DATA_SCIENCE_APPS_PAGE_SIZE: int = 500  # items per GET /apps page
+DATA_SCIENCE_APPS_MAX_PAGES: int = 200  # safety cap on pages fetched by list_apps()
+
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
 

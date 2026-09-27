@@ -2090,6 +2090,17 @@ config, the retry fires, and the retry destroys it for good.
   do NOT appear in the Apps UI. The command now keeps only
   `componentId == keboola.data-apps` (items missing `componentId` are kept
   defensively); the JSON envelope carries `component_id` per app.
+- **`data-app list` pages through the whole `GET /apps` collection
+  *(since vNEXT, #798)*.** The endpoint is paginated (default page = 100
+  items) and the workspace/data-app mix is filtered CLIENT-side. Before
+  vNEXT kbagent read only that first page, so a project with many
+  workspaces could report "No data apps found." (or a partial list) while
+  holding dozens of data apps further down the collection -- one reporter's
+  first data app was item #258 of 1,114. The same short read also made
+  `sync pull` miss the runtime type of those apps. kbagent now pages with
+  `limit`/`offset` until a short page. On an older version, an empty or
+  short `data-app list` is NOT evidence that the project has no data apps:
+  cross-check with `config list --component-id keboola.data-apps`.
 - **`secrets-remove` is idempotent.** Removing a key that isn't set is
   exit 0 with `removed: 0`, `not_found: [<derived env-var name>]`. The
   Storage version is not bumped on a no-op. Do NOT script around this

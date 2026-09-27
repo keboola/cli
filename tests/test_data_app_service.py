@@ -1904,3 +1904,130 @@ class TestTailAppLogsClient:
             text = client.tail_app_logs("42")
 
         assert text == "full buffer\n"
+
+
+# ---------------------------------------------------------------------------
+# data-app list pagination (client HTTP layer via httpx_mock) -- issue #798
+# ---------------------------------------------------------------------------
+
+
+class TestListAppsPaginationClient:
+    """``GET /apps`` is paginated and mixes workspaces with data apps.
+
+    Before #798 ``list_apps`` fetched only the server's default first page, so
+    a project whose first deployments were all workspaces (``keboola.sandboxes``)
+    reported "No data apps found." even with 139 data apps further down.
+    """
+
+    DATA_SCIENCE_BASE = "https://data-science.keboola.com"
+
+    @staticmethod
+    def _client():
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        return DataScienceClient(stack_url="https://connection.keboola.com", token="901-test-token")
+
+    @staticmethod
+    def _sandboxes(n: int, start: int = 0) -> list[dict[str, Any]]:
+        return [
+            {"id": str(start + i), "componentId": "keboola.sandboxes", "type": "snowflake"}
+            for i in range(n)
+        ]
+
+    def test_single_short_page_makes_one_request(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=[{"id": "1", "componentId": "keboola.data-apps"}],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert [a["id"] for a in apps] == ["1"]
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_pages_until_short_page_and_returns_later_data_apps(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        data_apps = [
+            {"id": "d1", "componentId": "keboola.data-apps", "configId": "c1"},
+            {"id": "d2", "componentId": "keboola.data-apps", "configId": "c2"},
+        ]
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[*self._sandboxes(3, start=size), *data_apps],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert len(apps) == size + 5
+        assert [a["id"] for a in apps if a["componentId"] == "keboola.data-apps"] == ["d1", "d2"]
+        assert [dict(r.url.params) for r in httpx_mock.get_requests()] == [
+            {"limit": str(size), "offset": "0"},
+            {"limit": str(size), "offset": str(size)},
+        ]
+
+    def test_exact_full_last_page_is_followed_by_empty_page(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert len(apps) == size
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_wrapped_data_shape_is_still_supported(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json={"data": [{"id": "1", "componentId": "keboola.data-apps"}]},
+        )
+        with self._client() as client:
+            assert [a["id"] for a in client.list_apps()] == ["1"]
+
+    def test_page_cap_stops_a_server_that_ignores_offset(self, httpx_mock) -> None:
+        httpx_mock.add_response(json=self._sandboxes(2), is_reusable=True)
+        with (
+            patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_PAGE_SIZE", 2),
+            patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_MAX_PAGES", 3),
+            self._client() as client,
+        ):
+            apps = client.list_apps()
+
+        assert len(apps) == 6
+        assert len(httpx_mock.get_requests()) == 3
+
+
+class TestDataAppListFiltersWorkspaces:
+    """``list_data_apps`` keeps only ``keboola.data-apps`` rows from the full listing."""
+
+    def test_sandboxes_dropped_data_apps_kept(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.list_apps.return_value = [
+            *[
+                {"id": str(i), "componentId": "keboola.sandboxes", "type": "snowflake"}
+                for i in range(300)
+            ],
+            {"id": "d1", "componentId": "keboola.data-apps", "configId": "c1", "type": "python-js"},
+        ]
+        storage_mock.list_component_configs.return_value = [{"id": "c1", "name": "App"}]
+
+        result = service.list_data_apps(aliases=["prod"])
+
+        assert result["errors"] == []
+        assert [a["app_id"] for a in result["apps"]] == ["d1"]
