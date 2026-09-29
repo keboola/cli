@@ -20,6 +20,7 @@ from pathlib import Path
 
 import typer
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
@@ -139,6 +140,7 @@ def data_app_secrets_set(
     """
 
     formatter = get_formatter(ctx)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
     if secret and secrets_file:
@@ -256,6 +258,7 @@ def data_app_secrets_list(
     """
 
     formatter = get_formatter(ctx)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
     try:
         result = service.list_data_app_secrets(
@@ -321,6 +324,7 @@ def data_app_secrets_get(
     """
 
     formatter = get_formatter(ctx)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
     try:
         result = service.get_data_app_secret(
@@ -396,6 +400,7 @@ def data_app_secrets_remove(
     """
 
     formatter = get_formatter(ctx)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
     if (

@@ -29,6 +29,7 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VALID_CHANNELS
 from ._helpers import (
@@ -432,6 +433,8 @@ def notification_replace_recipient(
         raise typer.Exit(code=2) from None
 
     service = get_service(ctx, "notification_service")
+    # Name the branch the config names are read from before the prompt.
+    resolve_branch(ctx.obj["config_store"], project, None, role="source")
 
     if not yes and not formatter.json_mode:
         confirmed = typer.confirm(
