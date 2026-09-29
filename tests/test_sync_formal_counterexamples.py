@@ -300,7 +300,7 @@ class World:
 
     def files(self) -> list[str]:
         return sorted(
-            str(p.parent.relative_to(self.root))
+            p.parent.relative_to(self.root).as_posix()
             for p in self.root.rglob("_config.yml")
             if "rows" not in p.parts
         )
