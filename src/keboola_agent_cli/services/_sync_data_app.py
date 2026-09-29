@@ -19,6 +19,7 @@ from typing import Any
 from ..client import KeboolaClient
 from ..data_science_client import DataScienceClient
 from ..errors import ErrorCode, KeboolaApiError
+from .base import find_default_branch_id
 from .data_app_service import DATA_APP_COMPONENT_ID
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,67 @@ def type_needs_rewrite(component_id: str, da_type: str | None, on_disk_da_type: 
     with an otherwise-unchanged body must still be rewritten to record it.
     """
     return component_id == DATA_APP_COMPONENT_ID and da_type != on_disk_da_type
+
+
+def push_ds_client(
+    ds_client_factory: Callable[[str, str], DataScienceClient],
+    project: Any,
+    changes: list[dict[str, Any]],
+) -> DataScienceClient | None:
+    """A Data Science client for push, or ``None`` when no data app is created.
+
+    Only a data-app CREATE needs one (to carry the runtime type), so an
+    ordinary push builds no DS client and pays no default-branch lookup.
+    """
+    if any(
+        c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
+        for c in changes
+        if not bool(c.get("is_row"))
+    ):
+        return ds_client_factory(project.stack_url, project.token)
+    return None
+
+
+def resolve_ds_branch_id(
+    storage_client: KeboolaClient,
+    ds_client: DataScienceClient | None,
+    branch_id: int | None,
+    warnings: list[dict[str, Any]],
+) -> int | None:
+    """Map the push branch onto the ``branchId`` Data Science ``POST /apps`` wants.
+
+    DS wants ``null`` for the project's default (production) branch and the
+    numeric id for a dev branch. The production check compares against the
+    default branch reported by the API, never ``manifest.branches[0]``: after
+    ``sync clone --branch <dev>`` that first manifest entry IS the dev branch,
+    so equating the two created every data app in production while the rest
+    of the push landed in the dev branch (#808).
+
+    Fails safe when the lookup fails or reports no default branch: the numeric
+    id is sent and a warning recorded. A wrong guess then surfaces as a DS
+    error on the create, never as an app silently created in production.
+    Returns ``None`` without any call when no DS client was built.
+    """
+    if ds_client is None or branch_id is None:
+        return None
+    try:
+        default_branch_id = find_default_branch_id(storage_client.list_dev_branches())
+    except KeboolaApiError as exc:
+        logger.warning("Default-branch lookup for data-app create failed: %s", exc.message)
+        default_branch_id = None
+    if default_branch_id is None:
+        warnings.append(
+            {
+                "change_type": "data_app_branch_lookup_failed",
+                "branch_id": str(branch_id),
+                "message": (
+                    "Could not determine the project's default branch; data apps are "
+                    f"created with branchId={branch_id} instead of assuming production."
+                ),
+            }
+        )
+        return branch_id
+    return None if branch_id == default_branch_id else branch_id
 
 
 def create_synced_data_app(

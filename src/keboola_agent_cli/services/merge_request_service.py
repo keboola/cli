@@ -32,6 +32,7 @@ from ..constants import (
     MERGE_REQUEST_REASON_MAX_LENGTH,
     PROTECTED_DEFAULT_BRANCH_FEATURE,
 )
+from ..effective_branch import record_branch
 from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
@@ -792,6 +793,7 @@ class MergeRequestService(BaseService):
                 client.merge_requests.get(merge_request_id).get("branches") or {}
             ).get("branchFromId")
             branch_from_id = _coerce_branch_id(raw_branch_from)
+            record_branch(self._config_store, alias, branch_from_id, "merge_request", role="source")
             try:
                 job = client.merge_requests.merge(merge_request_id)
             except KeboolaApiError as exc:
@@ -991,6 +993,7 @@ class MergeRequestService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             branch_id = self._branch_from_id_of(client, merge_request_id)
+            record_branch(self._config_store, alias, branch_id, "merge_request", role="source")
             diff = client.get_config_diff(component_id, config_id, branch_id)
         finally:
             client.close()
@@ -1210,6 +1213,7 @@ class MergeRequestService(BaseService):
         try:
             self._require_merge_requests_feature(client)
             branch_id = self._branch_from_id_of(client, merge_request_id)
+            record_branch(self._config_store, alias, branch_id, "merge_request", role="source")
             self._require_in_conflict_set(client, merge_request_id, component_id, config_id)
             diff = client.get_config_diff(component_id, config_id, branch_id)
             theirs = diff.get("theirs") or {}

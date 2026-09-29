@@ -32,6 +32,7 @@ import typer
 from rich.markup import escape
 
 from ..constants import MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH, MERGE_REQUEST_REASON_MAX_LENGTH
+from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.merge_request_service import (
     AUTO_MERGE_DISARMED,
@@ -44,7 +45,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     parse_json_arg,
-    resolve_branch,
     resolve_project_alias,
 )
 from ._merge_request_common import (
@@ -80,6 +80,11 @@ _EXTERNAL_ID_OPT = typer.Option(
     "--external-id",
     help=f"Free-form correlation id, e.g. a ticket (max {MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH} chars)",
 )
+
+
+def _record_production(ctx: typer.Context, alias: str) -> None:
+    """`merge` and armed `auto-merge` write production; the MR's branch is their source."""
+    record_branch(get_service(ctx, "config_store"), alias, None, "production", fixed=True)
 
 
 def _check_external_id(formatter: Any, external_id: str | None) -> None:
@@ -158,7 +163,7 @@ def merge_request_create(
     try:
         alias = resolve_project_alias(ctx, formatter, project)
         config_store = get_service(ctx, "config_store")
-        _, branch_id = resolve_branch(config_store, formatter, alias, branch)
+        branch_id = resolve_branch(config_store, alias, branch, required=True, role="source")
         if branch_id is None:
             formatter.error(
                 message=(
@@ -434,6 +439,7 @@ def merge_request_auto_merge(
             need_row=False,
         )
         if arms_auto_merge(strategy):
+            _record_production(ctx, target.alias)
             when = f" at {at}" if at else ""
             _confirm_or_abort(
                 formatter,
@@ -503,6 +509,7 @@ def merge_request_merge(
             branch=branch,
             need_row=will_prompt,
         )
+        _record_production(ctx, target.alias)
         title = (target.row or {}).get("title") or ""
         _confirm_or_abort(
             formatter,
