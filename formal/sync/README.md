@@ -99,9 +99,9 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 
 | ID | Finding | Sources | Severity | Test |
 |----|---------|---------|----------|------|
-| A | Remote delete + recreate under the same name: pull writes the new config into the old directory, the stale sweep then deletes that directory; the next push DELETEs the live new config | Lean F8, TLA I2 | HIGH | `test_a_recreate_under_same_name_does_not_delete_new_config` |
+| A | Remote delete + recreate under the same name: pull writes the new config into the old directory, the stale sweep then deletes that directory; the next push DELETEs the live new config | Lean F8, TLA I2 | HIGH -- **fixed** (#792 A/C PR) | `test_a_recreate_under_same_name_does_not_delete_new_config` |
 | B | Pull compares only `_config.yml`: local edits in `transform.sql`/`code.py`/`_description.md` are silently overwritten when the remote changed, no SYNC_CONFLICT | Lean F6 | HIGH | `test_b_pull_never_overwrites_local_sql_edit` |
-| C | Remote delete + local edit: pull (plain/`--force`) deletes the locally-edited directory with no conflict | Lean F7, TLA I5 | HIGH | `test_c_pull_never_deletes_locally_edited_dir_on_remote_delete` |
+| C | Remote delete + local edit: pull (plain/`--force`) deletes the locally-edited directory with no conflict | Lean F7, TLA I5 | HIGH -- **fixed** (#792 A/C PR) | `test_c_pull_never_deletes_locally_edited_dir_on_remote_delete` |
 | D | `sync push --branch dev` (promote) creates another dev copy of a prod-only config on every push | TLA I6/I1 | HIGH | `test_d_promote_push_is_idempotent` |
 | E | An untracked file carrying a config id (`config new --push --output-dir` scaffold / adopted orphan) is diffed 2-way: push overwrites a UI edit made after the scaffold was written | TLA I11 | MED | `test_e_adopted_scaffold_push_does_not_overwrite_remote_edit` |
 | F | A push aborted by `ENCRYPTION_FAILED` leaves the manifest unsaved; the retry duplicates the change(s) the aborted push already applied | TLA I1b (model trace only; replayed live for this pilot) | MED | `test_f_aborted_push_does_not_duplicate_already_created_config` |
@@ -111,7 +111,16 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 | J | `sync pull --branch dev` reports untouched production configs as "removed" | Spec S4 | LOW | `test_j_branch_scoped_pull_does_not_report_other_branch_configs_removed` |
 | K | A cosmetic local edit (raw vs normalized hash) blocks pull from ever applying a real remote change; `--force` raises a conflict | Spec S3, TLA I12 | LOW (documented, conservative behavior) | `test_k_cosmetic_edit_is_conservative_not_unsafe` (unmarked regression guard, not xfail) |
 
-A..F, H and I reproduce on current code and are `xfail(strict=True)` --
+**A and C are fixed**: a new config never lands on a stale entry's directory
+(it gets a suffixed path), the sweep never deletes a path an entry of the same
+pull owns, and a locally edited directory whose remote vanished is kept and
+reported as `skipped` by plain pull, raises `SYNC_CONFLICT` under `--force`,
+and is deleted only by `--theirs`. That is what the I2 (sweep half), I5 and I8
+(sweep half) counterexamples needed; the models themselves are unchanged, so a
+TLC/Lean rerun still reports them until the model's `Pull` is updated to match.
+Their tests are ordinary regression guards now.
+
+B, D..F, H and I reproduce on current code and are `xfail(strict=True)` --
 flipping to a hard failure the moment a fix lands is the point: delete the
 `xfail` marker to adopt the fix. G is kept `xfail` too even though the fix
 direction is a product decision (see the test's docstring). J reproduces and
