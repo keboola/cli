@@ -73,10 +73,9 @@ from ._encryption import (
     find_plaintext_secret_keys,
 )
 from ._sync_baseline import (
+    config_locally_modified,
     detect_force_pull_conflicts,
     effective_stored_hash,
-    extras_modified,
-    needs_shape_migration,
     raise_on_legacy_boundary,
 )
 from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
@@ -99,9 +98,21 @@ from ._sync_bulk import (
     push_all as _bulk_push_all,
 )
 from ._sync_clone import clone_project as _clone_project_impl
-from ._sync_data_app import load_data_app_types, resolve_pull_type, type_needs_rewrite
+from ._sync_data_app import (
+    load_data_app_types,
+    push_ds_client,
+    resolve_ds_branch_id,
+    resolve_pull_type,
+    type_needs_rewrite,
+)
 from ._sync_models import CreatedConfig, LocalConfigHashes
 from ._sync_push_ops import push_create, push_row_change, push_update
+from ._sync_stale import (
+    apply_stale_sweep,
+    find_stale_entries,
+    remote_deleted_conflicts,
+    reserved_paths,
+)
 from ._sync_storage import (
     fetch_jobs_per_config,
     fetch_samples,
@@ -115,7 +126,6 @@ from ._sync_writeback import (
 )
 from .base import BaseService, ClientFactory, find_default_branch_id
 from .data_app_service import (
-    DATA_APP_COMPONENT_ID,
     DataScienceClientFactory,
     make_default_ds_client_factory,
 )
@@ -526,7 +536,7 @@ class SyncService(BaseService):
 
         # Determine branch to pull from (git-branching aware)
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Fetch all components with configs from API (+ storage metadata + jobs)
@@ -638,6 +648,12 @@ class SyncService(BaseService):
         # Resolved once and shared by the conflict guard, the fetch loop and
         # the stale-entry sweep below -- see ``_effective_ignored_components``.
         ignored_components = self._effective_ignored_components(manifest)
+        # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
+        # reserved so a same-named new config cannot land in one.
+        stale = find_stale_entries(
+            self, manifest.configurations, components, branch_dir, ignored_components
+        )
+        used_paths |= reserved_paths(stale, branch_dir)
 
         # Force-pull conflict guard (force-pull baseline corruption fix).
         # ``--force`` bypasses the "preserve locally-modified files" guard
@@ -662,7 +678,7 @@ class SyncService(BaseService):
                 existing_file_hashes=existing_file_hashes,
                 existing_metadata=existing_metadata,
                 existing_rows=existing_rows,
-            )
+            ) + remote_deleted_conflicts(stale)
             if conflicts:
                 raise SyncConflictError(conflicts)
 
@@ -764,30 +780,19 @@ class SyncService(BaseService):
                 # would silently strand the un-pushed edits.  Preserving keeps
                 # the pending delta visible to ``sync push``.
                 # ``--theirs`` disables the preserve entirely: remote wins.
+                # The check covers every file the config's local
+                # representation consists of -- ``_config.yml`` plus the
+                # companion files recorded in ``pull_extra_hashes`` (the set
+                # diff/push merge back) -- so an edited ``transform.sql`` is
+                # protected like an edited ``_config.yml`` (issue #792 B).
                 locally_modified = False
                 if not is_new and not theirs:
-                    old_file_hash = existing_file_hashes.get(lookup_key, "")
-                    if old_file_hash:
-                        config_file = config_dir / CONFIG_FILENAME
-                        if config_file.exists():
-                            current_file_hash = self._file_hash(config_file)
-                            locally_modified = current_file_hash != old_file_hash
-                    # Shape migration (issue #686): the remote is unchanged, only
-                    # the recorded hash shape is old, so this pull re-extracts
-                    # (writing the boundary markers) and re-stamps. Because the
-                    # rewrite is not driven by a remote change, an edited
-                    # companion file must be preserved too -- the ordinary
-                    # overwrite-guard above only ever looks at ``_config.yml``.
-                    if not locally_modified and needs_shape_migration(
-                        existing_metadata.get(lookup_key, {}),
-                        component_id=component_id,
-                        config_id=config_id,
-                        raw_remote=cfg,
-                        api_cfg_hash=api_cfg_hash,
-                    ):
-                        locally_modified = extras_modified(
-                            self, config_dir, existing_extra_hashes.get(lookup_key, {})
-                        )
+                    locally_modified = config_locally_modified(
+                        self,
+                        config_dir,
+                        existing_file_hashes.get(lookup_key, ""),
+                        existing_extra_hashes.get(lookup_key, {}),
+                    )
 
                 remote_unchanged = False  # set in else branch; default for locally_modified path
                 if locally_modified and not dry_run:
@@ -994,6 +999,10 @@ class SyncService(BaseService):
                     cfg_metadata = {
                         "pull_hash": old_pull_hash,
                         "pull_config_hash": old_cfg_hash,
+                        # Carry the companion baseline over too: dropping it
+                        # would make diff/push read an edited transform.sql
+                        # as unchanged (issue #792 B).
+                        "pull_extra_hashes": existing_extra_hashes.get(lookup_key, {}),
                     }
                     # The preserved hash was NOT produced by the current
                     # producer, so its version marker is carried over verbatim
@@ -1050,48 +1059,17 @@ class SyncService(BaseService):
                     )
                 )
 
-        # Detect configs dropped from the manifest (in old manifest but not in
-        # new). Two distinct causes, reported apart (issue #689): the config was
-        # deleted on the remote ("removed"), or its component is now ignored
-        # ("ignored" -- the fetch loop above never produced an entry for it).
-        # Conflating them would report a live production config as gone from
-        # the remote, which is exactly the wrong thing to tell a user deciding
-        # whether to restore it. The on-disk cleanup is identical either way:
-        # an ignored config has no business sitting in the tree, and git keeps
-        # the removal reviewable.
-        new_keys = {f"{c.component_id}/{c.id}" for c in new_configurations}
-        for old_cfg in manifest.configurations:
-            old_key = f"{old_cfg.component_id}/{old_cfg.id}"
-            if old_key not in new_keys:
-                stale_action = (
-                    "ignored" if old_cfg.component_id in ignored_components else "removed"
-                )
-                pull_details.append(
-                    {
-                        "action": stale_action,
-                        "component_id": old_cfg.component_id,
-                        "config_name": "",
-                        "path": old_cfg.path,
-                    }
-                )
-
-        # Delete orphaned directories for removed / newly-ignored configurations
-        if not dry_run:
-            for detail in pull_details:
-                if detail["action"] in ("removed", "ignored") and detail.get("path"):
-                    orphan_dir = branch_dir / detail["path"]
-                    if orphan_dir.exists() and orphan_dir.is_dir():
-                        shutil.rmtree(orphan_dir)
-                        logger.info("Removed orphaned directory: %s", orphan_dir)
-                        # Clean up empty parent dirs up to (but not including) branch_dir
-                        parent = orphan_dir.parent
-                        while parent != branch_dir and parent.exists():
-                            if not any(parent.iterdir()):
-                                parent.rmdir()
-                                logger.info("Removed empty parent directory: %s", parent)
-                                parent = parent.parent
-                            else:
-                                break
+        # Report configs dropped from the manifest ("removed" from the remote vs
+        # "ignored" component, issue #689) and delete their directories --
+        # except a locally edited one (#792 C) or one this pull owns (#792 A).
+        apply_stale_sweep(
+            stale,
+            branch_dir,
+            theirs=theirs,
+            dry_run=dry_run,
+            new_configurations=new_configurations,
+            pull_details=pull_details,
+        )
 
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}
@@ -1254,7 +1232,7 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Fetch remote state
@@ -1658,7 +1636,7 @@ class SyncService(BaseService):
         manifest = load_manifest(project_root)
 
         branch_id = self._resolve_branch_id(
-            project, manifest, project_root, branch_override=branch_override
+            alias, manifest, project_root, branch_override=branch_override
         )
 
         # Detect name drift: local dir name doesn't match config name
@@ -1682,24 +1660,15 @@ class SyncService(BaseService):
         # actually creates a data app, and entered alongside ``client`` so its
         # close() runs on every exit from the push block, a mid-push raise
         # included.
-        ds_client = None
-        if any(
-            c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
-            for c in changes
-            if not bool(c.get("is_row"))
-        ):
-            ds_client = self._ds_client_factory(project.stack_url, project.token)
+        ds_client = push_ds_client(self._ds_client_factory, project, changes)
         ds_context = ds_client if ds_client is not None else contextlib.nullcontext()
-
-        # POST /apps wants branchId=null for the default (production) branch and
-        # a numeric id only for a dev branch. The sync engine carries production
-        # as the manifest's default branch id, so map it back to None for the DS
-        # create (data-app create does the same). Live-verified against 4214.
-        default_branch_id = manifest.branches[0].id if manifest.branches else None
-        ds_branch_id = None if branch_id == default_branch_id else branch_id
 
         with client, ds_context:
             self._ensure_branch_registered(manifest, branch_id, client)
+            # POST /apps wants branchId=null for production, the numeric id for
+            # a dev branch. Resolved against the API's default branch, not the
+            # first manifest branch (#808), and only when a data app is created.
+            ds_branch_id = resolve_ds_branch_id(client, ds_client, branch_id, warnings)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
 
             # Process configs before rows, and rebind variable links last.
@@ -2161,9 +2130,9 @@ class SyncService(BaseService):
             logger.warning("config-folder metadata lookup failed", exc_info=True)
             return None
 
-    @staticmethod
     def _resolve_branch_id(
-        project: Any,
+        self,
+        alias: str,
         manifest: "Manifest",
         project_root: Path,
         branch_override: int | None = None,
@@ -2184,6 +2153,7 @@ class SyncService(BaseService):
         guarantees there is always a recovery path when the mapping file is
         lost (issue #267, Bug E).
         """
+        from ..effective_branch import record_branch, resolve_branch
         from ..sync.branch_mapping import load_branch_mapping
         from ..sync.git_utils import get_current_branch
 
@@ -2191,7 +2161,7 @@ class SyncService(BaseService):
         # dev branch from a clean git workspace without first running
         # `branch use` or `branch-link`.
         if branch_override is not None:
-            return branch_override
+            return record_branch(self._config_store, alias, branch_override, "explicit")
 
         if manifest.git_branching.enabled:
             git_branch = get_current_branch(project_root)
@@ -2204,7 +2174,7 @@ class SyncService(BaseService):
                     # Mapping missing -- auto-recover for the default branch
                     # so the user is never locked out of production.
                     if is_default:
-                        return None
+                        return record_branch(self._config_store, alias, None, "production")
                     raise ConfigError(
                         f"Git branch '{git_branch}' is not linked to a Keboola "
                         f"branch (branch-mapping.json missing). "
@@ -2213,20 +2183,18 @@ class SyncService(BaseService):
                 entry = mapping.get(git_branch)
                 if entry is not None:
                     # entry.keboola_id is None for production (default branch)
-                    return entry.keboola_id
+                    return record_branch(self._config_store, alias, entry.keboola_id, "git_mapping")
                 # No entry for current branch -- default branch is always production
                 if is_default:
-                    return None
+                    return record_branch(self._config_store, alias, None, "production")
                 raise ConfigError(
                     f"Git branch '{git_branch}' is not linked to a Keboola branch. "
                     f"Run 'kbagent sync branch-link --project ALIAS' first."
                 )
 
         # Non git-branching: use active_branch_id or manifest fallback
-        branch_id = project.active_branch_id if project is not None else None
-        if not branch_id and manifest.branches:
-            branch_id = manifest.branches[0].id
-        return branch_id
+        fallback = manifest.branches[0].id if manifest.branches else None
+        return resolve_branch(self._config_store, alias, None, manifest_branch_id=fallback)
 
     # ------------------------------------------------------------------
     # Storage metadata / jobs / samples helpers

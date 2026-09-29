@@ -11,6 +11,73 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Every command that picks a branch names it: `Target:` line and `targets` key
+
+*(since vNEXT, #766)*
+
+- **`kbagent branch use` sets an active branch per project, and commands
+  apply it when `--branch` is omitted.** Before, some commands printed an
+  `Info:` line in human mode only, and others applied the active branch with
+  no notice (for example `workspace create`). A write could land on a
+  development branch and the caller did not know.
+- **Human mode prints one line on stderr** before the first API call to the
+  project and before any confirmation prompt:
+  - `Target: project 'prod', branch 456 'feature-x' (from 'kbagent branch use')`
+  - `Target: project 'prod', branch 789 (from the command line)`
+  - `Target: project 'prod', production (active branch 456 'feature-x' not
+    used; pass --branch 456 to use it)` -- storage reads, Data Streams,
+    data apps, branch metadata and git-branching `sync` do not use the
+    active branch.
+  - `Target: project 'prod', branch 388 (from .keboola/branch-mapping.json)`
+    or `(from .keboola/manifest.json)` -- `sync` without an active branch.
+  - `Source:` names the branch that a command reads from or merges from:
+    the source project of `config clone`, the branch of a merge request
+    (`merge-request *`, `branch merge`), the branch notification commands
+    read config names from, and the source table branch of `storage
+    create-table --source-branch-id` / `storage clone-table` (production).
+    `merge-request merge` and an armed `merge-request auto-merge` also print
+    `Target: project 'prod', production`.
+  - A command that uses two branches prints a line for each:
+    - `workspace create --ui` creates the config in the active branch but
+      runs its job on production.
+    - `workspace from-transformation` reads the transformation from
+      production.
+    - `sync clone` creates the buckets in production.
+- **`--json` adds `targets` to the success AND the error envelope**, before
+  `data` / `error`, which do not change. Each entry is
+  `{role, project_alias, branch_id, branch_name, branch_source, active_branch}`:
+  - `branch_source`: `explicit` (`--branch` or `--target-branch`),
+    `active_branch` (`branch use`), `git_mapping`
+    (`.keboola/branch-mapping.json`), `manifest` (the first branch of
+    `.keboola/manifest.json`), `merge_request` (the branch of the merge
+    request given by `--merge-request-id`) or `production`.
+  - `production` can carry a numeric `branch_id` when the command read the
+    default branch ID from the API (workspaces, config metadata).
+  - `active_branch` is the project's `branch use` choice
+    (`{branch_id, branch_name}` or null), also when the command did not use it.
+  - `role` is `source` for the `Source:` cases above, else `target`.
+- **No `targets` key means the command chose no branch**: it has no
+  `--branch` and never uses the active branch (`project list`, `token list`,
+  storage listings without `--project`), it failed on an unknown alias, or it
+  refused to run because it needs a branch and got none. It does not mean
+  production.
+- **`--branch 0` means production.** The API clients always sent 0 to the
+  production endpoint. Before vNEXT the config, flow, schedule and
+  notification commands used the active branch for `--branch 0` instead.
+- **`--dry-run` reports the same target as the real run.** `flow delete
+  --dry-run` and `flow schedule-remove --dry-run` now put the resolved branch
+  in `would_delete.branch_id` (before: the raw `--branch` value, so null under
+  an active branch).
+- **`workspace list` / `workspace detail` use the active branch.** The
+  `Info: Using production branch for read` line they printed was wrong: the
+  workspace service has used the active branch since v0.42.0. They now print
+  `Target:` with the branch they use.
+- **`branch use` and `branch create` save the branch name** next to the ID
+  (`active_branch_name` in `config.json`). It shows in `Target:` and in
+  `branch_name`. A branch renamed later keeps the saved name until the next
+  `branch use`. An active branch set by an older version has no name.
+- `kbagent serve` responses do not carry `targets` (REST reporting: #791).
+
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 
 *(since 0.95.0, #761)*
@@ -701,6 +768,31 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
+
+*(since vNEXT, #792)*
+
+`sync pull` decided "locally modified" from `_config.yml` alone. An edit that
+lived only in a companion file -- `transform.sql`, `transform.py`, `code.py`,
+`pyproject.toml`, `_description.md` -- was invisible to it, so when the remote
+had also changed, the edit was **silently overwritten**: plain pull wrote the
+remote version, and `pull --force` wrote it too instead of raising
+`SYNC_CONFLICT`. `sync diff` / `sync push` always counted those files.
+
+Now pull checks every file recorded in the manifest's `pull_extra_hashes`
+(the same set diff/push merge back into the config):
+
+- Plain pull: the config is `skipped` with reason `locally modified`, the edit
+  stays, and it is still pending for `sync push`.
+- `pull --force`: remote changed too -> exit 1, `SYNC_CONFLICT`, nothing written;
+  remote unchanged -> preserved.
+- `pull --theirs`: remote wins, as before.
+
+Behavior change: deleting only a companion file now counts as a local edit, so
+plain pull no longer re-creates it when the remote changed (diff/push already
+treated it as a change). To drop local edits, use `sync pull --theirs` or delete
+the whole config directory and pull.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*
@@ -1147,17 +1239,16 @@ kbagent --json workspace list --project prod --qs-compatible
 # returns only workspaces with login_type ∈ whitelist AND read_only=true
 ```
 
-**Branch behaviour (read-command parity with `storage buckets`):**
+**Branch behaviour:**
 
-`workspace list` / `workspace detail` now follow the same pattern as
-`storage buckets` / `storage tables` / `config list`: when an alias is
-pinned to a dev branch via `branch use`, the production endpoint is used
-with an `Info: Using production branch for read (active dev branch X
-ignored; pass --branch X to override)` banner. Before v0.42.0 these
-commands silently scoped to the pinned branch, returning a different
-workspace set than the same alias one shell ago. Pass `--branch ID` to
-opt back into the dev-branch endpoint. `--branch` requires exactly one
-`--project`.
+`workspace list` / `workspace detail` use the alias's active branch
+(`branch use`) when `--branch` is omitted, like `config list`. Up to vNEXT
+they printed `Info: Using production branch for read (active dev branch X
+ignored; pass --branch X to override)`, but the workspace service used the
+active branch: the line was wrong, the listing was not. Since vNEXT they
+print `Target:` with the branch they use (see the #766 entry at the top).
+`storage buckets` / `storage tables` are the reads that use production
+under an active branch. `--branch` requires exactly one `--project`.
 
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 
@@ -4063,6 +4154,20 @@ did not have that branch, so the clone failed with
 `Branch id "..." does not exists`. On an older install that shows this error,
 upgrade or pass `--branch` with the target's production branch id.
 
+### Data apps after `sync clone --branch` land in the dev branch, not production
+
+`sync clone --branch <dev-id>` writes the dev branch id as the manifest's first
+branch, and every later `sync push` falls back to it. Push used to treat that
+first manifest branch as production when it created a `keboola.data-apps`
+config, so it sent `branchId: null` to the Data Science API. The data app was
+created in PRODUCTION while every other config went to the dev branch.
+*(since vNEXT, #808)* push compares the push branch against the project's real
+default branch from the API (one extra call, made only when the push creates a
+data app). If that lookup fails, push sends the numeric branch id and adds a
+`data_app_branch_lookup_failed` warning, so it never assumes production. On an
+older install, check where any data app created after a `sync clone --branch`
+ended up (`data-app list --branch <dev-id>` vs production).
+
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
 `kbagent search --regex` opts into the Storage API `mode=regex` global-search
@@ -5340,3 +5445,24 @@ It carries the command name, the outcome, and the duration -- never argument val
   Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
 - **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
   builds a UI URL and resets the active branch.
+
+## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
+
+*(since vNEXT)* Two data-loss paths in pull's stale-entry sweep (the step that
+drops manifest entries whose config is gone from the remote) are closed:
+
+- **Remote delete + re-create under the same name.** Before, the new config was
+  written into the old config's directory and the sweep then deleted that same
+  directory; the next `sync push` DELETEd the live new config. Now the new
+  config lands in a suffixed directory (`<name>-<config id prefix>`), the old
+  one is removed, and the manifest matches disk. The next pull renames the
+  directory back to the plain name.
+- **Remote delete + local edit.** Before, plain pull and `pull --force` deleted
+  the edited directory silently. Now plain pull **keeps** it (manifest entry
+  kept, pull action `skipped`, reason `locally modified, deleted on remote`);
+  `pull --force` aborts with `SYNC_CONFLICT` and the conflict carries
+  `reason: "deleted on remote"`. Only `pull --theirs` still deletes it (remote
+  wins). "Edited" covers `_config.yml`, companion files (`transform.sql`,
+  `code.py`, `_description.md`, ...) and row files. A kept directory is still
+  tracked, so the next `sync push` re-creates the config remotely -- delete the
+  directory if the remote delete was intended.

@@ -200,6 +200,15 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
   registered project and ignored the pin (issue #684). gotchas.md.
 
+**Which branch did a command use? (vNEXT+)**
+- Every command that picks a branch names it: `Target: project 'P', branch ID
+  (from 'kbagent branch use')` on stderr, `targets` in `--json`
+  (`branch_source` `active_branch` = chosen by `branch use`). Read it before
+  you report a write as done on production. No `targets` key = no branch was
+  chosen, NOT production. Below vNEXT, `workspace create` and most config /
+  flow writes applied the active branch silently: check `branch list` (Active
+  column) first. gotchas.md (#766).
+
 **Recurring `ext.keboola.cli.` events in a project's own event log (0.93.0+)**
 - kbagent posts one best-effort usage event per command to the acting project's
   Storage events. An event audit then shows one `ext.keboola.cli.` (CLI/REPL) or

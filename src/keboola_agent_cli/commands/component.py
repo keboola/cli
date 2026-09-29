@@ -14,6 +14,7 @@ from rich.table import Table
 
 from ..config_store import ConfigStore
 from ..constants import VALID_COMPONENT_TYPES
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
 from ._helpers import (
@@ -22,7 +23,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 from .config import _parse_json_input
 
@@ -347,7 +347,7 @@ def component_sync_action(
             )
             raise typer.Exit(code=2) from None
 
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.run_sync_action(
