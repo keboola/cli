@@ -4112,6 +4112,20 @@ did not have that branch, so the clone failed with
 `Branch id "..." does not exists`. On an older install that shows this error,
 upgrade or pass `--branch` with the target's production branch id.
 
+### Data apps after `sync clone --branch` land in the dev branch, not production
+
+`sync clone --branch <dev-id>` writes the dev branch id as the manifest's first
+branch, and every later `sync push` falls back to it. Push used to treat that
+first manifest branch as production when it created a `keboola.data-apps`
+config, so it sent `branchId: null` to the Data Science API. The data app was
+created in PRODUCTION while every other config went to the dev branch.
+*(since vNEXT, #808)* push compares the push branch against the project's real
+default branch from the API (one extra call, made only when the push creates a
+data app). If that lookup fails, push sends the numeric branch id and adds a
+`data_app_branch_lookup_failed` warning, so it never assumes production. On an
+older install, check where any data app created after a `sync clone --branch`
+ended up (`data-app list --branch <dev-id>` vs production).
+
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
 `kbagent search --regex` opts into the Storage API `mode=regex` global-search
