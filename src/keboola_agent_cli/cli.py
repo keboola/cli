@@ -48,6 +48,7 @@ from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
+from .effective_branch import record_targets
 from .errors import ErrorCode, PermissionDeniedError
 from .output import OutputFormatter, force_utf8_when_redirected
 
@@ -300,6 +301,11 @@ def main(
         no_color=effective_no_color,
         verbose=verbose,
     )
+    # Record the project and branch of this command for the output (#766). Not
+    # for the REPL shell (each line records on its own) nor for `serve`, whose
+    # request threads would all add to one record for the server's lifetime.
+    if ctx.invoked_subcommand not in (None, "repl", "serve"):
+        ctx.with_resource(record_targets(formatter.report_target))
 
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)

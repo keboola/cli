@@ -1232,7 +1232,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create dev branch and auto-activate it. Async, CLI waits for completion.
 
   kbagent branch use --project ALIAS --branch ID
-    Set existing branch as active for subsequent commands.
+    Set existing branch as active for subsequent commands. Every command that
+    then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
+    'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
@@ -1334,14 +1336,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
   kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
-    List workspaces. Read command: ignores active dev branch (production endpoint) with an Info banner;
-    pass --branch to opt in. Each entry carries login_type, read_only, qs_compatible so callers can pick a
+    List workspaces. Without --branch uses each alias's active branch (`branch use`), else
+    production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
     confirmed-whitelist loginType (canonical data-app shape). --orphaned shows orphaned workspaces.
 
   kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
-    Read command: ignores active dev branch with an Info banner; pass --branch to opt in.
+    Without --branch uses the alias's active branch (`branch use`), else production.
 
   kbagent workspace delete --project ALIAS --workspace-id ID
     Delete workspace. They also expire automatically.
@@ -2161,6 +2163,16 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      Success: {{"status": "ok", "data": ...}}
      Error:   {{"status": "error", "error": {{"code": "...", "message": "...", "retryable": true/false}}}}
    Check "retryable" -- if true, retry the operation.
+   A command that picked a branch also carries "targets" (success AND error):
+   [{{"role": "target"|"source", "project_alias", "branch_id", "branch_name",
+     "branch_source": "explicit"|"active_branch"|"git_mapping"|"manifest"|"merge_request"
+       |"production",
+     "active_branch": {{"branch_id", "branch_name"}}|null}}]. Read it before you
+   trust a write target: "active_branch" means `branch use` chose the branch.
+   "source" = the branch read or merged FROM (config clone origin, a merge
+   request's branch); merge-request merge and an armed auto-merge also list
+   production as "target".
+   No "targets" key = the command chose no branch (it does NOT mean production).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.

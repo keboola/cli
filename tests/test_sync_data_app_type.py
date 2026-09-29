@@ -23,6 +23,8 @@ from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._sync_data_app import create_synced_data_app
 from keboola_agent_cli.services.sync_service import SyncService
+from keboola_agent_cli.sync.clone import repoint_default_branch_configs, repoint_manifest_project
+from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
 from test_sync_baseline_stamping import (
     FakeApi,
     _client_for,
@@ -395,6 +397,99 @@ def test_push_create_data_app_with_type_emits_no_default_warning(
 
     warnings = result.get("warnings", [])
     assert not [w for w in warnings if w["change_type"] == "data_app_type_default"]
+
+
+DEV_BRANCH_ID = 999
+
+
+def _repoint_to_dev_branch(project_root: Path) -> None:
+    """Make the manifest look like ``sync clone --branch <dev>`` left it (#808).
+
+    clone writes the dev branch id as ``manifest.branches[0].id`` and moves
+    the default-tree configs onto it, so ``_resolve_branch_id``'s manifest
+    fallback resolves every later push to the dev branch.
+    """
+    manifest = load_manifest(project_root)
+    source_default = manifest.branches[0].id
+    repoint_manifest_project(
+        manifest,
+        project_id=manifest.project.id,
+        api_host=manifest.project.api_host,
+        default_branch_id=DEV_BRANCH_ID,
+    )
+    repoint_default_branch_configs(
+        manifest, source_default_branch_id=source_default, new_branch_id=DEV_BRANCH_ID
+    )
+    save_manifest(project_root, manifest)
+
+
+def test_push_create_data_app_after_clone_branch_targets_dev_branch(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """#808: after ``sync clone --branch <dev>`` the first manifest branch IS the
+    dev branch. The production check must compare against the project's REAL
+    default branch (12345 from the API), so the DS create carries the dev id
+    instead of null -- null would put the data app in production while every
+    other config lands in the dev branch."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    _repoint_to_dev_branch(project_root)
+    _author_data_app(project_root, with_type=True)
+
+    ds = FakeDs(api)
+    result = _service(store, api, ds).push(alias="prod", project_root=project_root)
+
+    assert result["errors"] == []
+    assert result["created"] == 1
+    assert len(ds.create_app_calls) == 1
+    assert ds.create_app_calls[0]["branch_id"] == DEV_BRANCH_ID
+
+
+def test_push_create_data_app_branch_lookup_failure_sends_numeric_id(
+    tmp_config_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the default-branch lookup fails, push never guesses production: it
+    sends the numeric branch id (a wrong guess then fails loudly at the DS API
+    instead of silently creating the app in production) and warns."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    _repoint_to_dev_branch(project_root)
+    _author_data_app(project_root, with_type=True)
+    failing_lookup = MagicMock(
+        side_effect=KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR, retryable=True
+        )
+    )
+    monkeypatch.setattr(api, "list_dev_branches", failing_lookup)
+
+    ds = FakeDs(api)
+    result = _service(store, api, ds).push(alias="prod", project_root=project_root)
+
+    assert result["created"] == 1
+    assert ds.create_app_calls[0]["branch_id"] == DEV_BRANCH_ID
+    lookup_warnings = [
+        w for w in result["warnings"] if w["change_type"] == "data_app_branch_lookup_failed"
+    ]
+    assert len(lookup_warnings) == 1
+
+
+def test_push_without_data_app_create_skips_branch_lookup(
+    tmp_config_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary push (no data-app CREATE) pays no extra branch lookup."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    sql = next(project_root.rglob("transform.sql"))
+    sql.write_text("SELECT 2;\n", encoding="utf-8")
+    lookup = MagicMock(return_value=[])
+    monkeypatch.setattr(api, "list_dev_branches", lookup)
+
+    _service(store, api, FakeDs(api)).push(alias="prod", project_root=project_root)
+
+    lookup.assert_not_called()
 
 
 # ===================================================================

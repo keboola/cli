@@ -145,6 +145,12 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
+Promoting is idempotent (since vNEXT): a config the dev branch lacks is created
+there once, and the manifest records that dev copy for the same `main/`
+directory. Re-running the same push creates nothing; a later edit in `main/`
+updates the dev copy, never production. Older versions created another dev copy
+on every push (see gotchas.md).
+
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the
@@ -414,6 +420,10 @@ Stored in `.keboola/branch-mapping.json`:
 
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
 - **Pull protects local edits**: locally-modified files are skipped by default
+  -- and "locally modified" covers the whole config, not only `_config.yml`:
+  an edit to a companion file (`transform.sql`, `code.py`, `_description.md`,
+  ...) protects the config the same way *(since vNEXT, #792)*. Before, such an
+  edit was silently overwritten whenever the remote changed, plain or `--force`
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified and conflict changes are skipped
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
@@ -472,7 +482,10 @@ internal state:
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 
 `--force` no longer blindly overwrites locally-modified configs. It branches on
-the 3-way diff state per config (and per row):
+the 3-way diff state per config (and per row). "Local edited" means any file
+of the config -- `_config.yml` or a companion file such as `transform.sql`
+*(since vNEXT, #792)*; before, a companion-only edit was never a conflict and
+was overwritten:
 
 - **Local edited, remote UNCHANGED** -> the file and its sync baseline are
   **preserved**. The pending delta stays visible to `sync diff` / `sync push`.
@@ -483,11 +496,25 @@ the 3-way diff state per config (and per row):
   error code `SYNC_CONFLICT`, listing every conflicting config/row. Resolve with
   `sync diff`, then `sync push` your edits (or discard them), then pull again.
 - **Local untouched, remote changed** -> `--force` takes remote as before.
+- **Local edited, remote DELETED** *(since vNEXT, #792)* -> `--force` aborts
+  with `SYNC_CONFLICT` (conflict `reason: "deleted on remote"`). Plain pull
+  keeps the edited directory and its manifest entry and reports it as
+  `skipped` (`locally modified, deleted on remote`). Only `--theirs` deletes it.
+  A kept directory stays tracked, so the next `sync push` re-creates the config;
+  delete the directory if the remote delete was intended.
+
+> A config deleted and re-created remotely under the same name *(since vNEXT,
+> #792)* is written to a suffixed directory while the old one is removed; the
+> next pull renames it back. Before, the sweep deleted the new config's files
+> and the next push deleted the new config remotely.
 
 > Safe to run `sync pull --force` to refresh an unrelated config even while you
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
-> delete the file (or the config directory) and pull.
+> run `sync pull --theirs`, or delete the whole config directory and pull.
+> Deleting only a companion file (`transform.sql`, ...) counts as a local edit
+> *(since vNEXT, #792)* -- `sync diff` / `sync push` read it that way too -- so
+> plain pull keeps it deleted.
 
 ## Migrating a legacy sync tree (#686)
 
