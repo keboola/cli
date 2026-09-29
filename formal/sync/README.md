@@ -77,13 +77,13 @@ explores traces of up to 5 actions. BFS returns the shortest counterexample.
 | I7 never-fetched entry never deleted | **holds** (104,809 states, never-fetched initial entry) |
 | I1 no double create | violated: a promote push re-creates configs on every run; a resurrect followed by an `ENCRYPTION_FAILED` abort also creates a copy |
 | I2 push deletes only user-removed dirs | violated: **pull's stale-entry sweep deletes a directory the same pull just wrote, and the next push deletes the live remote config** |
-| I2b delete requires `--force` | violated: `push()` never reads `force` (S1) |
+| I2b delete requires `--force` | violated: `push()` never reads `force` (S1). Fixed in the code (G); the model is unchanged |
 | I5 pull keeps local work | violated: a remote delete plus a local edit ends with plain or `--force` pull deleting the edited directory silently |
 | I6 push then diff is clean | violated on `--branch` promote (finding D, since fixed in the engine; the TLA model is unchanged). Holds on production only (30,334 states) |
 | I8 manifest matches disk | violated: the stale sweep, and a promote write-back that records a `devt/` entry for a file in `main/` |
 | I9 an aborted push is atomic | violated (strong reading): the changes before the failing one reached the API and the manifest was never saved |
 | I11 no lost remote update | violated: an adopted file with a config id is diffed 2-way, so push reverts a UI edit |
-| I11b no silent resurrect | violated: a remote delete followed by any push re-creates the config, even with no local edit (S2) |
+| I11b no silent resurrect | violated: a remote delete followed by any push re-creates the config, even with no local edit (S2). Fixed in the code (H); the model is unchanged |
 | I12 a pull resolves REMOTE MODIFIED | violated: after a cosmetic edit, plain pull skips the file forever and `--force` raises a conflict (S3) |
 
 Each violation was checked against the code. The main ones were replayed
@@ -105,8 +105,8 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 | D | `sync push --branch dev` (promote) creates another dev copy of a prod-only config on every push. **Fixed** (fix/792-dev-promote-duplicates): on the promote path the target-branch entry shadows the production entry for the same `main/` dir (`sync/branch_scope.py::_promoted_paths`) | TLA I6/I1 | HIGH | `test_d_promote_push_is_idempotent`, `test_d_promote_push_diff_is_clean_and_edits_update_the_dev_copy` (regression guards) |
 | E | An untracked file carrying a config id (`config new --push --output-dir` scaffold / adopted orphan) is diffed 2-way: push overwrites a UI edit made after the scaffold was written | TLA I11 | MED | `test_e_adopted_scaffold_push_does_not_overwrite_remote_edit` |
 | F | A push aborted by `ENCRYPTION_FAILED` leaves the manifest unsaved; the retry duplicates the change(s) the aborted push already applied | TLA I1b (model trace only; replayed live for this pilot) | MED | `test_f_aborted_push_does_not_duplicate_already_created_config` |
-| G | `sync push` deletes remote configs with no `--force`; the CLI help text says `--force` gates deletion (soft delete to trash since 0.89.0, restorable) | Spec S1, Lean F1, TLA I2b | MED (product decision) | `test_g_push_without_force_does_not_delete_remote_config` |
-| H | A config deleted remotely by another actor is silently re-created by the next push, no warning | Spec S2, Lean F2, TLA I11b | MED | `test_h_push_does_not_silently_resurrect_deleted_config` |
+| G | `sync push` deletes remote configs with no `--force`; the CLI help text says `--force` gates deletion (soft delete to trash since 0.89.0, restorable) | Spec S1, Lean F1, TLA I2b | MED -- **fixed** (push deletes only with `--force`) | `test_g_push_without_force_does_not_delete_remote_config` |
+| H | A config deleted remotely by another actor is silently re-created by the next push, no warning | Spec S2, Lean F2, TLA I11b | MED -- **fixed** (diff reports `remote_deleted`, push skips it) | `test_h_push_does_not_silently_resurrect_deleted_config` |
 | I | Moving a config's directory by hand (`mv`/`git mv`) is seen as remote DELETE + CREATE under a new id | Lean F3 | LOW-MED | `test_i_moving_config_dir_is_not_delete_plus_create` |
 | J | `sync pull --branch dev` reports untouched production configs as "removed" | Spec S4 | LOW | `test_j_branch_scoped_pull_does_not_report_other_branch_configs_removed` |
 | K | A cosmetic local edit (raw vs normalized hash) blocks pull from ever applying a real remote change; `--force` raises a conflict | Spec S3, TLA I12 | LOW (documented, conservative behavior) | `test_k_cosmetic_edit_is_conservative_not_unsafe` (unmarked regression guard, not xfail) |
@@ -120,10 +120,11 @@ and is deleted only by `--theirs`. That is what the I2 (sweep half), I5 and I8
 TLC/Lean rerun still reports them until the model's `Pull` is updated to match.
 Their tests are ordinary regression guards now.
 
-E, F, H and I reproduce on current code and are `xfail(strict=True)` (D is fixed) --
-flipping to a hard failure the moment a fix lands is the point: delete the
-`xfail` marker to adopt the fix. G is kept `xfail` too even though the fix
-direction is a product decision (see the test's docstring). J reproduces and
+E, F and I reproduce on current code and are `xfail(strict=True)` (D, G and H
+are fixed) -- flipping to a hard failure the moment a fix lands is the point:
+delete the `xfail` marker to adopt the fix. F's test now reaches the aborted
+create through a promote push, because push no longer re-creates the
+remote-deleted config its first version used. J reproduces and
 is `xfail`. K is deliberate, documented behavior, so it is an ordinary
 (unmarked) regression guard instead. B is fixed: its marker was removed
 and the test is now an ordinary regression guard.

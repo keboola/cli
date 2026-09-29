@@ -4206,8 +4206,9 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   whose directory/`_config.yml` was deleted locally is re-fetched on the next
   pull even when the remote is unchanged (manifest<->disk invariant). The old
   behavior silently reported "Already up to date". NOTE the interplay with the
-  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config;
-  delete-dir-then-PULL now restores it instead of doing nothing.
+  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config
+  (since vNEXT only with `push --force`, #792); delete-dir-then-PULL now
+  restores it instead of doing nothing.
 - **Config-level `isDisabled` round-trips.** Pull writes a sparse
   `is_disabled: true` line into `_config.yml` (absent key = enabled -- old trees
   do not mass-diff), `sync diff` surfaces enabled/disabled drift (a config
@@ -4220,7 +4221,8 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   remote config. diff/push report it under `never_fetched` (JSON key + human
   warning); the next `sync pull` materializes it. A properly-pulled config
   (non-empty `pull_hash`) that you delete locally is still planned as a remote
-  DELETE on push -- the guard only protects entries that were never on disk.
+  DELETE on push (applied since vNEXT only with `--force`, #792) -- the guard
+  only protects entries that were never on disk.
 - **Adopted-by-id push writes the manifest.** Pushing an untracked local file
   whose `_keboola.config_id` resolves on the target branch (the #482
   adopt-update path) now also creates the manifest entry (fresh
@@ -5464,5 +5466,41 @@ drops manifest entries whose config is gone from the remote) are closed:
   `reason: "deleted on remote"`. Only `pull --theirs` still deletes it (remote
   wins). "Edited" covers `_config.yml`, companion files (`transform.sql`,
   `code.py`, `_description.md`, ...) and row files. A kept directory is still
-  tracked, so the next `sync push` re-creates the config remotely -- delete the
-  directory if the remote delete was intended.
+  tracked, but `sync push` does not re-create it (it is `remote_deleted`, see
+  the next entry) -- delete the directory if the remote delete was intended.
+
+## `sync push` deletes only with `--force` and never re-creates a config deleted on the remote (#792)
+
+*(since vNEXT)* Two changes to what `sync push` sends:
+
+- **Deletions need `--force`.** Before, push deleted a remote config or row as
+  soon as its local files were gone, with or without `--force`, although the
+  `--force` help said it allows the deletion. Now a plain push deletes nothing.
+  It lists each held-back deletion under `skipped_deletions`, with
+  `skipped_deletions_reason`, also in `--dry-run`. The `--dry-run`
+  `summary.deleted` counts only the deletions push would apply. `push --force`
+  deletes as before. A script that deletes by removing a directory must add
+  `--force`.
+- **No silent re-create.** Before, a config or row deleted on the remote by
+  someone else was created again under a new id by the next push, with no
+  notice. Now `sync diff` reports it as `remote_deleted` (human: `- REMOTE
+  DELETED`, `summary.remote_deleted`), push skips it and reports `skipped` with
+  `skipped_reason`, and `sync pull` removes the local copy (or keeps a locally
+  edited one, see the previous entry). Configs never fetched from the target
+  are still created: a `sync clone` copy, a promote push from `main/`, a
+  hand-written placeholder entry.
+- `skipped` / `skipped_reason` now appear in every push result (`pushed`,
+  `dry_run`), not only in `no_changes`.
+- **To keep a config someone deleted on the remote**, restore it with
+  `kbagent config restore` (a config deleted once is in the trash, and the
+  restored config keeps its id, so the next diff matches it again). This also covers a dev
+  copy that a promote push created and someone then deleted in the branch.
+- **Pipelines.** The `kbagent-promotion-pipeline` workflows now pass `--force`
+  in the validate dry-run and in the push, so a config deleted in the source is
+  deleted in the destination. A pipeline generated earlier needs `--force` in
+  both steps. The `kbagent-cicd-migration` push passes `--force` only when its
+  `allow_delete` input is set.
+- **`sync clone` re-runs.** A target directory written by an older kbagent
+  whose first clone run failed part-way can report the configs it never
+  created as `remote_deleted`. Delete that target directory and run the clone
+  again.

@@ -88,8 +88,10 @@ kbagent sync diff --project prod
 Related semantics (all since v0.72.0):
 
 - Plain `sync pull` re-materializes a tracked config whose local dir was
-  deleted (delete-dir-then-pull refetches; delete-dir-then-PUSH still deletes
-  the remote config -- the direction of the command picks the winner).
+  deleted (delete-dir-then-pull refetches; delete-dir-then-`push --force`
+  deletes the remote config -- the direction of the command picks the winner).
+  *(since vNEXT, #792)* A plain `sync push` deletes nothing: it lists the
+  deletion under `skipped_deletions` and says to add `--force`.
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
   shows the drift, push updates the remote state when the key is present.
@@ -414,7 +416,8 @@ Stored in `.keboola/branch-mapping.json`:
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
 | CONFLICT | Both sides changed | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
-| DELETED | Local file removed | Push deletes from remote |
+| DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since vNEXT)* |
+| REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since vNEXT)* |
 
 ## Key behaviors
 
@@ -425,7 +428,9 @@ Stored in `.keboola/branch-mapping.json`:
   ...) protects the config the same way *(since vNEXT, #792)*. Before, such an
   edit was silently overwritten whenever the remote changed, plain or `--force`
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
-- **Push only sends local changes**: remote_modified and conflict changes are skipped
+- **Push only sends local changes**: remote_modified, conflict and remote_deleted
+  changes are skipped (`skipped` in the result), and local deletions are applied
+  only with `--force` (`skipped_deletions` otherwise) *(since vNEXT, #792)*
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
   read-back), never from the files on disk. Before 0.91.0 the two producers
@@ -500,8 +505,9 @@ was overwritten:
   with `SYNC_CONFLICT` (conflict `reason: "deleted on remote"`). Plain pull
   keeps the edited directory and its manifest entry and reports it as
   `skipped` (`locally modified, deleted on remote`). Only `--theirs` deletes it.
-  A kept directory stays tracked, so the next `sync push` re-creates the config;
-  delete the directory if the remote delete was intended.
+  A kept directory stays tracked, but `sync push` does not re-create the config
+  (it diffs as `remote_deleted`); delete the directory if the remote delete was
+  intended, or restore the config with `kbagent config restore` to keep it.
 
 > A config deleted and re-created remotely under the same name *(since vNEXT,
 > #792)* is written to a suffixed directory while the old one is removed; the

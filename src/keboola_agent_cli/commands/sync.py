@@ -12,6 +12,7 @@ import typer
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
+from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
 
@@ -307,7 +308,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
         return
 
     local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-    remote_changes = [c for c in changes if c["change_type"] == "remote_modified"]
+    remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
     conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
 
     if local_changes:
@@ -318,11 +319,12 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  {prefix} {ct.upper()} {label}")
         formatter.console.print(
             f"  {summary['added']} to create, {summary['modified']} to update, "
-            f"{summary['deleted']} to delete"
+            f"{summary['deleted']} to delete (push --force)"
         )
     if remote_changes:
         for change in remote_changes:
-            formatter.console.print(f"  ~ REMOTE MODIFIED {_change_label(change)}")
+            label = REMOTE_CHANGE_LABELS[change["change_type"]]
+            formatter.console.print(f"  {label} {_change_label(change)}")
     if conflict_changes:
         for change in conflict_changes:
             formatter.console.print(f"  ! CONFLICT {_change_label(change)}")
@@ -354,6 +356,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
     status = result.get("status", "")
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         return
@@ -364,6 +367,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
             f"update {summary.get('modified', 0)}, "
             f"delete {summary.get('deleted', 0)}"
         )
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         return
@@ -372,6 +376,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         f"{result.get('updated', 0)} updated, "
         f"{result.get('deleted', 0)} deleted"
     )
+    print_push_skips(formatter, result)
     _format_never_fetched(formatter, result.get("never_fetched", []))
     _format_orphaned(formatter, result.get("orphaned", []))
     # Show name drift warnings
@@ -426,7 +431,7 @@ def _diff_one_liner(result: dict) -> str:
     mod = s.get("modified", 0)
     add = s.get("added", 0)
     dlt = s.get("deleted", 0)
-    rmod = s.get("remote_modified", 0)
+    rmod = s.get("remote_modified", 0) + s.get("remote_deleted", 0)
     conf = s.get("conflict", 0)
     ro = s.get("remote_only", 0)
     if not any([mod, add, dlt, rmod, conf, ro]):
@@ -437,7 +442,7 @@ def _diff_one_liner(result: dict) -> str:
     if mod:
         parts.append(f"[yellow]{mod} to push[/yellow]")
     if dlt:
-        parts.append(f"[red]{dlt} to delete[/red]")
+        parts.append(f"[red]{dlt} to delete (--force)[/red]")
     if rmod:
         parts.append(f"[cyan]{rmod} to pull[/cyan]")
     if conf:
@@ -450,15 +455,16 @@ def _diff_one_liner(result: dict) -> str:
 def _push_one_liner(result: dict) -> str:
     """One-line summary of a single push result."""
     status = result.get("status", "")
+    held = push_skips_one_liner(result)
     if status == "no_changes":
-        return "[green]nothing to push[/green]"
+        return f"[green]nothing to push[/green]{held}"
     if status == "dry_run":
         s = result.get("summary", {})
-        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}"
+        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}{held}"
     c = result.get("created", 0)
     u = result.get("updated", 0)
     d = result.get("deleted", 0)
-    return f"+{c} created, ~{u} updated, -{d} deleted"
+    return f"+{c} created, ~{u} updated, -{d} deleted{held}"
 
 
 def _format_all_results(
@@ -897,7 +903,7 @@ def sync_diff(
         }
 
         local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-        remote_changes = [c for c in changes if c["change_type"] == "remote_modified"]
+        remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
         conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
 
         # Local changes (what push would do)
@@ -913,7 +919,7 @@ def sync_diff(
                     formatter.console.print(f"    {detail}")
             formatter.console.print(
                 f"\n{summary['added']} to create, {summary['modified']} to update, "
-                f"{summary['deleted']} to delete"
+                f"{summary['deleted']} to delete (push --force)"
             )
 
         # Remote changes (need pull)
@@ -923,7 +929,8 @@ def sync_diff(
             formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
             for change in remote_changes:
                 label = _change_label(change)
-                formatter.console.print(f"  [cyan]~ REMOTE MODIFIED {label}[/cyan]")
+                kind = REMOTE_CHANGE_LABELS[change["change_type"]]
+                formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
                 for detail in change.get("details", []):
                     formatter.console.print(f"    {detail}")
 
@@ -982,7 +989,10 @@ def sync_push(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Allow deletion of remote configs that were removed locally",
+        help=(
+            "Delete remote configs and rows whose local files were removed. "
+            "Without it push skips those deletions and lists them."
+        ),
     ),
     allow_plaintext: bool = typer.Option(
         False,
@@ -1083,9 +1093,7 @@ def sync_push(
 
         if status == "no_changes":
             formatter.console.print("[green]No changes to push.[/green]")
-            skipped_reason = result.get("skipped_reason")
-            if skipped_reason:
-                formatter.console.print(f"  [yellow]{skipped_reason}[/yellow]")
+            print_push_skips(formatter, result)
             _format_never_fetched(formatter, result.get("never_fetched", []))
             _format_orphaned(formatter, result.get("orphaned", []))
             return
@@ -1100,6 +1108,7 @@ def sync_push(
                 f"\nWould create {summary['added']}, update {summary['modified']}, "
                 f"delete {summary['deleted']}"
             )
+            print_push_skips(formatter, result)
             _format_never_fetched(formatter, result.get("never_fetched", []))
             _format_orphaned(formatter, result.get("orphaned", []))
             return
@@ -1109,6 +1118,7 @@ def sync_push(
             f"{result['updated']} updated, "
             f"{result['deleted']} deleted"
         )
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         for change in result.get("pushed_details", []):

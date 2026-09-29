@@ -20,6 +20,7 @@ from ..sync.clone import (
     apply_instance_rename,
     apply_variable_values,
     copy_reference_tree,
+    drop_source_pull_marks,
     repoint_default_branch_configs,
     repoint_manifest_project,
 )
@@ -163,6 +164,7 @@ def clone_project(
             source_default_branch_id=source_default_branch_id,
             new_branch_id=push_branch_id or 0,
         )
+        drop_source_pull_marks(manifest)
         bucket_rewrites = apply_bucket_map(target_path, manifest, bucket_map)
         variable_overrides = apply_variable_values(target_path, manifest, variable_values)
         renamed_instances = apply_instance_rename(target_path, manifest, instance_rename)

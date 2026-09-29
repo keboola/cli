@@ -962,6 +962,10 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync push --force (#792): push deletes remote configs and rows ONLY with --force; a plain push lists them
+#   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
+#   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
+#   is never re-created (it lands in skipped). Version gate in gotchas.md.
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent

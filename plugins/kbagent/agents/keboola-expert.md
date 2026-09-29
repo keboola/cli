@@ -306,7 +306,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `is_disabled: true` in `_config.yml` = config disabled (absent = enabled); a
   `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
   `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
-  branch's tree -- `sync pull` to re-target, never push. `sync status`
+  branch's tree -- `sync pull` to re-target, never push. Since vNEXT (#792)
+  `sync push` deletes only with `--force` (else `skipped_deletions`), and a
+  `- REMOTE DELETED` diff line = deleted on the remote, push never re-creates
+  it: `sync pull`, or `config restore` to keep it. `sync status`
   is local-only -- audit real drift with `sync diff`. On <= 0.90.1 a
   `~ REMOTE MODIFIED ... codes changed` on a config nobody touched is usually
   PHANTOM (issue #686: push stamped the baseline from disk); fixed in 0.91.0 --

@@ -13,6 +13,7 @@ from keboola_agent_cli.constants import DIFF_MAX_LINES, ENCRYPTED_PLACEHOLDER
 from keboola_agent_cli.sync.diff_engine import (
     ConfigChange,
     compute_changeset,
+    compute_row_changeset,
     config_hash,
     deep_diff,
     normalize_for_comparison,
@@ -450,6 +451,60 @@ class TestComputeChangeset:
 # ===================================================================
 # TestConfigChange
 # ===================================================================
+
+
+def _local_config() -> dict[str, Any]:
+    return {
+        "component_id": "keboola.ex-http",
+        "config_id": "cfg-001",
+        "config_name": "My Extractor",
+        "path": "extractor/keboola.ex-http/my-extractor",
+        "data": {"name": "My Extractor", "parameters": {}},
+    }
+
+
+class TestRemoteDeleted:
+    """``remote_deleted``: tracked on the target branch, gone on the remote (#792 H)."""
+
+    def test_config_tracked_on_target_and_missing_remotely(self) -> None:
+        changes = compute_changeset(
+            [_local_config()], {}, target_tracked_keys={"keboola.ex-http/cfg-001"}
+        )
+        assert [c.change_type for c in changes] == ["remote_deleted"]
+
+    def test_config_not_tracked_on_target_is_added(self) -> None:
+        changes = compute_changeset([_local_config()], {}, target_tracked_keys=set())
+        assert [c.change_type for c in changes] == ["added"]
+
+    def test_rows(self) -> None:
+        def row(parent: str, row_id: str, name: str) -> dict[str, Any]:
+            return {
+                "component_id": "keboola.ex-http",
+                "parent_config_id": parent,
+                "row_id": row_id,
+                "row_name": name,
+                "path": f"rows/{name}",
+                "data": {"name": name},
+            }
+
+        changes = compute_row_changeset(
+            [
+                row("cfg-001", "row-1", "under-gone-parent"),
+                row("cfg-001", "", "new-under-gone-parent"),
+                row("cfg-002", "row-2", "fetched-then-gone"),
+                row("cfg-002", "row-3", "never-fetched"),
+            ],
+            {},
+            target_tracked_keys={"keboola.ex-http/cfg-002/rows/row-2"},
+            remote_deleted_parents={"keboola.ex-http/cfg-001"},
+        )
+
+        assert [(c.config_name, c.change_type) for c in changes] == [
+            ("under-gone-parent", "remote_deleted"),
+            ("new-under-gone-parent", "remote_deleted"),
+            ("fetched-then-gone", "remote_deleted"),
+            ("never-fetched", "added"),
+        ]
 
 
 class TestConfigChange:
