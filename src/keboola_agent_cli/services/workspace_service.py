@@ -28,6 +28,7 @@ from ..constants import (
     WORKSPACE_LOAD_JOB_MAX_WAIT,
     WORKSPACE_LOAD_TYPES,
 )
+from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._workspace_load_plan import (
@@ -219,21 +220,26 @@ class WorkspaceService(BaseService):
     Uses dependency injection for config_store and client_factory.
     """
 
-    def _resolve_branch_id(self, alias: str, project: ProjectConfig) -> int:
+    def _resolve_branch_id(
+        self, alias: str, project: ProjectConfig, branch_id: int | None = None
+    ) -> int:
         """Resolve the effective branch ID for a project.
 
-        Uses active_branch_id if set, otherwise fetches main branch from API.
+        Uses ``branch_id`` (``--branch``), then the active branch, otherwise
+        fetches the default branch ID from the API.
 
         Returns:
             Branch ID (int).
         """
-        if project.active_branch_id is not None:
-            return project.active_branch_id
+        effective = resolve_branch(self._config_store, alias, branch_id)
+        if effective is not None:
+            return effective
 
         client = self._client_factory(project.stack_url, project.token)
         try:
             default_branch_id = find_default_branch_id(client.list_dev_branches())
             if default_branch_id is not None:
+                record_branch(self._config_store, alias, default_branch_id, "production")
                 return default_branch_id
             raise ConfigError(
                 f"No default branch found for project '{alias}'. "
@@ -316,6 +322,8 @@ class WorkspaceService(BaseService):
             config_id = sandbox_config.get("id", "")
 
             if ui_mode:
+                # The sandbox job is created without a branch: it runs on production.
+                record_branch(self._config_store, alias, None, "production", fixed=True)
                 return self._create_workspace_via_job(
                     client,
                     alias,
@@ -484,9 +492,7 @@ class WorkspaceService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = (
-            branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
-        )
+        effective_branch = self._resolve_branch_id(alias, project, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -510,10 +516,8 @@ class WorkspaceService(BaseService):
             orphaned_only: If True, return only orphaned workspaces — those
                 whose keboola.sandboxes config no longer exists.
             branch_id: When set, list workspaces from this specific dev branch
-                (`/v2/storage/branch/{ID}/workspaces`). When None, the
-                production endpoint is used; callers wanting to honour the
-                alias's pinned branch should resolve it via
-                ``resolve_branch()`` in the command layer before calling.
+                (`/v2/storage/branch/{ID}/workspaces`). When None, each
+                project's active branch is used, else its default branch.
                 Only valid with a single alias (mirrors storage commands).
             qs_compatible_only: If True, return only workspaces whose
                 ``login_type`` is in ``QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES``
@@ -539,9 +543,7 @@ class WorkspaceService(BaseService):
         ) -> tuple[str, list[dict[str, Any]], bool] | tuple[str, dict[str, str]]:
             client = self._client_factory(project.stack_url, project.token)
             try:
-                effective_branch = (
-                    branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
-                )
+                effective_branch = self._resolve_branch_id(alias, project, branch_id)
                 raw_workspaces = client.list_workspaces(branch_id=effective_branch)
 
                 # Fetch sandbox configs to resolve user-given names
@@ -698,10 +700,7 @@ class WorkspaceService(BaseService):
             workspace_id: Workspace ID.
             branch_id: When set, query the branch-scoped endpoint
                 ``/v2/storage/branch/{ID}/workspaces/{WS}``. When None, falls
-                back to the project's active branch (or the production
-                endpoint if no active branch is pinned). Explicit None vs.
-                resolved value lets the command layer surface a "production
-                branch used" notice without changing the service signature.
+                back to the project's active branch, else its default branch.
 
         Returns:
             Dict with workspace details including ``login_type``,
@@ -711,9 +710,7 @@ class WorkspaceService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = (
-            branch_id if branch_id is not None else self._resolve_branch_id(alias, project)
-        )
+        effective_branch = self._resolve_branch_id(alias, project, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -1219,7 +1216,8 @@ class WorkspaceService(BaseService):
         try:
             effective_backend = backend or self._detect_backend(client)
 
-            # Read the transformation config
+            # Read the transformation config (from production, without a branch)
+            record_branch(self._config_store, alias, None, "production", fixed=True, role="source")
             config_data = client.get_config_detail(component_id, config_id)
 
             # Extract input mapping from configuration
