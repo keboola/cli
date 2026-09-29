@@ -99,7 +99,13 @@ from ._sync_bulk import (
     push_all as _bulk_push_all,
 )
 from ._sync_clone import clone_project as _clone_project_impl
-from ._sync_data_app import load_data_app_types, resolve_pull_type, type_needs_rewrite
+from ._sync_data_app import (
+    load_data_app_types,
+    push_ds_client,
+    resolve_ds_branch_id,
+    resolve_pull_type,
+    type_needs_rewrite,
+)
 from ._sync_models import CreatedConfig, LocalConfigHashes
 from ._sync_push_ops import push_create, push_row_change, push_update
 from ._sync_storage import (
@@ -115,7 +121,6 @@ from ._sync_writeback import (
 )
 from .base import BaseService, ClientFactory, find_default_branch_id
 from .data_app_service import (
-    DATA_APP_COMPONENT_ID,
     DataScienceClientFactory,
     make_default_ds_client_factory,
 )
@@ -1681,24 +1686,15 @@ class SyncService(BaseService):
         # actually creates a data app, and entered alongside ``client`` so its
         # close() runs on every exit from the push block, a mid-push raise
         # included.
-        ds_client = None
-        if any(
-            c.get("change_type") == "added" and c.get("component_id") == DATA_APP_COMPONENT_ID
-            for c in changes
-            if not bool(c.get("is_row"))
-        ):
-            ds_client = self._ds_client_factory(project.stack_url, project.token)
+        ds_client = push_ds_client(self._ds_client_factory, project, changes)
         ds_context = ds_client if ds_client is not None else contextlib.nullcontext()
-
-        # POST /apps wants branchId=null for the default (production) branch and
-        # a numeric id only for a dev branch. The sync engine carries production
-        # as the manifest's default branch id, so map it back to None for the DS
-        # create (data-app create does the same). Live-verified against 4214.
-        default_branch_id = manifest.branches[0].id if manifest.branches else None
-        ds_branch_id = None if branch_id == default_branch_id else branch_id
 
         with client, ds_context:
             self._ensure_branch_registered(manifest, branch_id, client)
+            # POST /apps wants branchId=null for production, the numeric id for
+            # a dev branch. Resolved against the API's default branch, not the
+            # first manifest branch (#808), and only when a data app is created.
+            ds_branch_id = resolve_ds_branch_id(client, ds_client, branch_id, warnings)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
 
             # Process configs before rows, and rebind variable links last.
