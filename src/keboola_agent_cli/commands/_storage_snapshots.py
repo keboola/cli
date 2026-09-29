@@ -20,12 +20,12 @@ import typer
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 _SNAPSHOTS = "Snapshots"
@@ -72,9 +72,7 @@ def register(app: typer.Typer) -> None:
         service = get_service(ctx, "snapshot_service")
         config_store: ConfigStore = ctx.obj["config_store"]
         # Read command: ignore implicit active dev branch (empty listing trap).
-        _, effective_branch = resolve_branch(
-            config_store, formatter, project, branch, ignore_active_branch=True
-        )
+        effective_branch = resolve_branch(config_store, project, branch, ignore_active_branch=True)
 
         try:
             result = service.list_snapshots(
@@ -134,7 +132,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "snapshot_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         try:
             result = service.create_snapshot(
@@ -269,7 +267,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "snapshot_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         try:
             result = service.create_table_from_snapshot(
