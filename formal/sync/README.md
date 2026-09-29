@@ -100,7 +100,7 @@ the regression test for each in `tests/test_sync_formal_counterexamples.py`.
 | ID | Finding | Sources | Severity | Test |
 |----|---------|---------|----------|------|
 | A | Remote delete + recreate under the same name: pull writes the new config into the old directory, the stale sweep then deletes that directory; the next push DELETEs the live new config | Lean F8, TLA I2 | HIGH -- **fixed** (#792 A/C PR) | `test_a_recreate_under_same_name_does_not_delete_new_config` |
-| B | Pull compares only `_config.yml`: local edits in `transform.sql`/`code.py`/`_description.md` are silently overwritten when the remote changed, no SYNC_CONFLICT | Lean F6 | HIGH | `test_b_pull_never_overwrites_local_sql_edit` |
+| B | Pull compares only `_config.yml`: local edits in `transform.sql`/`code.py`/`_description.md` are silently overwritten when the remote changed, no SYNC_CONFLICT | Lean F6 | HIGH -- **FIXED** (pull's local-modification check now covers every `pull_extra_hashes` companion file) | `test_b_pull_never_overwrites_local_sql_edit` (unmarked regression guard) + `tests/test_sync_pull_companion_files.py` |
 | C | Remote delete + local edit: pull (plain/`--force`) deletes the locally-edited directory with no conflict | Lean F7, TLA I5 | HIGH -- **fixed** (#792 A/C PR) | `test_c_pull_never_deletes_locally_edited_dir_on_remote_delete` |
 | D | `sync push --branch dev` (promote) creates another dev copy of a prod-only config on every push | TLA I6/I1 | HIGH | `test_d_promote_push_is_idempotent` |
 | E | An untracked file carrying a config id (`config new --push --output-dir` scaffold / adopted orphan) is diffed 2-way: push overwrites a UI edit made after the scaffold was written | TLA I11 | MED | `test_e_adopted_scaffold_push_does_not_overwrite_remote_edit` |
@@ -120,9 +120,10 @@ and is deleted only by `--theirs`. That is what the I2 (sweep half), I5 and I8
 TLC/Lean rerun still reports them until the model's `Pull` is updated to match.
 Their tests are ordinary regression guards now.
 
-B, D..F, H and I reproduce on current code and are `xfail(strict=True)` --
+D..F, H and I reproduce on current code and are `xfail(strict=True)` --
 flipping to a hard failure the moment a fix lands is the point: delete the
 `xfail` marker to adopt the fix. G is kept `xfail` too even though the fix
 direction is a product decision (see the test's docstring). J reproduces and
 is `xfail`. K is deliberate, documented behavior, so it is an ordinary
-(unmarked) regression guard instead.
+(unmarked) regression guard instead. B is fixed: its marker was removed
+and the test is now an ordinary regression guard.
