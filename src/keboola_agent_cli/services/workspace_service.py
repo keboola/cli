@@ -1219,8 +1219,13 @@ class WorkspaceService(BaseService):
         try:
             effective_backend = backend or self._detect_backend(client)
 
-            # Read the transformation config
-            config_data = client.get_config_detail(component_id, config_id)
+            # Read the transformation config from the SAME branch the workspace
+            # is created and loaded in (#807). Reading it from production made a
+            # branch-only transformation 404 and silently loaded production's
+            # input mapping for one changed in the branch. On production
+            # branch_id is the default branch id, which the branch-scoped
+            # endpoint resolves to the production config.
+            config_data = client.get_config_detail(component_id, config_id, branch_id=branch_id)
 
             # Extract input mapping from configuration
             configuration = config_data.get("configuration", {})

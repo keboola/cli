@@ -1070,6 +1070,20 @@ confirmed-good whitelist". For an unknown loginType, `workspace list`
 renders it as `?` (yellow) in the QS column so callers know the policy
 is uncertain rather than confirmed-bad.
 
+## `workspace from-transformation` reads the transformation from the active branch
+
+*(since vNEXT, #807)* `workspace from-transformation` reads the transformation config from the
+same branch the workspace is created and loaded in: the active branch (`branch use`), or the
+default branch on production. Before, the workspace was created in the active branch but the
+config was always read from **production**, so with a dev branch active:
+
+- a transformation that exists only in the branch failed with a 404 (`NOT_FOUND`), and
+- a transformation changed in the branch loaded **production's** input mapping, silently --
+  the workspace held the wrong tables for the SQL you were debugging.
+
+On an older version, debug a branch-changed transformation by creating a plain workspace
+(`workspace create`) and loading the branch's input tables yourself (`workspace load`).
+
 ## `workspace query`: fast inline results vs `--full` CSV export
 
 By default `workspace query` now reads the result set inline via the Query
