@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.manifest import ManifestConfiguration
+from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_baseline import extras_modified
 
 if TYPE_CHECKING:
@@ -172,3 +172,56 @@ def apply_stale_sweep(
         )
         if not dry_run and s.entry.path and s.entry.path not in live_paths:
             _remove_dir(branch_dir / s.entry.path, branch_dir)
+
+
+def sweep_stale_rows(
+    service: SyncService,
+    config_dir: Path,
+    existing_rows: dict[str, dict[str, str]],
+    row_key_prefix: str,
+    remote_row_ids: set[str],
+    *,
+    theirs: bool,
+    dry_run: bool,
+    rel_path: str,
+    pull_details: list[dict[str, str]],
+) -> list[ManifestConfigRow]:
+    """Handle the tracked rows of one config that are gone from the remote.
+
+    Pull rebuilds the row entries from the remote listing, so a row deleted on
+    the remote used to lose its manifest entry while its directory stayed on
+    disk. The next diff read that directory as a new row, and push created it
+    again under a new id (issue #792 H). Now an unedited row directory is
+    deleted (``removed``). An edited one is kept with its entry (``skipped``),
+    so diff keeps reporting it as ``remote_deleted``; ``--theirs`` deletes it.
+
+    Returns the entries to keep in the manifest.
+    """
+    kept: list[ManifestConfigRow] = []
+    for key, tracked in existing_rows.items():
+        row_id = key.removeprefix(row_key_prefix)
+        if row_id == key or row_id in remote_row_ids:
+            continue
+        row_dir = config_dir / tracked["path"]
+        row_file = row_dir / CONFIG_FILENAME
+        pull_hash = tracked["pull_hash"]
+        edited = bool(pull_hash) and row_file.exists() and service._file_hash(row_file) != pull_hash
+        path = f"{rel_path}/{tracked['path']}"
+        detail = {"component_id": row_key_prefix.split("/", 1)[0], "config_name": "", "path": path}
+        if edited and not theirs:
+            kept.append(
+                ManifestConfigRow(
+                    id=row_id,
+                    path=tracked["path"],
+                    metadata={
+                        "pull_hash": pull_hash,
+                        "pull_config_hash": tracked["pull_config_hash"],
+                    },
+                )
+            )
+            pull_details.append({**detail, "action": "skipped", "reason": REMOTE_DELETED_REASON})
+            continue
+        pull_details.append({**detail, "action": "removed"})
+        if not dry_run and row_dir.is_dir():
+            shutil.rmtree(row_dir)
+    return kept

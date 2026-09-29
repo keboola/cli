@@ -112,6 +112,7 @@ from ._sync_stale import (
     find_stale_entries,
     remote_deleted_conflicts,
     reserved_paths,
+    sweep_stale_rows,
 )
 from ._sync_storage import (
     fetch_jobs_per_config,
@@ -988,6 +989,18 @@ class SyncService(BaseService):
                             },
                         )
                     )
+                # A tracked row that is gone from the remote (issue #792 H).
+                row_manifests += sweep_stale_rows(
+                    self,
+                    config_dir,
+                    existing_rows,
+                    f"{component_id}/{config_id}/",
+                    {str(row.get("id", "")) for row in cfg.get("rows", [])},
+                    theirs=theirs,
+                    dry_run=dry_run,
+                    rel_path=rel_path,
+                    pull_details=pull_details,
+                )
 
                 # Record in manifest (store file hash for change detection).
                 # For skipped configs: keep existing pull_hash (file untouched)

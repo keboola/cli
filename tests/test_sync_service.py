@@ -3,6 +3,7 @@
 Tests use tmp_path for filesystem operations and MagicMock for API client.
 """
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -537,10 +538,14 @@ class TestPull:
         )
         result2 = svc2.pull(alias="prod", project_root=project_root, force=True)
 
-        # Verify transformation was detected as removed
+        # Verify transformation was detected as removed. The extractor's row is
+        # gone from the remote too (SAMPLE_COMPONENTS_NO_ROWS), so pull removes
+        # its directory as well (#792 H) -- reported with a rows/ path.
         removed = [d for d in result2["details"] if d["action"] == "removed"]
-        assert len(removed) == 1
-        assert removed[0]["component_id"] == "keboola.snowflake-transformation"
+        removed_configs = [d for d in removed if "/rows/" not in d["path"]]
+        assert len(removed_configs) == 1
+        assert removed_configs[0]["component_id"] == "keboola.snowflake-transformation"
+        assert [d["component_id"] for d in removed if "/rows/" in d["path"]] == ["keboola.ex-http"]
 
         # Verify the orphan directory no longer exists on disk
         assert not orphan_dir.exists(), "Orphaned config directory should be deleted"
@@ -1292,6 +1297,69 @@ class TestPushRows:
         push_client.delete_config_row.assert_not_called()
         for res in (result, forced):
             assert (res["status"], res["skipped"]) == ("no_changes", 3)
+
+    def _without_row_001(self) -> list[dict[str, Any]]:
+        """SAMPLE_COMPONENTS with row-001 deleted on the remote; cfg-001 stays."""
+        components: list[dict[str, Any]] = copy.deepcopy(SAMPLE_COMPONENTS)
+        components[0]["configurations"][0]["rows"] = []
+        return components
+
+    def test_row_deleted_remotely_is_removed_by_pull_and_not_recreated(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Remote row delete -> diff, pull, diff, push: the row is never created again (#792 H)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        client = _make_sync_mock_client(components_response=self._without_row_001())
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+        before = svc.diff(alias="prod", project_root=project_root)
+        pulled = svc.pull(alias="prod", project_root=project_root)
+        after = svc.diff(alias="prod", project_root=project_root)
+        pushed = svc.push(alias="prod", project_root=project_root)
+
+        assert [(c["change_type"], c["config_id"]) for c in before["changes"]] == [
+            ("remote_deleted", "row-001")
+        ]
+        assert not row_file.exists()
+        assert any(d["action"] == "removed" and "rows" in d["path"] for d in pulled["details"])
+        assert after["changes"] == []
+        assert pushed["status"] == "no_changes"
+        client.create_config_row.assert_not_called()
+
+    def test_edited_row_deleted_remotely_is_kept_by_pull_and_not_recreated(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """An edited row whose remote is gone stays tracked as remote_deleted (#792 H)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        row_file.write_text(row_file.read_text().replace("/users", "/members"))
+        client = _make_sync_mock_client(components_response=self._without_row_001())
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+        pulled = svc.pull(alias="prod", project_root=project_root)
+        after = svc.diff(alias="prod", project_root=project_root)
+        pushed = svc.push(alias="prod", project_root=project_root)
+
+        assert row_file.exists()
+        assert any(d["action"] == "skipped" and "rows" in d["path"] for d in pulled["details"])
+        assert [(c["change_type"], c["config_id"]) for c in after["changes"]] == [
+            ("remote_deleted", "row-001")
+        ]
+        assert pushed["status"] == "no_changes"
+        client.create_config_row.assert_not_called()
 
     def test_push_row_encrypts_hash_secrets_before_api_call(
         self, tmp_config_dir: Path, tmp_path: Path
