@@ -404,6 +404,8 @@ before the PR is mergeable.
 
   > **Running locally without exporting a token:** if the target project is already registered in a kbagent `config.json`, use config-dir mode -- `make test-e2e-local CONFIG_DIR=/path/to/.kbagent ALIAS=my-proj`. The harness reads the token from `config.json` at import time and promotes it into `E2E_API_TOKEN` / `E2E_URL`; an explicit `E2E_API_TOKEN` still wins.
 
+- [ ] **API call-count test for hot read paths** -- a new or changed list/detail command that users and agents run often (the `project`/`config`/`job`/`storage`/`flow` read commands and their peers) adds or updates a case in `tests/test_api_call_counts.py`. It pins the exact `(METHOD, path)` calls via `helpers.assert_api_calls`; list commands also get a 1-vs-10-items case proving the count does not grow per item. The expected lists are a ratchet: raising one is a deliberate, reviewed change -- say why in the PR
+
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
 - [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
 - [ ] **No new `tuple[...]` returns** -- multi-value returns use a `@dataclass` ([Code Quality Patterns](#code-quality-patterns))
