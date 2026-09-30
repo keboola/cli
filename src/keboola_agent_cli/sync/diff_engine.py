@@ -31,6 +31,8 @@ class ConfigChange:
     - ``"remote_modified"`` -- remote changed, local unchanged (run pull)
     - ``"conflict"`` -- both sides changed since last pull
     - ``"deleted"`` -- local file removed, wants to delete from remote
+    - ``"remote_deleted"`` -- tracked on the target branch, deleted on the
+      remote since the last pull (run pull; push never re-creates it)
 
     Row changes set ``is_row=True`` and carry ``parent_config_id`` so
     ``sync push`` can dispatch them to the row-specific client methods
@@ -311,6 +313,7 @@ def compute_changeset(
     tracked_keys: set[str] | None = None,
     base_hashes: dict[str, str] | None = None,
     local_override_hashes: dict[str, str] | None = None,
+    target_tracked_keys: set[str] | None = None,
 ) -> list[ConfigChange]:
     """3-way diff: compare local vs base (pull_hash) vs remote.
 
@@ -335,12 +338,17 @@ def compute_changeset(
             -> hash to use for local side instead of computing from data.
             Used when local files haven't changed since pull to avoid lossy
             code-merge roundtrip.
+        target_tracked_keys: Optional set of keys the manifest tracks on the
+            target branch itself. Such a key missing from the remote was
+            deleted there since the last pull: it is ``"remote_deleted"``,
+            never ``"added"`` (issue #792 H -- push re-created it silently).
 
     Returns:
         List of :class:`ConfigChange` objects.
     """
     changes: list[ConfigChange] = []
     seen_remote_keys: set[str] = set()
+    on_target = target_tracked_keys or set()
 
     for entry in local_configs:
         component_id: str = entry["component_id"]
@@ -351,11 +359,11 @@ def compute_changeset(
 
         remote_key = f"{component_id}/{config_id}" if config_id else ""
 
-        # New config (no id yet, or not in remote)
+        # New config (no id yet, or not in remote), or one deleted remotely
         if not config_id or remote_key not in remote_configs:
             changes.append(
                 ConfigChange(
-                    change_type="added",
+                    change_type="remote_deleted" if remote_key in on_target else "added",
                     component_id=component_id,
                     config_id=config_id,
                     config_name=config_name,
@@ -448,6 +456,8 @@ def compute_row_changeset(
     remote_rows: dict[str, dict[str, Any]],
     tracked_row_keys: set[str] | None = None,
     base_hashes: dict[str, str] | None = None,
+    target_tracked_keys: set[str] | None = None,
+    remote_deleted_parents: set[str] | None = None,
 ) -> list[ConfigChange]:
     """3-way diff for configuration rows, parallel to :func:`compute_changeset`.
 
@@ -467,12 +477,21 @@ def compute_row_changeset(
             Only manifest-tracked remote rows can be flagged as ``"deleted"``.
         base_hashes: Optional dict of row_key -> normalized config hash at last
             pull time. Enables 3-way diff (same semantics as parent configs).
+        target_tracked_keys: Optional set of row keys the manifest tracks on
+            the target branch. Same ``"remote_deleted"`` rule as
+            :func:`compute_changeset`.
+        remote_deleted_parents: Optional set of parent config keys
+            (``"{component_id}/{config_id}"``) classified ``"remote_deleted"``.
+            Every local row under one is ``"remote_deleted"`` too, a new row
+            included: push cannot create a row under a config that is gone.
 
     Returns:
         List of :class:`ConfigChange` objects, each with ``is_row=True``.
     """
     changes: list[ConfigChange] = []
     seen_remote_keys: set[str] = set()
+    on_target = target_tracked_keys or set()
+    gone_parents = remote_deleted_parents or set()
 
     for entry in local_rows:
         component_id: str = entry["component_id"]
@@ -488,11 +507,14 @@ def compute_row_changeset(
             else ""
         )
 
-        # New row (no id yet, or not in remote)
-        if not row_id or remote_key not in remote_rows:
+        # New row (no id yet, or not in remote), or one deleted remotely --
+        # on its own or with its parent config
+        parent_gone = f"{component_id}/{parent_config_id}" in gone_parents
+        if parent_gone or not row_id or remote_key not in remote_rows:
+            deleted_remotely = parent_gone or remote_key in on_target
             changes.append(
                 ConfigChange(
-                    change_type="added",
+                    change_type="remote_deleted" if deleted_remotely else "added",
                     component_id=component_id,
                     config_id=row_id,
                     config_name=row_name,

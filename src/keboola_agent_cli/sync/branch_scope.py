@@ -112,17 +112,41 @@ class TreeScope:
             excluded before any branch reasoning happens.
         orphaned: Report records for entries that belong to another tree.
         claims: ``config_key`` -> the claims held on it by *any* tree.
+        on_target: The ``in_tree`` entries fetched from the push target branch
+            itself (they carry a ``pull_hash``). Not the production entries a
+            promote push reads from ``main/``, a hand-authored placeholder, or
+            a ``sync clone`` copy: none of them was ever on the target.
     """
 
     in_tree: list[ManifestConfiguration]
     never_fetched: list[dict[str, str]]
     orphaned: list[dict[str, Any]]
     claims: dict[str, list[Claim]]
+    on_target: list[ManifestConfiguration]
 
     @property
     def tracked_keys(self) -> set[str]:
         """Keys diff/push treat as tracked -- source tree only."""
         return {config_key(cfg.component_id, cfg.id) for cfg in self.in_tree}
+
+    @property
+    def target_tracked_keys(self) -> set[str]:
+        """Config keys tracked on the target branch (issue #792 H)."""
+        return {config_key(cfg.component_id, cfg.id) for cfg in self.on_target}
+
+    @property
+    def target_tracked_row_keys(self) -> set[str]:
+        """Keys of the rows fetched from the target branch (issue #792 H).
+
+        A row carries its own ``pull_hash``: a row whose create failed under a
+        freshly created parent has none and stays ``added``.
+        """
+        return {
+            f"{config_key(cfg.component_id, cfg.id)}/rows/{row.id}"
+            for cfg in self.on_target
+            for row in cfg.rows
+            if row.metadata and row.metadata.get("pull_hash")
+        }
 
     @property
     def never_fetched_keys(self) -> set[str]:
@@ -152,9 +176,9 @@ def scope_manifest(
             (``ALWAYS_IGNORED_COMPONENTS`` plus the manifest's
             ``ignoredComponents``). Entries for these components are dropped
             from EVERY partition -- see below.
-        target_branch_id: Branch the API writes go to. Only consulted on the
-            promote path (the target's own tree is not *source_branch_path*),
-            see :func:`_promoted_paths`.
+        target_branch_id: Branch the API writes go to. Selects
+            ``on_target``, and on the promote path (the target's own tree is
+            not *source_branch_path*) :func:`_promoted_paths`.
 
     Returns:
         A :class:`TreeScope`.
@@ -163,6 +187,8 @@ def scope_manifest(
     never_fetched: list[dict[str, str]] = []
     orphaned: list[dict[str, Any]] = []
     claims: dict[str, list[Claim]] = {}
+    on_target: list[ManifestConfiguration] = []
+    target_tree = branch_tree_path(manifest, target_branch_id)
     promoted = _promoted_paths(manifest, project_root, source_branch_path, target_branch_id)
 
     for cfg in manifest.configurations:
@@ -210,10 +236,14 @@ def scope_manifest(
         if promote_key in promoted:
             if cfg.branch_id == target_branch_id:
                 in_tree.append(cfg)
+                if cfg.metadata.get("pull_hash"):
+                    on_target.append(cfg)
             continue
 
         if tree_path == source_branch_path:
             in_tree.append(cfg)
+            if tree_path == target_tree and cfg.metadata.get("pull_hash"):
+                on_target.append(cfg)
             continue
 
         orphaned.append(
@@ -225,6 +255,7 @@ def scope_manifest(
         never_fetched=never_fetched,
         orphaned=orphaned,
         claims=claims,
+        on_target=on_target,
     )
 
 

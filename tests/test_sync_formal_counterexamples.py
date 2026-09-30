@@ -617,7 +617,7 @@ def test_e_adopted_scaffold_push_does_not_overwrite_remote_edit(tmp_path: Path) 
 
 # ===========================================================================
 # F -- a push aborted by ENCRYPTION_FAILED leaves the manifest unsaved, so a
-#      change it already applied (a resurrect CREATE) is re-applied by the
+#      change it already applied (a promote CREATE) is re-applied by the
 #      retry, duplicating it.
 # ===========================================================================
 
@@ -638,8 +638,11 @@ def test_e_adopted_scaffold_push_does_not_overwrite_remote_edit(tmp_path: Path) 
 )
 def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path) -> None:
     """Invariant: retrying a push after an ENCRYPTION_FAILED abort must not
-    re-apply a change (here: a resurrect CREATE) that the aborted push had
-    already sent to the remote before it failed.
+    re-apply a change (here: a promote CREATE of ``main/`` into a dev branch)
+    that the aborted push had already sent to the remote before it failed.
+    The promote path keeps both creates in manifest order, so "Orders" is
+    created before "Contacts" fails. (The first version of this test used a
+    remote-deleted config, which push no longer re-creates since the H fix.)
 
     Issue #792 finding F.
     """
@@ -649,8 +652,6 @@ def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path
     w.init()
     w.pull()
 
-    # Remote deletes cfg-1 (resurrect precondition): local file untouched.
-    w.api.remote[PROD].pop("cfg-1")
     # Local edit to cfg-2's secret triggers the encryption failure below.
     contacts_file = w.config_dir("contacts") / CONFIG_FILENAME
     data = yaml.safe_load(contacts_file.read_text())
@@ -665,7 +666,7 @@ def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path
     w.api.encrypt_values = flaky_encrypt
 
     with pytest.raises(KeboolaApiError) as exc_info:
-        w.push()
+        w.push(branch=DEV)
     assert exc_info.value.error_code == ErrorCode.ENCRYPTION_FAILED
 
     creates_before_retry = [line for line in w.api.log if line.startswith("CREATE")]
@@ -680,41 +681,25 @@ def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path
     w.api.encrypt_values = lambda project_id, component_id, data: {
         k: f"KBC::Encrypted=={v}" for k, v in data.items()
     }
-    w.push()
+    w.push(branch=DEV)
 
     creates_after_retry = [line for line in w.api.log if line.startswith("CREATE")]
-    # Safe expectation: the resurrect CREATE for "Orders" happened exactly
+    # Safe expectation: the promote CREATE for "Orders" happened exactly
     # once across both push attempts, not once per attempt.
     assert len(creates_before_retry) == 1, "expected exactly one CREATE before the encryption abort"
     assert len(creates_after_retry) == len(creates_before_retry), (
-        "retrying the push after the encryption fix duplicated the already-applied resurrect CREATE: "
+        "retrying the push after the encryption fix duplicated the already-applied promote CREATE: "
         f"log={w.api.log}"
     )
 
 
 # ===========================================================================
-# G -- `sync push` deletes a remote config with no `--force`, contradicting
-#      the CLI's own help text ("--force: allow deletion of remote configs
-#      removed locally"). Product decision (soft-delete to trash since
-#      0.89.0, so it is recoverable) -- xfail per the task's own note.
+# G -- `sync push` deleted a remote config with no `--force`, contradicting
+#      the CLI's own help text. Fixed: push deletes nothing remote without
+#      `--force` and lists the held-back deletions (`skipped_deletions`).
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 G: SyncService.push() accepts `force` but never reads it in "
-        "its body (grep sync_service.py:1574-1966) -- only pull()'s conflict "
-        "guard does. The CLI help text for `sync push --force` "
-        "(commands/sync.py:982-986) promises 'Allow deletion of remote "
-        "configs that were removed locally', implying a plain push should "
-        "NOT delete, but push deletes a remote config the instant its local "
-        "directory is missing, force=True or not. This is a PRODUCT "
-        "DECISION (the delete is soft, into the Storage trash, since "
-        "0.89.0, so it is recoverable via `sync restore`) -- kept xfail per "
-        "issue #792 rather than resolved either way here."
-    ),
-)
 def test_g_push_without_force_does_not_delete_remote_config(
     tmp_config_dir: Path, tmp_path: Path
 ) -> None:
@@ -738,28 +723,18 @@ def test_g_push_without_force_does_not_delete_remote_config(
 
     client.delete_config.assert_not_called()
     assert push_result.get("deleted", 0) == 0
+    assert [(c["component_id"], c["config_id"]) for c in push_result["skipped_deletions"]] == [
+        (cfg.component_id, cfg.id)
+    ]
 
 
 # ===========================================================================
-# H -- a config deleted remotely by another actor is silently re-created
-#      (no warning) by the next push, even with no local change.
+# H -- a config deleted remotely by another actor was silently re-created by
+#      the next push, even with no local change. Fixed: the diff classifies it
+#      `remote_deleted`, which push never applies and reports as skipped.
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 H: compute_changeset routes ANY local entry whose remote_key "
-        "is absent into 'added' (diff_engine.py:355), regardless of whether "
-        "the id was previously tracked. A tracked config deleted/trashed "
-        "remotely by another actor -- with NO local change at all -- is "
-        "silently recreated under a brand-new id on the next push, with no "
-        "warning distinguishing it from a genuinely new config. Confirmed "
-        "via spec S2, Lean F2 and TLA I11b (three independent hits) and "
-        "replayed (scratchpad/repro/test_lean_refutations.py::test_R6, "
-        "scratchpad/replay/r_misc.py)."
-    ),
-)
 def test_h_push_does_not_silently_resurrect_deleted_config(tmp_path: Path) -> None:
     """Invariant: push must not silently POST a fresh create for a config
     another actor deleted remotely when the local user made no change to it
@@ -781,6 +756,58 @@ def test_h_push_does_not_silently_resurrect_deleted_config(tmp_path: Path) -> No
         "push silently recreated a remotely-deleted, locally-untouched config"
     )
     assert "cfg-1" not in w.api.remote[PROD]
+    assert result["skipped"] == 1
+    assert changes(w.diff()) == [("remote_deleted", "cfg-1")]
+
+
+def test_h_locally_edited_remote_deleted_config_is_not_recreated(tmp_path: Path) -> None:
+    """A local edit does not turn a config deleted on the remote into a new one.
+
+    Issue #792 finding H (the local-edit half; C keeps the edited dir on pull).
+    """
+    w = World(tmp_path)
+    w.api.put(PROD, "cfg-1", "Orders", "a")
+    w.init()
+    w.pull()
+    cfg_file = w.config_dir("orders") / CONFIG_FILENAME
+    cfg_file.write_text(cfg_file.read_text().replace("value: a", "value: b"))
+    w.api.remote[PROD].pop("cfg-1")
+
+    result = w.push()
+
+    assert result.get("created", 0) == 0
+    assert "cfg-1" not in w.api.remote[PROD]
+    assert changes(w.diff()) == [("remote_deleted", "cfg-1")]
+
+
+def test_g_dry_run_counts_only_the_deletions_push_applies(tmp_path: Path) -> None:
+    """``--dry-run`` shows what push does: without --force a deletion is listed,
+    not counted, and push leaves the remote config alone until --force.
+
+    Issue #792 finding G.
+    """
+    w = World(tmp_path)
+    w.api.put(PROD, "cfg-1", "Orders", "a")
+    w.api.put(PROD, "cfg-2", "Contacts", "b")
+    w.init()
+    w.pull()
+    cfg_file = w.config_dir("orders") / CONFIG_FILENAME
+    cfg_file.write_text(cfg_file.read_text().replace("value: a", "value: b"))
+    shutil.rmtree(w.config_dir("contacts"))
+
+    dry = w.push(dry_run=True)
+    assert (dry["summary"]["modified"], dry["summary"]["deleted"]) == (1, 0)
+    assert [c["config_id"] for c in dry["skipped_deletions"]] == ["cfg-2"]
+    assert w.push(dry_run=True, force=True)["summary"]["deleted"] == 1
+
+    pushed = w.push()
+    assert (pushed["updated"], pushed["deleted"]) == (1, 0)
+    assert [c["config_id"] for c in pushed["skipped_deletions"]] == ["cfg-2"]
+    assert "cfg-2" in w.api.remote[PROD]
+
+    forced = w.push(force=True)
+    assert forced["deleted"] == 1
+    assert "cfg-2" not in w.api.remote[PROD]
 
 
 # ===========================================================================

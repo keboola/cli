@@ -106,12 +106,13 @@ from ._sync_data_app import (
     type_needs_rewrite,
 )
 from ._sync_models import CreatedConfig, LocalConfigHashes
-from ._sync_push_ops import push_create, push_row_change, push_update
+from ._sync_push_ops import plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
     remote_deleted_conflicts,
     reserved_paths,
+    sweep_stale_rows,
 )
 from ._sync_storage import (
     fetch_jobs_per_config,
@@ -988,6 +989,18 @@ class SyncService(BaseService):
                             },
                         )
                     )
+                # A tracked row that is gone from the remote (issue #792 H).
+                row_manifests += sweep_stale_rows(
+                    self,
+                    config_dir,
+                    existing_rows,
+                    f"{component_id}/{config_id}/",
+                    {str(row.get("id", "")) for row in cfg.get("rows", [])},
+                    theirs=theirs,
+                    dry_run=dry_run,
+                    rel_path=rel_path,
+                    pull_details=pull_details,
+                )
 
                 # Record in manifest (store file hash for change detection).
                 # For skipped configs: keep existing pull_hash (file untouched)
@@ -1437,6 +1450,7 @@ class SyncService(BaseService):
             tracked_keys,
             base_hashes or None,
             local_override_hashes or None,
+            scope.target_tracked_keys,
         )
 
         # Row-level diff: walk manifest rows, load local YAML, feed into
@@ -1499,6 +1513,12 @@ class SyncService(BaseService):
             remote_rows,
             tracked_row_keys,
             row_base_hashes or None,
+            scope.target_tracked_row_keys,
+            {
+                f"{c.component_id}/{c.config_id}"
+                for c in changeset
+                if c.change_type == "remote_deleted"
+            },
         )
         changeset.extend(row_changeset)
 
@@ -1507,6 +1527,7 @@ class SyncService(BaseService):
         remote_modified = [c for c in changeset if c.change_type == "remote_modified"]
         conflicts = [c for c in changeset if c.change_type == "conflict"]
         deleted = [c for c in changeset if c.change_type == "deleted"]
+        remote_deleted = [c for c in changeset if c.change_type == "remote_deleted"]
 
         # Detect remote-only configs (new on server, not yet pulled).
         local_keys = {
@@ -1535,11 +1556,13 @@ class SyncService(BaseService):
                 "remote_modified": len(remote_modified),
                 "conflict": len(conflicts),
                 "deleted": len(deleted),
+                "remote_deleted": len(remote_deleted),
                 "unchanged": len(local_configs)
                 - len(added)
                 - len(modified)
                 - len(remote_modified)
-                - len(conflicts),
+                - len(conflicts)
+                - sum(1 for c in remote_deleted if not c.is_row),
                 "remote_only": len(remote_only),
                 "never_fetched": len(never_fetched),
                 "orphaned": len(orphaned),
@@ -1569,7 +1592,9 @@ class SyncService(BaseService):
             alias: Project alias from config store.
             project_root: Root directory of the sync working tree.
             dry_run: If True, compute changes but don't execute them.
-            force: If True, allow deletions without extra confirmation.
+            force: If True, delete remote configs and rows whose local files
+                were removed. Without it push deletes nothing and lists the
+                deletions under ``skipped_deletions`` (issue #792 G).
             allow_plaintext_fallback: If True, allow push when secret
                 encryption fails (DANGEROUS).
             branch_override: If set, target this dev-branch ID for the push.
@@ -1594,13 +1619,10 @@ class SyncService(BaseService):
         # branch's tree (issue #649) -- reported, never pushed.
         orphaned = diff_result.get("orphaned", [])
 
-        # Only push local-side changes (added, modified, deleted).
-        # Skip remote_modified (need pull) and conflict (need resolution).
-        pushable_types = {"added", "modified", "deleted"}
-        changes = [c for c in all_changes if c["change_type"] in pushable_types]
-
-        # Warn about skipped changes
-        skipped = [c for c in all_changes if c["change_type"] not in pushable_types]
+        # Push applies local-side changes only, and deletes only with --force.
+        # What it holds back is listed in every result (issue #792 G, H).
+        plan = plan_push(all_changes, force=force)
+        changes = plan.changes
 
         if not changes:
             result: dict[str, Any] = {
@@ -1609,10 +1631,8 @@ class SyncService(BaseService):
                 "updated": 0,
                 "deleted": 0,
                 "errors": [],
+                **plan.report(),
             }
-            if skipped:
-                result["skipped"] = len(skipped)
-                result["skipped_reason"] = "Remote changes detected. Run 'sync pull' first."
             if never_fetched:
                 result["never_fetched"] = never_fetched
             if orphaned:
@@ -1623,7 +1643,8 @@ class SyncService(BaseService):
             dry_result: dict[str, Any] = {
                 "status": "dry_run",
                 "changes": changes,
-                "summary": diff_result["summary"],
+                "summary": {**diff_result["summary"], "deleted": plan.deletions},
+                **plan.report(),
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched
@@ -1922,6 +1943,7 @@ class SyncService(BaseService):
             "deleted": deleted,
             "errors": errors,
             "pushed_details": pushed_details,
+            **plan.report(),
         }
         if warnings:
             result_data["warnings"] = warnings

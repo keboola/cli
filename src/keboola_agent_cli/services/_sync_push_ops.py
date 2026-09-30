@@ -1,6 +1,7 @@
 """Per-change push CRUD operations (create/update/delete config + rows).
 
-Extracted from sync_service.py. ``push()`` calls :func:`push_create`,
+Extracted from sync_service.py. ``push()`` first splits the diff with
+:func:`plan_push`, then calls :func:`push_create`,
 :func:`push_update`, and :func:`push_row_change`; the row dispatcher fans out to
 the create/update/delete row helpers. Each reads a local ``_config.yml``,
 encrypts ``#``-prefixed secrets (fail-closed), POSTs/PUTs/DELETEs, then writes
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +33,65 @@ if TYPE_CHECKING:
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
+
+# The local-side change types push applies. ``remote_modified``, ``conflict``
+# and ``remote_deleted`` need a ``sync pull`` first.
+PUSHABLE_CHANGE_TYPES = frozenset({"added", "modified", "deleted"})
+SKIPPED_REASON = "Remote changes detected. Run 'sync pull' first."
+SKIPPED_DELETIONS_REASON = (
+    "Push deletes remote configs and rows only with --force. "
+    "Run 'kbagent sync push --force' to delete these."
+)
+
+
+@dataclass
+class PushPlan:
+    """The changes one ``sync push`` applies, and the ones it holds back.
+
+    Attributes:
+        changes: Changes push applies.
+        skipped: Remote-side changes; they need ``sync pull`` first.
+        skipped_deletions: ``deleted`` changes held back because ``--force``
+            was not given (issue #792 G).
+    """
+
+    changes: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+    skipped_deletions: list[dict[str, Any]]
+
+    @property
+    def deletions(self) -> int:
+        """Number of ``deleted`` changes push applies."""
+        return sum(1 for change in self.changes if change["change_type"] == "deleted")
+
+    def report(self) -> dict[str, Any]:
+        """Result keys that list what push does not apply."""
+        report: dict[str, Any] = {}
+        if self.skipped:
+            report["skipped"] = len(self.skipped)
+            report["skipped_reason"] = SKIPPED_REASON
+        if self.skipped_deletions:
+            report["skipped_deletions"] = self.skipped_deletions
+            report["skipped_deletions_reason"] = SKIPPED_DELETIONS_REASON
+        return report
+
+
+def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
+    """Split a diff changeset into what push applies and what it holds back.
+
+    Without *force* push deletes nothing on the remote, configs and rows
+    alike, as the ``--force`` help says (issue #792 G). The held-back
+    deletions are listed in the result, also for ``--dry-run``.
+    """
+    plan = PushPlan(changes=[], skipped=[], skipped_deletions=[])
+    for change in all_changes:
+        if change["change_type"] not in PUSHABLE_CHANGE_TYPES:
+            plan.skipped.append(change)
+        elif change["change_type"] == "deleted" and not force:
+            plan.skipped_deletions.append(change)
+        else:
+            plan.changes.append(change)
+    return plan
 
 
 def guard_script_shape(

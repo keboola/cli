@@ -106,6 +106,22 @@ def repoint_default_branch_configs(
             cfg.branch_id = new_branch_id
 
 
+def drop_source_pull_marks(manifest: Any) -> None:
+    """Drop the ``pull_hash`` the copied entries carry from the SOURCE project.
+
+    ``pull_hash`` marks an entry as fetched from the remote it now points at.
+    After the re-point it would claim that for the target, where none of these
+    configs exists, and the diff would report each one as deleted on the
+    target instead of new (``remote_deleted``, issue #792 H). The rows carry
+    their own. Push stamps a fresh ``pull_hash`` when it creates each one.
+    """
+    for cfg in manifest.configurations:
+        cfg.metadata.pop("pull_hash", None)
+        for row in cfg.rows:
+            if row.metadata:
+                row.metadata.pop("pull_hash", None)
+
+
 def _default_branch_dir(manifest: Any) -> str:
     """On-disk tree for an unregistered branch id -- the default branch's dir.
 

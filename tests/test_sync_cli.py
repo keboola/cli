@@ -13,7 +13,12 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands.sync import _format_pull_result, _pull_one_liner
+from keboola_agent_cli.commands.sync import (
+    _diff_one_liner,
+    _format_pull_result,
+    _pull_one_liner,
+    _push_one_liner,
+)
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError, SyncConflictError
@@ -446,6 +451,23 @@ class TestSyncPullCli:
 
         assert "2 ignored" in line
         assert "up to date" not in line
+
+    def test_push_one_liner_names_what_push_held_back(self) -> None:
+        """--all-projects push line: remote changes to pull and deletions that need --force (#792)."""
+        line = _push_one_liner(
+            {"status": "no_changes", "skipped": 2, "skipped_deletions": [{"config_id": "c"}]}
+        )
+
+        assert "nothing to push" in line
+        assert "2 to pull first" in line
+        assert "1 deletion(s) need --force" in line
+
+    def test_diff_one_liner_counts_remote_deletions(self) -> None:
+        """A config deleted on the remote is a change to pull, not "in sync" (#792 H)."""
+        line = _diff_one_liner({"summary": {"remote_deleted": 1}})
+
+        assert "1 to pull" in line
+        assert "in sync" not in line
 
     def test_pull_one_liner_flags_folder_lookup_failed(self) -> None:
         """The --all-projects one-liner signals a degraded folder lookup, even
@@ -1244,6 +1266,51 @@ class TestSyncPushCli:
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "No changes to push" in result.output
+
+    def test_sync_push_lists_deletions_held_back_without_force_human(self, tmp_path: Path) -> None:
+        """Human mode names each deletion push skipped without --force, and the fix (#792 G)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_sync = _make_sync_service_mock()
+        mock_sync.push.return_value = {
+            "status": "no_changes",
+            "created": 0,
+            "updated": 0,
+            "deleted": 0,
+            "errors": [],
+            "skipped_deletions": [
+                {
+                    "change_type": "deleted",
+                    "component_id": "keboola.ex-http",
+                    "config_id": "cfg-001",
+                    "config_name": "My HTTP Extractor",
+                    "path": "",
+                    "details": [],
+                }
+            ],
+            "skipped_deletions_reason": "Push deletes remote configs and rows only with --force.",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SyncService") as MockSyncService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockSyncService.return_value = mock_sync
+            result = runner.invoke(
+                app, ["sync", "push", "--project", "prod", "--directory", str(tmp_path)]
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        # A notice, not a result: stderr only (#791 proposal, rule O6).
+        assert "1 deletion(s) not applied" in result.stderr
+        assert "only with --force" in result.stderr
+        assert "keboola.ex-http/cfg-001" in result.stderr
+        assert "deletion(s) not applied" not in result.stdout
 
     def test_sync_push_with_row_changes_json(self, tmp_path: Path) -> None:
         """JSON output reflects row-level push results (P0-1).

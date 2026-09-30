@@ -1625,7 +1625,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Never-fetched guard: a manifest entry with an empty pull_hash and no
     local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
     diff/push exclude it and report it under never_fetched with a warning -- run sync pull
-    to materialize it. Local deletion of a properly-pulled config still deletes on push.
+    to materialize it. Local deletion of a properly-pulled config deletes on push --force
+    only (#792): a plain push deletes nothing and lists the deletion under skipped_deletions,
+    also in --dry-run. A config or row deleted on the remote since the last pull is
+    remote_deleted: push never re-creates it, sync pull removes the local copy.
     Adopted-by-id writeback: pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.

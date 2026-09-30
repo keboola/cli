@@ -259,6 +259,8 @@ for the full mapping from the old `secrets.KBC_SAPI_TOKEN_*` / `vars.KBC_*` sche
   push is fail-closed by design.
 - `sync push --force` deletes remote configs removed locally. It is wired to
   the `allow_delete` workflow input (default off). Treat it like the old `--force`.
+  Without it push deletes nothing and lists the deletions (since vNEXT; older
+  kbagent deleted without `--force`, so `allow_delete` off did not stop them).
 - Tokens live **only** in GitHub secrets and are injected as env vars per step; the
   generated workflows never write a `config.json` to disk.
 - **Never run `--all-projects` in a directory that also holds a flat single-project
