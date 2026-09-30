@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
+from keboola_agent_cli.services._data_app_password import DataAppPassword
 from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
 AUTH = {"Authorization": "Bearer test-token"}
@@ -464,54 +465,55 @@ def test_storage_file_download_passes_output_path_kwarg(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # data_apps.py  GET /{p}/{app}/password
-# Service: data_app.get_data_app_password(manage_token=...)
-# Also: omitting X-Manage-Token header returns 401.
+# Service: data_app.get_data_app_password(alias=, app_id=) -- project token only,
+# no X-Manage-Token. The password is in the response only with ?reveal=true.
 # ---------------------------------------------------------------------------
 
+_APP_PASSWORD_SENTINEL = "pw-sentinel-5f1e9a"
 
-def test_data_app_password_passes_manage_token_kwarg(tmp_path: Path) -> None:
-    """Router must pass ``manage_token=`` to DataAppService.get_data_app_password."""
+
+def _password_app(tmp_path: Path) -> tuple[Any, MagicMock]:
     data_app_svc = MagicMock()
-    data_app_svc.get_data_app_password.return_value = {"password": "s3cr3t"}
+    data_app_svc.get_data_app_password.return_value = DataAppPassword(
+        project_alias=PROJECT,
+        app_id=APP_ID,
+        auth="password",
+        app_url="https://app-1234.hub.keboola.com",
+        ui_url="https://connection.keboola.com/admin/projects/1/branch/default/data-apps/c1",
+        password=_APP_PASSWORD_SENTINEL,
+    )
     registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Override get_manage_token to provide a token
-    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+    return _make_app_with_registry(tmp_path, registry), data_app_svc
+
+
+def test_data_app_password_needs_no_manage_token_and_omits_the_password(tmp_path: Path) -> None:
+    """No X-Manage-Token header; by default the response has no password."""
+    app, data_app_svc = _password_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.get(f"/data-apps/{PROJECT}/{APP_ID}/password", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    data_app_svc.get_data_app_password.assert_called_once_with(alias=PROJECT, app_id=APP_ID)
+    assert _APP_PASSWORD_SENTINEL not in res.text
+    payload = res.json()
+    assert payload["password_delivered_to"] is None
+    assert "password" not in payload
+    assert payload["ui_url"].endswith("/data-apps/c1")
+
+
+def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
+    app, _svc = _password_app(tmp_path)
 
     with TestClient(app) as client:
         res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,
+            f"/data-apps/{PROJECT}/{APP_ID}/password", params={"reveal": "true"}, headers=AUTH
         )
 
     assert res.status_code == 200, res.text
-    kwargs = data_app_svc.get_data_app_password.call_args.kwargs
-    assert kwargs.get("manage_token") == "mgmt-tok", (
-        f"Expected manage_token='mgmt-tok', got kwargs={kwargs}"
-    )
-
-
-def test_data_app_password_missing_manage_token_returns_401(tmp_path: Path) -> None:
-    """GET /{p}/{app}/password without X-Manage-Token must return 401."""
-    data_app_svc = MagicMock()
-    registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Explicitly provide None (no token) -- this mirrors the real behaviour when
-    # the header is absent; no dependency override so the real get_manage_token runs.
-
-    with TestClient(app) as client:
-        res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,  # Bearer auth present but NO X-Manage-Token
-        )
-
-    assert res.status_code == 401, f"Expected 401, got {res.status_code}: {res.text}"
-    body = res.json()
-    # The app wraps HTTPException via a global handler into
-    # {"status": "error", "error": {"code": ..., "message": ...}}.
-    msg = body.get("detail") or body.get("error", {}).get("message", "")
-    assert "X-Manage-Token" in msg, f"Expected message mentioning X-Manage-Token, got: {body}"
-    data_app_svc.get_data_app_password.assert_not_called()
+    payload = res.json()
+    assert payload["password"] == _APP_PASSWORD_SENTINEL
+    assert payload["password_delivered_to"] == "response"
 
 
 # ---------------------------------------------------------------------------

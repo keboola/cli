@@ -2,7 +2,7 @@
 
 Covers: input validation, the §9 redeploy contract, cleanup-in-finally,
 the §8 pitfall #1 (transient stopped during initial deploy), encryption
-round-trip, and password retrieval.
+round-trip, and password retrieval (auth gating, null password, UI URL).
 
 The tests speak to a fully-mocked Data Science + Storage + Encryption
 stack -- they verify orchestration, not HTTP shapes (those live in
@@ -20,6 +20,10 @@ import pytest
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._data_app_bodies import (
+    _build_public_auth_block,
+    _build_simple_auth_block,
+)
 from keboola_agent_cli.services.data_app_service import (
     DataAppService,
     _redact_git_block,
@@ -28,7 +32,6 @@ from keboola_agent_cli.services.data_app_service import (
 )
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
-TEST_MANAGE_TOKEN = "manage-test-token"
 
 
 # ---------------------------------------------------------------------------
@@ -1318,24 +1321,116 @@ class TestDataAppPoll:
 # ---------------------------------------------------------------------------
 
 
+def _stub_password_app(
+    ds_mock: MagicMock,
+    storage_mock: MagicMock,
+    *,
+    authorization: dict[str, Any] | None,
+    branch_id: Any = None,
+    password: str | None = "deadbeefcafe",
+) -> None:
+    """A deployed app record, its Storage config (auth block) and its password."""
+    ds_mock.get_app.return_value = {
+        "id": 42,
+        "configId": "cfg-1",
+        "branchId": branch_id,
+        "url": "https://app-42.hub.keboola.com",
+    }
+    configuration = {} if authorization is None else {"authorization": authorization}
+    storage_mock.get_config_detail.return_value = {"id": "cfg-1", "configuration": configuration}
+    ds_mock.get_app_password.return_value = {"password": password}
+
+
 class TestDataAppPassword:
-    def test_returns_password(self, tmp_path: Path) -> None:
+    def test_returns_metadata_and_password_apart(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
-        service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app_password.return_value = {"password": "deadbeefcafe"}
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
 
-        result = service.get_data_app_password(
-            alias="prod", app_id="42", manage_token=TEST_MANAGE_TOKEN
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.password == "deadbeefcafe"
+        assert result.metadata() == {
+            "project_alias": "prod",
+            "app_id": "42",
+            "auth": "password",
+            "app_url": "https://app-42.hub.keboola.com",
+            "ui_url": (
+                "https://connection.keboola.com/admin/projects/5725/branch/default/data-apps/cfg-1"
+            ),
+        }
+        # Neither the metadata nor the repr carries the password.
+        assert "deadbeefcafe" not in repr(result)
+        assert "deadbeefcafe" not in str(result.metadata())
+        # Only the project token: no Manage token argument any more.
+        ds_mock.get_app_password.assert_called_once_with("42")
+        storage_mock.get_config_detail.assert_called_once_with(
+            "keboola.data-apps", "cfg-1", branch_id=None
         )
-        assert result["password"] == "deadbeefcafe"
-        ds_mock.get_app_password.assert_called_once_with("42", manage_token=TEST_MANAGE_TOKEN)
+        ds_mock.close.assert_called_once()
+        storage_mock.close.assert_called_once()
 
-    def test_missing_manage_token(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("authorization", "auth_kind"),
+        [
+            (
+                {"app_proxy": {"auth_providers": [{"id": "oidc", "type": "oidc"}]}},
+                "oidc",
+            ),
+            (_build_public_auth_block(), "public"),
+            (None, "missing"),
+        ],
+    )
+    def test_non_password_auth_is_refused_before_the_password_call(
+        self, tmp_path: Path, authorization: dict[str, Any] | None, auth_kind: str
+    ) -> None:
         store = _make_store(tmp_path)
-        service, _ds, _storage, _enc = _make_service(store)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=authorization)
+
         with pytest.raises(KeboolaApiError) as excinfo:
-            service.get_data_app_password(alias="prod", app_id="42", manage_token="")
-        assert excinfo.value.error_code == ErrorCode.INVALID_TOKEN
+            service.get_data_app_password(alias="prod", app_id="42")
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert f"auth: {auth_kind}" in excinfo.value.message
+        ds_mock.get_app_password.assert_not_called()
+        ds_mock.close.assert_called_once()
+        storage_mock.close.assert_called_once()
+
+    def test_no_password_yet_is_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(
+            ds_mock, storage_mock, authorization=_build_simple_auth_block(), password=None
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_data_app_password(alias="prod", app_id="42")
+
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+        assert "no password yet" in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        ("branch_id", "config_branch", "ui_branch"),
+        [(None, None, "default"), ("7788", 7788, "7788"), (7788, 7788, "7788")],
+    )
+    def test_ui_url_and_config_read_follow_the_app_branch(
+        self, tmp_path: Path, branch_id: Any, config_branch: int | None, ui_branch: str
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(
+            ds_mock, storage_mock, authorization=_build_simple_auth_block(), branch_id=branch_id
+        )
+
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.ui_url == (
+            f"https://connection.keboola.com/admin/projects/5725/branch/{ui_branch}/data-apps/cfg-1"
+        )
+        storage_mock.get_config_detail.assert_called_once_with(
+            "keboola.data-apps", "cfg-1", branch_id=config_branch
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1587,11 +1682,9 @@ class TestDataAppEnvelopesNoBareIdKey:
 
     def test_password_envelope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
-        service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app_password.return_value = {"password": "deadbeefcafe"}
-        result = service.get_data_app_password(
-            alias="prod", app_id="42", manage_token=TEST_MANAGE_TOKEN
-        )
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
+        result = service.get_data_app_password(alias="prod", app_id="42").metadata()
         assert result["app_id"] == "42"
         assert "id" not in result
 

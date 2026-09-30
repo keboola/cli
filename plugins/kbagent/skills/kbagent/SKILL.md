@@ -144,7 +144,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
-| Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
@@ -155,6 +154,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |

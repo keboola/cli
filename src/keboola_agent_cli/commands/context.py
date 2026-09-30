@@ -1395,8 +1395,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
     [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID]
     [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+    [--copy] [--reveal]
     Create + configure + deploy in one call. Default `--auth password` mints
-    a 20-char hex simpleAuth password (retrievable via `data-app password`).
+    a 20-char hex simpleAuth password during the deploy. With --wait the
+    password is delivered like `data-app password` once the app runs (see
+    there); --copy / --reveal need --wait and a deploy. --dry-run accepts
+    the same flags and adds `password_delivery` (prompt|clipboard|stdout).
     PAT input (private repo): env var (recommended) > file > pre-encrypted.
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
@@ -1423,7 +1427,14 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
-    [--wait] [--timeout SECONDS] [--branch ID]
+    [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+    With --wait on a password app (vNEXT+): the password is delivered like
+    `data-app password` (the c prompt in a terminal, which then waits for
+    Enter or 120 s; --copy / --reveal need --wait). Without a flag and
+    without the prompt (no terminal, --json) nothing is read: output as
+    before. With a flag, JSON adds only ui_url, password_delivered_to
+    (+ password with --reveal); a failed password read or a non-password
+    app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback).
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
@@ -1442,12 +1453,43 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     URL is permanently retired. Confirmation prompt unless --yes.
 
   kbagent data-app password --project NAME --app-id ID
-    Retrieve the simpleAuth password. Requires the Manage API token in
-    addition to the project's Storage token. Token is read from interactive
-    hidden prompt by default; pass top-level --allow-env-manage-token to
-    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.29.0). Never
-    persisted, never logged. Password is auto-generated at create time
-    and CANNOT be rotated -- delete and recreate the app to mint a new one.
+    [--copy] [--reveal] [--open]
+    Give the user the password of a password-protected app WITHOUT printing
+    it (vNEXT+; older versions printed it and needed a Manage API token).
+    Project token only (static or session), no Manage token. In a terminal
+    (human mode, stdin + stdout a TTY, not a background job) it shows the app
+    URL and `ui_url`, then waits: `c` copies the password, Enter / Esc / q
+    finishes, 120 s timeout.
+    Without a terminal or with --json there is no prompt: only --copy copies
+    it (the clipboard tool gets it on stdin). Nothing copied -> exit 0 with
+    `password_delivered_to: null`; `ui_url` is the Keboola UI page that shows
+    the password under Open App. --reveal prints it (human + JSON,
+    `password_delivered_to: "stdout"`); --reveal + --copy = INVALID_ARGUMENT.
+    --open also opens `app_url` in the browser (`app_opened`). JSON keys:
+    project_alias, app_id, auth, app_url, ui_url, password_delivered_to,
+    app_opened, message (+ password with --reveal). VALIDATION_ERROR when the
+    app's auth is not `password` (e.g. oidc, public); NOT_FOUND when the app
+    has no password yet. The Keboola UI can reset the password.
+    BREAKING: scripts that read `.data.password` must add --reveal (without
+    it the key is absent, exit 0); REST clients pass reveal=true;
+    KBC_MANAGE_API_TOKEN / --allow-env-manage-token are no longer used here.
+    AGENT RULES -- the password must not go into the chat:
+      1. Recommend that the user runs `kbagent data-app password --project P
+         --app-id ID` in their own terminal window (not through you, not
+         through Claude Code's `!` mode) and presses c. Recommend
+         `kbagent data-app deploy --project P --app-id ID --wait` there
+         only when a deploy is needed anyway (c after the deploy); a deploy
+         restarts the app, so never redeploy just to get the password.
+      2. Offer to run it yourself with --copy (plus --wait on create /
+         deploy); say that the password then replaces the clipboard content
+         but does not go into the chat. When `password_delivered_to` is
+         null, give the user `ui_url`.
+      3. Do not pass --reveal unless the user asks for it, and warn first
+         that the password then goes into the chat history.
+      4. Never read the clipboard (pbpaste, `xclip -o`, wl-paste,
+         Get-Clipboard), never get the password another way (`kbagent http`,
+         curl, `serve` with reveal=true), never ask the user to paste it into
+         the chat, never repeat it.
 
   kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
     Tail the container log buffer (Data Science /apps/{{id}}/logs/tail).
@@ -1538,7 +1580,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
         [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
     Mint a git credential for the app's MANAGED git repository. ssh_key
     requires a public key; http_token returns a ONE-TIME secret printed
-    once and never retrievable again (mirrors data-app password). Requires
+    once and never retrievable again. Requires
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
@@ -2195,7 +2237,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
                               a standalone `export` does not survive between tool calls.
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
+     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh).
                               Default-DENY since 0.29.0: pass --allow-env-manage-token
                               to opt in, otherwise this var is ignored and a TTY prompt
                               is required. Closes AI-exfiltration via subprocess env.

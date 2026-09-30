@@ -350,6 +350,20 @@ class TestOpenBrowser:
 
         assert opened == ["https://connection.keboola.com/admin/auth/pkce/authorize?x=1"]
 
+    def test_wait_seconds_joins_the_opener_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With ``wait_seconds`` the open has run by the time the call returns.
+
+        ``data-app password --open`` exits right after the call; a daemon
+        thread that has not run yet would die with the process.
+        """
+        opened: list[str] = []
+
+        monkeypatch.setattr(environment.webbrowser, "get", lambda: object())
+        monkeypatch.setattr(environment.webbrowser, "open", opened.append)
+
+        assert open_browser("https://app.example.com", wait_seconds=5.0) is True
+        assert opened == ["https://app.example.com"]
+
     def test_never_raises_even_when_webbrowser_open_itself_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
