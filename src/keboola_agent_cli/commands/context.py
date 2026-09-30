@@ -163,7 +163,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     registered unless --register-projects was passed, and where the
     suggested alias is slugified from the project NAME, never the numeric
     project id (e.g. 9840). Once registered, `--project 9840` resolves to
-    that alias too (since vNEXT; see Tips 3).
+    that alias too (since 0.96.0; see Tips 3).
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
     ConfigError naming it). Omitting both starts an interactive arrow-key +
@@ -344,7 +344,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project use ALIAS
     Pin ALIAS as the default project. Persists to config.json. A registered
-    project ID pins that project's alias (since vNEXT; see Tips 3).
+    project ID pins that project's alias (since 0.96.0; see Tips 3).
     Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
     an explicit --project flag overrides both.
 
@@ -373,7 +373,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
     Bulk invite. CSV must have a header row with columns: email, project (alias or
-    numeric ID -- an alias wins, see Tips 3; since vNEXT) or project_id (ID only),
+    numeric ID -- an alias wins, see Tips 3; since 0.96.0) or project_id (ID only),
     role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
     `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
@@ -1431,7 +1431,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
-    With --wait on a password app (vNEXT+): the password is delivered like
+    With --wait on a password app (0.96.0+): the password is delivered like
     `data-app password` (the c prompt in a terminal, which then waits for
     Enter or 120 s; --copy / --reveal need --wait). Without a flag and
     without the prompt (no terminal, --json) nothing is read: output as
@@ -1458,7 +1458,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent data-app password --project NAME --app-id ID
     [--copy] [--reveal] [--open]
     Give the user the password of a password-protected app WITHOUT printing
-    it (vNEXT+; older versions printed it and needed a Manage API token).
+    it (0.96.0+; older versions printed it and needed a Manage API token).
     Project token only (static or session), no Manage token. In a terminal
     (human mode, stdin + stdout a TTY, not a background job) it shows the app
     URL and `ui_url`, then waits: `c` copies the password, Enter / Esc / q
@@ -1592,7 +1592,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
-    --with-workspaces (since vNEXT, CLI-25) sets "syncWorkspaces": true in the manifest
+    --with-workspaces (since 0.96.0, CLI-25) sets "syncWorkspaces": true in the manifest
     (with --adopt-existing: turns it on in an existing one). pull/diff/push/clone then also
     sync shared SQL workspaces: keboola.sandboxes configs with no parameters.id and
     runtime.shared true (Python/R and legacy SQL sandboxes carry parameters.id and stay
@@ -1627,7 +1627,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
-    always excluded (except shared SQL workspaces under syncWorkspaces, since vNEXT),
+    always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.0),
     unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
     component newly ignored has its manifest entry dropped and local dir removed on the next
@@ -1667,7 +1667,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
-    Workspace delete (since vNEXT, syncWorkspaces trees): a --force push that deletes a shared
+    Workspace delete (since 0.96.0, syncWorkspaces trees): a --force push that deletes a shared
     SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
     backend workspaces, which config restore does not bring back; check
     `sync push --dry-run --force` (warnings[] workspace_sessions) first. --force is destructive-class (a policy denying
@@ -1706,11 +1706,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
-    reference->ULID; since vNEXT also shared-code links, legacy keboola.orchestrator
+    reference->ULID; since 0.96.0 also shared-code links, legacy keboola.orchestrator
     task configIds, task configRowIds and schedule targets (link_remaps counts each
     kind; an unset link is an errors[] entry, a failed PUT is sent by the next push).
     Idempotent (re-run -> no_changes); needs a fresh target.
-    Read warnings[] after a clone (also --dry-run, vNEXT+): missing_task_target (a
+    Read warnings[] after a clone (also --dry-run, 0.96.0+): missing_task_target (a
     flow/orchestrator task runs a config not in the tree), encrypted_values_copied
     (KBC:: paths the target cannot decrypt; secret_keys: plaintext in _config.yml +
     sync push, unencryptable_keys: encrypt values, oauth_keys: authorize again),
@@ -2255,7 +2255,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
-   --project takes an alias or a registered project's numeric ID (since vNEXT).
+   --project takes an alias or a registered project's numeric ID (since 0.96.0).
    An alias wins over an ID. An ID registered under several aliases fails with
    CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
    exactly one is a session (browser-login) alias, which then wins. The same
