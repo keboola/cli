@@ -5553,6 +5553,10 @@ workspaces".
 - **`sync push --force` is destructive-class** (operation `sync.push --force`
   in `permissions list`): a policy denying `cli:destructive`, or
   `--deny-destructive`, blocks it, while a plain `sync push` stays write-class.
+  An allow-list that names only `sync.push` now blocks `sync push --force`
+  too (also in trees without `syncWorkspaces`): add
+  `--allow "sync.push --force"` or a glob such as `sync.*`. The same applies to
+  a default-allow policy that denies `cli:write` and allows `sync.push`.
 - **Removing the key** makes the next `sync pull` drop the workspace entries
   with action `ignored`, except a workspace edited locally and not pushed: pull
   (also `--force`) keeps it and reports it as `skipped`; only `--theirs`

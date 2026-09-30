@@ -88,6 +88,8 @@ kbagent permissions set --mode deny \
 ```
 Everything else is blocked. This is the most restrictive approach.
 
+*(since vNEXT)* `sync push --force` is checked as its own operation, `sync.push --force`. An allow-list that names only `sync.push` allows a plain push and blocks a forced push (exit 6). To allow a forced push, add `--allow "sync.push --force"`, or use a glob such as `sync.*`. The same is true for a default-allow policy that denies `cli:write` and allows `sync.push`.
+
 ## Checking permissions before acting
 
 ```bash

@@ -1303,7 +1303,34 @@ class TestPushForcePermission:
         assert engine.is_allowed("sync.push") is True
         assert engine.is_allowed("sync.push --force") is False
 
-    def _config_dir(self, tmp_path: Path, deny: list[str]) -> Path:
+    @pytest.mark.parametrize(
+        ("mode", "allow", "deny", "force_allowed"),
+        [
+            # An allow-list that names only `sync.push` allows a plain push, not `--force`.
+            ("deny", ["sync.push"], [], False),
+            ("deny", ["sync.push", "sync.push --force"], [], True),
+            ("deny", ["sync.*"], [], True),
+            ("deny", ["sync.push", "cli:destructive"], [], True),
+            # `cli:write` covers the destructive class, and `sync.push` does not match `--force`.
+            ("allow", ["sync.push"], ["cli:write"], False),
+            ("allow", ["sync.push", "sync.push --force"], ["cli:write"], True),
+        ],
+    )
+    def test_allow_list_must_name_the_force_escalation(
+        self, mode: str, allow: list[str], deny: list[str], force_allowed: bool
+    ) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode=mode, allow=allow, deny=deny))
+        assert engine.is_allowed("sync.push") is True
+        assert engine.is_allowed("sync.push --force") is force_allowed
+
+    def _config_dir(
+        self,
+        tmp_path: Path,
+        deny: list[str],
+        *,
+        mode: str = "allow",
+        allow: list[str] | None = None,
+    ) -> Path:
         config_dir = tmp_path / "c"
         config_dir.mkdir()
         # Written directly: `permissions set` needs a human at a real terminal.
@@ -1312,11 +1339,22 @@ class TestPushForcePermission:
                 {
                     "version": CURRENT_CONFIG_VERSION,
                     "projects": {},
-                    "permissions": {"mode": "allow", "allow": [], "deny": deny},
+                    "permissions": {"mode": mode, "allow": allow or [], "deny": deny},
                 }
             )
         )
         return config_dir
+
+    def test_allow_list_with_only_sync_push_blocks_force(self, tmp_path: Path) -> None:
+        config_dir = self._config_dir(tmp_path, [], mode="deny", allow=["sync.push"])
+
+        denied, svc = self._push_with(config_dir, tmp_path, "--force")
+        assert denied.exit_code == EXIT_PERMISSION_DENIED
+        svc.push.assert_not_called()
+
+        allowed, svc = self._push_with(config_dir, tmp_path)
+        assert allowed.exit_code == 0, allowed.output
+        svc.push.assert_called_once()
 
     def test_policy_denying_destructive_blocks_force_only(self, tmp_path: Path) -> None:
         config_dir = self._config_dir(tmp_path, ["cli:destructive"])
