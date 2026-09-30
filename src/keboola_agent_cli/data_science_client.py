@@ -17,7 +17,8 @@ Verified shapes (writeup §2 / §6 / §9, replayed in this PR's live
 validation):
 
     POST   /apps                          -> 201, {id, configId, ...}
-    GET    /apps                          -> 200, [{id, configId, state, desiredState, url}, ...]
+    GET    /apps?limit=N&offset=M         -> 200, [{id, configId, state, desiredState, url}, ...]
+                                              (paginated; default page = 100)
     GET    /apps/{id}                     -> 200, full deployment record
     PATCH  /apps/{id}                     -> 200, deployment record (only
                                               desiredState / configVersion /
@@ -42,7 +43,11 @@ from urllib.parse import quote
 
 import httpx
 
-from .constants import DEFAULT_TIMEOUT
+from .constants import (
+    DATA_SCIENCE_APPS_MAX_PAGES,
+    DATA_SCIENCE_APPS_PAGE_SIZE,
+    DEFAULT_TIMEOUT,
+)
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
@@ -75,16 +80,42 @@ class DataScienceClient(BaseHttpClient):
         self.close()
 
     def list_apps(self) -> list[dict[str, Any]]:
-        """Return the thin index of data apps in the project (no body filter).
+        """Return the thin index of ALL deployments in the project (no body filter).
 
         The Data Science API scopes responses by the token's project; there
         is no ``branchId`` query parameter on the list endpoint.
+
+        ``GET /apps`` is paginated: without ``limit``/``offset`` it returns
+        only a default first page (100 items) that mixes workspace
+        deployments (``keboola.sandboxes``) with data apps
+        (``keboola.data-apps``). Callers filter client-side, so a project with
+        many workspaces could have every data app beyond that first page and
+        ``data-app list`` reported "No data apps found." (#798). We therefore
+        page with ``limit``/``offset`` until a short (or empty) page.
         """
-        response = self._do_request("GET", "/apps")
-        body = response.json()
-        # Some stacks wrap the list in {"data": [...]}; fall back gracefully.
-        apps = (body.get("data") or body.get("apps") or []) if isinstance(body, dict) else body
-        return apps if isinstance(apps, list) else []
+        apps: list[dict[str, Any]] = []
+        page_size = DATA_SCIENCE_APPS_PAGE_SIZE
+        for page in range(DATA_SCIENCE_APPS_MAX_PAGES):
+            response = self._do_request(
+                "GET", "/apps", params={"limit": page_size, "offset": page * page_size}
+            )
+            body = response.json()
+            # Some stacks wrap the list in {"data": [...]}; fall back gracefully.
+            items = (body.get("data") or body.get("apps") or []) if isinstance(body, dict) else body
+            if not isinstance(items, list):
+                break
+            apps.extend(items)
+            if len(items) < page_size:
+                break
+        else:
+            # Guard against a server that ignores ``offset`` and keeps
+            # returning full pages -- never loop forever, but say so.
+            logger.warning(
+                "GET /apps: stopped after %d pages of %d; the listing may be incomplete",
+                DATA_SCIENCE_APPS_MAX_PAGES,
+                page_size,
+            )
+        return apps
 
     def get_app(self, app_id: str) -> dict[str, Any]:
         """Fetch a single deployment record by numeric app id."""
