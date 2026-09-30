@@ -574,6 +574,55 @@ def _mock_create(httpx_mock: Any) -> None:
     _mock_deploy_patch(httpx_mock)
 
 
+def _deny_password_read(config_dir: Path) -> None:
+    """Persist a policy that allows everything but reading a data app password."""
+    config_path = config_dir / "config.json"
+    config = json.loads(config_path.read_text())
+    config["permissions"] = {"mode": "allow", "allow": [], "deny": ["data-app.password"]}
+    config_path.write_text(json.dumps(config))
+
+
+class TestPasswordPermission:
+    """Reading the password is the operation `data-app.password`, also after a deploy."""
+
+    @pytest.mark.parametrize(
+        "argv_tail",
+        [
+            ("deploy", "--wait", "--copy"),
+            ("deploy", "--wait", "--reveal"),
+            ("create", "--wait", "--copy"),
+            ("create", "--dry-run", "--wait", "--reveal"),
+        ],
+    )
+    def test_denied_password_read_exits_6_before_any_http_call(
+        self, config_dir, httpx_mock, caplog, argv_tail: tuple[str, ...]
+    ) -> None:
+        _deny_password_read(config_dir)
+        command, *extra = argv_tail
+        build = _create_argv if command == "create" else _deploy_argv
+        result = _run(build(config_dir, *extra, json_mode=True), caplog)
+
+        assert result.exit_code == 6
+        assert json.loads(result.stdout)["error"]["code"] == "PERMISSION_DENIED"
+        assert httpx_mock.get_requests() == []
+
+    def test_denied_password_read_skips_the_terminal_prompt(
+        self, config_dir, httpx_mock, caplog, monkeypatch
+    ) -> None:
+        _deny_password_read(config_dir)
+        _mock_deployed_app(httpx_mock, password_call=False)
+        _mock_deploy_patch(httpx_mock)
+        clipboard = _clipboard(monkeypatch)
+        _terminal(monkeypatch, ["c", "\n"])
+
+        result = _run(_deploy_argv(config_dir, "--wait", json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert "Press c to copy" not in result.stdout
+        assert clipboard.copied == []
+        assert not any(r.url.path.endswith("/password") for r in httpx_mock.get_requests())
+
+
 class TestAfterDeploy:
     def test_deploy_wait_in_a_terminal_prompts_and_copies(
         self, config_dir, httpx_mock, caplog, monkeypatch

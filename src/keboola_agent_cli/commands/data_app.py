@@ -385,7 +385,7 @@ def data_app_create(
     blocker = deploy_blocker(
         wait=wait, no_deploy=no_deploy, use_managed_git_repo=use_managed_git_repo
     )
-    check_password_flags(formatter, flags, deploy_blocker=blocker)
+    flags = check_password_flags(ctx, flags, deploy_blocker=blocker)
     branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
@@ -564,7 +564,7 @@ def data_app_deploy(
     command then ends after Enter or 120 s), --copy / --reveal elsewhere.
     """
     flags = PasswordFlags(copy=copy, reveal=reveal)
-    check_password_flags(get_formatter(ctx), flags, deploy_blocker=deploy_blocker(wait=wait))
+    flags = check_password_flags(ctx, flags, deploy_blocker=deploy_blocker(wait=wait))
     branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     _run_lifecycle(
         ctx,

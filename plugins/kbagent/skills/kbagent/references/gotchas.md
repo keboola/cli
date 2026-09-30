@@ -2219,7 +2219,10 @@ config, the retry fires, and the retry destroys it for good.
   `ui_url`, `password_delivered_to` and (with `--reveal`) `password`;
   existing keys do not change. `--copy` / `--reveal` without `--wait`, or on
   `create --no-deploy` / `--use-managed-git-repo`, is `INVALID_ARGUMENT`
-  (exit 2) before any API call. The deploy result stays the result: a
+  (exit 2) before any API call. Reading the password is the operation
+  `data-app.password`, also here: when the permission policy denies it,
+  `--copy` / `--reveal` exit 6 (`PERMISSION_DENIED`) before any API call, and
+  the terminal prompt is skipped. The deploy result stays the result: a
   non-password app with `--copy` / `--reveal`, or any failure to read the
   password after the deploy, adds a `warnings[]` entry and exits 0 (a
   password that is not ready yet: run `data-app password` in a moment).

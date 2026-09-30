@@ -27,7 +27,7 @@ this lives in the command layer and not in the service.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, NoReturn
 
 import typer
@@ -41,7 +41,7 @@ from ..output import OutputFormatter
 from ..services._data_app_password import PASSWORD_AUTH, DataAppPassword, data_app_auth_kind
 from ..services.data_app_service import RUNNING_STATE
 from . import _url_copy
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import check_cli_operation, get_formatter, get_service, map_error_to_exit_code
 
 DELIVERED_TO_CLIPBOARD = "clipboard"
 DELIVERED_TO_STDOUT = "stdout"
@@ -83,12 +83,23 @@ RevealOption = Annotated[
 ]
 
 
+# The operation that reads a password. `create` and `deploy` are checked as
+# their own operations by the group callback, so reading the password after
+# their deploy needs its own check: a policy can deny this one on purpose.
+PASSWORD_OPERATION = "data-app.password"
+
+
 @dataclass(frozen=True)
 class PasswordFlags:
-    """The --copy / --reveal choice of one invocation."""
+    """The --copy / --reveal choice of one invocation.
+
+    ``permitted`` is False when the permission policy denies
+    :data:`PASSWORD_OPERATION`; :func:`check_password_flags` sets it.
+    """
 
     copy: bool = False
     reveal: bool = False
+    permitted: bool = True
 
     @property
     def any(self) -> bool:
@@ -120,13 +131,17 @@ def _invalid_argument(formatter: OutputFormatter, message: str) -> NoReturn:
 
 
 def check_password_flags(
-    formatter: OutputFormatter, flags: PasswordFlags, *, deploy_blocker: str = ""
-) -> None:
-    """Exit 2 (INVALID_ARGUMENT) before any API call on flags that cannot work.
+    ctx: typer.Context, flags: PasswordFlags, *, deploy_blocker: str = ""
+) -> PasswordFlags:
+    """Check the flags before any API call and return them with ``permitted`` set.
 
-    ``deploy_blocker`` is for ``create`` / ``deploy``: why the command will not
-    wait for a deploy (e.g. "--wait is missing"), "" when it will.
+    Exits 2 (INVALID_ARGUMENT) on flags that cannot work, and 6
+    (PERMISSION_DENIED) when --copy / --reveal asks for a password that the
+    policy denies (:data:`PASSWORD_OPERATION`). ``deploy_blocker`` is for
+    ``create`` / ``deploy``: why the command will not wait for a deploy (e.g.
+    "--wait is missing"), "" when it will.
     """
+    formatter = get_formatter(ctx)
     if flags.copy and flags.reveal:
         _invalid_argument(formatter, "--reveal and --copy are mutually exclusive.")
     if flags.any and deploy_blocker:
@@ -136,6 +151,11 @@ def check_password_flags(
             "creates the password during the deploy, so kbagent can read it only after "
             "--wait sees the app running.",
         )
+    if flags.any:
+        check_cli_operation(ctx, PASSWORD_OPERATION)
+    engine = ctx.obj.get("permission_engine") if isinstance(ctx.obj, dict) else None
+    permitted = engine is None or not engine.active or engine.is_allowed(PASSWORD_OPERATION)
+    return replace(flags, permitted=permitted)
 
 
 def deploy_blocker(
@@ -358,6 +378,8 @@ def password_after_deploy(
     """
     if not waited or not (flags.any or _would_prompt(formatter, flags)):
         return None
+    if not flags.permitted:  # only the implicit prompt gets here; the flags exit earlier
+        return None
     if result.get("dry_run"):
         _plan_password_delivery(result, flags)
         return None
@@ -457,8 +479,7 @@ def register_password_command(app: typer.Typer) -> None:
         can reset the password.
         """
         formatter = get_formatter(ctx)
-        flags = PasswordFlags(copy=copy, reveal=reveal)
-        check_password_flags(formatter, flags)
+        flags = check_password_flags(ctx, PasswordFlags(copy=copy, reveal=reveal))
         service = get_service(ctx, "data_app_service")
         try:
             lookup = service.get_data_app_password(alias=project, app_id=app_id)
