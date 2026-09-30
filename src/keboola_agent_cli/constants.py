@@ -613,11 +613,13 @@ MINUTES_PER_CREDIT: int = 60
 PAYG_FEATURE: str = "pay-as-you-go"
 
 # --- Changelog rendering ---
-# `kbagent changelog` shows a one-line summary per version by default (--full
-# expands). A summary is the note's first sentence, capped at this many chars
+# `kbagent changelog` shows headlines by default (--full expands): every
+# BREAKING note of a version, plus its first other notes until at least
+# CHANGELOG_SUMMARY_NOTES show. A headline is the note's first sentence, capped at this many chars
 # (cut on a word boundary) so a verbose release note collapses to a scannable
 # headline instead of a wall of text.
 CHANGELOG_HEADLINE_MAX_CHARS: int = 160
+CHANGELOG_SUMMARY_NOTES: int = 2
 
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling

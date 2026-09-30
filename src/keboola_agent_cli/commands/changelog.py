@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from ..changelog import DEFAULT_CHANGELOG_LIMIT, get_changelog, headline
+from ..constants import CHANGELOG_SUMMARY_NOTES
 from ._helpers import get_formatter
 
 # Map each known prefix word to a Rich style.  Order does not matter; the
@@ -99,12 +100,29 @@ def _print_bullet(console: Console, styled: Text, body_width: int) -> None:
         console.print(row)
 
 
+def _summary_notes(notes: list[str]) -> list[str]:
+    """Return the notes that the default view shows for one version.
+
+    Every BREAKING note, so a user who only skims still sees each migration
+    step, plus the first other notes until at least ``CHANGELOG_SUMMARY_NOTES``
+    show. The notes keep their changelog order.
+    """
+    breaking = {
+        i
+        for i, note in enumerate(notes)
+        if (m := _PREFIX_RE.match(note)) is not None and m.group(1).lower() == "breaking"
+    }
+    others = [i for i in range(len(notes)) if i not in breaking]
+    fill = others[: max(0, CHANGELOG_SUMMARY_NOTES - len(breaking))]
+    return [notes[i] for i in sorted(breaking.union(fill))]
+
+
 def _format_changelog_human(console: Console, data: dict, *, full: bool) -> None:
     """Render the changelog.
 
-    Default (``full=False``): one headline bullet per version -- the first
-    note's first sentence, plus a dim ``(+N more)`` when a version carries
-    extra notes.  ``full=True``: every note, word-wrapped in full.
+    Default (``full=False``): per version, the first sentence of each note
+    that ``_summary_notes`` picks, plus a dim ``(+N more)`` when the version
+    carries other notes.  ``full=True``: every note, word-wrapped in full.
     """
     # Body width = terminal width minus the 4-char bullet gutter.  Floor at
     # 40 to stay readable on pathologically narrow terminals and to handle
@@ -118,14 +136,18 @@ def _format_changelog_human(console: Console, data: dict, *, full: bool) -> None
             for note in notes:
                 _print_bullet(console, _styled_note(note), body_width)
         else:
-            head = headline(notes[0])
-            styled = _styled_note(head)
-            extra = len(notes) - 1
+            shown = _summary_notes(notes)
+            extra = len(notes) - len(shown)
             if extra > 0:
-                styled.append(f"  (+{extra} more)", style="dim")
-            if extra > 0 or head != notes[0].strip():
                 has_hidden_detail = True
-            _print_bullet(console, styled, body_width)
+            for j, note in enumerate(shown):
+                head = headline(note)
+                styled = _styled_note(head)
+                if extra > 0 and j == len(shown) - 1:
+                    styled.append(f"  (+{extra} more)", style="dim")
+                if head != note.strip():
+                    has_hidden_detail = True
+                _print_bullet(console, styled, body_width)
         if i < len(entries) - 1:
             console.print("")
     if not full and has_hidden_detail:
@@ -147,13 +169,14 @@ def changelog_command(
         False,
         "--full",
         "-v",
-        help="Show complete notes for each version (default: one-line summary).",
+        help="Show complete notes for each version (default: headlines of the BREAKING and first notes).",
     ),
 ) -> None:
     """Show recent changelog (what changed in each version).
 
-    By default each version is summarised as a single headline; pass --full
-    (-v) for the complete notes.
+    By default each version shows the first sentence of each BREAKING note,
+    plus of its first other notes until at least two show. Pass --full (-v)
+    for the complete notes.
 
     After auto-update, kbagent automatically prints "What's new" for the
     new version.  To see changes for a specific version manually, set
