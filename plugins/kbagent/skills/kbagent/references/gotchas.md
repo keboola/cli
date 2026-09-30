@@ -127,7 +127,10 @@ Versioning convention:
   follows the same rules -- an alias wins over a project ID, and an ID
   registered more than once fails that row with the list of aliases. Before,
   an all-digit value was always taken as an ID, and the first project with
-  that ID was used. A `project_id` column value is still only an ID.
+  that ID was used. A `project_id` column value is still only an ID. One
+  difference from `--project`: when a digits-only alias is also the project ID
+  of a different registered project, the row fails and names both, because an
+  invite grants membership and a bulk run must not guess the project.
 
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 

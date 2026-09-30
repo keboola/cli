@@ -37,7 +37,12 @@ from ..models import (
     ProjectInvitation,
     ProjectMember,
 )
-from ..project_ref import is_project_id, resolve_project_id, resolve_project_ref
+from ..project_ref import (
+    alias_shadow_notice,
+    is_project_id,
+    resolve_project_id,
+    resolve_project_ref,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -345,12 +350,24 @@ class MemberService:
         wins, then a project ID, and an ID registered more than once is a
         ``ConfigError`` listing the aliases. A ``project_id`` value is only
         ever looked up as an ID. The stack URL comes from the registered project.
+
+        One difference from ``--project``: when a digits-only alias is also the
+        project ID of a DIFFERENT registered project, the row fails instead of
+        taking the alias. An invite grants membership, and a bulk run has no
+        notice a person reads before the grant, so kbagent must not guess.
         """
         project_field = str(row["project"]).strip()
         projects = self._config_store.load().projects
         if row.get("by_id") and is_project_id(project_field):
             alias = resolve_project_id(projects, int(project_field))
         else:
+            shadow = alias_shadow_notice(projects, project_field)
+            if shadow is not None:
+                raise ConfigError(
+                    f"{shadow} kbagent skips this row, because it does not guess the project "
+                    "of an invite: put the alias in the `project` column, or the ID in the "
+                    "`project_id` column."
+                )
             alias = resolve_project_ref(projects, project_field)
         if alias is not None and alias in projects:
             return self._resolve_alias(alias)

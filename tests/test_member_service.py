@@ -424,10 +424,22 @@ class TestInviteBulkProjectColumn:
         assert "'eu'" in result.rows[0].note
         assert "'us'" in result.rows[0].note
 
-    def test_numeric_alias_wins_over_another_projects_id(
+    def test_numeric_alias_that_hides_another_projects_id_fails_the_row(
         self, tmp_path: Path, tmp_config_dir: Path
     ) -> None:
+        # An invite grants membership: the row must not guess between the alias
+        # `4242` (project 5555) and project ID 4242 (alias `prod`).
         store = self._store(tmp_config_dir, {"4242": (5555, STACK_URL), "prod": (4242, STACK_URL)})
+
+        result = self._dry_run(tmp_path, store, "project", "4242")
+        assert result.rows[0].status == "failed"
+        assert "'prod'" in result.rows[0].note
+        assert "`project_id` column" in result.rows[0].note
+
+    def test_numeric_alias_without_a_hidden_id_is_used(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        store = self._store(tmp_config_dir, {"4242": (5555, STACK_URL), "prod": (6666, STACK_URL)})
 
         result = self._dry_run(tmp_path, store, "project", "4242")
         assert result.rows[0].status == "ok"
