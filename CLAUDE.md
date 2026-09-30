@@ -880,7 +880,7 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
-kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
@@ -903,11 +903,27 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   deploy pins the LATEST configVersion when a git block is present and omits it for a PURE managed
 #   repo (deploys from managedGitRepoId). Use `data-app runs` to debug a deploy that reverts to
 #   stopped (setup-phase failures produce no container logs).
-kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
-kbagent data-app password --project NAME --app-id ID
+kbagent data-app password --project NAME --app-id ID [--copy] [--reveal] [--open]
+# data-app password: never prints the password unless --reveal, so it does not go into an AI
+#   agent's context. Project token only (static or session) -- the Manage token and its prompt are
+#   gone. In a terminal (human mode) it waits for `c` to copy (Enter/Esc/q finishes, 120 s timeout);
+#   without a terminal or with --json only --copy copies. Nothing copied -> exit 0,
+#   password_delivered_to null, ui_url = the Keboola UI page that shows it. --reveal + --copy =
+#   INVALID_ARGUMENT. Refuses a non-password app (VALIDATION_ERROR) and a null password (NOT_FOUND).
+#   serve: GET /data-apps/{p}/{app}/password takes no X-Manage-Token; ?reveal=true adds `password`.
+#   create --wait / deploy --wait deliver the password the same way once the app runs (shared
+#   CopyOption / RevealOption + deliver_password in commands/_data_app_password.py); there
+#   --copy / --reveal need --wait and a deploy (else INVALID_ARGUMENT, exit 2, no API call;
+#   --dry-run applies the same rules and adds a `password_delivery` plan). Without a flag and
+#   without the terminal prompt nothing is read (output as before). With a flag, JSON adds only
+#   ui_url / password_delivered_to / password (--reveal); any failed read after the deploy is a
+#   warnings[] entry, exit 0. The serve create / deploy routes are unchanged. BREAKING: scripts
+#   reading `.data.password` from `data-app password` must add --reveal.
+#   Version gate + agent rules: gotchas.md / AGENT_CONTEXT.
 kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
 kbagent data-app runs --project NAME --app-id ID [--limit N]
 kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]

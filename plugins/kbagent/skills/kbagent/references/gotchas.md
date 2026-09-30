@@ -2181,12 +2181,91 @@ config, the retry fires, and the retry destroys it for good.
   with the shape above. The previous URL stays retired in either case
   (the proxy URL is bound to the deployment record, not the config).
 - **`--auth password` behaviour unchanged.** Mints a 20-char hex
-  simpleAuth password retrievable via `kbagent data-app password`
-  (Manage token required) or visible in the UI's Authentication tab.
+  simpleAuth password. The user copies it with `kbagent data-app password`
+  (see the `data-app password` entry below) or reads it in the Keboola UI.
 - **Other auth providers (OIDC / GitHub OAuth / GitLab OAuth /
   JumpCloud / Auth0)** are NOT yet supported by the CLI's `--auth`
   flag. Use the Keboola UI to configure them after `data-app create`.
   Tracked as a follow-up issue.
+
+## `data-app password` keeps the password out of the chat: `c` in a terminal, `--copy` elsewhere
+
+*(since vNEXT)*
+
+- **The password is not printed without `--reveal`.** Before vNEXT the
+  command printed it (`Password: ...`, and a `password` key in `--json`), so
+  it went into the context of any AI agent that ran it. On an older kbagent,
+  do not run the command from an agent: send the user to the Keboola UI.
+- **Migration (breaking).** A script that reads `.data.password` must add
+  `--reveal`: without it the key is absent and the exit code is still 0. A
+  REST client must pass `reveal=true`. `KBC_MANAGE_API_TOKEN` and
+  `--allow-env-manage-token` are no longer used by this command.
+- **In a terminal** (human mode, stdin and stdout a TTY, and not a
+  background job) it prints the message, `app_url` and `ui_url`, then waits: `c` copies the password once,
+  Enter / Esc / `q` finishes, and after 120 s it ends with a line that says
+  the password was not copied. An arrow key does not end the prompt. With no
+  clipboard tool there is no prompt; the message points to `ui_url`.
+- **Without a terminal** (agent, CI, a background job) **or with `--json`**
+  there is no prompt. Only `--copy` copies the password. The clipboard tool
+  gets it on stdin, never in argv; a tool that hangs times out, and a tool
+  that fails (e.g. `xclip` without an X display) falls through to the next. `--copy` in a terminal
+  copies at once, without the prompt. On WSL without the Windows PATH,
+  kbagent runs `/mnt/c/Windows/System32/clip.exe` by its full path.
+- **Nothing copied is not an error**: exit 0, `password_delivered_to: null`,
+  and `ui_url` is the Keboola UI page that shows the password under Open App.
+  Other values: `"clipboard"`, `"stdout"` (`--reveal`). `--reveal` together
+  with `--copy` is `INVALID_ARGUMENT` (exit 2).
+- **Project token only.** No Manage API token, no prompt for it, and
+  `--allow-env-manage-token` does not apply: the password endpoint checks
+  only that the token belongs to the app's project. A browser-login session
+  works too.
+- **Auth check first.** kbagent reads the app's config and asks for the
+  password only when `authorization.app_proxy.auth_providers[0].type` is
+  `password` -- the check the Keboola UI makes. Otherwise `VALIDATION_ERROR`
+  names the auth (`oidc`, `public`, `missing`, ...). A `null` password (none
+  set yet) is `NOT_FOUND`.
+- **The Keboola UI can reset the password** (the API has
+  `POST /apps/{id}/reset-password`). Earlier kbagent docs said it could not
+  be rotated. kbagent has no reset command.
+- **`data-app create --wait` and `data-app deploy --wait` deliver it too.**
+  The platform creates the password during the first deploy of a password-auth
+  app, so it exists only after a deploy. Once `--wait` sees the app running,
+  both commands deliver the password the same way as `data-app password`: the
+  `c` prompt in a terminal (so `deploy --wait` in a terminal ends only after
+  Enter or 120 s), `--copy`, or `--reveal`. With no flag and no prompt (no
+  terminal, a background job, or `--json`) they do not read the password at
+  all: no extra call, output as before. With a flag, `--json` adds only
+  `ui_url`, `password_delivered_to` and (with `--reveal`) `password`;
+  existing keys do not change. `--copy` / `--reveal` without `--wait`, or on
+  `create --no-deploy` / `--use-managed-git-repo`, is `INVALID_ARGUMENT`
+  (exit 2) before any API call. Reading the password is the operation
+  `data-app.password`, also here: when the permission policy denies it,
+  `--copy` / `--reveal` exit 6 (`PERMISSION_DENIED`) before any API call, and
+  the terminal prompt is skipped. The deploy result stays the result: a
+  non-password app with `--copy` / `--reveal`, or any failure to read the
+  password after the deploy, adds a `warnings[]` entry and exits 0 (a
+  password that is not ready yet: run `data-app password` in a moment).
+  `create --dry-run` accepts and refuses exactly the same flags; a valid run
+  adds `password_delivery` (`prompt`, `clipboard` or `stdout`) to the plan,
+  plus the warning the real run would give (no clipboard tool, or no
+  password for a `--auth public` app), with no API call, prompt or copy. The
+  `kbagent serve` create / deploy routes do not deliver the password; use
+  `GET /data-apps/{project}/{app_id}/password`.
+- **`kbagent serve`**: `GET /data-apps/{project}/{app_id}/password` needs no
+  `X-Manage-Token`. It leaves the password out (`password_delivered_to:
+  null`) unless `?reveal=true` (`password_delivered_to: "response"`).
+- **Agent rules.** Recommend that the user runs `kbagent data-app password
+  --project P --app-id ID` in their own terminal window (not through the
+  agent, not through Claude Code's `!` mode) and presses `c`. Recommend
+  `kbagent data-app deploy --project P --app-id ID --wait` there only when a
+  deploy is needed anyway -- a deploy restarts the app, so never redeploy
+  just to get the password. Or offer to run the command with `--copy` (with
+  `--wait` on create / deploy), and say that the password then replaces the
+  clipboard content but does not go into the chat. No `--reveal` unless the
+  user asks, and warn first that the password then goes into the chat history. Never
+  read the clipboard (`pbpaste`, `xclip -o`, `wl-paste`, `Get-Clipboard`),
+  never get the password another way (`kbagent http`, curl, `serve` with
+  `reveal=true`), never ask the user to paste it into the chat.
 
 ## `data-app secrets-*` -- per-project KMS, idempotent remove, never decryptable
 
@@ -2309,7 +2388,8 @@ config, the retry fires, and the retry destroys it for good.
 
 - `KBC_MANAGE_API_TOKEN` is no longer auto-resolved on the three
   surfaces that consume it (`kbagent org setup`,
-  `kbagent project refresh`, `kbagent data-app password`). Default
+  `kbagent project refresh`, `kbagent data-app password` -- the last one
+  needs no Manage token since vNEXT). Default
   behaviour on 0.29.0+ is **default-deny**: the env var is ignored, a
   TTY hidden-input prompt is shown instead. With no TTY (CI / cron /
   systemd / `< /dev/null`) the resolver exits **2** with the message
@@ -3960,8 +4040,8 @@ Other behaviors of this family:
   (`CanManageAppRepoCredentials`), unlike `git-repo` which needs only the
   ordinary project storage token.
 - For `--type http_token`, the create response carries a **one-time secret**
-  that is printed once and can never be retrieved again (mirrors
-  `data-app password`); the `git-credentials` list never returns it. `--type
+  that is printed once and can never be retrieved again; the
+  `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
 ## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)

@@ -5,10 +5,12 @@ Pins the contract: KBC_MANAGE_API_TOKEN is ignored by default; passing
 resolution. The flag is session-only (not persisted), mirroring
 --deny-writes / --deny-destructive.
 
-Three CLI surfaces consume the manage token: `org setup`,
-`project refresh`, and `data-app password`. Each is tested in both
-modes: default-deny (asserts the service was never reached) and
-allow-env (asserts the service received manage_token=<sentinel>).
+Two CLI commands covered here consume the manage token: `org setup` and
+`project refresh`. Each is tested in both modes: default-deny (asserts the
+service was never reached) and allow-env (asserts the service received
+manage_token=<sentinel>). `data-app password` needed it until CLI-23 and
+now reads the password with the project token alone
+(tests/test_data_app_password.py).
 """
 
 from pathlib import Path
@@ -112,40 +114,6 @@ class TestAllowEnvManageTokenFlag:
         assert kwargs["manage_token"] == SENTINEL_MANAGE_TOKEN
         # Even though the call succeeded, the sentinel must not appear in
         # JSON output (the resolver and service handle masking).
-        assert SENTINEL_MANAGE_TOKEN not in result.output
-
-    def test_data_app_password_default_deny_no_tty_exits_2(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
-        """data-app password mirrors project refresh: env ignored without
-        the flag, service never called."""
-        store = _make_store(tmp_path)
-        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", SENTINEL_MANAGE_TOKEN)
-
-        mock_data_app = MagicMock()
-        with (
-            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch("keboola_agent_cli.cli.DataAppService") as MockDataAppService,
-        ):
-            MockStore.return_value = store
-            MockDataAppService.return_value = mock_data_app
-            result = runner.invoke(
-                app,
-                [
-                    "--json",
-                    "data-app",
-                    "password",
-                    "--project",
-                    "prod",
-                    "--app-id",
-                    "1",
-                ],
-            )
-
-        assert result.exit_code == 2
-        assert "found in environment but ignored" in result.output
-        assert "--allow-env-manage-token" in result.output
-        mock_data_app.get_data_app_password.assert_not_called()
         assert SENTINEL_MANAGE_TOKEN not in result.output
 
     def test_org_setup_allow_env_passes_token_through(self, tmp_path: Path, monkeypatch) -> None:

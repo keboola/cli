@@ -305,7 +305,7 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `POST` | `/data-apps/{project}/{app_id}/deploy` | Deploy a data app version |
 | `POST` | `/data-apps/{project}/{app_id}/start` | Start a data app |
 | `POST` | `/data-apps/{project}/{app_id}/stop` | Stop a data app |
-| `GET` | `/data-apps/{project}/{app_id}/password` | Get data app access password |
+| `GET` | `/data-apps/{project}/{app_id}/password` | Get data app password metadata (password only with reveal=true) |
 | `GET` | `/data-apps/{project}/{app_id}/logs` | Tail data app container logs |
 | `GET` | `/data-apps/{project}/{app_id}/secrets` | List data app secrets |
 | `PUT` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |

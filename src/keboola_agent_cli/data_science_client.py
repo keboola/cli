@@ -8,10 +8,10 @@ encrypted secrets, slug, runtime size. Both must stay in sync; see
 
 URL derivation: ``https://data-science.<stack-suffix>`` from the project's
 connection URL via ``BaseHttpClient._derive_service_url``. Auth: same
-``X-StorageApi-Token`` as the Storage API. The single exception is
-``GET /apps/{id}/password`` which additionally requires
-``X-KBC-ManageApiToken`` -- the manage token is passed per-call so the
-client itself stays project-scoped.
+``X-StorageApi-Token`` as the Storage API (or, for a browser-login session,
+``Authorization: Bearer`` + ``X-KBC-ProjectId`` through ``http_auth``). Every
+endpoint below, ``GET /apps/{id}/password`` included, needs only a token of
+the app's own project.
 
 Verified shapes (writeup §2 / §6 / §9, replayed in this PR's live
 validation):
@@ -25,9 +25,8 @@ validation):
                                               ``config:{...}`` is silently
                                               dropped)
     DELETE /apps/{id}                     -> 202, cascades to Storage config
-    GET    /apps/{id}/password            -> 200, {password: "<20 hex>"}
-                                              (requires both Storage and
-                                              Manage tokens)
+    GET    /apps/{id}/password            -> 200, {password: "<20 hex>" | null}
+                                              (null = no password yet)
     GET    /apps/{id}/logs/tail           -> 200, text/plain container log
                                               tail. ``lines=N`` and
                                               ``since=ISO8601`` are mutually
@@ -211,28 +210,16 @@ class DataScienceClient(BaseHttpClient):
         """
         self._do_request("DELETE", f"/apps/{quote(str(app_id), safe='')}")
 
-    def get_app_password(self, app_id: str, manage_token: str) -> dict[str, Any]:
-        """Retrieve the auto-generated simpleAuth password.
+    def get_app_password(self, app_id: str) -> dict[str, Any]:
+        """Return ``{"password": str | None}`` for a password-protected app.
 
-        Requires both the project's Storage token (already on
-        ``self._client``) AND a Manage API token, supplied per-call so the
-        manage token never lives on the client instance.
-
-        The 20-character hex password is auto-generated at app create time
-        and is NOT rotatable -- to change it you must delete and recreate
-        the app (writeup §11.2).
+        The sandboxes-service authorizes this call with the project token
+        alone (``StorageApiTokenAuth`` + ``CanManageApp``, which only checks
+        that the token's project is the app's project), the same call the
+        Keboola UI makes. ``password`` is ``None`` while the app has no
+        password yet.
         """
-        path = f"/apps/{quote(str(app_id), safe='')}/password"
-        # Pass the Manage token via per-request `headers=`. httpx merges these
-        # with the client's persistent headers for this call only, so the
-        # manage token never lives on `self._client`. Using `_do_request`
-        # gives us the same retry/backoff and uniform error mapping as every
-        # other call in this client (no bespoke try/except needed).
-        response = self._do_request(
-            "GET",
-            path,
-            headers={"X-KBC-ManageApiToken": manage_token},
-        )
+        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/password")
         return response.json()
 
     def tail_app_logs(

@@ -22,6 +22,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import datetime
 from typing import Any
 
@@ -43,6 +44,13 @@ from ._data_app_bodies import (
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
+)
+from ._data_app_password import (
+    DataAppPassword,
+    app_branch_id,
+    build_data_app_password,
+    data_app_auth_kind,
+    require_password_auth,
 )
 from .base import BaseService, ClientFactory, make_session_aware_client_factory, project_error_entry
 from .encrypt_service import EncryptService
@@ -796,47 +804,38 @@ class DataAppService(BaseService):
             ),
         }
 
-    def get_data_app_password(
-        self,
-        alias: str,
-        app_id: str,
-        manage_token: str,
-    ) -> dict[str, Any]:
-        """Return the auto-generated simpleAuth password.
+    def get_data_app_password(self, alias: str, app_id: str) -> DataAppPassword:
+        """Read the password of a password-protected data app.
 
-        Requires both project Storage token and a Manage API token. The
-        Manage token is passed per-call -- it is never persisted, never
-        attached to the long-lived client, and never logged.
+        Needs only the project token (static or session): the password
+        endpoint checks just that the token belongs to the app's project.
+        Reads the app record and its Storage config first and refuses
+        (``VALIDATION_ERROR``) when the auth is not ``password`` -- the same
+        check the Keboola UI makes before it asks for the password. The
+        password comes back apart from the metadata; see
+        :class:`DataAppPassword`.
         """
-        if not manage_token:
-            raise KeboolaApiError(
-                message=(
-                    "Manage API token is required to read the data-app simpleAuth "
-                    "password. Run interactively (default since v0.28.0), or pass "
-                    "--allow-env-manage-token + set KBC_MANAGE_API_TOKEN for CI."
-                ),
-                status_code=0,
-                error_code=ErrorCode.INVALID_TOKEN,
-                retryable=False,
-            )
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        ds_client = self._ds_client_factory(project.stack_url, project.token)
-        try:
-            payload = ds_client.get_app_password(app_id, manage_token=manage_token)
-        finally:
-            ds_client.close()
-        password = payload.get("password", "") if isinstance(payload, dict) else ""
-        return {
-            "project_alias": alias,
-            "app_id": str(app_id),
-            "password": password,
-            "message": (
-                f"Retrieved simpleAuth password for data app {app_id}. "
-                "This password is auto-generated and cannot be rotated; "
-                "delete and recreate the app to mint a new one."
-            ),
-        }
+        # ExitStack closes whatever was created, also when the second factory raises.
+        with ExitStack() as clients:
+            ds_client = self._ds_client_factory(project.stack_url, project.token)
+            clients.callback(ds_client.close)
+            storage_client = self._client_factory(project.stack_url, project.token)
+            clients.callback(storage_client.close)
+            app = ds_client.get_app(app_id)
+            config_id = str(app.get("configId") or "")
+            configuration: dict[str, Any] = {}
+            if config_id:
+                detail = storage_client.get_config_detail(
+                    DATA_APP_COMPONENT_ID, config_id, branch_id=app_branch_id(app)
+                )
+                configuration = _coerce_config_dict(detail.get("configuration"))
+            require_password_auth(str(app_id), data_app_auth_kind(configuration))
+            payload = ds_client.get_app_password(app_id)
+        return build_data_app_password(
+            alias=alias, app_id=app_id, project=project, app=app, payload=payload
+        )
 
     def get_app_logs(
         self,
@@ -2115,9 +2114,7 @@ class DataAppService(BaseService):
         # wait=True
         if state == RUNNING_STATE:
             tail = (
-                " Run `kbagent data-app password` to retrieve the simpleAuth password."
-                if auth == "password"
-                else ""
+                " Copy its password with `kbagent data-app password`." if auth == "password" else ""
             )
             return f"Data app '{name}' is running.{tail}"
         return f"Data app '{name}' deploy reached state={state}."

@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_manage_token, get_registry
+from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
 
@@ -201,19 +201,38 @@ def delete(
     return registry.data_app.delete_data_app(alias=project, app_id=app_id)
 
 
-@router.get("/{project}/{app_id}/password", summary="Get data app access password")
+@router.get(
+    "/{project}/{app_id}/password",
+    summary="Get data app password metadata (password only with reveal=true)",
+)
 def password(
     project: str,
     app_id: str,
-    manage_token: str | None = Depends(get_manage_token),
+    reveal: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Fetch the password for a password-protected data app. Mirrors `kbagent data-app password`."""
-    if not manage_token:
-        raise HTTPException(status_code=401, detail="Missing X-Manage-Token header.")
-    return registry.data_app.get_data_app_password(
-        alias=project, app_id=app_id, manage_token=manage_token
-    )
+    """Password metadata of a password-protected data app. Mirrors `kbagent data-app password`.
+
+    Needs only the project token. The server cannot use the caller's
+    clipboard, so by default the response leaves the password out
+    (`password_delivered_to: null`) and `ui_url` names the Keboola UI page
+    that shows it. `reveal=true` adds `password`
+    (`password_delivered_to: "response"`).
+    """
+    lookup = registry.data_app.get_data_app_password(alias=project, app_id=app_id)
+    if not reveal:
+        hint = lookup.ui_hint()
+        return {
+            **lookup.metadata(),
+            "password_delivered_to": None,
+            "message": f"The password of data app {lookup.app_id} is not in this response. {hint}",
+        }
+    return {
+        **lookup.metadata(),
+        "password_delivered_to": "response",
+        "message": f"The password of data app {lookup.app_id} is in `password`.",
+        "password": lookup.password,
+    }
 
 
 @router.get("/{project}/{app_id}/logs", summary="Tail data app container logs")
