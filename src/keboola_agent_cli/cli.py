@@ -1,51 +1,18 @@
 """Typer root application with global options and subcommand registration."""
 
+import importlib
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import typer
+import typer.main
+from typer.core import TyperGroup
 
 from . import telemetry
-from .commands.agent import agent_app
-from .commands.auth import auth_app
-from .commands.billing import billing_app
-from .commands.branch import branch_app
-from .commands.changelog import changelog_command
-from .commands.component import component_app
-from .commands.config import config_app
-from .commands.context import context_command
-from .commands.data_app import data_app_app
-from .commands.dev_portal import dev_portal_app
-from .commands.docs import docs_app
-from .commands.doctor import doctor_command
-from .commands.encrypt import encrypt_app
-from .commands.feature import feature_app
-from .commands.flow import flow_app
-from .commands.http_client import http_app
-from .commands.init import init_command
-from .commands.job import job_app
-from .commands.kai import kai_app
-from .commands.lineage import lineage_app
-from .commands.merge_request import merge_request_app
-from .commands.notification import notification_app
-from .commands.org import org_app
-from .commands.permissions import permissions_app
-from .commands.project import project_app
-from .commands.repl import repl_command
-from .commands.schedule import schedule_app
-from .commands.search import search_command
-from .commands.semantic_layer import semantic_layer_app
-from .commands.serve import serve_command
-from .commands.sharing import sharing_app
-from .commands.storage import storage_app
-from .commands.stream import stream_app
-from .commands.sync import sync_app
-from .commands.token import token_app
-from .commands.transformation import transformation_app
-from .commands.version import update_command, version_command
-from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
 from .effective_branch import record_targets
@@ -56,113 +23,272 @@ from .output import OutputFormatter, force_utf8_when_redirected
 # very same policy for the REST surface; re-exported here because callers (and
 # tests) have imported it from `cli` since 0.22.0.
 from .permissions import PermissionEngine, apply_firewall_flags
-from .services.agent_service import AgentService
-from .services.auth_service import AuthService
-from .services.billing_service import BillingService
-from .services.branch_service import BranchService
-from .services.component_service import ComponentService
-from .services.config_service import ConfigService
-from .services.data_app_git_service import DataAppGitService
-from .services.data_app_service import DataAppService
-from .services.deep_lineage_service import DeepLineageService
-from .services.docs_service import DocsService
-from .services.doctor_service import DoctorService
-from .services.encrypt_service import EncryptService
-from .services.feature_service import FeatureService
-from .services.flow_service import FlowService
-from .services.http_forwarder_service import HttpForwarderService
-from .services.job_service import JobService
-from .services.kai_service import KaiService
-from .services.lineage_service import LineageService
-from .services.member_service import MemberService
-from .services.merge_request_service import MergeRequestService
-from .services.notification_service import NotificationService
-from .services.org_service import OrgService
-from .services.project_service import ProjectService
-from .services.repo_validate_service import RepoValidateService
-from .services.schedule_service import ScheduleService
-from .services.search_service import SearchService
-from .services.semantic_layer_service import SemanticLayerService
-from .services.sharing_service import SharingService
-from .services.snapshot_service import SnapshotService
-from .services.storage_service import StorageService
-from .services.stream_service import StreamService
-from .services.sync_service import SyncService
-from .services.token_service import TokenService
-from .services.variables_service import VariablesService
-from .services.version_service import VersionService
-from .services.workspace_service import WorkspaceService
 
 # At import, not inside the root callback: Click renders `--help` while parsing,
 # before any callback runs, and `--help` is one of the surfaces that crashed.
 force_utf8_when_redirected()
 
+# ---------------------------------------------------------------------------
+# Lazy command registration (issue #801)
+#
+# Importing every command module (and through them every service, prompt_toolkit,
+# the AI / Data Science clients, ...) cost ~0.2 s on EVERY invocation, although
+# an invocation only ever runs one command. Commands are therefore registered
+# by NAME: the root group lists every name up front and imports a command's
+# module only when that command is looked up. `kbagent job list` imports only
+# `commands.job`; `kbagent --help` looks every command up (it needs each one's
+# help text), so its output is unchanged.
+#
+# The order below IS the order of `kbagent --help` within each panel: plain
+# commands first, then groups -- the order Typer produced when these were
+# registered eagerly with `app.command()` / `app.add_typer()`.
+# tests/test_startup_imports.py guards the import budget.
+# ---------------------------------------------------------------------------
+
+_SETUP = "Setup & Info"
+_PROJ = "Project Management"
+_BROWSE = "Browse & Inspect"
+_FLOWS = "Flows"
+_DEV = "Development"
+
+
+@dataclass(frozen=True)
+class LazyCommand:
+    """A root command registered by name; its module is imported on first lookup.
+
+    ``target`` is ``"<module under commands/>:<attribute>"``. A ``typer.Typer``
+    attribute becomes a group (the ``app.add_typer`` path), anything else a
+    command (the ``app.command`` path) -- with exactly the options the eager
+    registration passed, so the resulting Click objects are identical.
+    """
+
+    name: str
+    target: str
+    panel: str
+    hidden: bool = False
+    help: str | None = None
+    no_args_is_help: bool = False
+
+    def load(self) -> Any:
+        """Import the command module and build the Click command/group for it."""
+        module_name, attr = self.target.split(":")
+        obj = getattr(importlib.import_module(f".commands.{module_name}", __package__), attr)
+        # A throwaway Typer records the registration exactly as the root app did
+        # before #801; Typer's own converters then build the Click object.
+        holder = typer.Typer()
+        if isinstance(obj, typer.Typer):
+            extra: dict[str, Any] = {"hidden": True} if self.hidden else {}
+            holder.add_typer(obj, name=self.name, rich_help_panel=self.panel, **extra)
+            return typer.main.get_group_from_info(
+                holder.registered_groups[0],
+                pretty_exceptions_short=app.pretty_exceptions_short,
+                suggest_commands=app.suggest_commands,
+                rich_markup_mode=app.rich_markup_mode,
+            )
+        holder.command(
+            self.name,
+            rich_help_panel=self.panel,
+            help=self.help,
+            no_args_is_help=self.no_args_is_help,
+        )(obj)
+        return typer.main.get_command_from_info(
+            holder.registered_commands[0],
+            pretty_exceptions_short=app.pretty_exceptions_short,
+            rich_markup_mode=app.rich_markup_mode,
+        )
+
+
+LAZY_COMMANDS: tuple[LazyCommand, ...] = (
+    # -- plain commands --
+    LazyCommand("init", "init:init_command", _SETUP),
+    LazyCommand("doctor", "doctor:doctor_command", _SETUP),
+    LazyCommand("version", "version:version_command", _SETUP),
+    LazyCommand("update", "version:update_command", _SETUP),
+    LazyCommand("changelog", "changelog:changelog_command", _SETUP),
+    LazyCommand("context", "context:context_command", _SETUP),
+    LazyCommand("repl", "repl:repl_command", _SETUP),
+    LazyCommand("serve", "serve:serve_command", _SETUP),
+    LazyCommand(
+        "search",
+        "search:search_command",
+        _BROWSE,
+        help="Search for items (tables, buckets, configs, flows, …) by name or content.",
+        no_args_is_help=True,
+    ),
+    # -- groups --
+    LazyCommand("permissions", "permissions:permissions_app", _SETUP),
+    LazyCommand("auth", "auth:auth_app", _SETUP),
+    LazyCommand("project", "project:project_app", _PROJ),
+    LazyCommand("org", "org:org_app", _PROJ),
+    LazyCommand("feature", "feature:feature_app", _PROJ),
+    LazyCommand("token", "token:token_app", _PROJ),
+    LazyCommand("billing", "billing:billing_app", _PROJ),
+    LazyCommand("component", "component:component_app", _BROWSE),
+    LazyCommand("config", "config:config_app", _BROWSE),
+    LazyCommand("data-app", "data_app:data_app_app", _BROWSE),
+    LazyCommand("job", "job:job_app", _BROWSE),
+    LazyCommand("storage", "storage:storage_app", _BROWSE),
+    LazyCommand("stream", "stream:stream_app", _BROWSE),
+    LazyCommand("sharing", "sharing:sharing_app", _BROWSE),
+    LazyCommand("lineage", "lineage:lineage_app", _BROWSE),
+    LazyCommand("kai", "kai:kai_app", _BROWSE),
+    LazyCommand("docs", "docs:docs_app", _BROWSE),
+    LazyCommand("transformation", "transformation:transformation_app", _BROWSE),
+    LazyCommand("flow", "flow:flow_app", _FLOWS),
+    LazyCommand("schedule", "schedule:schedule_app", _FLOWS),
+    LazyCommand("notification", "notification:notification_app", _FLOWS),
+    LazyCommand("branch", "branch:branch_app", _DEV),
+    LazyCommand("merge-request", "merge_request:merge_request_app", _DEV),
+    LazyCommand("mr", "merge_request:merge_request_app", _DEV, hidden=True),
+    LazyCommand("workspace", "workspace:workspace_app", _DEV),
+    LazyCommand("sync", "sync:sync_app", _DEV),
+    LazyCommand("encrypt", "encrypt:encrypt_app", _DEV),
+    LazyCommand("semantic-layer", "semantic_layer:semantic_layer_app", _DEV),
+    LazyCommand("sl", "semantic_layer:semantic_layer_app", _DEV, hidden=True),
+    LazyCommand("http", "http_client:http_app", _DEV),
+    LazyCommand("agent", "agent:agent_app", _DEV),
+    LazyCommand("dev-portal", "dev_portal:dev_portal_app", _DEV),
+)
+
+
+class _LazyCommandTable(dict[str, Any]):
+    """The root group's ``commands`` mapping, resolving a name on first lookup.
+
+    Every name is a key from the start, so everything that only needs names --
+    typo suggestions, ``name in commands``, iteration order -- behaves as with
+    eager registration. Looking a command up (``[]``, ``get``, ``values``,
+    ``items``) replaces its :class:`LazyCommand` with the real Click object in
+    place, which keeps the key order. It stays a ``dict`` so existing tree
+    walkers (telemetry, the permission-registry test, tooling scripts) need no
+    change.
+    """
+
+    def __getitem__(self, name: str) -> Any:
+        value = super().__getitem__(name)
+        if isinstance(value, LazyCommand):
+            value = value.load()
+            super().__setitem__(name, value)
+        return value
+
+    def get(self, name: str, default: Any = None) -> Any:  # ty: ignore[invalid-method-override]
+        try:
+            return self[name]
+        except KeyError:
+            return default
+
+    def values(self) -> list[Any]:  # ty: ignore[invalid-method-override]
+        return [self[name] for name in self]
+
+    def items(self) -> list[tuple[str, Any]]:  # ty: ignore[invalid-method-override]
+        return [(name, self[name]) for name in self]
+
+
+class LazyRootGroup(TyperGroup):
+    """Root Click group whose commands are imported on demand (see above)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        table = _LazyCommandTable(self.commands)
+        for entry in LAZY_COMMANDS:
+            table[entry.name] = entry
+        self.commands = table
+
+
 app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
     invoke_without_command=True,
+    cls=LazyRootGroup,
 )
 
-# -- Setup & Info --
-_SETUP = "Setup & Info"
-app.command("init", rich_help_panel=_SETUP)(init_command)
-app.command("doctor", rich_help_panel=_SETUP)(doctor_command)
-app.command("version", rich_help_panel=_SETUP)(version_command)
-app.command("update", rich_help_panel=_SETUP)(update_command)
-app.command("changelog", rich_help_panel=_SETUP)(changelog_command)
-app.command("context", rich_help_panel=_SETUP)(context_command)
-app.command("repl", rich_help_panel=_SETUP)(repl_command)
-app.command("serve", rich_help_panel=_SETUP)(serve_command)
-app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
-app.add_typer(auth_app, name="auth", rich_help_panel=_SETUP)
 
-# -- Project Management --
-_PROJ = "Project Management"
-app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
-app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
-app.add_typer(feature_app, name="feature", rich_help_panel=_PROJ)
-app.add_typer(token_app, name="token", rich_help_panel=_PROJ)
-app.add_typer(billing_app, name="billing", rich_help_panel=_PROJ)
+# ---------------------------------------------------------------------------
+# Lazy services (issue #801)
+#
+# ctx.obj key -> service class; each key is also the module name under
+# `services/`. A service is built on its first `ctx.obj[key]` (`_ServiceMap`),
+# and its class is resolved through this module's attribute (`__getattr__`
+# below), so `mock.patch("keboola_agent_cli.cli.JobService")` -- the pattern the
+# test-suite uses throughout -- keeps working.
+# ---------------------------------------------------------------------------
 
-# -- Browse & Inspect --
-_BROWSE = "Browse & Inspect"
-app.add_typer(component_app, name="component", rich_help_panel=_BROWSE)
-app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
-app.command(
-    "search",
-    rich_help_panel=_BROWSE,
-    help="Search for items (tables, buckets, configs, flows, …) by name or content.",
-    no_args_is_help=True,
-)(search_command)
-app.add_typer(data_app_app, name="data-app", rich_help_panel=_BROWSE)
-app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
-app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
-app.add_typer(stream_app, name="stream", rich_help_panel=_BROWSE)
-app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
-app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
-app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
-app.add_typer(docs_app, name="docs", rich_help_panel=_BROWSE)
-app.add_typer(transformation_app, name="transformation", rich_help_panel=_BROWSE)
+_SERVICES: dict[str, str] = {
+    "project_service": "ProjectService",
+    "component_service": "ComponentService",
+    "config_service": "ConfigService",
+    "job_service": "JobService",
+    "lineage_service": "LineageService",
+    "deep_lineage_service": "DeepLineageService",
+    "org_service": "OrgService",
+    "member_service": "MemberService",
+    "feature_service": "FeatureService",
+    "branch_service": "BranchService",
+    "merge_request_service": "MergeRequestService",
+    "sharing_service": "SharingService",
+    "search_service": "SearchService",
+    "snapshot_service": "SnapshotService",
+    "storage_service": "StorageService",
+    "stream_service": "StreamService",
+    "token_service": "TokenService",
+    "sync_service": "SyncService",
+    "variables_service": "VariablesService",
+    "encrypt_service": "EncryptService",
+    "flow_service": "FlowService",
+    "schedule_service": "ScheduleService",
+    "notification_service": "NotificationService",
+    "workspace_service": "WorkspaceService",
+    "data_app_service": "DataAppService",
+    "data_app_git_service": "DataAppGitService",
+    "semantic_layer_service": "SemanticLayerService",
+    "repo_validate_service": "RepoValidateService",
+    "kai_service": "KaiService",
+    "docs_service": "DocsService",
+    "doctor_service": "DoctorService",
+    "version_service": "VersionService",
+    "http_forwarder_service": "HttpForwarderService",
+    "agent_service": "AgentService",
+    "auth_service": "AuthService",
+    "billing_service": "BillingService",
+}
+# Services whose constructor takes no ConfigStore.
+_STATELESS_SERVICES = frozenset({"version_service", "http_forwarder_service"})
+_SERVICE_MODULE_BY_CLASS = {cls: key for key, cls in _SERVICES.items()}
 
-# -- Flows --
-_FLOWS = "Flows"
-app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
-app.add_typer(schedule_app, name="schedule", rich_help_panel=_FLOWS)
-app.add_typer(notification_app, name="notification", rich_help_panel=_FLOWS)
 
-# -- Development --
-_DEV = "Development"
-app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
-app.add_typer(merge_request_app, name="merge-request", rich_help_panel=_DEV)
-app.add_typer(merge_request_app, name="mr", rich_help_panel=_DEV, hidden=True)
-app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
-app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
-app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
-app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
-app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
-app.add_typer(http_app, name="http", rich_help_panel=_DEV)
-app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
-app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
+def __getattr__(name: str) -> Any:
+    """Import a service class on first access as ``cli.<ServiceClass>``."""
+    module_key = _SERVICE_MODULE_BY_CLASS.get(name)
+    if module_key is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    cls = getattr(importlib.import_module(f".services.{module_key}", __package__), name)
+    globals()[name] = cls
+    return cls
+
+
+class _ServiceMap(dict[str, Any]):
+    """``ctx.obj``: a plain dict that constructs a service on its first lookup."""
+
+    def __init__(self, config_store: ConfigStore) -> None:
+        super().__init__()
+        self._config_store = config_store
+
+    def __missing__(self, key: str) -> Any:
+        cls_name = _SERVICES.get(key)
+        if cls_name is None:
+            raise KeyError(key)
+        cls = getattr(sys.modules[__name__], cls_name)
+        service = cls() if key in _STATELESS_SERVICES else cls(config_store=self._config_store)
+        self[key] = service
+        return service
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(key) or key in _SERVICES
+
+    def get(self, key: str, default: Any = None) -> Any:  # ty: ignore[invalid-method-override]
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 def _version_callback(value: bool) -> None:
@@ -310,43 +436,6 @@ def main(
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
 
-    project_service = ProjectService(config_store=config_store)
-    component_service = ComponentService(config_store=config_store)
-    config_service = ConfigService(config_store=config_store)
-    job_service = JobService(config_store=config_store)
-    lineage_service = LineageService(config_store=config_store)
-    deep_lineage_service = DeepLineageService(config_store=config_store)
-    org_service = OrgService(config_store=config_store)
-    member_service = MemberService(config_store=config_store)
-    feature_service = FeatureService(config_store=config_store)
-    branch_service = BranchService(config_store=config_store)
-    merge_request_service = MergeRequestService(config_store=config_store)
-    sharing_service = SharingService(config_store=config_store)
-    search_service = SearchService(config_store=config_store)
-    snapshot_service = SnapshotService(config_store=config_store)
-    storage_service = StorageService(config_store=config_store)
-    stream_service = StreamService(config_store=config_store)
-    token_service = TokenService(config_store=config_store)
-    sync_service = SyncService(config_store=config_store)
-    variables_service = VariablesService(config_store=config_store)
-    encrypt_service = EncryptService(config_store=config_store)
-    flow_service = FlowService(config_store=config_store)
-    schedule_service = ScheduleService(config_store=config_store)
-    notification_service = NotificationService(config_store=config_store)
-    workspace_service = WorkspaceService(config_store=config_store)
-    data_app_service = DataAppService(config_store=config_store)
-    data_app_git_service = DataAppGitService(config_store=config_store)
-    semantic_layer_service = SemanticLayerService(config_store=config_store)
-    repo_validate_service = RepoValidateService(config_store=config_store)
-    kai_service = KaiService(config_store=config_store)
-    docs_service = DocsService(config_store=config_store)
-    doctor_service = DoctorService(config_store=config_store)
-    version_service = VersionService()
-    http_forwarder_service = HttpForwarderService()
-    agent_service = AgentService(config_store=config_store)
-    auth_service = AuthService(config_store=config_store)
-    billing_service = BillingService(config_store=config_store)
-
     try:
         config = config_store.load()
         persisted_policy = config.permissions
@@ -361,52 +450,20 @@ def main(
     )
     permission_engine = PermissionEngine(session_policy)
 
-    ctx.ensure_object(dict)
-    ctx.obj["formatter"] = formatter
-    ctx.obj["json_output"] = json_output
-    ctx.obj["permission_engine"] = permission_engine
-    ctx.obj["verbose"] = verbose
-    ctx.obj["no_color"] = effective_no_color
-    ctx.obj["deny_writes"] = deny_writes
-    ctx.obj["deny_destructive"] = deny_destructive
-    ctx.obj["allow_env_manage_token"] = allow_env_manage_token
-    ctx.obj["config_store"] = config_store
-    ctx.obj["project_service"] = project_service
-    ctx.obj["component_service"] = component_service
-    ctx.obj["config_service"] = config_service
-    ctx.obj["job_service"] = job_service
-    ctx.obj["lineage_service"] = lineage_service
-    ctx.obj["deep_lineage_service"] = deep_lineage_service
-    ctx.obj["org_service"] = org_service
-    ctx.obj["member_service"] = member_service
-    ctx.obj["feature_service"] = feature_service
-    ctx.obj["branch_service"] = branch_service
-    ctx.obj["merge_request_service"] = merge_request_service
-    ctx.obj["sharing_service"] = sharing_service
-    ctx.obj["search_service"] = search_service
-    ctx.obj["snapshot_service"] = snapshot_service
-    ctx.obj["storage_service"] = storage_service
-    ctx.obj["stream_service"] = stream_service
-    ctx.obj["token_service"] = token_service
-    ctx.obj["sync_service"] = sync_service
-    ctx.obj["variables_service"] = variables_service
-    ctx.obj["encrypt_service"] = encrypt_service
-    ctx.obj["flow_service"] = flow_service
-    ctx.obj["schedule_service"] = schedule_service
-    ctx.obj["notification_service"] = notification_service
-    ctx.obj["workspace_service"] = workspace_service
-    ctx.obj["data_app_service"] = data_app_service
-    ctx.obj["data_app_git_service"] = data_app_git_service
-    ctx.obj["semantic_layer_service"] = semantic_layer_service
-    ctx.obj["repo_validate_service"] = repo_validate_service
-    ctx.obj["kai_service"] = kai_service
-    ctx.obj["docs_service"] = docs_service
-    ctx.obj["doctor_service"] = doctor_service
-    ctx.obj["version_service"] = version_service
-    ctx.obj["http_forwarder_service"] = http_forwarder_service
-    ctx.obj["agent_service"] = agent_service
-    ctx.obj["auth_service"] = auth_service
-    ctx.obj["billing_service"] = billing_service
+    # Services are built on first use (issue #801); anything already in ctx.obj
+    # (the REPL marker set above) is carried over.
+    obj = _ServiceMap(config_store)
+    obj.update(ctx.ensure_object(dict))
+    ctx.obj = obj
+    obj["formatter"] = formatter
+    obj["json_output"] = json_output
+    obj["permission_engine"] = permission_engine
+    obj["verbose"] = verbose
+    obj["no_color"] = effective_no_color
+    obj["deny_writes"] = deny_writes
+    obj["deny_destructive"] = deny_destructive
+    obj["allow_env_manage_token"] = allow_env_manage_token
+    obj["config_store"] = config_store
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":
