@@ -610,6 +610,15 @@ id, the **Phase-C** transformation variable links **and the Phase-D
 `keboola.flow` task `configId`s** remap reference→ULID automatically — no manual
 "remap orchestrator task" pass. The push result carries `flow_task_remaps`.
 
+Since vNEXT push also remaps a transformation's shared code (`shared_code_id`, `shared_code_row_ids` and the `{{<row id>}}` script placeholders), legacy `keboola.orchestrator` task `configId`s, task `configRowIds`, and a schedule's `target.configurationId`. The result carries `link_remaps` with one count per kind. A link push cannot set is an `errors[]` entry (`shared_code_link`, `flow_task_link`, `schedule_target_link`). After a failed PUT the next `sync push` or clone re-run sends the link again.
+
+**Check `warnings[]` after a clone (since vNEXT).** Some configs need an action in the target. The clone result lists each one in `warnings[]` next to the push warnings, also for `--dry-run`, and human mode prints them. Only the run that creates the configs reports them, so keep them from the first run:
+
+- `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config.
+- `encrypted_values_copied`: `KBC::` values that only the reference project can decrypt, as `_config.yml` paths. For `secret_keys` put the plaintext into the clone's `_config.yml` and run `sync push`. `unencryptable_keys` need `kbagent encrypt values`, `oauth_keys` a new authorization.
+- `data_app_not_deployed`: run `kbagent data-app deploy`.
+- `schedule_not_active`: clone never activates a schedule, so the new project starts no jobs by itself. `kbagent flow schedule --flow-id ...` activates it; with several schedules on one flow, use the Keboola UI.
+
 **Idempotent:** re-running with an existing `--target-dir` skips the copy +
 overrides and just pushes, so a completed clone reports `no_changes` /
 `created: 0`. Re-running is safe.

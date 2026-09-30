@@ -4,7 +4,8 @@ Extracted from ``sync_service.py``. ``SyncService.clone_project`` is a thin
 delegator to :func:`clone_project` here; the pure, client-free override helpers
 live in ``..sync.clone``. This function only orchestrates: validate the
 reference, copy + re-point + parameterize the tree, run the fresh-target guard,
-and push (so push Phase C/D remaps the flow/variable links).
+and push (so push Phase C/D remaps the links between the configs), then list
+what the target still needs in ``warnings``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from ..sync.clone import (
     repoint_manifest_project,
 )
 from ..sync.manifest import load_manifest, save_manifest
+from ._sync_clone_warnings import collect_clone_warnings, read_encrypted_values
 from ._sync_storage import create_buckets_from_export
 from .base import find_default_branch_id
 
@@ -59,8 +61,9 @@ def clone_project(
     Copies the reference tree at ``source`` into ``target_dir``, applies the
     declarative ``overrides`` (``bucket_map``, ``variable_values``,
     ``instance_rename``), re-points the manifest at ``target_alias``'s project,
-    and pushes -- so every config is CREATEd fresh and its flow task / variable
-    links are remapped reference->ULID by push Phase C/D.
+    and pushes -- so every config is CREATEd fresh and its links (flow and
+    orchestrator tasks, schedule targets, variables, shared code) are remapped
+    reference->ULID by push Phase C/D.
 
     Cloning into a fresh target needs no id surgery: the reference's config ids
     do not exist in the target remote, so the diff classifies every config as
@@ -92,8 +95,11 @@ def clone_project(
         A dict matching ``CloneResult``: ``status``
         (``cloned`` | ``no_changes`` | ``dry_run``), ``target_alias``,
         ``target_dir``, ``created``, ``bucket_rewrites``, ``variable_overrides``,
-        ``renamed_instances``, ``flow_task_remaps``, ``push`` (the underlying
-        push result), ``errors``.
+        ``renamed_instances``, ``flow_task_remaps`` (flow tasks only),
+        ``link_remaps`` (per kind), ``push`` (the underlying push result),
+        ``errors``, ``warnings`` (the push warnings plus the follow-ups the
+        target needs, see ``_sync_clone_warnings``; also on ``dry_run``; only
+        the run that creates the configs reports them).
 
     Raises:
         ConfigError: ``source`` is not a synced project, ``target_alias`` is
@@ -176,13 +182,28 @@ def clone_project(
         "renamed_instances": renamed_instances,
     }
 
+    # Every run reads the diff before it pushes: the dry run reports it, the
+    # fresh-target guard checks it, and the encrypted values are read from the
+    # same changes. They are read before the push, because push encrypts a
+    # plaintext `#` value for the target and writes the ciphertext back.
+    diff_result = service.diff(target_alias, target_path, branch_override=branch_override)
+    changes = diff_result.get("changes", [])
+    tree_args: dict[str, Any] = {
+        "target_alias": target_alias,
+        "target_path": target_path,
+        "branch_override": branch_override,
+    }
+    encrypted = read_encrypted_values(service, changes=changes, **tree_args)
+
     if dry_run:
-        diff_result = service.diff(target_alias, target_path, branch_override=branch_override)
         return {
             "status": "dry_run",
             "target_alias": target_alias,
             "target_dir": str(target_path),
             "summary": diff_result["summary"],
+            "warnings": collect_clone_warnings(
+                service, changes=changes, encrypted=encrypted, dry_run=True, **tree_args
+            ),
             **override_counts,
         }
 
@@ -190,10 +211,9 @@ def clone_project(
     # CREATE. A non-'added' change means a reference id already exists in the
     # target -> not a fresh target; refuse rather than UPDATE a stranger's config.
     if not already_cloned:
-        diff_result = service.diff(target_alias, target_path, branch_override=branch_override)
         collisions = [
             f"{c.get('component_id')}/{c.get('config_id')}"
-            for c in diff_result["changes"]
+            for c in changes
             if c["change_type"] != "added"
         ]
         if collisions:
@@ -213,17 +233,26 @@ def clone_project(
 
     push_result = service.push(target_alias, target_path, branch_override=branch_override)
     status = "no_changes" if push_result.get("status") == "no_changes" else "cloned"
+    clone_warnings = collect_clone_warnings(
+        service,
+        changes=push_result.get("pushed_details", []),
+        encrypted=encrypted,
+        dry_run=False,
+        **tree_args,
+    )
     return {
         "status": status,
         "target_alias": target_alias,
         "target_dir": str(target_path),
         "created": push_result.get("created", 0),
         "flow_task_remaps": push_result.get("flow_task_remaps", 0),
+        "link_remaps": push_result.get("link_remaps", {}),
         "buckets_created": len(bucket_result.created) if bucket_result else 0,
         "buckets_skipped": len(bucket_result.skipped) if bucket_result else 0,
         "bucket_errors": bucket_result.errors if bucket_result else [],
         "linked_buckets": bucket_result.linked if bucket_result else [],
         "push": push_result,
         "errors": push_result.get("errors", []),
+        "warnings": [*push_result.get("warnings", []), *clone_warnings],
         **override_counts,
     }

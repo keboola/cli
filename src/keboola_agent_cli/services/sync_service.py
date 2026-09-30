@@ -78,7 +78,7 @@ from ._sync_baseline import (
     effective_stored_hash,
     raise_on_legacy_boundary,
 )
-from ._sync_bindings import resolve_flow_task_bindings, resolve_variable_bindings
+from ._sync_bindings import resolve_run_target_bindings, resolve_transformation_bindings
 from ._sync_branch import (
     branch_link as _branch_link,
 )
@@ -1844,8 +1844,9 @@ class SyncService(BaseService):
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
             # ---- Phase B: row creates / updates / deletes ----------------
-            # row placeholder id -> ULID; ULID parent -> rows created under it.
-            created_row_id_map: dict[str, str] = {}
+            # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
+            # created under it. Keyed per parent: two configs can use one row id.
+            created_row_id_map: dict[tuple[str, str], str] = {}
             created_rows_by_parent: dict[str, list[str]] = {}
             for change in row_changes:
                 change_type = change["change_type"]
@@ -1881,7 +1882,7 @@ class SyncService(BaseService):
                         created += 1
                         if new_row_id:
                             if config_id:
-                                created_row_id_map[config_id] = new_row_id
+                                created_row_id_map[(effective_parent_id, config_id)] = new_row_id
                             created_rows_by_parent.setdefault(effective_parent_id, []).append(
                                 new_row_id
                             )
@@ -1899,8 +1900,8 @@ class SyncService(BaseService):
                         raise
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
-            # ---- Phase C: variable-link backfill (KFR-03) ----------------
-            binding = resolve_variable_bindings(
+            # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
+            binding = resolve_transformation_bindings(
                 self,
                 client,
                 created_configs=created_configs,
@@ -1915,15 +1916,16 @@ class SyncService(BaseService):
             if binding.configs_rewritten:
                 manifest_dirty = True
 
-            # ---- Phase D: flow task configId backfill (#426) -------------
-            # After variable links, remap keboola.flow task configIds that point
-            # at configs created this push (golden/placeholder -> ULID). Reuses
-            # created_id_map; a no-op when no flow was created.
-            flow_binding = resolve_flow_task_bindings(
+            # ---- Phase D: flow/orchestrator task + schedule target backfill
+            # After transformation links, remap the configIds that flows,
+            # orchestrations and schedules run when they point at configs created
+            # this push (golden/placeholder -> ULID). Reuses created_id_map.
+            flow_binding = resolve_run_target_bindings(
                 self,
                 client,
                 created_configs=created_configs,
                 created_id_map=created_id_map,
+                created_row_id_map=created_row_id_map,
                 manifest=manifest,
                 branch_id=branch_id,
             )
@@ -1947,8 +1949,7 @@ class SyncService(BaseService):
         }
         if warnings:
             result_data["warnings"] = warnings
-        if flow_binding.tasks_remapped:
-            result_data["flow_task_remaps"] = flow_binding.tasks_remapped
+        result_data.update(flow_binding.push_fields(binding.shared_code_links))
         if name_drift_warnings and not no_name_drift_warnings:
             result_data["name_drift_warnings"] = name_drift_warnings
         if never_fetched:

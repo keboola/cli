@@ -1058,6 +1058,25 @@ A linked (shared) bucket is **linked** in the target to the same source as in th
 
 Only the buckets are created, never their tables or their data -- the pull export carries table metadata (columns / primary key) but no table data, only truncated samples. Move the actual data by bucket sharing, `storage upload-table`, or by running the flows that populate the output tables. The old Go CLI `kbc` did not materialize storage into the tree at all, so this is strictly more than parity.
 
+## `sync clone` re-points shared code, orchestrator tasks and schedules, and lists what the target still needs
+
+*(since vNEXT)*
+
+Before vNEXT, `sync push` set only two kinds of links to the config IDs it created in the same push: `keboola.flow` job-task `configId`s and transformation `variables_id` / `variables_values_id`. All other links kept the reference IDs, and `sync clone` still reported `status: cloned` with `errors: []`: a transformation's `shared_code_id`, `shared_code_row_ids` and `{{<row id>}}` script placeholders, a legacy `keboola.orchestrator` task's `configId`, a task's `configRowIds`, and a `keboola.scheduler` config's `target.configurationId`.
+
+Now push sets these to the new IDs too, for a clone and for a plain `sync push` of a fresh tree. It rewrites the placeholders in the remote scripts and in the local `transform.sql` / `transform.py`. A row ID is looked up under its own new parent config, so two shared-code configs with the same row ID do not swap rows. Push never registers a schedule with the Scheduler service, so a cloned project starts no jobs by itself.
+
+A link push cannot set is an `errors[]` entry, never a silent skip: `change_type` `shared_code_link`, `flow_task_link` or `schedule_target_link` (next to the existing `variable_link`). A row ID with no new row (for example its create failed) has error code `LINK_UNRESOLVED` and keeps the old ID. When the PUT of a link fails, the local files already hold the new IDs and the manifest hash is left stale, so the next `sync push` (or `sync clone` re-run) sees a modified config and sends them. The push and clone results carry `link_remaps` with one count per kind (`flow_tasks`, `orchestrator_tasks`, `schedule_targets`, `shared_code`, `config_row_ids`). `flow_task_remaps` still counts flow tasks only.
+
+`sync clone` (also with `--dry-run`) adds these entries to `warnings[]` and prints them in human mode. Each entry has `change_type`, `component_id`, `config_id`, `path` and `message`:
+
+- `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config. The target has no such config. Extra fields: `task_id`, `task_name`, `target_component_id`, `target_config_id`.
+- `encrypted_values_copied`: one entry per config. The paths are in the `_config.yml` shape (`authorization` is under `_configuration_extra`, a row's paths start with the row path), never the values. `secret_keys` are under a `#` key: put the plaintext into the clone's `_config.yml` and run `sync push`, which encrypts it for the target (`config clone --target-project` handles this for a single config with `--secret PATH=VALUE`). `unencryptable_keys` are under a plain key, which push does not encrypt: encrypt the value with `kbagent encrypt values` and set the result. `oauth_keys` are OAuth credentials: authorize the config again in the target. Clone reads these values before it pushes, so a plaintext `#` value in the reference is not reported.
+- `data_app_not_deployed`: sync creates a data app but does not deploy it. `app_id` is the new app; run `kbagent data-app deploy --project T --app-id ID` (with `--branch` when the clone used it).
+- `schedule_not_active`: `active: false`. `kbagent flow schedule --project T --flow-id F --cron '...'` updates that schedule and registers it; the hint adds `--disabled` for a disabled schedule and `--branch` when the clone used it. `flow schedule` updates only the first schedule of a flow, so when several cloned schedules run one flow the message says to activate them in the Keboola UI instead.
+
+The clone `warnings[]` also carries the push warnings, which before were only in `push.warnings`. Only the run that creates the configs reports the warnings: a re-run that creates nothing returns `warnings: []`, so keep them from the first run. After a `--dry-run` the tree still has the reference IDs, so those messages give no command with an ID.
+
 ## `semantic-layer search-context` + `get-context` cover the upstream `search_semantic_context` / `get_semantic_context` parity
 
 `kbagent semantic-layer search-context --project P [--pattern G ...] [--type T] [--limit N]`
