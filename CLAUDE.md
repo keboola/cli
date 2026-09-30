@@ -82,7 +82,7 @@ src/keboola_agent_cli/
   http_base.py          # BaseHttpClient - shared retry/backoff + common HTTP infra
   client/               # Storage API + Queue API package (X-StorageApi-Token);
                         #   split by endpoint family (storage_tables/storage_files/configs/
-                        #   queue/tokens/branches/stream/query/workspaces/misc + _core/_transfer),
+                        #   queue/tokens/branches/stream/query/workspaces/editor/misc + _core/_transfer),
                         #   composed into one KeboolaClient via mixins (#520)
   manage_client.py      # Manage API                   (X-KBC-ManageApiToken)
   ai_client.py          # AI Service API               (component schemas, Kai)
@@ -954,7 +954,8 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 #   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
-kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
+# `sync init --with-workspaces` (CLI-25) sets the manifest key `syncWorkspaces`: pull/diff/push/clone then also sync shared SQL workspaces (keboola.sandboxes with no parameters.id and runtime.shared true; Python/R and legacy SQL sandboxes stay skipped), config only (services/_sync_workspace.py). A `push --force` delete removes the workspace's SQL editor sessions (Editor service, client/editor.py) before the config, `push --dry-run --force` lists them, and a plain push holds the delete back under skipped_deletions; clone warns about workspace input tables missing in the target. With --adopt-existing it turns the key on in an existing manifest. Version gate for this entry lives in gotchas.md.
 kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
 # `sync pull` auto-inits: if the target directory has no `.keboola/manifest.json`, pull runs `init` first, so a separate `sync init` is NOT needed for a first checkout. `sync pull --project X -d ./dir` on an empty dir writes the manifest and fetches the configs in one step.
 # `sync pull --force` is conflict-aware (since 0.53.0): locally-modified config whose remote is UNCHANGED is preserved (delta stays pushable, never silently re-stamped); a true merge conflict (local AND remote both changed since last pull) aborts (exit 1, SYNC_CONFLICT, --json lists details.conflicts); local-untouched + remote-changed takes remote.
@@ -966,6 +967,7 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent

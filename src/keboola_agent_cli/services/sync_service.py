@@ -17,7 +17,6 @@ import yaml
 
 from ..config_store import ConfigStore
 from ..constants import (
-    ALWAYS_IGNORED_COMPONENTS,
     BRANCH_MAPPING_FILENAME,
     CONFIG_FILENAME,
     CONFIG_HASH_VERSION,
@@ -68,6 +67,7 @@ from ..sync.manifest import (
     save_manifest,
 )
 from ..sync.naming import config_path, config_row_path, sanitize_name
+from . import _sync_workspace as sql_workspaces
 from ._encryption import (
     encrypt_secrets_in_config,
     find_plaintext_secret_keys,
@@ -291,6 +291,7 @@ class SyncService(BaseService):
         project_root: Path,
         git_branching: bool = False,
         adopt_existing: bool = False,
+        sync_workspaces: bool = False,
     ) -> dict[str, Any]:
         """Initialize a sync working directory for a project.
 
@@ -304,6 +305,9 @@ class SyncService(BaseService):
             adopt_existing: If True and a manifest already exists, validate it
                 against the alias's project_id and normalise it (idempotent
                 upgrade of a ``kbc``-written manifest) instead of refusing.
+            sync_workspaces: Set the manifest key ``syncWorkspaces`` (CLI-25),
+                so pull/diff/push/clone also handle shared SQL workspaces. On
+                ``adopt_existing`` it only turns the key on, never off.
 
         Returns:
             Dict with initialization stats and created file paths.
@@ -322,7 +326,7 @@ class SyncService(BaseService):
         manifest_path = keboola_dir / "manifest.json"
         if manifest_path.exists():
             if adopt_existing:
-                return self._adopt_existing_manifest(alias, project_root, project)
+                return self._adopt_existing_manifest(alias, project_root, project, sync_workspaces)
             raise FileExistsError(
                 f"Manifest already exists at {manifest_path}. "
                 "Use 'sync pull' to update, 'sync init --adopt-existing' to adopt a "
@@ -360,6 +364,7 @@ class SyncService(BaseService):
             allowTargetEnv=True,
             gitBranching=git_branching_config,
             naming=ManifestNaming(),
+            syncWorkspaces=sync_workspaces,
             branches=[
                 ManifestBranch(
                     id=default_branch_id,
@@ -401,6 +406,7 @@ class SyncService(BaseService):
             "api_host": api_host,
             "git_branching": git_branching,
             "default_branch": default_branch_name,
+            "sync_workspaces": sync_workspaces,
             "files_created": created_files,
         }
 
@@ -409,6 +415,7 @@ class SyncService(BaseService):
         alias: str,
         project_root: Path,
         project: Any,
+        sync_workspaces: bool = False,
     ) -> dict[str, Any]:
         """Validate and normalise an existing manifest written by kbc or kbagent.
 
@@ -434,6 +441,7 @@ class SyncService(BaseService):
             )
 
         api_host = project.stack_url.replace("https://", "").rstrip("/")
+        existing.sync_workspaces = existing.sync_workspaces or sync_workspaces
         save_manifest(project_root, existing)
 
         return {
@@ -443,6 +451,7 @@ class SyncService(BaseService):
             "api_host": api_host,
             "git_branching": existing.git_branching.enabled,
             "default_branch": existing.git_branching.default_branch,
+            "sync_workspaces": existing.sync_workspaces,
             "files_created": [],
         }
 
@@ -474,21 +483,6 @@ class SyncService(BaseService):
             if not fpath.exists() or self._file_hash(fpath) != stored_hash:
                 return False
         return True
-
-    @staticmethod
-    def _effective_ignored_components(manifest: Manifest) -> frozenset[str]:
-        """Components excluded from this working tree's sync operations.
-
-        The hardcoded :data:`ALWAYS_IGNORED_COMPONENTS` plus the manifest's
-        ``ignoredComponents``, which was declared in the schema from day one
-        but read by nothing until issue #689. Computed ONCE per pull/diff and
-        threaded through every filtering site so the remote side, the local
-        side and the force-pull conflict guard can never disagree about what is
-        ignored -- a disagreement is what turns a tracked-but-unfetchable
-        config into a phantom "added" that ``sync push`` duplicates on the
-        remote, once per push.
-        """
-        return ALWAYS_IGNORED_COMPONENTS | frozenset(manifest.ignored_components)
 
     def pull(
         self,
@@ -548,6 +542,7 @@ class SyncService(BaseService):
         samples_data: dict[str, str] = {}  # table_id -> CSV string
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
+            components = sql_workspaces.scope_listing(components, manifest)
             self._ensure_branch_registered(manifest, branch_id, client)
             folder_map = self._fetch_config_folders(client, branch_id)
 
@@ -647,8 +642,8 @@ class SyncService(BaseService):
                 }
 
         # Resolved once and shared by the conflict guard, the fetch loop and
-        # the stale-entry sweep below -- see ``_effective_ignored_components``.
-        ignored_components = self._effective_ignored_components(manifest)
+        # the stale-entry sweep below -- see ``effective_ignored_components``.
+        ignored_components = sql_workspaces.effective_ignored_components(manifest)
         # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
         # reserved so a same-named new config cannot land in one.
         stale = find_stale_entries(
@@ -1252,11 +1247,12 @@ class SyncService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         with client:
             components = client.list_components_with_configs(branch_id=branch_id)
+            components = sql_workspaces.scope_listing(components, manifest)
             self._ensure_branch_registered(manifest, branch_id, client)
 
         # One ignored set for BOTH sides of this diff -- the remote lookups
         # below and the local scoping further down.
-        ignored_components = self._effective_ignored_components(manifest)
+        ignored_components = sql_workspaces.effective_ignored_components(manifest)
 
         # Build remote lookups:
         #   remote_configs: "{component_id}/{config_id}" -> parent config data
@@ -1650,6 +1646,7 @@ class SyncService(BaseService):
                 dry_result["never_fetched"] = never_fetched
             if orphaned:
                 dry_result["orphaned"] = orphaned
+            sql_workspaces.preview_deletes(self, alias, project_root, branch_override, dry_result)
             return dry_result
 
         projects = self.resolve_projects([alias])
@@ -1815,11 +1812,8 @@ class SyncService(BaseService):
                         pushed_details.append(change)
 
                     elif change_type == "deleted":
-                        client.delete_config(
-                            component_id=component_id,
-                            config_id=config_id,
-                            branch_id=branch_id,
-                        )
+                        # A workspace's SQL editor sessions go first (CLI-25).
+                        sql_workspaces.delete_remote_config(client, change, branch_id)
                         # Remove from manifest
                         manifest.configurations = [
                             c

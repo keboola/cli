@@ -77,6 +77,7 @@ The agent can still pull configs and view diffs, but cannot push changes back. N
 kbagent permissions set --mode allow --deny "cli:destructive"
 ```
 Blocks `branch.delete`, `workspace.delete`, `config.delete`. The agent can still create and modify resources.
+*(since vNEXT)* It also blocks `sync push --force` (operation `sync.push --force`, a flag escalation like `auth.logout --remove-projects`): a forced push of a tree that syncs SQL workspaces deletes their SQL editor sessions and workspaces. A plain `sync push` stays write-class and allowed.
 
 ### Allow only specific commands (strict allowlist)
 ```bash
@@ -86,6 +87,8 @@ kbagent permissions set --mode deny \
   --allow "job.list" --allow "job.detail"
 ```
 Everything else is blocked. This is the most restrictive approach.
+
+*(since vNEXT)* `sync push --force` is checked as its own operation, `sync.push --force`. An allow-list that names only `sync.push` allows a plain push and blocks a forced push (exit 6). To allow a forced push, add `--allow "sync.push --force"`, or use a glob such as `sync.*`. The same is true for a default-allow policy that denies `cli:write` and allows `sync.push`.
 
 ## Checking permissions before acting
 

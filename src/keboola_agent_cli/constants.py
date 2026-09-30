@@ -760,7 +760,7 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
 # A project may extend this set per working tree via the manifest's
-# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
+# ``ignoredComponents`` field -- see ``_sync_workspace.effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile

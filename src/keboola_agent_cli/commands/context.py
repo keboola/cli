@@ -1545,8 +1545,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 ### Project Sync
 
-  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
+    --with-workspaces (since vNEXT, CLI-25) sets "syncWorkspaces": true in the manifest
+    (with --adopt-existing: turns it on in an existing one). pull/diff/push/clone then also
+    sync shared SQL workspaces: keboola.sandboxes configs with no parameters.id and
+    runtime.shared true (Python/R and legacy SQL sandboxes carry parameters.id and stay
+    skipped). Config only: push never runs a job, opens a SQL editor session or loads
+    tables; a parameters.backendSize change adds a workspace_backend_size warning (an open
+    session keeps its size). A `push --force` DELETE removes the workspace's SQL editor
+    sessions of every user in the push branch, then the config (a plain push holds it back
+    under skipped_deletions); if listing/deleting sessions fails the config stays and the
+    error is reported. push --dry-run --force lists them (warnings[] workspace_sessions:
+    session_count, session_ids). sync clone warns per workspace whose
+    input tables the target lacks (workspace_input_tables_missing). Removing the key makes
+    the next pull drop the entries as "ignored", except a locally edited workspace, which
+    pull (also --force) keeps and reports as "skipped" (only --theirs deletes it). An
+    ignoredComponents entry wins.
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
@@ -1567,7 +1582,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
-    always excluded, unioned with the manifest's ignoredComponents list
+    always excluded (except shared SQL workspaces under syncWorkspaces, since vNEXT),
+    unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
     component newly ignored has its manifest entry dropped and local dir removed on the next
     pull, reported with details[].action "ignored" -- distinct from "removed", which means
@@ -1606,6 +1622,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
+    Workspace delete (since vNEXT, syncWorkspaces trees): a --force push that deletes a shared
+    SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
+    backend workspaces, which config restore does not bring back; check
+    `sync push --dry-run --force` (warnings[] workspace_sessions) first. --force is destructive-class (a policy denying
+    cli:destructive or --deny-destructive blocks it; plain push stays write-class).
     Fresh-CREATE behavior: if the manifest contains a placeholder entry at
     (component_id, path), the create path updates it in place (no manifest duplication)
     and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
