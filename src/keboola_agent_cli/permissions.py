@@ -432,8 +432,14 @@ OPERATION_REGISTRY: dict[str, str] = {
 # `project remove`. Without this, a policy denying `cli:admin` to keep an agent
 # out of the project registry would still let it de-register projects through
 # `auth`.
+#
+# `sync push --force` applies the deletions push plans. For a SQL workspace
+# (CLI-25) that also deletes its SQL editor sessions and their workspaces,
+# which a config restore does not bring back, so it is destructive while a
+# plain push is only a write.
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
+    "sync.push --force": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

@@ -482,7 +482,7 @@ def detect_force_pull_conflicts(
     changed.
 
     ``ignored_components`` is the caller's pre-computed effective set
-    (``SyncService._effective_ignored_components``: the hardcoded always-ignored
+    (``_sync_workspace.effective_ignored_components``: the hardcoded always-ignored
     components plus the manifest's ``ignoredComponents``, issue #689) so this
     guard can never disagree with pull/diff about what is ignored.
     """

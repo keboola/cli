@@ -9,7 +9,9 @@ would create):
 - a flow / orchestration task that runs a config which is not in the tree,
 - encrypted (``KBC::``) values, which only the reference project can decrypt,
 - a data app, which sync creates but never deploys,
-- a schedule, which sync never registers with the Scheduler service.
+- a schedule, which sync never registers with the Scheduler service,
+- a SQL workspace whose input tables do not exist in the target (CLI-25,
+  built in ``_sync_workspace``).
 
 Only the run that creates the configs reports them: a re-run that creates
 nothing returns no warnings, so the caller must keep them.
@@ -26,6 +28,12 @@ from ..sync.manifest import Manifest, load_manifest
 from ._encryption import find_encrypted_secret_paths, find_unencryptable_secret_paths
 from ._sync_bindings import task_config_ref
 from ._sync_models import FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID
+from ._sync_workspace import (
+    SANDBOXES_COMPONENT_ID,
+    ClonedWorkspace,
+    cloned_workspace,
+    missing_input_table_warnings,
+)
 from .data_app_service import DATA_APP_COMPONENT_ID
 
 if TYPE_CHECKING:
@@ -219,6 +227,7 @@ def collect_clone_warnings(
     )
 
     warnings: list[dict[str, Any]] = []
+    workspaces: list[ClonedWorkspace] = []
     for change in added:
         component_id = change["component_id"]
         path = change.get("path", "")
@@ -243,6 +252,11 @@ def collect_clone_warnings(
             warnings.append(_data_app_warning(config, context))
         if component_id == SCHEDULER_COMPONENT_ID:
             warnings.append(_schedule_warning(config, context))
+        if component_id == SANDBOXES_COMPONENT_ID:
+            workspace = cloned_workspace(config.config_id, path, local_data)
+            if workspace is not None:
+                workspaces.append(workspace)
+    warnings.extend(missing_input_table_warnings(service, target_alias, workspaces))
     return warnings
 
 

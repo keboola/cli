@@ -3,12 +3,16 @@
 Split out of ``commands/sync.py``, which is at its size ceiling. Push lists
 what it did not apply in every result: remote-side changes that need a
 ``sync pull`` (``skipped``) and the deletions it held back because
-``--force`` was not given (``skipped_deletions``).
+``--force`` was not given (``skipped_deletions``). The same notice prints the
+result's ``warnings[]`` (e.g. the SQL editor sessions a workspace delete
+removes, CLI-25).
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from rich.markup import escape
 
 # Remote-side change types in the diff, labelled for human output.
 REMOTE_CHANGE_LABELS = {
@@ -18,10 +22,14 @@ REMOTE_CHANGE_LABELS = {
 
 
 def print_push_skips(formatter: Any, result: dict[str, Any]) -> None:
-    """Print the changes a push result did not apply, with the next step.
+    """Print the changes a push result did not apply, with the next step, and its warnings.
 
-    A notice, not a result, so it goes to stderr like every other hint.
+    A notice, not a result, so it goes to stderr like every other hint. A
+    warning message quotes config names and paths, which can hold ``[...]``;
+    it is escaped so Rich prints it as text instead of reading it as markup.
     """
+    for warn in result.get("warnings", []):
+        formatter.warning(f"  {escape(str(warn.get('message', '')))}")
     skipped_reason = result.get("skipped_reason")
     if skipped_reason:
         formatter.err_console.print(f"  [yellow]{skipped_reason}[/yellow]")

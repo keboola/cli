@@ -77,6 +77,7 @@ The agent can still pull configs and view diffs, but cannot push changes back. N
 kbagent permissions set --mode allow --deny "cli:destructive"
 ```
 Blocks `branch.delete`, `workspace.delete`, `config.delete`. The agent can still create and modify resources.
+*(since vNEXT)* It also blocks `sync push --force` (operation `sync.push --force`, a flag escalation like `auth.logout --remove-projects`): a forced push of a tree that syncs SQL workspaces deletes their SQL editor sessions and workspaces. A plain `sync push` stays write-class and allowed.
 
 ### Allow only specific commands (strict allowlist)
 ```bash

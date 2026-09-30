@@ -702,6 +702,53 @@ def test_plain_push_of_a_fresh_tree_repoints_links(world: World) -> None:
     assert result["link_remaps"]["config_row_ids"] == 1
 
 
+def _with_shared_sql_workspace(components: list[dict[str, Any]]) -> None:
+    """A shared SQL workspace created from ``SQL step``: its shared-code and variables links."""
+    _component_entry(components, SANDBOX)["configurations"].append(
+        _config(
+            "ws-ref",
+            "SQL workspace",
+            {
+                "parameters": _blocks(("Shared", [f"{{{{ {SHARED_ROW_ID} }}}}"])),
+                "runtime": {"shared": True},
+                "shared_code_id": "sc-sql",
+                "shared_code_row_ids": [SHARED_ROW_ID],
+                "variables_id": "var-ref",
+                "variables_values_id": "vrow-ref",
+            },
+        )
+    )
+
+
+def test_clone_repoints_links_of_a_shared_sql_workspace(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """A workspace created from a transformation carries its links in the config
+    body, like the transformation (CLI-25): push re-points them to the target."""
+    world = World(tmp_path, tmp_config_dir, reference=_with_shared_sql_workspace)
+    manifest = load_manifest(world.ref_dir)
+    manifest.sync_workspaces = True
+    save_manifest(world.ref_dir, manifest)
+    world.service.pull(alias="ref", project_root=world.ref_dir, no_storage=True, no_jobs=True)
+
+    result = world.clone()
+
+    assert result["errors"] == []
+    shared = world.target(SHARED, "Shared sql")
+    new_row_id = shared["rows"][0]["id"]
+    variables = world.target(VARS)
+    configuration = world.target(SANDBOX, "SQL workspace")["configuration"]
+    assert configuration["shared_code_id"] == shared["id"]
+    assert configuration["shared_code_row_ids"] == [new_row_id]
+    assert configuration["parameters"]["blocks"][0]["codes"][0]["script"] == [
+        f"{{{{ {new_row_id} }}}}"
+    ]
+    assert configuration["variables_id"] == variables["id"]
+    assert configuration["variables_values_id"] == variables["rows"][0]["id"]
+    extra = world.local_config(SANDBOX, "SQL workspace")["_configuration_extra"]
+    assert extra["shared_code_id"] == shared["id"]
+
+
 # ---------------------------------------------------------------------------
 # Failure paths: every broken link is reported, and a failed PUT is retried
 # ---------------------------------------------------------------------------

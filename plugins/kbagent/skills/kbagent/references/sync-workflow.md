@@ -459,7 +459,11 @@ internal state:
 - **Always ignored** -- `keboola.sandboxes` (Workspaces API) and
   `keboola.mcp-server-tool` (the Keboola MCP server auto-creates one empty
   workspace-record config per project it touches, `configuration: {}`, name
-  like `mcp-workspace-<hex>`). This is a hardcoded floor; no flag disables it.
+  like `mcp-workspace-<hex>`). This is a hardcoded floor. The one exception
+  *(since vNEXT)*: the manifest key `syncWorkspaces` takes `keboola.sandboxes`
+  off the list for its shared SQL workspaces, see
+  [Shared SQL workspaces](#shared-sql-workspaces). `keboola.mcp-server-tool`
+  stays ignored.
 - **Project-configurable** -- the manifest field `ignoredComponents` in
   `.keboola/manifest.json` adds project-specific exclusions on top of the
   hardcoded list, without waiting for an upstream kbagent release:
@@ -483,6 +487,76 @@ internal state:
   can never be classified as `DELETED` and pushed as a remote deletion.
 - **Un-ignoring** a component: remove it from `ignoredComponents` and run
   `sync pull` again -- it re-materializes like any newly-tracked config.
+
+## Shared SQL workspaces
+
+*(since vNEXT)* A tree can sync the shared SQL workspaces (Snowflake,
+BigQuery) of a project. It is opt-in per tree, with the manifest key
+`syncWorkspaces`:
+
+```bash
+kbagent sync init --project prod --with-workspaces        # new tree
+kbagent sync init --project prod --adopt-existing --with-workspaces   # existing tree
+```
+
+or set `"syncWorkspaces": true` in `.keboola/manifest.json`. Without the key,
+sync skips `keboola.sandboxes` exactly as before.
+
+- **Scope.** Only `keboola.sandboxes` configs WITHOUT `parameters.id` and with
+  `runtime.shared: true`. A config with `parameters.id` is a Python/R
+  (container) workspace, or a legacy SQL sandbox from before the SQL editor;
+  both stay skipped. The official CLI tells SQL from Python/R by the same key.
+  A non-shared workspace is visible only to its creator in the UI, so pull
+  does not fetch it. A workspace already tracked stays tracked when someone
+  turns `runtime.shared` off: diff reports the change as `remote_modified`.
+- **Pull / diff.** A normal `_config.yml`: `parameters.blocks` (the SQL
+  scripts), `parameters.backendSize`, `input` / `output` (including
+  `read_only_storage_access` when it is off), and under
+  `_configuration_extra` the `runtime.shared` flag and the
+  `shared_code_id` / `shared_code_row_ids` / `variables_id` /
+  `variables_values_id` links of a workspace created from a transformation.
+  The config holds no credentials.
+- **Push create / update** writes the Storage configuration only: no Queue
+  job, no SQL editor session, no table load. The UI creates the session when
+  a user opens the workspace. When `parameters.backendSize` changes, push adds
+  a `workspace_backend_size` warning: an existing session keeps its size, the
+  new size applies only to a session created later. Dev branches work the
+  same way (config only).
+- **Push delete** needs `--force`, like every delete: a plain push lists the
+  workspace under `skipped_deletions` and touches neither its sessions nor its
+  configuration; `skipped_deletions_reason` then says what `--force` also
+  deletes. `push --force` first deletes the workspace's SQL editor
+  sessions in the push branch, of every user, then the configuration, like
+  `kbc remote workspace delete`. Deleting a session also drops its backend
+  workspace, which a config restore does not bring back. When the sessions
+  cannot be listed, or one cannot be deleted (for example it is still
+  initializing), push keeps the configuration and reports the error. The
+  deleted session ids are in `pushed_details[].deleted_session_ids`.
+  `push --dry-run --force` adds one `workspace_sessions` warning per deleted
+  workspace with `session_count` and `session_ids`; a plain `push --dry-run`
+  previews no session delete. A tracked workspace whose
+  config now has `parameters.id` (backed by a Data Science app) is not
+  deleted: push reports a `VALIDATION_ERROR`, and `push --dry-run --force`
+  reports `workspace_delete_refused` for it instead of a session list. When
+  the config delete fails after the sessions were deleted, the error names
+  those sessions. `sync push --force` needs the
+  destructive permission class (`--deny-destructive` blocks it).
+- **Clone** creates the workspace configs like other configs; `bucket_map`
+  rewrites their input mapping. Clone creates buckets, never tables, so the
+  clone result carries one `workspace_input_tables_missing` warning per
+  workspace whose input tables do not exist in the target.
+- **Turning it off.** Remove the key: the next `sync pull` drops the workspace
+  entries and their directories with action `"ignored"`. A workspace edited
+  locally and not pushed is kept instead (entry and directory), reported with
+  action `"skipped"` and the reason; plain pull and `--force` both keep it,
+  only `--theirs` deletes it. Diff and push ignore the kept entry, so set the
+  key again and push to apply the edit. An `ignoredComponents` entry for
+  `keboola.sandboxes` wins over the key.
+- **Mixed trees.** `kbc` reads the manifest with unknown keys ignored, so the
+  key does not break it. A manifest save by `kbc` writes only the keys `kbc`
+  knows, so it removes `syncWorkspaces`. `kbc` itself always ignores
+  `keboola.sandboxes`: it logs a warning for each workspace entry in the
+  manifest and skips it.
 
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 

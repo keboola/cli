@@ -11,7 +11,13 @@ import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
-from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_operation,
+    check_cli_permission,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 from ._sync_clone_render import print_clone_result
 from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
 
@@ -103,6 +109,9 @@ def sync_init(
         "instead of failing. Validates the manifest's project_id against the alias "
         "and normalises the file. Idempotent.",
     ),
+    with_workspaces: bool = typer.Option(
+        False, "--with-workspaces", help="Also sync shared SQL workspaces (keboola.sandboxes)."
+    ),
 ) -> None:
     """Initialize a sync working directory for a Keboola project.
 
@@ -112,6 +121,10 @@ def sync_init(
 
     Use --adopt-existing to register a directory that was already initialised
     by the official kbc CLI without overwriting the manifest.
+
+    Use --with-workspaces to set syncWorkspaces in the manifest: pull, diff,
+    push and clone then also handle shared SQL workspaces. With --adopt-existing
+    it turns the key on in an existing manifest.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sync_service")
@@ -123,6 +136,7 @@ def sync_init(
             project_root=project_root,
             git_branching=git_branching,
             adopt_existing=adopt_existing,
+            sync_workspaces=with_workspaces,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -991,8 +1005,9 @@ def sync_push(
         False,
         "--force",
         help=(
-            "Delete remote configs and rows whose local files were removed. "
-            "Without it push skips those deletions and lists them."
+            "Delete remote configs and rows whose local files were removed (for a SQL "
+            "workspace also its SQL editor sessions). Without it push skips those deletions "
+            "and lists them."
         ),
     ),
     allow_plaintext: bool = typer.Option(
@@ -1023,9 +1038,14 @@ def sync_push(
 
     Use --project for a single project or --all-projects for all configured
     projects in parallel.
+
+    --force needs the destructive permission class: a forced delete of a SQL
+    workspace also deletes its SQL editor sessions and their workspaces.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sync_service")
+    if force:
+        check_cli_operation(ctx, "sync.push --force")
 
     if all_projects and project:
         formatter.error(
@@ -1131,8 +1151,6 @@ def sync_push(
                 f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
                 f"{err['message']}"
             )
-        for warn in result.get("warnings", []):
-            formatter.warning(f"  {warn['message']}")
 
 
 @sync_app.command("clone")

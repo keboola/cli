@@ -322,7 +322,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   action `"ignored"`, distinct from `"removed"`); a stale local dir for an
   already-ignored component can never classify as `DELETED` -- so
   delete-dir-then-push is safe for those, but on <= 0.90.1 it still deletes
-  the config in production.
+  the config in production. Exception (vNEXT+): a manifest with
+  `"syncWorkspaces": true` (`sync init --with-workspaces`) syncs shared SQL
+  workspaces, config only; a `push --force` delete of one also deletes its SQL
+  editor sessions (every user's); run `push --dry-run --force` first, it lists them.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
   defaults must be lowercase; `INTEGER(10)` is invalid (use `NUMBER(3,0)`);
   `--not-null` / `--default` must name a defined `--column`. In a dev branch

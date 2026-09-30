@@ -15,6 +15,11 @@ directories. Two data-loss paths used to hide in that sweep:
   its remote vanished. Now plain pull preserves it (entry kept, reported as
   ``skipped``), ``--force`` aborts with SYNC_CONFLICT, and only ``--theirs``
   (remote wins) still deletes it.
+
+An ``ignored`` entry is deleted even when edited, except a shared SQL
+workspace (CLI-25): turning ``syncWorkspaces`` off must not delete SQL typed
+into its ``_config.yml`` and never pushed. Plain pull and ``--force`` keep such
+an entry and report it as ``skipped``; only ``--theirs`` deletes it.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_baseline import extras_modified
+from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -35,6 +41,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 REMOTE_DELETED_REASON = "locally modified, deleted on remote"
+WORKSPACE_SYNC_OFF_REASON = (
+    "locally modified, workspace sync is off; set syncWorkspaces and push, or pull --theirs"
+)
 
 
 @dataclass
@@ -44,6 +53,11 @@ class StaleEntry:
     entry: ManifestConfiguration
     action: str  # "removed" (gone from the remote) or "ignored" (component ignored)
     locally_modified: bool
+
+    @property
+    def keep_reason(self) -> str:
+        """The ``skipped`` reason pull reports when it keeps this edited entry."""
+        return REMOTE_DELETED_REASON if self.action == "removed" else WORKSPACE_SYNC_OFF_REASON
 
 
 def _entry_locally_modified(
@@ -90,9 +104,8 @@ def find_stale_entries(
         if f"{entry.component_id}/{entry.id}" in remote_keys:
             continue
         action = "ignored" if entry.component_id in ignored_components else "removed"
-        modified = action == "removed" and _entry_locally_modified(
-            service, branch_dir / entry.path, entry
-        )
+        guarded = action == "removed" or entry.component_id == SANDBOXES_COMPONENT_ID
+        modified = guarded and _entry_locally_modified(service, branch_dir / entry.path, entry)
         stale.append(StaleEntry(entry=entry, action=action, locally_modified=modified))
     return stale
 
@@ -103,7 +116,11 @@ def reserved_paths(stale: list[StaleEntry], branch_dir: Path) -> set[str]:
 
 
 def remote_deleted_conflicts(stale: list[StaleEntry]) -> list[dict[str, str]]:
-    """``--force`` conflicts: locally edited configs whose remote was deleted (C)."""
+    """``--force`` conflicts: locally edited configs whose remote was deleted (C).
+
+    An edited ignored workspace is no conflict (its remote still exists): it is
+    kept like on a plain pull.
+    """
     return [
         {
             "scope": "config",
@@ -114,7 +131,7 @@ def remote_deleted_conflicts(stale: list[StaleEntry]) -> list[dict[str, str]]:
             "reason": "deleted on remote",
         }
         for s in stale
-        if s.locally_modified
+        if s.locally_modified and s.action == "removed"
     ]
 
 
@@ -158,7 +175,7 @@ def apply_stale_sweep(
                     "component_id": s.entry.component_id,
                     "config_name": s.entry.path,
                     "path": s.entry.path,
-                    "reason": REMOTE_DELETED_REASON,
+                    "reason": s.keep_reason,
                 }
             )
             continue

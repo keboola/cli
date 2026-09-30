@@ -5523,3 +5523,38 @@ drops manifest entries whose config is gone from the remote) are closed:
   whose first clone run failed part-way can report the configs it never
   created as `remote_deleted`. Delete that target directory and run the clone
   again.
+
+## `sync` can sync shared SQL workspaces, opt-in per tree (CLI-25)
+
+*(since vNEXT)* `keboola.sandboxes` is no longer skipped when the manifest sets
+`"syncWorkspaces": true` (`sync init --with-workspaces`, or
+`sync init --adopt-existing --with-workspaces` for an existing tree). Without
+the key nothing changes. Full rules: `sync-workflow.md` > "Shared SQL
+workspaces".
+
+- **Only shared SQL workspaces.** A `keboola.sandboxes` config with no
+  `parameters.id` and `runtime.shared: true`. Python/R workspaces and legacy
+  SQL sandboxes carry `parameters.id` and stay skipped. `keboola.mcp-server-tool`
+  stays ignored. An `ignoredComponents` entry for `keboola.sandboxes` wins.
+- **Config only.** Push writes the Storage configuration, never a job, a SQL
+  editor session or a table load. A `parameters.backendSize` change gets a
+  `workspace_backend_size` warning: an open session keeps its old size.
+- **A delete is not only a config delete.** `push --force` deletes the
+  workspace's SQL editor sessions (every user's, in the push branch) before the
+  config, and that drops their backend workspaces, which `config restore` does
+  not bring back. Check `push --dry-run --force` first: its `workspace_sessions`
+  warnings list the session ids. If the sessions cannot be listed or deleted,
+  the config stays. A plain push deletes neither: the workspace is listed under
+  `skipped_deletions`, like any other deletion, and `skipped_deletions_reason`
+  says that `--force` also deletes the sessions.
+- **`sync clone`** adds a `workspace_input_tables_missing` warning per cloned
+  workspace whose input tables do not exist in the target (clone creates
+  buckets, never tables).
+- **`sync push --force` is destructive-class** (operation `sync.push --force`
+  in `permissions list`): a policy denying `cli:destructive`, or
+  `--deny-destructive`, blocks it, while a plain `sync push` stays write-class.
+- **Removing the key** makes the next `sync pull` drop the workspace entries
+  with action `ignored`, except a workspace edited locally and not pushed: pull
+  (also `--force`) keeps it and reports it as `skipped`; only `--theirs`
+  deletes it. A `kbc` manifest save removes the key too (`kbc` writes back only
+  the keys it knows).

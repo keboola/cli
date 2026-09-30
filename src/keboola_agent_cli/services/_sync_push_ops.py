@@ -26,6 +26,7 @@ from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import encrypt_secrets_in_config
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
+from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
 from .data_app_service import DATA_APP_COMPONENT_ID, DEFAULT_TYPE
 
@@ -41,6 +42,12 @@ SKIPPED_REASON = "Remote changes detected. Run 'sync pull' first."
 SKIPPED_DELETIONS_REASON = (
     "Push deletes remote configs and rows only with --force. "
     "Run 'kbagent sync push --force' to delete these."
+)
+# Added to the reason when a held-back deletion is a SQL workspace (CLI-25).
+SKIPPED_WORKSPACE_DELETIONS_NOTE = (
+    " For a SQL workspace (keboola.sandboxes), --force also deletes the SQL editor sessions "
+    "of all users with their Snowflake/BigQuery workspaces, which cannot be restored. "
+    "Run 'kbagent sync push --dry-run --force' first to list them."
 )
 
 
@@ -73,6 +80,11 @@ class PushPlan:
         if self.skipped_deletions:
             report["skipped_deletions"] = self.skipped_deletions
             report["skipped_deletions_reason"] = SKIPPED_DELETIONS_REASON
+            if any(
+                change["component_id"] == SANDBOXES_COMPONENT_ID and not change.get("is_row")
+                for change in self.skipped_deletions
+            ):
+                report["skipped_deletions_reason"] += SKIPPED_WORKSPACE_DELETIONS_NOTE
         return report
 
 
@@ -585,7 +597,8 @@ def push_update(
     Returns the API response so the caller can stamp the manifest baseline
     from the remote's own view of the config (issue #686). ``warnings``
     accumulates the ``script[]`` normalization records of
-    :func:`guard_script_shape` for the push envelope.
+    :func:`guard_script_shape` for the push envelope, and for a workspace a
+    ``parameters.backendSize`` change (CLI-25).
     """
     branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     config_dir = project_root / branch_path / config_path_str
@@ -616,6 +629,15 @@ def push_update(
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
     )
+
+    if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
+        warn_on_backend_size_change(
+            client,
+            config_id=config_id,
+            configuration=configuration,
+            branch_id=branch_id,
+            warnings=warnings,
+        )
 
     result = client.update_config(
         component_id=component_id,
