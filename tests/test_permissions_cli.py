@@ -331,6 +331,7 @@ class TestPermissionsSet:
                 app, ["--json", "permissions", "set", "--mode", "allow", "--deny", "cli:write"]
             )
         assert result.exit_code == EXIT_PERMISSION_DENIED
+        assert "Refusing to update permission policy" in result.output
         assert store.load().permissions is None
 
     def test_set_invalid_mode(self, tmp_path: Path) -> None:
