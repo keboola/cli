@@ -2,8 +2,9 @@
 
 Run ``make changelog`` to scaffold new entries from GitHub releases.
 
-Authoring contract (keep entries scannable -- ``kbagent changelog`` shows a
-one-line summary per version by default):
+Authoring contract (keep entries scannable -- ``kbagent changelog`` shows
+only first sentences by default: of every ``BREAKING`` note of a version, plus
+of its first other notes until at least two show):
 
 * One *logical* change per bullet -- split a release into several entries
   instead of cramming everything into one paragraph.
@@ -12,8 +13,9 @@ one-line summary per version by default):
   ``Change:``, ``Note:``, ``Security:``, ``UX:`` ... (see
   ``commands/changelog.py:_PREFIX_STYLES``). The prefix may carry a ``(#274)``
   decoration.
-* Lead with a self-contained first sentence -- that sentence becomes the
-  default summary; everything after it is detail shown only under ``--full``.
+* Lead with a self-contained first sentence -- that sentence is the note's
+  headline in the default view and in the "What's new" notice after an update;
+  everything after it is detail shown only under ``--full``.
 """
 
 from __future__ import annotations

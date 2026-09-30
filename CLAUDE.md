@@ -1289,7 +1289,7 @@ kbagent update [--beta]
 # completes discovery first, then does the terminal exact-version reinstall and immediately
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
-# Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
+# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
 # `--config-dir` on serve (since 0.91.0, #679): `serve` is the only subcommand with a --config-dir of
 #   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
