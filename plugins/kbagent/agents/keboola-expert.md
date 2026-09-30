@@ -369,6 +369,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
   grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
   patch + redeploy.
+- **Managed-repo app `running` with no `WORKSPACE_ID`**: before vNEXT (CLI-15),
+  `deploy` on a pure `--use-managed-git-repo` app wrote no
+  `parameters.dataApp.git`, and the workspace grant is gated on that block --
+  `data-app detail` shows `Git: {}`. vNEXT+ backfills it on deploy (managed repo
+  must be pushed to `main`); older: merge the block by hand, then redeploy.
 - **Data-app type in `sync`**: a `keboola.data-apps` config's runtime type (`python-js` / `streamlit`) lives only on the Data Science `/apps` record. `sync pull` records it as `_keboola.data_app_type`, and `sync push` / `sync clone` send it through `create_app`. A tree pulled before this carries no type (since 0.94.0). A type-less data app is created as `python-js`, the default, with a `data_app_type_default` push warning *(since vNEXT)*. So re-pull the source before you clone a Streamlit app, or set `_keboola.data_app_type: streamlit`.
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
