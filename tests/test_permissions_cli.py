@@ -317,18 +317,21 @@ class TestPermissionsSet:
         assert config.permissions.deny == ["cli:write", "cli:destructive"]
 
     def test_set_rejected_without_confirmation(self, tmp_path: Path) -> None:
-        """set should fail when confirmation is not provided (non-interactive)."""
+        """set refuses without a TTY confirmation and persists nothing.
+
+        The real confirmation helper runs (CliRunner has no TTY), so the exit
+        code comes from the production refusal path, not from a mock -- and
+        the store is checked so a write that happened before the refusal
+        would fail the test.
+        """
         store = _make_store(tmp_path)
-        with (
-            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch(
-                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
-                side_effect=typer.Exit(code=EXIT_PERMISSION_DENIED),
-            ),
-        ):
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
             MockStore.return_value = store
-            result = runner.invoke(app, ["--json", "permissions", "set", "--mode", "allow"])
+            result = runner.invoke(
+                app, ["--json", "permissions", "set", "--mode", "allow", "--deny", "cli:write"]
+            )
         assert result.exit_code == EXIT_PERMISSION_DENIED
+        assert store.load().permissions is None
 
     def test_set_invalid_mode(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

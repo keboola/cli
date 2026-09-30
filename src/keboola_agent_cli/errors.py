@@ -1,8 +1,9 @@
 """Error types and helpers for Keboola Agent CLI."""
 
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
+@unique
 class ErrorCode(StrEnum):
     """Stable machine-readable error codes emitted by kbagent.
 
