@@ -19,7 +19,7 @@ kbagent --json workspace from-transformation \
 ```
 
 The transformation is read from the active branch (`branch use`), the same branch the
-workspace is created in *(since vNEXT, #807)*; before that it was always read from production.
+workspace is created in *(since 0.96.0, #807)*; before that it was always read from production.
 
 ```bash
 # Step 2: Run the original SQL to reproduce the error

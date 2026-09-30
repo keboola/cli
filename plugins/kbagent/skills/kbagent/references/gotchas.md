@@ -13,7 +13,7 @@ Versioning convention:
 
 ## Every command that picks a branch names it: `Target:` line and `targets` key
 
-*(since vNEXT, #766)*
+*(since 0.96.0, #766)*
 
 - **`kbagent branch use` sets an active branch per project, and commands
   apply it when `--branch` is omitted.** Before, some commands printed an
@@ -62,7 +62,7 @@ Versioning convention:
   refused to run because it needs a branch and got none. It does not mean
   production.
 - **`--branch 0` means production.** The API clients always sent 0 to the
-  production endpoint. Before vNEXT the config, flow, schedule and
+  production endpoint. Before 0.96.0 the config, flow, schedule and
   notification commands used the active branch for `--branch 0` instead.
 - **`--dry-run` reports the same target as the real run.** `flow delete
   --dry-run` and `flow schedule-remove --dry-run` now put the resolved branch
@@ -80,7 +80,7 @@ Versioning convention:
 
 ## `--project` takes a project ID as well as an alias
 
-*(since vNEXT)* (CLI-22)
+*(since 0.96.0)* (CLI-22)
 
 - **A registered project's numeric ID works wherever `--project` takes an
   alias.** `kbagent config list --project 9840` runs against the alias whose
@@ -328,7 +328,7 @@ Versioning convention:
   `--alias ID=ALIAS`, or request a second alias for an already-registered
   project. An existing entry is never overwritten either way.
 - **Registered aliases derive from the project NAME, never the numeric
-  project id.** Before vNEXT `--project 9840` never resolved; since then it
+  project id.** Before 0.96.0 `--project 9840` never resolved; since then it
   resolves once the project is registered (see "`--project` takes a project
   ID as well as an alias"). `login`'s
   accessible-projects table shows a numeric `id`, but the alias
@@ -826,7 +826,7 @@ Versioning convention:
 
 ## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
 
-*(since vNEXT, #792)*
+*(since 0.96.0, #792)*
 
 `sync pull` decided "locally modified" from `_config.yml` alone. An edit that
 lived only in a companion file -- `transform.sql`, `transform.py`, `code.py`,
@@ -1008,11 +1008,11 @@ per-branch subtree *does* exist, behaviour is unchanged.
 
 ## Repeating a promote `sync push --branch <dev>` no longer duplicates configs
 
-*(since vNEXT)*
+*(since 0.96.0)*
 
 When the dev branch lacks a production config (typically one created in
 production after the branch was cut), the promote push above CREATEs a dev copy
-under a new id. Before vNEXT the next `sync diff --branch <dev>` still reported
+under a new id. Before 0.96.0 the next `sync diff --branch <dev>` still reported
 that config as `added`, and every further `sync push --branch <dev>` created
 **another** dev copy -- N pushes, N copies of the same config on the branch.
 Now the dev entry the first push recorded is what the `main/` directory is
@@ -1100,13 +1100,13 @@ without losing data.
 
 A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since 0.94.0).
 
-`sync pull` now reads the type from the DS `/apps` list and records it in the config's `_keboola` block as `data_app_type`. The config hash already ignores that key, so it adds no `sync diff` noise. `sync push` and `sync clone` route a `keboola.data-apps` CREATE through the Data Science `create_app` when the local config carries a `data_app_type`. That call sends the type and writes the new app's `parameters.id`. A config with no recorded type (hand-authored, or pulled before 0.94.0) is created as `python-js`, the default, through the same `create_app` call *(since vNEXT)*. Before that it went through the plain `create_config` path and the platform picked `streamlit`. The push records the type in the local `_keboola` block and adds a `data_app_type_default` warning to the result. To keep a Streamlit app a Streamlit app, re-pull the source first or set `_keboola.data_app_type: streamlit`.
+`sync pull` now reads the type from the DS `/apps` list and records it in the config's `_keboola` block as `data_app_type`. The config hash already ignores that key, so it adds no `sync diff` noise. `sync push` and `sync clone` route a `keboola.data-apps` CREATE through the Data Science `create_app` when the local config carries a `data_app_type`. That call sends the type and writes the new app's `parameters.id`. A config with no recorded type (hand-authored, or pulled before 0.94.0) is created as `python-js`, the default, through the same `create_app` call *(since 0.96.0)*. Before that it went through the plain `create_config` path and the platform picked `streamlit`. The push records the type in the local `_keboola` block and adds a `data_app_type_default` warning to the result. To keep a Streamlit app a Streamlit app, re-pull the source first or set `_keboola.data_app_type: streamlit`.
 
 The DS `/apps` list also returns sandbox and workspace records. Each carries a parent component's id and a backend `type` such as `snowflake`. So kbagent builds the type map from `componentId == keboola.data-apps` records only.
 
 ## `sync clone` recreates the reference's storage buckets
 
-`sync clone` copies component configs, not storage. The pulled `storage/` tree is a read-only snapshot, so a cloned config's input/output mappings point at buckets a fresh target project does not have. Clone *(since vNEXT)* closes that gap for the buckets **by default**: it reads the `storage/buckets.json` pull export, maps each bucket id through `--bucket-map` (so a created bucket matches what the config refs were rewritten to), and creates the ones the target is missing. Pass `--no-create-buckets` to skip it -- a clone is a complete clone by default, so this is opt-out, never opt-in.
+`sync clone` copies component configs, not storage. The pulled `storage/` tree is a read-only snapshot, so a cloned config's input/output mappings point at buckets a fresh target project does not have. Clone *(since 0.96.0)* closes that gap for the buckets **by default**: it reads the `storage/buckets.json` pull export, maps each bucket id through `--bucket-map` (so a created bucket matches what the config refs were rewritten to), and creates the ones the target is missing. Pass `--no-create-buckets` to skip it -- a clone is a complete clone by default, so this is opt-out, never opt-in.
 
 Idempotent by design -- an existing bucket is skipped, and a per-bucket API failure is collected in the result's `bucket_errors` rather than aborting the clone. It runs even on an idempotent re-run (existing `--target-dir`), so a re-clone fills in any bucket the target is still missing. Bucket creation happens before the config push, and buckets are created at production level (no branch scoping). Each bucket is created on the backend the export recorded. If the target cannot list its buckets, clone records one `bucket_errors` entry, creates no bucket, and still pushes the configs.
 
@@ -1116,9 +1116,9 @@ Only the buckets are created, never their tables or their data -- the pull expor
 
 ## `sync clone` re-points shared code, orchestrator tasks and schedules, and lists what the target still needs
 
-*(since vNEXT)*
+*(since 0.96.0)*
 
-Before vNEXT, `sync push` set only two kinds of links to the config IDs it created in the same push: `keboola.flow` job-task `configId`s and transformation `variables_id` / `variables_values_id`. All other links kept the reference IDs, and `sync clone` still reported `status: cloned` with `errors: []`: a transformation's `shared_code_id`, `shared_code_row_ids` and `{{<row id>}}` script placeholders, a legacy `keboola.orchestrator` task's `configId`, a task's `configRowIds`, and a `keboola.scheduler` config's `target.configurationId`.
+Before 0.96.0, `sync push` set only two kinds of links to the config IDs it created in the same push: `keboola.flow` job-task `configId`s and transformation `variables_id` / `variables_values_id`. All other links kept the reference IDs, and `sync clone` still reported `status: cloned` with `errors: []`: a transformation's `shared_code_id`, `shared_code_row_ids` and `{{<row id>}}` script placeholders, a legacy `keboola.orchestrator` task's `configId`, a task's `configRowIds`, and a `keboola.scheduler` config's `target.configurationId`.
 
 Now push sets these to the new IDs too, for a clone and for a plain `sync push` of a fresh tree. It rewrites the placeholders in the remote scripts and in the local `transform.sql` / `transform.py`. A row ID is looked up under its own new parent config, so two shared-code configs with the same row ID do not swap rows. Push never registers a schedule with the Scheduler service, so a cloned project starts no jobs by itself.
 
@@ -1256,7 +1256,7 @@ is uncertain rather than confirmed-bad.
 
 ## `workspace from-transformation` reads the transformation from the active branch
 
-*(since vNEXT, #807)* `workspace from-transformation` reads the transformation config from the
+*(since 0.96.0, #807)* `workspace from-transformation` reads the transformation config from the
 same branch the workspace is created and loaded in: the active branch (`branch use`), or the
 default branch on production. Before, the workspace was created in the active branch but the
 config was always read from **production**, so with a dev branch active:
@@ -1331,10 +1331,10 @@ kbagent --json workspace list --project prod --qs-compatible
 **Branch behaviour:**
 
 `workspace list` / `workspace detail` use the alias's active branch
-(`branch use`) when `--branch` is omitted, like `config list`. Up to vNEXT
+(`branch use`) when `--branch` is omitted, like `config list`. Up to 0.96.0
 they printed `Info: Using production branch for read (active dev branch X
 ignored; pass --branch X to override)`, but the workspace service used the
-active branch: the line was wrong, the listing was not. Since vNEXT they
+active branch: the line was wrong, the listing was not. Since 0.96.0 they
 print `Target:` with the branch they use (see the #766 entry at the top).
 `storage buckets` / `storage tables` are the reads that use production
 under an active branch. `--branch` requires exactly one `--project`.
@@ -2260,9 +2260,9 @@ config, the retry fires, and the retry destroys it for good.
 
 ## `data-app password` keeps the password out of the chat: `c` in a terminal, `--copy` elsewhere
 
-*(since vNEXT)*
+*(since 0.96.0)*
 
-- **The password is not printed without `--reveal`.** Before vNEXT the
+- **The password is not printed without `--reveal`.** Before 0.96.0 the
   command printed it (`Password: ...`, and a `password` key in `--json`), so
   it went into the context of any AI agent that ran it. On an older kbagent,
   do not run the command from an agent: send the user to the Keboola UI.
@@ -2367,9 +2367,9 @@ config, the retry fires, and the retry destroys it for good.
   `componentId == keboola.data-apps` (items missing `componentId` are kept
   defensively); the JSON envelope carries `component_id` per app.
 - **`data-app list` pages through the whole `GET /apps` collection
-  *(since vNEXT, #798)*.** The endpoint is paginated (default page = 100
+  *(since 0.96.0, #798)*.** The endpoint is paginated (default page = 100
   items) and the workspace/data-app mix is filtered CLIENT-side. Before
-  vNEXT kbagent read only that first page, so a project with many
+  0.96.0 kbagent read only that first page, so a project with many
   workspaces could report "No data apps found." (or a partial list) while
   holding dozens of data apps further down the collection -- one reporter's
   first data app was item #258 of 1,114. The same short read also made
@@ -2470,7 +2470,7 @@ config, the retry fires, and the retry destroys it for good.
 - `KBC_MANAGE_API_TOKEN` is no longer auto-resolved on the three
   surfaces that consume it (`kbagent org setup`,
   `kbagent project refresh`, `kbagent data-app password` -- the last one
-  needs no Manage token since vNEXT). Default
+  needs no Manage token since 0.96.0). Default
   behaviour on 0.29.0+ is **default-deny**: the env var is ignored, a
   TTY hidden-input prompt is shown instead. With no TTY (CI / cron /
   systemd / `< /dev/null`) the resolver exits **2** with the message
@@ -4341,7 +4341,7 @@ branch, and every later `sync push` falls back to it. Push used to treat that
 first manifest branch as production when it created a `keboola.data-apps`
 config, so it sent `branchId: null` to the Data Science API. The data app was
 created in PRODUCTION while every other config went to the dev branch.
-*(since vNEXT, #808)* push compares the push branch against the project's real
+*(since 0.96.0, #808)* push compares the push branch against the project's real
 default branch from the API (one extra call, made only when the push creates a
 data app). If that lookup fails, push sends the numeric branch id and adds a
 `data_app_branch_lookup_failed` warning, so it never assumes production. On an
@@ -4387,7 +4387,7 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   pull even when the remote is unchanged (manifest<->disk invariant). The old
   behavior silently reported "Already up to date". NOTE the interplay with the
   GitOps delete flow: delete-dir-then-PUSH still deletes the remote config
-  (since vNEXT only with `push --force`, #792); delete-dir-then-PULL now
+  (since 0.96.0 only with `push --force`, #792); delete-dir-then-PULL now
   restores it instead of doing nothing.
 - **Config-level `isDisabled` round-trips.** Pull writes a sparse
   `is_disabled: true` line into `_config.yml` (absent key = enabled -- old trees
@@ -4401,7 +4401,7 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   remote config. diff/push report it under `never_fetched` (JSON key + human
   warning); the next `sync pull` materializes it. A properly-pulled config
   (non-empty `pull_hash`) that you delete locally is still planned as a remote
-  DELETE on push (applied since vNEXT only with `--force`, #792) -- the guard
+  DELETE on push (applied since 0.96.0 only with `--force`, #792) -- the guard
   only protects entries that were never on disk.
 - **Adopted-by-id push writes the manifest.** Pushing an untracked local file
   whose `_keboola.config_id` resolves on the target branch (the #482
@@ -4602,7 +4602,7 @@ applied. `kbagent update` printed `(scheduled)` and every later launch printed
 
 ## Windows self-update on a OneDrive / cloud-synced profile can delete kbagent
 
-*(since vNEXT, #786)*
+*(since 0.96.0, #786)*
 
 If a Windows user reports that `kbagent` vanished after a background update,
 check `%LOCALAPPDATA%\keboola-agent-cli\keboola-agent-cli\pending_update.log`
@@ -5116,7 +5116,7 @@ maximum as `job detail`'s.
 
 ## `logTail` was empty for nested jobs
 
-Fixed (since vNEXT). A job inside a flow, or a child row job of a row-based component, has a
+Fixed (since 0.96.0). A job inside a flow, or a child row job of a row-based component, has a
 dotted Queue `runId` (`<parent>.<child>.<job id>`). The Storage Events API
 returns zero events for that dotted value, so `job detail --log-tail-lines`
 and the `serve` job log stream came back with `logTail: []` for such jobs
@@ -5630,7 +5630,7 @@ It carries the command name, the outcome, and the duration -- never argument val
 
 ## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
 
-*(since vNEXT)* Two data-loss paths in pull's stale-entry sweep (the step that
+*(since 0.96.0)* Two data-loss paths in pull's stale-entry sweep (the step that
 drops manifest entries whose config is gone from the remote) are closed:
 
 - **Remote delete + re-create under the same name.** Before, the new config was
@@ -5651,7 +5651,7 @@ drops manifest entries whose config is gone from the remote) are closed:
 
 ## `sync push` deletes only with `--force` and never re-creates a config deleted on the remote (#792)
 
-*(since vNEXT)* Two changes to what `sync push` sends:
+*(since 0.96.0)* Two changes to what `sync push` sends:
 
 - **Deletions need `--force`.** Before, push deleted a remote config or row as
   soon as its local files were gone, with or without `--force`, although the
@@ -5687,7 +5687,7 @@ drops manifest entries whose config is gone from the remote) are closed:
 
 ## `sync` can sync shared SQL workspaces, opt-in per tree (CLI-25)
 
-*(since vNEXT)* `keboola.sandboxes` is no longer skipped when the manifest sets
+*(since 0.96.0)* `keboola.sandboxes` is no longer skipped when the manifest sets
 `"syncWorkspaces": true` (`sync init --with-workspaces`, or
 `sync init --adopt-existing --with-workspaces` for an existing tree). Without
 the key nothing changes. Full rules: `sync-workflow.md` > "Shared SQL
