@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -36,7 +36,12 @@ from ..permissions import PermissionEngine, apply_firewall_flags
 from ._serve_command_map import SERVE_COMMAND_MAP
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
-from .dependencies import ServiceRegistry, install_permission_engine, install_registry
+from .dependencies import (
+    ServiceRegistry,
+    install_permission_engine,
+    install_registry,
+    translate_project_refs,
+)
 from .routers import (
     agents,
     ai_chat,
@@ -844,6 +849,8 @@ def create_app(
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
+        dependencies=[Depends(translate_project_refs("project"))],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,

@@ -150,6 +150,14 @@ def _has_stored_session(config_path: object) -> bool:
     return bool(isinstance(payload, dict) and payload.get("sessions"))
 
 
+# Appended to the "not found" errors below. They cannot say whether the value
+# was already looked up as a project ID: a value from a REST body or a direct
+# service call never is (CLI-22).
+PROJECT_ID_HINT = (
+    "--project and the other project options of the CLI also take the ID of a registered project."
+)
+
+
 def project_not_found_error(alias: str, config_path: object, source: object) -> ConfigError:
     """Build the canonical "project not found" error.
 
@@ -162,8 +170,9 @@ def project_not_found_error(alias: str, config_path: object, source: object) -> 
     remedy is NOT ``project add`` -- a session user has no static token to
     paste, and would have to hand-write a ``kbc-session://`` sentinel. Point
     those users at the picker instead (0.80.0). Note that a session
-    registers aliases from the project *name*, so the numeric project id is
-    never a valid alias, which is the exact trap this hint exists to defuse.
+    registers aliases from the project *name*, so the numeric project ID is
+    never the alias. ``--project`` takes the ID too (CLI-22), but only for a
+    project that is registered -- this hint covers the one that is not.
 
     A module-level function (not a ConfigStore method) so services can build
     a real ConfigError even when their config_store is a test double -- the
@@ -171,8 +180,9 @@ def project_not_found_error(alias: str, config_path: object, source: object) -> 
     """
     message = (
         f"Project '{alias}' not found in {config_path} "
-        f"(source: {source}). "
-        "Run 'kbagent project list' to see configured projects."
+        f"(source: {source}): no registered alias '{alias}'. "
+        "Run 'kbagent project list' to see configured projects. "
+        f"{PROJECT_ID_HINT}"
     )
     if _has_stored_session(config_path):
         message += (
@@ -181,6 +191,18 @@ def project_not_found_error(alias: str, config_path: object, source: object) -> 
             "to register (aliases come from the project NAME, not its id)."
         )
     return ConfigError(message)
+
+
+def project_not_registered_error(alias: str) -> ConfigError:
+    """Build the short "not registered" error of the single-project services.
+
+    Used by the ``token`` / ``stream`` / ``snapshot`` / ``feature`` /
+    ``member`` services; unlike :func:`project_not_found_error` it names no
+    config path.
+    """
+    return ConfigError(
+        f"Project '{alias}' is not registered. Run `kbagent project list`. {PROJECT_ID_HINT}"
+    )
 
 
 def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:

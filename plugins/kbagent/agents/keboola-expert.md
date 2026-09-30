@@ -200,6 +200,20 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
   registered project and ignored the pin (issue #684). gotchas.md.
 
+**`--project` given a numeric project ID (vNEXT+)**
+- `--project`, `KBAGENT_PROJECT`, `project use`, the other alias options
+  (`config clone --target-project`, `sync clone --target`, `semantic-layer
+  promote` / `diff` project options, `auth * --stack`) and serve `{project}`
+  / `?project=` (path and query only, never a request body) take a
+  registered project's ID and use its alias. A registered
+  alias wins over an ID. An ID registered under several aliases is exit 5
+  (`CONFIG_ERROR`) listing them -- pick one; only a lone session alias on one
+  stack wins by itself. Output names the alias. A digits-only alias that is
+  also another project's ID wins, with a stderr warning naming that project
+  (also under `--json`). Below vNEXT an ID is "not found". `project add` /
+  `project create` treat the value as a NEW alias; `lineage show --project`
+  is an offline filter, not translated. gotchas.md (CLI-22).
+
 **Which branch did a command use? (vNEXT+)**
 - Every command that picks a branch names it: `Target: project 'P', branch ID
   (from 'kbagent branch use')` on stderr, `targets` in `--json`
@@ -417,10 +431,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   Confirming **revokes the session it gave you** -- that is the design, not
   a failure: follow it with `auth login --stack URL`, and note the alias
   survives (the sentinel keys on project id + stack, never the session).
-- **Aliases derive from the project NAME, never the numeric id** --
-  `--project 9840` never resolves. Use `kbagent project list` or
-  `auth register-projects` to find/register the real alias; it never overwrites
-  an existing registration.
+- **Aliases derive from the project NAME, never the numeric id.**
+  `--project 9840` resolves only once project 9840 is registered (vNEXT+;
+  never below). Use `kbagent project list` or `auth register-projects` to
+  find/register the real alias; it never overwrites an existing registration.
 - **Session auth covers almost every command** -- only three features still
   need a static token: `kbagent kai`, `semantic-layer token --encrypt`, and the
   importable SDK (`keboola_agent_cli.Client`). **Do NOT reconstruct that list

@@ -78,6 +78,57 @@ Versioning convention:
   `branch use`. An active branch set by an older version has no name.
 - `kbagent serve` responses do not carry `targets` (REST reporting: #791).
 
+## `--project` takes a project ID as well as an alias
+
+*(since vNEXT)* (CLI-22)
+
+- **A registered project's numeric ID works wherever `--project` takes an
+  alias.** `kbagent config list --project 9840` runs against the alias whose
+  stored `project_id` is 9840. The same applies to `KBAGENT_PROJECT`,
+  `kbagent project use 9840` (it pins the alias), and to the `kbagent serve`
+  `{project}` / `{alias}` path parameters and `?project=` / `?alias=` /
+  `?stack=` (on `/auth/*`) query parameters.
+- **The other CLI options that name a registered alias take an ID too:**
+  `config clone --target-project`, `sync clone --target`, `semantic-layer
+  promote --from-project/--to-project`, `semantic-layer diff
+  --project-a/--project-b`, and `--stack` of `auth login` / `login-password`
+  / `status` / `logout` / `register-projects` (a stack URL is used as before).
+- **`kbagent serve` translates path and query parameters only.** A project in
+  a request body (for example `target_project` of the config clone route, or
+  the semantic-layer `from_project` / `to_project` / `project_a` /
+  `project_b`) still needs the alias.
+- **An alias wins.** When the alias `1234` belongs to project 5555,
+  `--project 1234` means that alias, not project 1234. The CLI then prints a
+  warning on stderr, in `--json` mode too (stdout stays one JSON document):
+  `'1234' is an alias of project 5555; project ID 1234 is registered as
+  'prod'. Pass 'prod' to use that project.`
+- **An ID registered more than once is an error, never a guess:**
+  `CONFIG_ERROR`, exit 5 (HTTP 400 over serve), and the message lists each
+  matching alias with its stack. A project ID is unique only per stack, and
+  one project can be registered under two aliases (two tokens). One
+  exception: when every match is on the same stack and exactly one of them is
+  a session (`auth login`) alias, that alias is used.
+- **Output names the alias, not the ID.** `targets[].project_alias` and the
+  `project_alias` fields in results carry the resolved alias. Human mode also
+  prints `Project ID 9840 resolved to alias 'prod'` on stderr, before the
+  `Target:` line.
+- **An ID that matches nothing is still "not found"**; the message names the
+  missing alias and adds that `--project` and the other project options also
+  take a registered project's ID. A project registered without a stored
+  `project_id` (an old entry) is never matched by ID -- re-add it with
+  `project add` to store the ID.
+- **`project current` with an ambiguous `KBAGENT_PROJECT`** keeps the value as
+  typed, reports `env_points_to_configured_project: false` (commands using it
+  fail) and puts the ambiguity message in the new `env_error` field.
+- **Not translated where `--project` is no registry lookup.** `project add
+  --project` and `project create --project` take the value as the new alias;
+  `lineage show --project` filters the aliases inside an offline graph file.
+- **`project invite --from-csv` changed:** a `project` column value now
+  follows the same rules -- an alias wins over a project ID, and an ID
+  registered more than once fails that row with the list of aliases. Before,
+  an all-digit value was always taken as an ID, and the first project with
+  that ID was used. A `project_id` column value is still only an ID.
+
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 
 *(since 0.95.0, #761)*
@@ -274,7 +325,9 @@ Versioning convention:
   `--alias ID=ALIAS`, or request a second alias for an already-registered
   project. An existing entry is never overwritten either way.
 - **Registered aliases derive from the project NAME, never the numeric
-  project id -- `--project 9840` will never resolve.** `login`'s
+  project id.** Before vNEXT `--project 9840` never resolved; since then it
+  resolves once the project is registered (see "`--project` takes a project
+  ID as well as an alias"). `login`'s
   accessible-projects table shows a numeric `id`, but the alias
   `--register-projects` (or `auth register-projects`, or the login picker)
   writes is a slug of the project *name* (e.g. `jirka-bq-sox`), suffixed

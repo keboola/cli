@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from . import telemetry
+from .commands._project_ref import ProjectRefGroup
 from .commands.agent import agent_app
 from .commands.auth import auth_app
 from .commands.billing import billing_app
@@ -101,6 +102,8 @@ app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
     invoke_without_command=True,
+    # Translates a project ID given as --project to its alias (CLI-22).
+    cls=ProjectRefGroup,
 )
 
 # -- Setup & Info --

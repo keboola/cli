@@ -9,7 +9,7 @@ import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
-from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.models import BulkInviteResult, ProjectConfig
 from keboola_agent_cli.services.member_service import MemberService
 
 STACK_URL = "https://connection.us-east4.gcp.keboola.com"
@@ -384,6 +384,61 @@ class TestInviteBulk:
         result = svc.invite_bulk(manage_token=MANAGE_TOKEN, csv_path=csv_path, workers=1)
         assert result.succeeded == 1
         assert result.rows[0].project_id == PROJECT_ID
+
+
+class TestInviteBulkProjectColumn:
+    """The CSV `project` column follows the --project rules (CLI-22); `project_id` is only an ID."""
+
+    EU_STACK = "https://connection.eu-central-1.keboola.com"
+
+    def _store(self, tmp_config_dir: Path, projects: dict[str, tuple[int, str]]) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        for alias, (project_id, stack_url) in projects.items():
+            store.add_project(
+                alias,
+                ProjectConfig(
+                    stack_url=stack_url, token="901-fake-token-1234567890", project_id=project_id
+                ),
+            )
+        return store
+
+    def _dry_run(
+        self, tmp_path: Path, store: ConfigStore, column: str, value: str
+    ) -> BulkInviteResult:
+        csv_path = _write_csv(
+            tmp_path / "bulk.csv", f"email,{column},role\nx@y.com,{value},guest\n"
+        )
+        svc = MemberService(store, manage_client_factory=MagicMock())
+        return svc.invite_bulk(manage_token=MANAGE_TOKEN, csv_path=csv_path, dry_run=True)
+
+    def test_same_id_on_two_stacks_is_a_config_error(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        store = self._store(tmp_config_dir, {"us": (77, STACK_URL), "eu": (77, self.EU_STACK)})
+        svc = MemberService(store, manage_client_factory=MagicMock())
+        with pytest.raises(ConfigError, match="matches more than one registered project"):
+            svc._stack_for_row({"project": "77"})
+
+        result = self._dry_run(tmp_path, store, "project", "77")
+        assert result.rows[0].status == "failed"
+        assert "'eu'" in result.rows[0].note
+        assert "'us'" in result.rows[0].note
+
+    def test_numeric_alias_wins_over_another_projects_id(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        store = self._store(tmp_config_dir, {"4242": (5555, STACK_URL), "prod": (4242, STACK_URL)})
+
+        result = self._dry_run(tmp_path, store, "project", "4242")
+        assert result.rows[0].status == "ok"
+        assert result.rows[0].project_id == 5555
+
+    def test_project_id_column_is_only_an_id(self, tmp_path: Path, tmp_config_dir: Path) -> None:
+        store = self._store(tmp_config_dir, {"4242": (5555, STACK_URL), "prod": (4242, STACK_URL)})
+
+        result = self._dry_run(tmp_path, store, "project_id", "4242")
+        assert result.rows[0].status == "ok"
+        assert result.rows[0].project_id == 4242
 
 
 # ──────────────────────────────────────────────────────────────────────

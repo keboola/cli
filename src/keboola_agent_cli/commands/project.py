@@ -33,6 +33,7 @@ from ._helpers import (
 )
 from ._metadata_input import resolve_text_input
 from ._project_create import format_provision_result
+from ._project_ref import env_override_warning
 
 
 class ProjectBackend(StrEnum):
@@ -729,11 +730,9 @@ def project_current(ctx: typer.Context) -> None:
             return
         if source == "env":
             c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: KBAGENT_PROJECT env var)[/dim]")
-            if d.get("env_points_to_configured_project") is False:
-                c.print(
-                    f"[yellow]Warning:[/yellow] '{alias}' is NOT in your "
-                    "configured projects. Commands that use this pin will fail."
-                )
+            warning = env_override_warning(d)
+            if warning:
+                c.print(f"[yellow]Warning:[/yellow] {escape(warning)}")
             pinned = d.get("pinned")
             if pinned:
                 c.print(f"[dim]  (pinned in config: {pinned}, overridden)[/dim]")
