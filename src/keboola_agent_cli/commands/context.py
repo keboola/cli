@@ -2202,7 +2202,8 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5
-    versions, one-line summary each; --full (-v) expands every note.
+    versions, the first sentence of every BREAKING note, plus of the first other
+    notes until at least two show; --full (-v) expands every note.
 
   kbagent permissions list [--category read|write|destructive|admin]
     List all operations with risk categories and current allowed/denied status.
