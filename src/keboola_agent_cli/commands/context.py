@@ -1640,7 +1640,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
-    reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    reference->ULID; since vNEXT also shared-code links, legacy keboola.orchestrator
+    task configIds, task configRowIds and schedule targets (link_remaps counts each
+    kind; an unset link is an errors[] entry, a failed PUT is sent by the next push).
+    Idempotent (re-run -> no_changes); needs a fresh target.
+    Read warnings[] after a clone (also --dry-run, vNEXT+): missing_task_target (a
+    flow/orchestrator task runs a config not in the tree), encrypted_values_copied
+    (KBC:: paths the target cannot decrypt; secret_keys: plaintext in _config.yml +
+    sync push, unencryptable_keys: encrypt values, oauth_keys: authorize again),
+    data_app_not_deployed (run data-app deploy), schedule_not_active (clone never
+    activates schedules; flow schedule does). Only the run that creates the configs
+    reports them -- a re-run returns warnings: [], so keep them from the first run.
     Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
     value -> CONFIG_ERROR naming the key + type.
     Clone recreates the reference's storage buckets in the target from

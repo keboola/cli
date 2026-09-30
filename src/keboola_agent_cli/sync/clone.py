@@ -6,8 +6,10 @@ CREATEs everything fresh in the target project. Cloning into a **fresh** target
 project needs no id surgery: the reference's config ids do not exist in the
 target remote, so the diff classifies every config as ``added`` and the push
 assigns new ULIDs -- and because ``created_id_map`` is keyed by the reference id
-(the manifest entry's id before writeback), the Phase-C variable links and the
-Phase-D flow task ``configId``s remap reference->ULID automatically.
+(the manifest entry's id before writeback), push remaps the links between the
+configs reference->ULID automatically: Phase C the transformation variables and
+shared-code links, Phase D the flow and orchestrator task ``configId``s (and
+``configRowIds``) and the schedule targets.
 
 These functions are deliberately side-effecting but **pure of API calls**: they
 only touch the on-disk tree + the in-memory manifest, so they are unit-testable

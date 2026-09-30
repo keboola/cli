@@ -222,6 +222,13 @@ class CloneResult(_ApiResultModel):
     flow_task_remaps: int = Field(
         default=0, description="keboola.flow task configIds remapped reference->ULID."
     )
+    link_remaps: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Links remapped reference->ULID per kind: flow_tasks, orchestrator_tasks, "
+            "schedule_targets, shared_code, config_row_ids. Empty when nothing was remapped."
+        ),
+    )
     buckets_created: int = Field(
         default=0, description="Storage buckets created in the target (--create-buckets)."
     )
@@ -240,6 +247,14 @@ class CloneResult(_ApiResultModel):
     )
     errors: list[dict[str, Any]] = Field(
         default_factory=list, description="Per-change push errors, if any."
+    )
+    warnings: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Push warnings plus what the target still needs: tasks that run a config not in "
+            "the tree, copied encrypted values, undeployed data apps, inactive schedules. "
+            "Only the run that creates the configs reports them."
+        ),
     )
 
     @property

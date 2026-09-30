@@ -16,7 +16,7 @@ import yaml
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
-from keboola_agent_cli.services._sync_bindings import resolve_flow_task_bindings
+from keboola_agent_cli.services._sync_bindings import resolve_run_target_bindings
 from keboola_agent_cli.services._sync_storage import _parse_bucket_id, create_buckets_from_export
 from keboola_agent_cli.services.sync_service import CreatedConfig, SyncService
 from keboola_agent_cli.sync.clone import (
@@ -362,17 +362,18 @@ class TestResolveFlowTaskBindings:
         created = [CreatedConfig("keboola.flow", "flow-new", flow_dir)]
         created_id_map = {("keboola.ex-http", "ext-golden"): "ext-new"}
 
-        result = resolve_flow_task_bindings(
+        result = resolve_run_target_bindings(
             svc,
             client,
             created_configs=created,
             created_id_map=created_id_map,
+            created_row_id_map={},
             manifest=manifest,
             branch_id=None,
         )
 
         assert result.configs_rewritten == 1
-        assert result.tasks_remapped == 1
+        assert result.flow_tasks == 1
         # The flow was PUT with the remapped task configId.
         client.update_config.assert_called_once()
         put_config = client.update_config.call_args.kwargs["configuration"]
@@ -416,15 +417,16 @@ class TestResolveFlowTaskBindings:
         )
         client = MagicMock()
         svc = _service(tmp_config_dir, client)
-        result = resolve_flow_task_bindings(
+        result = resolve_run_target_bindings(
             svc,
             client,
             created_configs=[CreatedConfig("keboola.flow", "flow-new", flow_dir)],
             created_id_map={("keboola.ex-http", "other-golden"): "x"},
+            created_row_id_map={},
             manifest=manifest,
             branch_id=None,
         )
-        assert result.tasks_remapped == 0
+        assert result.flow_tasks == 0
         client.update_config.assert_not_called()
 
 

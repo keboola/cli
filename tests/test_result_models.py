@@ -199,6 +199,21 @@ class TestCloneResult:
         cr = CloneResult.model_validate({"status": "cloned", "errors": [{"message": "boom"}]})
         assert cr.ok is False
 
+    def test_warnings_and_link_remaps(self) -> None:
+        # CLI-24: warnings do not make the clone fail; link_remaps counts per kind.
+        warning = {"change_type": "schedule_not_active", "message": "m", "active": False}
+        remaps = {"flow_tasks": 2, "orchestrator_tasks": 1, "schedule_targets": 1}
+        cr = CloneResult.model_validate(
+            {"status": "cloned", "warnings": [warning], "link_remaps": remaps}
+        )
+        assert cr.warnings == [warning]
+        assert cr.link_remaps == remaps
+        assert cr.ok is True
+
+    def test_warnings_and_link_remaps_default_empty(self) -> None:
+        cr = CloneResult.model_validate({"status": "no_changes"})
+        assert cr.warnings == [] and cr.link_remaps == {}
+
     def test_dry_run_without_push(self) -> None:
         cr = CloneResult.model_validate(
             {"status": "dry_run", "target_alias": "t", "bucket_rewrites": 1}
