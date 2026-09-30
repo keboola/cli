@@ -70,6 +70,8 @@ src/keboola_agent_cli/
   models.py             # Pydantic models shared across layers
   effective_branch.py   # resolve_branch(): the ONLY code that applies the `branch use` active branch;
                         #   records project + branch for the `Target:` line / `targets` key (#766)
+  project_ref.py        # resolve_project_ref(): a project ID given where an alias is expected -> the
+                        #   alias (CLI-22); applied by commands/_project_ref.py and serve's dependency
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
@@ -303,6 +305,20 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `tests/test_effective_branch.py` fails on a new direct read. A read that
     only shows or manages the active branch must be on its list, with a reason.
 
+20. **Services receive project aliases, never project IDs.** `--project`
+    (and `project use`, `KBAGENT_PROJECT`, serve's `{project}` / `?project=`)
+    also takes a project ID; the root command group
+    (`commands/_project_ref.py`) translates it to the alias before the command
+    runs. A new command gets this without extra code. A new command whose
+    `--project` is not a registry lookup (a NEW alias like `project add`, an
+    offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS`
+    there, and an option with another name that takes an existing alias (like
+    `config clone --target-project`) to `ALIAS_OPTIONS`.
+    `tests/test_project_ref.py` fails on a new option whose flag contains
+    `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
+    test's `NOT_AN_ALIAS` list; an option with any other name (like
+    `sync clone --target`) needs that decision by hand.
+
 ## Claude Code Plugin
 
 The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
@@ -367,6 +383,13 @@ plugins/kbagent/
 #   settings.json -> env). Neither set = header omitted, as before. Version gate for this entry
 #   lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines,
 #   because check_version_gates.py parses them as ATX markdown headings (where a `vNEXT` is fatal).
+# --project (CLI-22) takes a registered alias OR a project ID. An alias wins; an ID registered under
+#   several aliases is CONFIG_ERROR (exit 5) listing them, unless all are on one stack and exactly one is a
+#   session alias. Same for KBAGENT_PROJECT, `project use`, `config clone --target-project`,
+#   `sync clone --target`, the `semantic-layer promote/diff` project options, `auth * --stack`, and
+#   serve's {project} / ?project= / ?stack= (path and query only, not request bodies). Not for
+#   `project add` / `project create` (new alias) or `lineage show` (offline filter). Version gate in
+#   gotchas.md.
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
@@ -418,7 +441,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
 # `auth register-projects` (0.80.0+): fixes the usability gap where nothing was registered unless
 #   --register-projects was passed at login, and where the alias offered was a slug of the project
-#   NAME (never the numeric id, so `--project 9840` never resolves). Lists every project the session
+#   NAME (never the numeric id; the id itself resolves as `--project` once registered, CLI-22). Lists every project the session
 #   can access with a collision-free suggested alias, then lets the caller pick which to register.
 #   --all selects every candidate; --project-id ID (repeatable) selects specific ones (unknown id ->
 #   ConfigError); omitting both runs an interactive arrow-key + spacebar checkbox picker (every

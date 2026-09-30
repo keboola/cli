@@ -161,8 +161,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     EXISTING session, without re-running login. Fixes the usability trap
     where `login` prints an accessible-project table but nothing gets
     registered unless --register-projects was passed, and where the
-    suggested alias is slugified from the project NAME -- the numeric
-    project id (e.g. 9840) is never a valid alias on its own.
+    suggested alias is slugified from the project NAME, never the numeric
+    project id (e.g. 9840). Once registered, `--project 9840` resolves to
+    that alias too (since vNEXT; see Tips 3).
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
     ConfigError naming it). Omitting both starts an interactive arrow-key +
@@ -342,7 +343,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
 
   kbagent project use ALIAS
-    Pin ALIAS as the default project. Persists to config.json.
+    Pin ALIAS as the default project. Persists to config.json. A registered
+    project ID pins that project's alias (since vNEXT; see Tips 3).
     Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
     an explicit --project flag overrides both.
 
@@ -371,7 +373,8 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
     Bulk invite. CSV must have a header row with columns: email, project (alias or
-    numeric ID), role (optional if --default-role is given), reason (optional).
+    numeric ID -- an alias wins, see Tips 3; since vNEXT) or project_id (ID only),
+    role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
     `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
 
@@ -2252,6 +2255,22 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
+   --project takes an alias or a registered project's numeric ID (since vNEXT).
+   An alias wins over an ID. An ID registered under several aliases fails with
+   CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
+   exactly one is a session (browser-login) alias, which then wins. The same
+   applies to KBAGENT_PROJECT, `project use`, `config clone --target-project`,
+   `sync clone --target`, `semantic-layer promote --from-project/--to-project`,
+   `semantic-layer diff --project-a/--project-b`, `auth * --stack`, the
+   `project` column of `project invite --from-csv`, and the `kbagent serve`
+   {{project}} / {{alias}} path and ?project= / ?alias= / ?stack= query
+   parameters. serve translates path and query parameters only: a project in
+   a request body still needs the alias. Output names the resolved alias
+   (`targets`, `project_alias`). When a digits-only alias is also another
+   project's ID, the alias is used and a warning names that project on stderr
+   (in --json mode too). `project add` / `project create` take --project as a
+   NEW alias, never an ID; `lineage show --project` filters an offline graph
+   and is not translated either.
 
 4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 
@@ -2278,7 +2297,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
-     KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
+     KBAGENT_PROJECT          Override the pinned default project for this shell/session (alias or project ID; beats pin, loses to --project)
      KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
                               reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL.
                               Headless / token-only mode: no `project add`, no config.json on disk. Use
