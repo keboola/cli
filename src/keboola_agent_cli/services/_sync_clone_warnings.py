@@ -17,6 +17,7 @@ nothing returns no warnings, so the caller must keep them.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -113,8 +114,8 @@ class _WarningContext:
     schedules_per_flow: dict[str, int]
 
     @property
-    def branch_option(self) -> str:
-        return f" --branch {self.branch_override}" if self.branch_override is not None else ""
+    def branch_args(self) -> list[str]:
+        return ["--branch", str(self.branch_override)] if self.branch_override is not None else []
 
 
 @dataclass(frozen=True)
@@ -342,10 +343,19 @@ def _data_app_warning(config: _ClonedConfig, context: _WarningContext) -> dict[s
     app_id = str(parameters.get("id", "")) if isinstance(parameters, dict) else ""
     message = f"sync clone does not deploy data app {config.label}."
     if not context.dry_run and app_id:
-        message += (
-            f" Deploy it with `kbagent data-app deploy --project {context.target_alias} "
-            f"--app-id {app_id}{context.branch_option}`."
+        command = shlex.join(
+            [
+                "kbagent",
+                "data-app",
+                "deploy",
+                "--project",
+                context.target_alias,
+                "--app-id",
+                app_id,
+                *context.branch_args,
+            ]
         )
+        message += f" Deploy it with `{command}`."
     else:
         message += " Deploy it with `kbagent data-app deploy` after the clone."
     return config.record("data_app_not_deployed", message, app_id=app_id)
@@ -387,13 +397,24 @@ def _schedule_hint(schedule: dict[str, Any], flow_id: str, context: _WarningCont
             f" {flow_schedules} cloned schedules run flow {flow_id}, and `kbagent flow schedule` "
             "updates only one schedule per flow. Activate these schedules in the Keboola UI."
         )
+    # The cron and the timezone come from the reference tree, so every value is
+    # shell-quoted: a value such as `UTC; <cmd>` must not become a second command
+    # when an agent or a user runs the suggested line.
+    args = [
+        "kbagent",
+        "flow",
+        "schedule",
+        "--project",
+        context.target_alias,
+        "--flow-id",
+        flow_id,
+        "--cron",
+        str(schedule["cronTab"]),
+    ]
     timezone = schedule.get("timezone", "")
-    options = f" --timezone {timezone}" if timezone else ""
+    if timezone:
+        args += ["--timezone", str(timezone)]
     if schedule.get("state") == "disabled":
-        options += " --disabled"
-    cron_tab = schedule["cronTab"]
-    return (
-        f" To register it, run `kbagent flow schedule --project {context.target_alias} "
-        f"--flow-id {flow_id} --cron '{cron_tab}'{options}{context.branch_option}`, which "
-        "updates this schedule."
-    )
+        args.append("--disabled")
+    args += context.branch_args
+    return f" To register it, run `{shlex.join(args)}`, which updates this schedule."

