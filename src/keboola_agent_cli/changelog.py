@@ -207,6 +207,10 @@ CHANGELOG: dict[str, list[str]] = {
         "component, has a dotted `runId`. The Storage events API returns no events for a dotted "
         "`runId`, so these jobs returned `logTail: []`. kbagent now queries the events by the job "
         "ID.",
+        "Change (#818): `kbagent changelog` now shows the first sentence of every BREAKING note of "
+        "a version by default, not only of the first note. When a version has fewer than two "
+        "BREAKING notes, it adds the first other notes until two notes show. `--full`, `--json` "
+        "and the `What's new` notice after an update do not change.",
         "Note (#793, #797, #804, #806, #816): housekeeping with no user-facing change. #793 adds a "
         "formal model of the sync engine (TLA+ and Lean 4, under `formal/sync/`) and one "
         "regression test for each finding. The sync fixes #794, #795, #796 and #811 in this "
