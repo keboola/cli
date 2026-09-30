@@ -82,8 +82,9 @@ class DataScienceClient(BaseHttpClient):
     def list_apps(self) -> list[dict[str, Any]]:
         """Return the thin index of ALL deployments in the project (no body filter).
 
-        The Data Science API scopes responses by the token's project; there
-        is no ``branchId`` query parameter on the list endpoint.
+        The Data Science API scopes responses by the token's project. The list
+        endpoint also accepts ``componentId``, ``type`` and ``branchId``
+        filters; this method sends none of them.
 
         ``GET /apps`` is paginated: without ``limit``/``offset`` it returns
         only a default first page (100 items) that mixes workspace

@@ -1,6 +1,7 @@
-"""Integration tests for Keboola Agent CLI using real API credentials.
+"""Integration tests for Keboola Agent CLI, plus offline CI guard self-tests.
 
-These tests are skipped unless the following environment variables are set:
+``TestFullWorkflow`` uses real API credentials. It is skipped unless the
+following environment variables are set:
   - KBA_TEST_TOKEN_AWS: Storage API token for AWS stack
   - KBA_TEST_URL_AWS: Stack URL for AWS stack (default: https://connection.keboola.com)
 
@@ -8,6 +9,9 @@ To run integration tests:
     KBA_TEST_TOKEN_AWS=your-token uv run pytest tests/test_integration.py -v
 
 These tests exercise the full workflow: add project, list, status, config list, remove.
+
+The ``scripts/check_error_codes.py`` self-tests need no network and no
+credentials, so they are not marked ``integration`` and run in the normal suite.
 """
 
 import json
@@ -304,6 +308,26 @@ class TestCheckErrorCodesGuard:
         mod = _load_guard_script()
         assert mod._collect_violations(clean) == []
 
+    def test_src_root_is_the_source_tree(self) -> None:
+        """main() walks SRC_ROOT; a wrong path would scan nothing and report OK."""
+        mod = _load_guard_script()
+        assert mod.SRC_ROOT.is_dir()
+        assert any(mod.SRC_ROOT.rglob("*.py"))
+
+    def test_main_fails_on_planted_literal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main() -- what `make check-error-codes` runs -- returns 1 on a raw literal."""
+        pkg = tmp_path / "src" / "pkg"
+        pkg.mkdir(parents=True)
+        (pkg / "planted.py").write_text(
+            'raise KeboolaApiError("oops", error_code="FOO")\n', encoding="utf-8"
+        )
+        mod = _load_guard_script()
+        monkeypatch.setattr(mod, "SRC_ROOT", pkg)
+        monkeypatch.setattr(sys, "argv", ["check_error_codes.py"])
+        assert mod.main() == 1
+
 
 class TestErrorCodesDocCompleteness:
     """Verify the enum-vs-docs/error-codes.md completeness guard."""
@@ -333,3 +357,21 @@ class TestErrorCodesDocCompleteness:
         stale_doc.write_text(doc, encoding="utf-8")
         monkeypatch.setattr(mod, "DOC_PATH", stale_doc)
         assert mod._check_doc_completeness() is False
+
+    def test_main_fails_on_doc_missing_a_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main() returns 1 when the doc lacks an enum member, even with clean source."""
+        mod = _load_guard_script()
+        doc_lines = mod.DOC_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
+        pruned = [line for line in doc_lines if not line.startswith("| `INVALID_TOKEN` |")]
+        assert len(pruned) == len(doc_lines) - 1
+        stale_doc = tmp_path / "error-codes.md"
+        stale_doc.write_text("".join(pruned), encoding="utf-8")
+        pkg = tmp_path / "src" / "pkg"
+        pkg.mkdir(parents=True)
+        (pkg / "clean.py").write_text("x = 1\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "DOC_PATH", stale_doc)
+        monkeypatch.setattr(mod, "SRC_ROOT", pkg)
+        monkeypatch.setattr(sys, "argv", ["check_error_codes.py"])
+        assert mod.main() == 1

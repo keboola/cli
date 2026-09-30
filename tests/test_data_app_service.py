@@ -11,6 +11,7 @@ test_data_science_client.py / test_e2e.py).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
@@ -2092,17 +2093,75 @@ class TestListAppsPaginationClient:
         with self._client() as client:
             assert [a["id"] for a in client.list_apps()] == ["1"]
 
-    def test_page_cap_stops_a_server_that_ignores_offset(self, httpx_mock) -> None:
+    def test_page_cap_stops_a_server_that_ignores_offset(self, httpx_mock, caplog) -> None:
         httpx_mock.add_response(json=self._sandboxes(2), is_reusable=True)
         with (
             patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_PAGE_SIZE", 2),
             patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_MAX_PAGES", 3),
+            caplog.at_level(logging.WARNING, logger="keboola_agent_cli.data_science_client"),
             self._client() as client,
         ):
             apps = client.list_apps()
 
         assert len(apps) == 6
         assert len(httpx_mock.get_requests()) == 3
+        assert [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "keboola_agent_cli.data_science_client"
+        ] == ["GET /apps: stopped after 3 pages of 2; the listing may be incomplete"]
+
+    def test_error_on_a_later_page_raises_with_no_partial_result(self, httpx_mock) -> None:
+        """A page that still fails after the client's retries fails the whole listing."""
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+        from keboola_agent_cli.constants import MAX_RETRIES
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            status_code=503,
+            json={"error": "Service Unavailable"},
+            is_reusable=True,
+        )
+        with (
+            patch("keboola_agent_cli.http_base.time.sleep"),
+            self._client() as client,
+            pytest.raises(KeboolaApiError) as excinfo,
+        ):
+            client.list_apps()
+
+        assert excinfo.value.status_code == 503
+        assert len(httpx_mock.get_requests()) == 1 + MAX_RETRIES
+
+    def test_sync_type_lookup_finds_a_data_app_on_page_two(self, httpx_mock) -> None:
+        """``load_data_app_types`` (sync pull) reads the type through the paged listing."""
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+        from keboola_agent_cli.data_science_client import DataScienceClient
+        from keboola_agent_cli.services._sync_data_app import load_data_app_types
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[
+                {
+                    "id": "d1",
+                    "componentId": "keboola.data-apps",
+                    "configId": "c1",
+                    "type": "python-js",
+                }
+            ],
+        )
+        project = ProjectConfig(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+
+        types = load_data_app_types(DataScienceClient, project, [{"id": "keboola.data-apps"}])
+
+        assert types == {"c1": "python-js"}
 
 
 class TestDataAppListFiltersWorkspaces:
