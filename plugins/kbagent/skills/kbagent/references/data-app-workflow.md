@@ -166,7 +166,7 @@ never appears in argv. The service encrypts it under THIS project's KMS via
 the Encryption API before writing it to Storage. `--auth password` (the
 default) makes the platform generate a 20-character hex simpleAuth password
 during the deploy, so the password exists only after a deploy. The user copies
-it to the clipboard with (since 0.96.0; project token only, no Manage token):
+it to the clipboard with (since 0.96.1; project token only, no Manage token):
 
 ```bash
 kbagent data-app password --project prod --app-id <ID>
@@ -196,7 +196,7 @@ a deploy is needed anyway does the agent recommend `kbagent data-app deploy
 app, so it is never a way to get the password. When `password_delivered_to`
 is `null`, `ui_url` is the Keboola UI page that shows the password under
 Open App. `--reveal` prints it, for scripts and CI only (a script that read
-`.data.password` must add `--reveal` since 0.96.0). The Keboola UI can reset
+`.data.password` must add `--reveal` since 0.96.1). The Keboola UI can reset
 the password.
 
 ### Roll out a new code version (no Storage edit)
@@ -447,7 +447,7 @@ yours at runtime.
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |
 | Pause a running app temporarily | `data-app stop --app-id N` |
-| Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.0; never printed without `--reveal`) |
+| Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.1; never printed without `--reveal`) |
 | Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
 | Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
 | Read one key | `data-app secrets-get --app-id N --key KEY` (`#` optional; encrypted → metadata only, plain → value) |
@@ -484,7 +484,7 @@ yours at runtime.
 | `GET` | `data-science.<stack>/apps/{id}` | `data-app detail`, poll loop, `data-app password` |
 | `PATCH` | `data-science.<stack>/apps/{id}` | `data-app deploy / start / stop` |
 | `DELETE` | `data-science.<stack>/apps/{id}` | `data-app delete` (cascades to Storage) |
-| `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (project token only, since 0.96.0) |
+| `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (project token only, since 0.96.1) |
 | `GET` | `data-science.<stack>/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
 | `GET` | `data-science.<stack>/apps/{id}/runs` | `data-app runs` (since 0.65.0; deployment attempts + failure_reason / startup_logs) |
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |

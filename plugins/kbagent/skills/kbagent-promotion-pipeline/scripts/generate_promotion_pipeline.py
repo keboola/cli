@@ -17,7 +17,7 @@ directory between a SOURCE Keboola project (e.g. dev) and a DESTINATION project
      Pushes every pipeline's directory to its DESTINATION project once the PR
      has merged, with `--force`: a config deleted in the SOURCE is deleted in
      the DESTINATION too. Without `--force`, `sync push` deletes nothing
-     (since 0.96.0, #792), and the validate dry-run passes it for the same
+     (since 0.96.1, #792), and the validate dry-run passes it for the same
      reason, so it shows what the push does.
 
 Each pipeline needs two Storage API token secrets (`KBC_TOKEN_<NAME>_SOURCE` /

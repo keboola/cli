@@ -512,7 +512,7 @@ git add -A && git commit -m "initial sync"
 `manifest.json`'s `ignoredComponents` field (since 0.91.0) lets you exclude
 project-specific components from every sync operation, on top of the
 always-ignored `keboola.sandboxes` and `keboola.mcp-server-tool`.
-`sync init --with-workspaces` *(since 0.96.0)* opts a tree in to syncing its
+`sync init --with-workspaces` *(since 0.96.1)* opts a tree in to syncing its
 shared SQL workspaces (`keboola.sandboxes`), config only.
 
 What you end up with on disk:
