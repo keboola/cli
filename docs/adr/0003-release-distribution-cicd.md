@@ -48,7 +48,9 @@ Add a **tag-triggered release pipeline** (`.github/workflows/release-kbagent.yml
    `--collect-all keboola_agent_cli`, entry `build/package/entry.py`) across a matrix
    (linux amd64/arm64, macOS arm64, windows amd64 — macOS is Apple Silicon only;
    Intel Macs fall back to `uv tool install`), then **signs/notarizes**
-   (Apple `notarytool`, Windows Authenticode via `jsign`). **Verified:** a frozen
+   (Apple `notarytool`, Windows Authenticode via `jsign`). *(2026-10-01: the macOS
+   Developer ID signature and the notarization were removed. The macOS binary ships
+   with the ad-hoc signature from PyInstaller. Windows Authenticode is unchanged.)* **Verified:** a frozen
    Linux binary runs in a stripped env — `env -i kbagent --version` → `kbagent v0.58.0`
    — with no Python/uv present. This is the **primary install path**; `uv`/`pipx` is
    only an additional convenience for Python users, never a requirement.
@@ -93,8 +95,8 @@ retiring the git-HEAD risk.
 | `HOMEBREW_TAP_TOKEN` | Push formula to `keboola/homebrew-keboola-cli2` | fine-grained PAT, tap repo only |
 | `CHOCOLATEY_KEY` | Push `.nupkg` | chocolatey.org API key (org account) |
 | `WINGET_TOKEN` | Fork + PR `microsoft/winget-pkgs` | classic PAT (`public_repo`) on an org bot |
-| `APPLE_DEVELOPER_CERTIFICATE_P12_BASE64` / `APPLE_DEVELOPER_CERTIFICATE_PASSWORD` | macOS code-sign | Developer ID Application cert (`.p12` base64) + its password |
-| `APPLE_ACCOUNT_PASSWORD` | Notarization | App-specific password for the Apple ID (account/team are literals in the workflow) |
+| `APPLE_DEVELOPER_CERTIFICATE_P12_BASE64` / `APPLE_DEVELOPER_CERTIFICATE_PASSWORD` | macOS code-sign (not used since 2026-10-01) | Developer ID Application cert (`.p12` base64) + its password |
+| `APPLE_ACCOUNT_PASSWORD` | Notarization (not used since 2026-10-01) | App-specific password for the Apple ID (account/team are literals in the workflow) |
 | `WINDOWS_SIGNING_TENANT_ID` / `WINDOWS_SIGNING_CLIENT_ID` / `WINDOWS_SIGNING_CLIENT_SECRET` | Authenticode via Azure Key Vault | service principal with Key Vault access |
 | `AWS_ROLE_ARN` | Upload to `cli-dist.keboola.com` | IAM role trusting GitHub OIDC |
 | `DEB_KEY_PRIVATE` (apt keyring exported inline from it by `index.sh`; no `DEB_KEY_PUBLIC`), `RPM_KEY_PRIVATE` / `RPM_KEY_PUBLIC` | Sign deb/rpm packages + repo metadata | GPG keypair (passphrase-less) |

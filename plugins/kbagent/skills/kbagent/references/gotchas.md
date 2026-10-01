@@ -4488,6 +4488,13 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   `sudo dnf upgrade keboola-cli2` · hand-unpacked archive -> re-download from
   the GitHub release page. Note the **package** is `keboola-cli2` while the
   **binary** is `kbagent`; the PyPI distribution is a third name, `keboola-cli`.
+- **The macOS binary is not notarized** *(since vNEXT)*. It has only the
+  ad-hoc signature that PyInstaller adds, with no Apple Developer ID signature
+  and no Apple notarization. A `darwin_arm64` zip that a browser downloads gets
+  the macOS quarantine flag, and macOS refuses to open the binary. Recommend
+  `brew install keboola-cli2` or `uv tool install keboola-cli` instead. A user
+  who must use the zip can allow the binary in System Settings > Privacy &
+  Security, or run `xattr -d com.apple.quarantine kbagent`.
 
 ## `--json` is written as UTF-8, independent of the console codepage
 
