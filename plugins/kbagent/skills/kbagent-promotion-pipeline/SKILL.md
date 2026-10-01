@@ -54,7 +54,7 @@ two Storage API tokens (source, destination):
    another).
 
 Both steps pass `--force`, so a config deleted in the source is deleted in
-the destination too. Without it `sync push` deletes nothing *(since 0.96.0,
+the destination too. Without it `sync push` deletes nothing *(since 0.96.1,
 #792)*; a pipeline generated before that relied on push deleting without
 `--force`, so regenerate it or add `--force` to both steps by hand.
 

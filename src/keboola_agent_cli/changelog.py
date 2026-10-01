@@ -26,7 +26,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.96.0": [
+    "0.96.1": [
         "BREAKING (#813): `kbagent data-app password` no longer prints the password unless "
         "you pass `--reveal`. When an AI agent ran the command, the password went into the model "
         "context and the chat history (CLI-23). The command now uses the project token (static or "
@@ -213,6 +213,12 @@ CHANGELOG: dict[str, list[str]] = {
         "a version by default, not only of the first note. When a version has fewer than two "
         "BREAKING notes, it adds the first other notes until two notes show. `--full`, `--json` "
         "and the `What's new` notice after an update do not change.",
+        "Change (#821): the macOS binary is no longer signed with an Apple Developer ID or "
+        "notarized by Apple. A problem on the Apple side stopped the 0.96.0 release on every "
+        "platform. The binary now has only the ad-hoc signature that PyInstaller adds. Install "
+        "it with `brew install keboola-cli2`, or use `uv tool install keboola-cli`. macOS blocks "
+        "a `darwin_arm64` zip that a browser downloads: allow it in System Settings > Privacy & "
+        "Security, or run `xattr -d com.apple.quarantine kbagent`.",
         "Note (#793, #797, #804, #806, #816): housekeeping with no user-facing change. #793 adds a "
         "formal model of the sync engine (TLA+ and Lean 4, under `formal/sync/`) and one "
         "regression test for each finding. The sync fixes #794, #795, #796 and #811 in this "
@@ -220,6 +226,9 @@ CHANGELOG: dict[str, list[str]] = {
         "that they guard breaks, and add tests that count the API calls of frequent read "
         "commands. #806 updates `undici` in the web backend from 6.28.0 to 6.28.1, for three "
         "security advisories.",
+        "Note: this release replaces 0.96.0, because the 0.96.0 release run stopped at the Apple "
+        "notarization. 0.96.0 reached PyPI, but it got no GitHub release and no packages, and "
+        "`kbagent update` stayed on 0.95.0. This release has every change of 0.96.0 and #821.",
     ],
     "0.95.0": [
         "New (#775): `kbagent project create --url URL` creates a new Keboola project from a "
