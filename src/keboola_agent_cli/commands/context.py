@@ -1460,9 +1460,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Give the user the password of a password-protected app WITHOUT printing
     it (0.96.1+; older versions printed it and needed a Manage API token).
     Project token only (static or session), no Manage token. In a terminal
-    (human mode, stdin + stdout a TTY, not a background job) it shows the app
-    URL and `ui_url`, then waits: `c` copies the password, Enter / Esc / q
-    finishes, 120 s timeout.
+    (human mode, stdin + stdout a TTY, not a background job) it prints the
+    links `Open the app:` (`app_url`) and `Configuration:` (`ui_url`), then
+    waits: `c` copies the password, Enter / Esc / q finishes, 120 s timeout.
     Without a terminal or with --json there is no prompt: only --copy copies
     it (the clipboard tool gets it on stdin). Nothing copied -> exit 0 with
     `password_delivered_to: null`; `ui_url` is the Keboola UI page that shows

@@ -33,6 +33,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.panel import Panel
 from rich.text import Text
 
 from ..auth import environment
@@ -51,11 +52,12 @@ DELIVERED_TO_STDOUT = "stdout"
 _BROWSER_OPEN_WAIT_SECONDS = 2.0
 
 _COPY_PROMPT_TIMEOUT_SECONDS = 120.0
+_PANEL_TITLE = "Data app password"
 _COPY_PROMPT_HINT = "Press c to copy the password, Enter to finish"
 # Enter arrives as "\n" in cbreak mode on POSIX and as "\r" from msvcrt on Windows.
 _COPY_PROMPT_FINISH_KEYS = frozenset({"\n", "\r", "\x1b", "q"})
-# The terminal flow prints the UI URL itself, so its lines only refer to it.
-_UI_URL_SHOWS_IT = "The UI URL shows it under Open App after login."
+# The terminal flow prints the Configuration link itself, so its lines only refer to it.
+_UI_URL_SHOWS_IT = "The Configuration page shows it under Open App after login."
 
 # -- Shared options: one definition for `password`, `create` and `deploy` -------
 
@@ -206,29 +208,67 @@ def _non_interactive_message(
     )
 
 
-def _print_line(console: Console, *parts: str | tuple[str, str]) -> None:
+def _print_line(console: Console, *parts: str | Text | tuple[str, str]) -> None:
     """One line of plain text parts: no markup parsing, no highlighting, and a
     URL in it is never folded (non-TTY consoles wrap at 80 columns)."""
     console.print(Text.assemble(*parts), highlight=False, soft_wrap=True)
 
 
-def _print_links(console: Console, *, app_url: str, ui_url: str | None, app_opened: bool) -> None:
-    _print_line(console, ("  App URL:", "bold"), f" {app_url or '-'}")
-    _print_line(console, ("  UI URL:", "bold"), f"  {ui_url or '-'}")
+def _print_password_block(
+    console: Console,
+    status: Text,
+    *,
+    app_url: str,
+    ui_url: str | None,
+    app_opened: bool,
+    password: str | None = None,
+) -> None:
+    """The status line, the two links and (``--reveal``) the password.
+
+    In a terminal they go in a panel laid out like the device-login one: a
+    plain label, a blank line, the link. Anywhere else (a pipe, a CI log, an
+    agent) they stay plain lines, so a URL is never folded and never carries
+    a panel border.
+    """
+    app_link = (app_url, _url_copy.LINK_STYLE) if app_url else "-"
+    # The app link is the one to open, so only it gets the link color.
+    ui_link = (ui_url, "bold") if ui_url else "-"
+    password_part = (password or "", "bold yellow")
+    if console.is_terminal:
+        parts: list[str | Text | tuple[str, str]] = [
+            status,
+            "\n\nOpen the app:\n\n",
+            app_link,
+            "\n\nConfiguration:\n\n",
+            ui_link,
+        ]
+        if app_opened:
+            parts.append("\n\nOpened the app in the browser.")
+        if password is not None:
+            parts += ["\n\nPassword: ", password_part]
+        console.print(Panel(Text.assemble(*parts), title=_PANEL_TITLE, expand=False))
+        return
+    _print_line(console, status)
+    _print_line(console, ("  Open the app:", "bold"), "  ", app_link)
+    _print_line(console, ("  Configuration:", "bold"), " ", ui_link)
     if app_opened:
         console.print("  Opened the app in the browser.")
+    if password is not None:
+        _print_line(console, "\nPassword: ", password_part)
 
 
 def _print_result(console: Console, data: dict[str, Any]) -> None:
     label = (
         ("Success:", "bold green") if data["password_delivered_to"] else ("Warning:", "bold yellow")
     )
-    _print_line(console, label, f" {data['message']}")
-    _print_links(
-        console, app_url=data["app_url"], ui_url=data["ui_url"], app_opened=data["app_opened"]
+    _print_password_block(
+        console,
+        Text.assemble(label, f" {data['message']}"),
+        app_url=data["app_url"],
+        ui_url=data["ui_url"],
+        app_opened=data["app_opened"],
+        password=data.get("password"),
     )
-    if "password" in data:
-        _print_line(console, ("\nPassword:", "bold yellow"), f" {data['password']}")
 
 
 def _copy_on_keypress(console: Console, lookup: DataAppPassword, *, app_opened: bool) -> bool:
@@ -239,15 +279,19 @@ def _copy_on_keypress(console: Console, lookup: DataAppPassword, *, app_opened: 
         hint=_COPY_PROMPT_HINT,
         finish_keys=_COPY_PROMPT_FINISH_KEYS,
     )
-    if not wait.enabled:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] No clipboard tool was found, so the password "
-            f"of data app {escape(lookup.app_id)} cannot be copied. {_UI_URL_SHOWS_IT}"
+    if wait.enabled:
+        status = Text(f"The password of data app {lookup.app_id} is ready to copy.")
+    else:
+        status = Text.assemble(
+            ("Warning:", "bold yellow"),
+            f" No clipboard tool was found, so the password of data app {lookup.app_id} "
+            f"cannot be copied. {_UI_URL_SHOWS_IT}",
         )
-        _print_links(console, app_url=lookup.app_url, ui_url=lookup.ui_url, app_opened=app_opened)
+    _print_password_block(
+        console, status, app_url=lookup.app_url, ui_url=lookup.ui_url, app_opened=app_opened
+    )
+    if not wait.enabled:
         return False
-    console.print(f"The password of data app {escape(lookup.app_id)} is ready to copy.")
-    _print_links(console, app_url=lookup.app_url, ui_url=lookup.ui_url, app_opened=app_opened)
     wait.prompt_and_wait(lookup.password, _COPY_PROMPT_TIMEOUT_SECONDS)
     if wait.copied:
         return True
