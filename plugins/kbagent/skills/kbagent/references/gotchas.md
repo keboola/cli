@@ -2271,10 +2271,12 @@ config, the retry fires, and the retry destroys it for good.
   REST client must pass `reveal=true`. `KBC_MANAGE_API_TOKEN` and
   `--allow-env-manage-token` are no longer used by this command.
 - **In a terminal** (human mode, stdin and stdout a TTY, and not a
-  background job) it prints the message, `app_url` and `ui_url`, then waits: `c` copies the password once,
-  Enter / Esc / `q` finishes, and after 120 s it ends with a line that says
-  the password was not copied. An arrow key does not end the prompt. With no
-  clipboard tool there is no prompt; the message points to `ui_url`.
+  background job) it prints the message and the links `Open the app:`
+  (`app_url`) and `Configuration:` (`ui_url`), then waits: `c` copies the
+  password once, Enter / Esc / `q` finishes, and after 120 s it ends with a
+  line that says the password was not copied. An arrow key does not end the
+  prompt. With no clipboard tool there is no prompt; the message points to
+  `ui_url`.
 - **Without a terminal** (agent, CI, a background job) **or with `--json`**
   there is no prompt. Only `--copy` copies the password. The clipboard tool
   gets it on stdin, never in argv; a tool that hangs times out, and a tool

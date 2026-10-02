@@ -929,8 +929,9 @@ copy it later (the project token is enough):
 
 ```bash
 kbagent data-app password --project prod --app-id 12345678
-# Shows the app URL and the Keboola UI page, then: press c to copy the
-# password, Enter to finish. The password is not printed.
+# Prints the links "Open the app:" and "Configuration:" (the Keboola UI
+# page), then: press c to copy the password, Enter to finish. The password
+# is not printed.
 ```
 
 Without a terminal (a script, or an AI agent running the command), add

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import select
 import subprocess
 import sys
@@ -66,6 +67,14 @@ DS_URL = "https://data-science.keboola.com"
 CONFIG_URL = "https://connection.keboola.com/v2/storage/components/keboola.data-apps/configs/cfg-1"
 APP_URL = "https://app-42.hub.keboola.com"
 UI_URL = "https://connection.keboola.com/admin/projects/258/branch/default/data-apps/cfg-1"
+
+# Rich styles of the `auth login --device-code` panel: its link, its plain
+# URL, its code value and its hint.
+BOLD_CYAN = "\x1b[1;36m"
+BOLD = "\x1b[1m"
+BOLD_YELLOW = "\x1b[1;33m"
+CYAN = "\x1b[36m"
+RESET = "\x1b[0m"
 
 
 class _Clipboard:
@@ -161,6 +170,14 @@ def _telemetry_payload(argv: list[str], result: Result, monkeypatch: pytest.Monk
     return repr(sent)
 
 
+def _assert_labelled_links(output: str) -> None:
+    """The app link and the configuration page, named by what each one opens."""
+    assert f"Open the app:  {APP_URL}" in output
+    assert f"Configuration: {UI_URL}" in output
+    assert "App URL" not in output
+    assert "UI URL" not in output
+
+
 def _assert_no_leak(
     argv: list[str],
     result: Result,
@@ -210,6 +227,17 @@ class TestWithoutTerminal:
             "app_opened": False,
             "message": data["message"],
         }
+
+    @pytest.mark.parametrize("flags", [(), ("--reveal",)])
+    def test_human_output_labels_the_two_links(
+        self, config_dir, httpx_mock, caplog, flags: tuple[str, ...]
+    ) -> None:
+        _mock_api(httpx_mock)
+
+        result = _run(_argv(config_dir, *flags, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        _assert_labelled_links(result.stdout)
 
     @pytest.mark.parametrize("json_mode", [True, False])
     def test_copy_puts_the_password_on_the_clipboard(
@@ -289,6 +317,16 @@ class TestTerminalPrompt:
         assert "not copied" not in result.stdout
         _assert_no_leak(argv, result, caplog, monkeypatch)
 
+    def test_prompt_labels_the_two_links(self, config_dir, httpx_mock, caplog, monkeypatch) -> None:
+        _mock_api(httpx_mock)
+        _clipboard(monkeypatch)
+        _terminal(monkeypatch, ["\n"])
+
+        result = _run(_argv(config_dir, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        _assert_labelled_links(result.stdout)
+
     @pytest.mark.parametrize("key", ["\n", "\r", "\x1b", "q"])
     def test_finish_key_ends_without_copying(
         self, config_dir, httpx_mock, caplog, monkeypatch, key: str
@@ -318,6 +356,7 @@ class TestTerminalPrompt:
         assert result.exit_code == 0, result.output
         assert clipboard.copied == []
         assert "No key pressed for 120 s. The password was not copied." in result.stdout
+        assert "The Configuration page shows it under Open App after login." in result.stdout
         _assert_no_leak(argv, result, caplog, monkeypatch)
 
     def test_failed_copy_says_so_and_points_to_the_ui(
@@ -334,6 +373,7 @@ class TestTerminalPrompt:
         assert clipboard.copied == [SENTINEL]
         assert "Copied to clipboard" not in result.stdout
         assert "The password was not copied." in result.stdout
+        assert "The Configuration page shows it under Open App after login." in result.stdout
         assert UI_URL in result.stdout
         _assert_no_leak(argv, result, caplog, monkeypatch)
 
@@ -349,7 +389,8 @@ class TestTerminalPrompt:
         assert result.exit_code == 0, result.output
         assert "Press c" not in result.stdout
         assert "cannot be copied" in result.stdout
-        assert UI_URL in result.stdout
+        assert "The Configuration page shows it under Open App after login." in result.stdout
+        _assert_labelled_links(result.stdout)
         _assert_no_leak(argv, result, caplog, monkeypatch)
 
     def test_copy_flag_in_a_terminal_copies_without_the_prompt(
@@ -486,6 +527,88 @@ class TestAuthHeaders:
             assert request.headers["X-KBC-ProjectId"] == "258"
             assert "X-StorageApi-Token" not in request.headers
             assert "X-KBC-ManageApiToken" not in request.headers
+
+
+# ---------------------------------------------------------------------------
+# Colours: the styles of the `auth login --device-code` panel
+# ---------------------------------------------------------------------------
+
+
+class TestColours:
+    def test_only_the_app_link_is_bold_cyan_like_the_device_login_link(
+        self, config_dir, httpx_mock, caplog, force_colour
+    ) -> None:
+        _mock_api(httpx_mock)
+
+        result = _run(_argv(config_dir, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert f"{BOLD_CYAN}{APP_URL}{RESET}" in result.stdout
+        assert f"{BOLD}{UI_URL}{RESET}" in result.stdout
+
+    def test_revealed_password_is_bold_yellow_like_the_device_login_code(
+        self, config_dir, httpx_mock, caplog, force_colour
+    ) -> None:
+        _mock_api(httpx_mock)
+
+        result = _run(_argv(config_dir, "--reveal", json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert f"Password: {BOLD_YELLOW}{SENTINEL}{RESET}" in result.stdout
+
+    def test_prompt_hint_is_cyan_like_the_device_login_hint(
+        self, config_dir, httpx_mock, caplog, monkeypatch, force_colour
+    ) -> None:
+        _mock_api(httpx_mock)
+        _clipboard(monkeypatch)
+        _terminal(monkeypatch, ["\n"])
+
+        result = _run(_argv(config_dir, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert f"{CYAN}Press c to copy the password, Enter to finish{RESET}" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Panel: in a terminal the block is laid out like the device-login panel
+# ---------------------------------------------------------------------------
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output: str) -> str:
+    return _ANSI.sub("", output)
+
+
+class TestPanel:
+    @pytest.mark.parametrize("flags", [(), ("--reveal",)])
+    def test_terminal_output_is_one_panel(
+        self, config_dir, httpx_mock, caplog, monkeypatch, force_colour, flags
+    ) -> None:
+        monkeypatch.setenv("COLUMNS", "200")
+        _mock_api(httpx_mock)
+        if not flags:
+            _clipboard(monkeypatch)
+            _terminal(monkeypatch, ["\n"])
+
+        result = _run(_argv(config_dir, *flags, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        lines = _plain(result.stdout).splitlines()
+        assert "Data app password" in lines[0]
+        rows = [line[1:-1].strip() for line in lines if line.startswith("│")]
+        # Like the device-login panel: a plain label, a blank line, the link.
+        assert rows[1:9] == ["", "Open the app:", "", APP_URL, "", "Configuration:", "", UI_URL]
+        assert rows[9:] == (["", f"Password: {SENTINEL}"] if flags else [])
+
+    def test_no_panel_outside_a_terminal(self, config_dir, httpx_mock, caplog) -> None:
+        _mock_api(httpx_mock)
+
+        result = _run(_argv(config_dir, json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert "╭" not in result.stdout
+        _assert_labelled_links(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +781,23 @@ class TestAfterDeploy:
         assert "is running" in result.stdout
         assert "Press c to copy the password, Enter to finish" in result.stdout
         _assert_no_leak(argv, result, caplog, monkeypatch)
+
+    @pytest.mark.parametrize("command", ["deploy", "create"])
+    def test_wait_with_reveal_labels_the_two_links(
+        self, config_dir, httpx_mock, caplog, command: str
+    ) -> None:
+        if command == "create":
+            _mock_create(httpx_mock)
+        else:
+            _mock_deploy_patch(httpx_mock)
+        _mock_deployed_app(httpx_mock)
+        build = _create_argv if command == "create" else _deploy_argv
+
+        result = _run(build(config_dir, "--wait", "--reveal", json_mode=False), caplog)
+
+        assert result.exit_code == 0, result.output
+        assert "is in this output (--reveal)." in result.stdout
+        _assert_labelled_links(result.stdout)
 
     @pytest.mark.parametrize("json_mode", [True, False])
     @pytest.mark.parametrize("command", ["deploy", "create"])

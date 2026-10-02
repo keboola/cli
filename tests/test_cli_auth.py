@@ -247,6 +247,32 @@ class TestLogin:
         assert "Or enter the code by hand at this URL:" in result.output
         assert "https://connection.keboola.com/device?user_code=ABCD-EFGH" in result.output
 
+    def test_device_login_panel_colours(self, tmp_path: Path, force_colour) -> None:
+        """The link is bold cyan, the plain URL bold, the code bold yellow.
+
+        `data-app` prints its app link in the same bold cyan (`LINK_STYLE`).
+        """
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        self._fire_device_prompt(
+            svc,
+            DeviceAuthorization(
+                deviceCode="device-code-1",
+                userCode="ABCD-EFGH",
+                verificationUri="https://connection.keboola.com/device",
+                verificationUriComplete=(
+                    "https://connection.keboola.com/device?user_code=ABCD-EFGH"
+                ),
+            ),
+        )
+        result = _invoke(config_dir, svc, ["auth", "login", "--device-code"])
+        assert result.exit_code == 0, result.output
+        link = "https://connection.keboola.com/device?user_code=ABCD-EFGH"
+        assert f"\x1b[1;36m{link}\x1b[0m" in result.output
+        assert "\x1b[1mhttps://connection.keboola.com/device\x1b[0m" in result.output
+        assert "\x1b[1;33mABCD-EFGH\x1b[0m" in result.output
+
     def test_device_login_panel_omits_one_click_link_when_absent(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

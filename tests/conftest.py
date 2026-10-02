@@ -1,9 +1,12 @@
 """Shared test fixtures for Keboola Agent CLI tests."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from rich.console import Console
 
+from keboola_agent_cli import output
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.output import OutputFormatter
 
@@ -19,6 +22,23 @@ def _deterministic_console_width(monkeypatch: pytest.MonkeyPatch) -> None:
     while passing locally. Wide enough that nothing under test is elided.
     """
     monkeypatch.setenv("COLUMNS", "200")
+
+
+@pytest.fixture
+def force_colour(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the CLI print ANSI colour codes under ``CliRunner``.
+
+    ``OutputFormatter`` turns the terminal off when stdout is not a TTY, and
+    ``CliRunner`` is not one, so a test that pins a Rich style would otherwise
+    only see plain text.
+    """
+    real_console = output.Console
+
+    def _colour_console(**kwargs: Any) -> Console:
+        kwargs.update(force_terminal=True, color_system="standard", no_color=False)
+        return real_console(**kwargs)
+
+    monkeypatch.setattr(output, "Console", _colour_console)
 
 
 @pytest.fixture(autouse=True)
