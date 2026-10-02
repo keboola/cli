@@ -26,6 +26,17 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.96.2": [
+        "Fix (#825): the `data-app` commands now label the app link `Open the app:` and the "
+        "Keboola UI link `Configuration:`, so it is clear which link opens what. Before, the "
+        "labels were `App URL:` and `UI URL:`, or only `URL:` in `data-app detail` and "
+        "`data-app create`. In a terminal, `data-app password`, `create --wait` and "
+        "`deploy --wait` show the links in a panel that looks like the `auth login` device-code "
+        "panel. Outside a terminal, the output stays plain lines without a panel. The `--json` "
+        "output does not change.",
+        "Note (#819, #820, #822, #823): housekeeping with no user-facing change. Dependency "
+        "updates in the web UI and its backend (fast-uri, brace-expansion, fastify, dompurify).",
+    ],
     "0.96.1": [
         "BREAKING (#813): `kbagent data-app password` no longer prints the password unless "
         "you pass `--reveal`. When an AI agent ran the command, the password went into the model "
