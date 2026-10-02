@@ -1889,15 +1889,13 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per principal (never free-text SQL). Same
 metastore/master-token requirements as Semantic Layer above.
-**Org-admin-only, structurally**: every write is authored at `organization`
-scope (default) or `targeted` scope (with --target-project) -- there is NO
-`--scope project` option anywhere in this group, matching the backend's own
-restriction that a project's own admin can never author policy for its own
-tables. The metastore backend does not register the `rls-policy` object type
-yet on any deployed stack (a companion go-monorepo change, tracked
-separately) -- every command here answers with a clean, classified error
-against a real project until that lands; a NOT_FOUND/schema-fetch failure is
-expected, not a kbagent bug. Enforcement (the actual SQL rewrite) happens in
+**Scope**: every write is authored at `organization` scope (default) or
+`targeted` scope (with --target-project) -- there is NO `--scope project`
+option anywhere in this group (the metastore ACL reserves organization scope
+and cross-project grants for organization admins). A stack whose metastore
+predates the `rls-policy`/`cls-policy` schemas answers `rls schema` with a
+classified NOT_FOUND schema-fetch error -- expected there, not a kbagent
+bug. Enforcement (the actual SQL rewrite) happens in
 `keboola-mcp-server`'s `query_data`, not here -- kbagent only authors
 policies, it never executes queries against them.
 
@@ -1938,6 +1936,36 @@ policies, it never executes queries against them.
     + confirm, then one `rls create` call per selected table. Refuses under
     --json or a non-TTY stdout with a one-line hint to use `rls create`
     directly -- there is no non-interactive path through `setup` itself.
+
+### Column-Level Security (CLS)
+
+Author `cls-policy` metastore objects: one object per protected table, a
+`visible_columns` allowlist per principal (unlisted columns are omitted from
+that principal's result; masking is not supported). Sibling of RLS above --
+same scope rule (organization/targeted, never project), fetch-then-merge
+update and master-token requirement; no `setup` wizard. `query_data` in
+`keboola-mcp-server` composes RLS and CLS; a principal with no rule for a
+governed table is refused there.
+
+  kbagent cls list --project P
+    List CLS policies visible to a project.
+
+  kbagent cls detail --project P --policy-id ID
+    Full rule set for one policy.
+
+  kbagent cls schema --project P
+    Live cls-policy JSON Schema from the metastore (live-only).
+
+  kbagent cls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+    Create one policy for one table. --rules is a JSON array of
+    {{principal|principals, visible_columns: [col, ...]}} objects. --dry-run
+    prints each principal's allowed projection without writing.
+
+  kbagent cls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+    Fetch-then-merge: an omitted flag keeps its current value.
+
+  kbagent cls delete --project P --policy-id ID [--yes]
+    Delete a policy; its table's columns become unrestricted.
 
 
 ### Self-call HTTP (inside `kbagent serve` subprocesses)

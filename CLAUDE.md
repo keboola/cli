@@ -1114,11 +1114,10 @@ kbagent rls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect 
 kbagent rls delete --project P --policy-id ID [--yes]
 kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--yes]
 # rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
-#   one object per protected table). ORG-ADMIN-ONLY, STRUCTURALLY: every write (create/update/
+#   one object per protected table). SCOPE: every write (create/update/
 #   setup) is authored at organization scope (default) or targeted scope (--target-project,
-#   repeatable), never project scope -- there is no --scope flag offering project at all, matching
-#   the backend's own restriction that a project's own admin can never author policy for its own
-#   tables. --rules is a JSON array of {principal|principals, condition} objects; condition is a
+#   repeatable), never project scope -- there is no --scope flag offering project at all (the metastore ACL
+#   reserves organization scope and cross-project grants for organization admins). --rules is a JSON array of {principal|principals, condition} objects; condition is a
 #   declarative primitive tree (column/op/value comparisons, in/not_in, is_null/is_not_null,
 #   and/or nesting, or a {"true": true} sentinel) -- never a free-text predicate string, closing
 #   the injection surface a hand-written-SQL model would have. `--dry-run` previews the compiled
@@ -1129,12 +1128,25 @@ kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file
 #   picker + guided condition builder, reusing `storage tables` and the same write path `rls
 #   create` uses) -- it refuses under --json or a non-TTY stdout with a hint to use `rls create`
 #   directly, same carve-out as `auth register-projects`'s picker, and has no REST route.
-#   THE METASTORE BACKEND DOES NOT REGISTER `rls-policy` ON ANY DEPLOYED STACK YET (a companion
-#   go-monorepo change, tracked separately) -- every command here answers a clean, classified
-#   error (schema fetch failure, NOT_FOUND) against a real project until that lands; this is
-#   expected, not a kbagent bug. New error code: INVALID_RLS_POLICY. Version gate for this whole
+#   A stack whose metastore predates the `rls-policy`/`cls-policy` schemas answers a clean,
+#   classified error (schema fetch failure, NOT_FOUND); expected there, not a kbagent bug.
+#   New error code: INVALID_RLS_POLICY. Version gate for this whole
 #   entry lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment
 #   lines (check_version_gates.py parses them as ATX markdown headings).
+
+kbagent cls list --project P
+kbagent cls detail --project P --policy-id ID
+kbagent cls schema --project P
+kbagent cls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+kbagent cls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+kbagent cls delete --project P --policy-id ID [--yes]
+# cls: column-level security policy authoring (`cls-policy` object type, one object per
+#   protected table), sibling of `rls`: same organization/targeted-only scope, fetch-then-merge
+#   update, master-token requirement and permission class (`admin` for writes). --rules is a
+#   JSON array of {principal|principals, visible_columns: [col, ...]} objects -- an allowlist
+#   projection (masking is not supported). `--dry-run` prints each principal's projection.
+#   No `setup` wizard; the REST routes under /cls/{project} mirror /rls.
+#   New error code: INVALID_CLS_POLICY. Version gate lives in gotchas.md.
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]

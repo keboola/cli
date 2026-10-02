@@ -14,15 +14,11 @@ Thin CLI layer over :class:`RlsService`. Seven subcommands:
 
 **Every policy this group writes is authored at ``organization`` or
 ``targeted`` scope, never ``project``** -- there is deliberately no
-``--scope`` flag that could select ``project``, matching the metastore
-backend's own restriction (an RLS policy is centrally governed, never
-authored by a project's own admin for its own tables -- see the RFC in
+``--scope`` flag that could select ``project`` (see the RFC in
 ``keboola-mcp-server``'s ``feature_spec/rls_query_tool/RFC.md``).
 
-The ``rls-policy`` metastore object type does not exist on any deployed
-backend yet -- see ``gotchas.md``'s "RLS backend not yet available" entry.
-Every read/write command here will answer with a clean, classified error
-against a real project until that backend work (tracked separately) lands.
+On a stack whose metastore predates the ``rls-policy`` schema every command here
+answers with a clean, classified error -- see ``gotchas.md``'s RLS/CLS entry.
 
 ``list``/``detail``/``schema`` are read-only and safe under ``--deny-writes``.
 ``create``/``update``/``setup`` are gated as ``admin`` (organization-level,
@@ -56,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 rls_app = typer.Typer(
     help=(
-        "Manage row-level security policies (metastore-backed, org-admin-only). "
+        "Manage row-level security policies (metastore-backed). "
         "'list'/'detail'/'schema' are read-only; 'create'/'update'/'setup'/'delete' "
         "are gated as admin -- see CONTRIBUTING.md."
     )
@@ -129,7 +125,10 @@ def _print_preview(formatter: Any, result: dict[str, Any]) -> None:
         formatter.console.print(f"  {entry.get('principal')}: WHERE {entry.get('condition')}")
 
 
-def _parse_rules_arg(formatter: Any, raw: str) -> list[dict[str, Any]]:
+def _parse_rules_arg(
+    formatter: Any, raw: str, shape: str = "{principal|principals, condition}"
+) -> list[dict[str, Any]]:
+    """Parse ``--rules``; ``shape`` is only the hint in the error (``cls`` passes its own)."""
     try:
         parsed = parse_json_arg(raw, label="--rules")
     except ValueError as exc:
@@ -137,7 +136,7 @@ def _parse_rules_arg(formatter: Any, raw: str) -> list[dict[str, Any]]:
         raise typer.Exit(code=2) from None
     if not isinstance(parsed, list):
         formatter.error(
-            message="--rules must be a JSON array of {principal|principals, condition} objects",
+            message=f"--rules must be a JSON array of {shape} objects",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
@@ -224,9 +223,8 @@ def rls_schema(
     """Print the live ``rls-policy`` JSON Schema fetched from the metastore.
 
     Unlike ``flow schema``, there is no offline bundled snapshot -- the
-    schema is authoritative only from the live metastore, and (until the
-    go-monorepo backend work lands) fetching it will fail with a clean,
-    classified error rather than returning a schema.
+    schema is authoritative only from the live metastore, and on a stack whose
+    metastore predates it, fetching fails with a clean, classified error.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "rls_service")

@@ -48,6 +48,7 @@ from .routers import (
     auth,
     billing,
     branches,
+    cls,
     components,
     configs,
     data_apps,
@@ -350,6 +351,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "create|update|delete` (`rls setup`'s interactive picker has no "
             "endpoint of its own, same carve-out as "
             "`auth register-projects`)."
+        ),
+    },
+    {
+        "name": "cls",
+        "description": (
+            "**Development.** "
+            "Column-level security policies (metastore-backed `cls-policy` "
+            "objects: a per-principal `visible_columns` allowlist), always "
+            "authored at `organization`/`targeted` scope -- never `project` "
+            "scope. Mirrors `kbagent cls list|detail|schema|create|update|"
+            "delete`."
         ),
     },
     # ---- AI & Tools ----
@@ -1005,6 +1017,7 @@ def create_app(
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
     app.include_router(rls.router)
+    app.include_router(cls.router)
     app.include_router(transformation.router)
     app.include_router(docs.router)
     app.include_router(org.router)

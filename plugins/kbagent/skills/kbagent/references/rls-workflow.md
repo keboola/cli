@@ -1,4 +1,4 @@
-# RLS Workflow -- Row-Level Security Policies
+# RLS / CLS Workflow -- Row- and Column-Level Security Policies
 
 Row-level security in Keboola is authored as metastore `rls-policy` objects
 -- one object per protected table, holding a list of per-principal condition
@@ -9,15 +9,13 @@ different runtime. `kbagent rls` never executes a query and never decides
 whether a real query gets filtered -- it only creates, reads, updates and
 deletes the policy objects the enforcement engine reads.
 
-**Authorship is org-admin-only, structurally.** Every write (`create`,
-`update`, `setup`) is issued at `organization` scope (default) or
-`targeted` scope (`--target-project`, repeatable) -- there is no `--scope
-project` option anywhere in this command group, matching the backend's own
-restriction that a project's own admin can never author policy for its own
-tables. `--project` on every command still names the project whose tables
-you're working with (and, for reads, which metastore instance to query) --
-it does not grant that project's admin any extra authority over policy
-authorship.
+**Scope is `organization` or `targeted`, never `project`.** Every write (`create`,
+`update`, `setup`) is issued at `organization` scope (default) or `targeted` scope
+(`--target-project`, repeatable) -- there is no `--scope project` option anywhere in this
+command group. The metastore ACL reserves `organization` scope and cross-project grants
+for organization admins; it additionally lets the owning project's admin author
+`targeted` policies for that project. `--project` on every command names the project
+whose tables you're working with (and which metastore instance to query).
 
 Same metastore requirements as [semantic-layer-workflow.md](semantic-layer-workflow.md):
 a MASTER (project admin) Storage token (`kbagent --json project info
@@ -28,14 +26,8 @@ on a non-master token. Pre-flight before anything else in this file:
 kbagent --json project info --project P | jq '.is_master_token'
 ```
 
-**The metastore backend does not register the `rls-policy` object type on
-any deployed stack yet** (a companion `go-monorepo` change, tracked
-separately from the kbagent work). Every command below will answer with a
-classified `NOT_FOUND` (schema fetch failure) or similar error against a
-real project until that lands -- see Workflow 7 for how to tell that apart
-from an actual problem. All the examples here are still correct and worth
-running once the backend ships; they are also fully covered by kbagent's own
-test suite against a mocked metastore in the meantime.
+**Backend availability.** The `rls-policy` and `cls-policy` object types are registered by
+the metastore's `2026-09-29` schema migrations. A stack whose metastore predates the `rls-policy`/`cls-policy` schema migrations answers `rls schema`/`cls schema` with a classified `NOT_FOUND` (schema-fetch failure) -- expected there, not a kbagent bug. See Workflow 7.
 
 Full per-command flag reference: [commands-reference.md](commands-reference.md#row-level-security-rls).
 Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
@@ -258,19 +250,17 @@ kbagent rls delete --project prod --policy-id <id>
 
 ## Workflow 7 -- Troubleshooting "backend not available" errors
 
-Until the `go-monorepo` companion work registers the `rls-policy` object
-type, EVERY command in this group will fail against a real, live project --
-this is expected, not a kbagent bug. Tell it apart from a real problem:
+On a stack whose metastore predates the `rls-policy`/`cls-policy` schemas,
+EVERY command in this group fails with a classified `NOT_FOUND` -- expected,
+not a kbagent bug. Tell it apart from a real problem:
 
 ```bash
 kbagent --json rls schema --project prod
 ```
 
 - **`NOT_FOUND` / "Could not fetch the rls-policy schema: ..."** -- the
-  expected shape while the backend isn't registered yet. The commands are
-  fully implemented and unit-tested against a mocked metastore client
-  (`tests/test_rls_service.py`); nothing here is broken, the object type
-  just doesn't exist on the stack yet.
+  object type isn't registered on this stack's metastore (same for
+  `cls schema`). Nothing here is broken; use a stack with a newer metastore.
 - **`MISSING_MASTER_TOKEN`** -- an actual, fixable problem: the registered
   token for this project isn't a master token. `kbagent project info
   --project P` -> `is_master_token`, then `project edit --project P
@@ -300,3 +290,35 @@ kbagent --json rls schema --project prod
   (`keboola-mcp-server`'s `rls.py`) are two separate implementations by
   design -- the preview is a convenience for human review, never the
   source of truth for what a query actually returns.
+
+---
+
+## Column-Level Security (CLS)
+
+`kbagent cls` authors `cls-policy` objects: one per protected table, each rule naming a
+principal and the `visible_columns` that principal may read (an allowlist -- unlisted
+columns are omitted from the result; masking is not supported). It mirrors `rls`
+(`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same scope rule,
+master-token requirement, `--dry-run`/`--yes` flags and fetch-then-merge `update`;
+there is no `cls setup` wizard. Enforcement and RLS+CLS composition happen in
+`keboola-mcp-server`'s `query_data`.
+
+```bash
+kbagent --json cls schema --project prod            # live shape
+kbagent --json cls list --project prod              # expect [] on a fresh project
+
+# Dry-run first: prints each principal's projection, writes nothing.
+kbagent cls create --project prod --table in.c-crm.customers --dialect snowflake \
+  --rules '[{"principal":"analyst@example.com","visible_columns":["id","region","amount"]},
+            {"principals":["a@example.com","b@example.com"],"visible_columns":["id"]}]' --dry-run
+
+kbagent cls create --project prod --table in.c-crm.customers --dialect snowflake \
+  --rules @cls_rules.json --yes
+kbagent --json cls update --project prod --policy-id <id> --rules @cls_rules_v2.json
+kbagent cls delete --project prod --policy-id <id> --yes
+```
+
+- A table can carry both an `rls-policy` and a `cls-policy`; author them separately.
+- `INVALID_CLS_POLICY` -- `--rules` failed validation (exactly one of `principal`/`principals`
+  per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, plus the live JSON Schema).
+  Nothing was written.

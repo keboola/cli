@@ -5731,7 +5731,7 @@ workspaces".
   deletes it. A `kbc` manifest save removes the key too (`kbc` writes back only
   the keys it knows).
 
-## Row-Level Security (RLS): org-admin-only scope, backend not yet available
+## Row-Level and Column-Level Security (RLS, CLS): organization/targeted scope only
 
 *(since vNEXT)*
 
@@ -5739,21 +5739,18 @@ workspaces".
 enforces anything itself: the actual SQL rewrite happens in `keboola-mcp-server`'s `query_data`
 tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes.
 
-- **The metastore backend does not register `rls-policy` on any deployed stack yet** (a companion
-  `go-monorepo` change, tracked separately from this kbagent work). Every `rls` command answers a
-  clean, classified error (`NOT_FOUND` from a failed schema fetch, or the same from `list`/`get`/
-  `post`/`put`/`delete`) against a real project until that backend work lands -- this is expected,
-  not a kbagent bug. All six commands are fully implemented and covered by
-  `tests/test_rls_service.py` / `tests/test_rls_cli.py` / `tests/test_server_rls.py` against a
-  mocked `MetastoreClient` in the meantime.
+- **Availability depends on the stack's metastore.** The `rls-policy` and `cls-policy` object types are
+  registered by the metastore's `2026-09-29` schema migrations. A stack whose metastore predates the `rls-policy`/`cls-policy` schema migrations answers `rls schema`/`cls schema` with a classified `NOT_FOUND` (schema-fetch failure) -- expected there, not a kbagent bug. Check with
+  `kbagent --json rls schema --project P` / `cls schema`. All commands are covered by
+  `tests/test_rls_*.py` / `tests/test_cls_*.py` / `tests/test_server_{rls,cls}.py` against a mocked
+  `MetastoreClient`.
 - **`--scope project` does not exist anywhere in this group, on purpose.** Every write
   (`create`/`update`/`setup`) is issued at `organization` scope (default) or `targeted` scope
   (`--target-project`, repeatable) -- never `project`. This is structural, not merely validated:
-  the command surface has no flag that could even attempt `project` scope, matching the backend's
-  own restriction that a project's own admin can never author RLS policy for its own tables (see
-  the RFC in `keboola-mcp-server`'s `feature_spec/rls_query_tool/RFC.md`). `--project` on every
-  command still names which project's tables/metastore instance you're working against -- it just
-  never grants that project's admin any extra authorship power.
+  the command surface has no flag that could even attempt `project` scope, the metastore ACL reserves
+  `organization` scope and cross-project grants for organization admins (it additionally lets the
+  owning project's admin author `targeted` policies for that project). `--project` on every command
+  names which project's tables/metastore instance you're working against.
 - **One `rls-policy` object per protected table**, never one blob per project. `rls setup`
   creates one policy per table selected in the checkbox picker, all sharing the same rules --
   if tables need different rules, run `setup`/`create` again per table.
@@ -5790,3 +5787,11 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   spans write+destructive+admin) is what has to be denied. Every REST route is gated the same way
   `merge-request`'s routes are (`Depends(require_permission(...))`), unlike `notifications.py`'s
   routes, which currently enforce nothing over HTTP -- RLS was built gated from the start.
+- **`cls` is the column-level sibling of `rls`.** `kbagent cls list|detail|schema|create|update|delete`
+  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals, visible_columns}]}`) with the
+  same scope rule (`organization`/`targeted`, never `project`), fetch-then-merge `update`, `admin`
+  permission class for writes, and `/cls/{project}` REST mirror as `rls`. `ClsService` subclasses
+  `RlsService` (only the item type, error code and rule hooks differ). Differences: `visible_columns` is a
+  non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
+  principal's projection instead of a SQL condition, validation failures raise `INVALID_CLS_POLICY`, and
+  there is no `cls setup` wizard.
