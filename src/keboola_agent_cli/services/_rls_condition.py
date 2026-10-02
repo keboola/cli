@@ -95,6 +95,20 @@ def validate_condition_ops(condition: Any) -> list[str]:
     return errors
 
 
+def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
+    """Each rule names exactly one of ``principal``/``principals`` (the schema's ``oneOf``).
+
+    Shared by the RLS and CLS (``cls_service``) local checks -- both policy
+    types use the identical principal shape.
+    """
+    principals_value = rule.get("principals")
+    has_principal = bool(rule.get("principal"))
+    has_principals = isinstance(principals_value, list) and bool(principals_value)
+    if has_principal == has_principals:  # both or neither
+        return [f"rules[{index}] must set exactly one of 'principal'/'principals'"]
+    return []
+
+
 def validate_rules_local(rules: Any) -> list[str]:
     """Semantic checks on ``rules`` that hold regardless of schema availability.
 
@@ -113,11 +127,7 @@ def validate_rules_local(rules: Any) -> list[str]:
         if not isinstance(rule, dict):
             errors.append(f"rules[{index}] must be an object")
             continue
-        principals_value = rule.get("principals")
-        has_principal = bool(rule.get("principal"))
-        has_principals = isinstance(principals_value, list) and bool(principals_value)
-        if has_principal == has_principals:  # both or neither
-            errors.append(f"rules[{index}] must set exactly one of 'principal'/'principals'")
+        errors.extend(validate_principal_fields(rule, index))
         condition = rule.get("condition")
         if condition is None:
             errors.append(f"rules[{index}] is missing 'condition'")
