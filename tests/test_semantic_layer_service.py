@@ -1499,7 +1499,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.side_effect = [
+        mock.put_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
         ]
@@ -1512,8 +1512,9 @@ class TestEditMetric:
             assume_yes=True,
         )
         assert result["updated"]["id"] == "m_new"
-        # delete called twice: once for the old metric, once for the cascade
-        assert mock.delete_item.call_count == 2
+        # in-place PUTs: the metric and its cascaded constraint, nothing deleted
+        assert mock.put_item.call_count == 2
+        mock.delete_item.assert_not_called()
         # cascade list populated
         assert result["cascaded_constraints"][0]["status"] == "updated"
 
@@ -1530,7 +1531,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.return_value = {"id": "m_new", "attributes": {"name": "rev"}}
+        mock.put_item.return_value = {"id": "m_new", "attributes": {"name": "rev"}}
 
         result = service.edit_metric(
             "prod",
@@ -1539,8 +1540,7 @@ class TestEditMetric:
             new_description="updated desc",
         )
         assert result["updated"]["id"] == "m_new"
-        # Only one delete: the metric itself.
-        assert mock.delete_item.call_count == 1
+        mock.delete_item.assert_not_called()
         assert result["cascaded_constraints"] == []
 
     def test_metric_not_found(self, tmp_path: Path) -> None:
@@ -1557,8 +1557,8 @@ class TestEditMetric:
             service.edit_metric("prod", None, current_name="ghost", new_sql="1")
         assert excinfo.value.error_code == ErrorCode.NOT_FOUND
 
-    def test_rollback_on_post_failure(self, tmp_path: Path) -> None:
-        """When POST after DELETE fails, the original item is re-POSTed."""
+    def test_failed_put_leaves_original_untouched(self, tmp_path: Path) -> None:
+        """Edit is an in-place PUT: a failure never deletes anything, so nothing needs rolling back."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
         original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
@@ -1571,17 +1571,34 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        # First POST (the actual edit) fails; second POST (rollback) succeeds.
-        mock.post_item.side_effect = [
-            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
-            {"id": "restored", "attributes": {"name": "rev"}},
-        ]
+        mock.put_item.side_effect = KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+        )
 
-        with pytest.raises(KeboolaApiError) as excinfo:
+        with pytest.raises(KeboolaApiError):
             service.edit_metric("prod", None, current_name="rev", new_sql="2")
-        details = excinfo.value.details or {}
-        rollback = details.get("rollback") or {}
-        assert rollback.get("status") == "succeeded"
+        mock.delete_item.assert_not_called()
+        mock.post_item.assert_not_called()
+
+    def test_edit_keeps_scope_and_item_id(self, tmp_path: Path) -> None:
+        """PUT in place: the item keeps its id and (untouched by a PUT) its scope."""
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        original["meta"] = {"scope": "organization"}
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            return [original] if item_type == "semantic-metric" else []
+
+        mock.list_items.side_effect = _list
+        mock.put_item.return_value = {"id": "m1", "attributes": {"name": "rev"}}
+        service.edit_metric("prod", None, current_name="rev", new_sql="2")
+        args, kwargs = mock.put_item.call_args
+        assert args[:3] == ("semantic-metric", "m1", "rev")
+        assert kwargs == {}
+        mock.post_item.assert_not_called()
 
     def test_partial_state_false_when_cascade_succeeds(self, tmp_path: Path) -> None:
         """Envelope carries partial_state=False + recovery_hint=None on full success (issue #294)."""
@@ -1601,7 +1618,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.side_effect = [
+        mock.put_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
         ]
@@ -1630,16 +1647,11 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        # POST sequence:
-        #  1. metric rename POST -> succeeds
-        #  2. c1 cascade POST  -> succeeds
-        #  3. c2 cascade POST  -> fails
-        #  4. c2 rollback POST -> succeeds (per-item rollback)
-        mock.post_item.side_effect = [
+        # PUT sequence: metric rename ok, c1 cascade ok, c2 cascade fails.
+        mock.put_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c1_new", "attributes": {"name": "rev_ok", "metrics": ["revenue"]}},
             KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
-            {"id": "c2_restored", "attributes": {"name": "rev_fail", "metrics": ["rev"]}},
         ]
         result = service.edit_metric(
             "prod", None, current_name="rev", new_name="revenue", assume_yes=True
@@ -1720,7 +1732,7 @@ class TestEditRelationship:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.return_value = {
+        mock.put_item.return_value = {
             "id": "r2",
             "attributes": {"name": "fact_to_dim", "from": "out.c.fact_v2"},
         }
@@ -1730,11 +1742,11 @@ class TestEditRelationship:
             current_name="fact_to_dim",
             new_from="out.c.fact_v2",
         )
-        mock.delete_item.assert_called_once_with("semantic-relationship", "r1")
+        mock.delete_item.assert_not_called()
         # The POST payload retains the unchanged endpoints but rewrites `from`.
-        post_kwargs = mock.post_item.call_args.kwargs
-        assert post_kwargs["data"]["from"] == "out.c.fact_v2"
-        assert post_kwargs["data"]["to"] == "out.c.dim"
+        put_args = mock.put_item.call_args.args
+        assert put_args[3]["from"] == "out.c.fact_v2"
+        assert put_args[3]["to"] == "out.c.dim"
         assert result["rollback"] is None
         assert result["cascaded_constraints"] == []
 
@@ -1785,7 +1797,7 @@ class TestEditGlossary:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.return_value = {
+        mock.put_item.return_value = {
             "id": "g2",
             "attributes": {"term": "MRR", "definition": "Updated def"},
         }
@@ -1795,10 +1807,10 @@ class TestEditGlossary:
             current_term="MRR",
             new_definition="Updated def",
         )
-        mock.delete_item.assert_called_once_with("semantic-glossary", "g1")
-        post_kwargs = mock.post_item.call_args.kwargs
-        assert post_kwargs["data"]["term"] == "MRR"
-        assert post_kwargs["data"]["definition"] == "Updated def"
+        mock.delete_item.assert_not_called()
+        put_args = mock.put_item.call_args.args
+        assert put_args[3]["term"] == "MRR"
+        assert put_args[3]["definition"] == "Updated def"
         assert result["rollback"] is None
 
     def test_rename_term(self, tmp_path: Path) -> None:
@@ -1814,16 +1826,16 @@ class TestEditGlossary:
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.return_value = {"id": "g2", "attributes": {"term": "RECURRING_REVENUE"}}
+        mock.put_item.return_value = {"id": "g2", "attributes": {"term": "RECURRING_REVENUE"}}
         service.edit_glossary(
             "prod",
             None,
             current_term="MRR",
             new_term="RECURRING_REVENUE",
         )
-        post_kwargs = mock.post_item.call_args.kwargs
-        assert post_kwargs["data"]["term"] == "RECURRING_REVENUE"
-        assert post_kwargs["name"] == "RECURRING_REVENUE"
+        put_args = mock.put_item.call_args.args
+        assert put_args[3]["term"] == "RECURRING_REVENUE"
+        assert put_args[2] == "RECURRING_REVENUE"
 
     def test_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -2002,7 +2014,7 @@ class TestImportSnapshot:
         assert result["imported"]["datasets"]["created"] == 0
         mock.post_item.assert_not_called()
 
-    def test_overwrite_deletes_then_posts(self, tmp_path: Path) -> None:
+    def test_overwrite_puts_in_place_keeping_scope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
 
@@ -2010,11 +2022,13 @@ class TestImportSnapshot:
             if item_type == "semantic-model":
                 return [_model_item("U", "target")]
             if item_type == "semantic-dataset":
-                return [_child_item("semantic-dataset", "d1", {"name": "fact_x"})]
+                existing = _child_item("semantic-dataset", "d1", {"name": "fact_x"})
+                existing["meta"] = {"scope": "organization"}
+                return [existing]
             return []
 
         mock.list_items.side_effect = _list
-        mock.post_item.return_value = {"id": "new"}
+        mock.put_item.return_value = {"id": "d1"}
         snap = tmp_path / "s.json"
         _write_snapshot(
             snap,
@@ -2024,8 +2038,11 @@ class TestImportSnapshot:
         )
         result = service.import_snapshot("prod", snap, overwrite=True)
         assert result["imported"]["datasets"]["overwritten"] == 1
-        mock.delete_item.assert_called_with("semantic-dataset", "d1")
-        mock.post_item.assert_called()
+        args, kwargs = mock.put_item.call_args
+        assert args[:3] == ("semantic-dataset", "d1", "fact_x")
+        assert kwargs == {}
+        mock.delete_item.assert_not_called()
+        mock.post_item.assert_not_called()
 
     def test_dry_run_no_writes(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

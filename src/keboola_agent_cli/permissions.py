@@ -357,6 +357,20 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # `scope` sub-app: visibility scope / target-project grants / elevation
+    # requests (PSGO-140). Parent key at the least-privileged level (read),
+    # same pattern as `reference-data` above. `set --scope organization` is
+    # escalated to `destructive` (FLAG_ESCALATIONS): it is one-way (no
+    # downgrade endpoint exists) and widens an item's visibility to every
+    # project in the organization.
+    "semantic-layer.scope": "read",
+    "semantic-layer.scope.get": "read",
+    "semantic-layer.scope.request-list": "read",
+    "semantic-layer.scope.add": "write",
+    "semantic-layer.scope.remove": "write",
+    "semantic-layer.scope.set": "write",
+    "semantic-layer.scope.request-create": "write",
+    "semantic-layer.scope.request-delete": "write",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method under the taxonomy at the top
     # of this registry: GET = read, POST/PATCH = write (they create/modify),
@@ -440,6 +454,15 @@ OPERATION_REGISTRY: dict[str, str] = {
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
     "sync.push --force": "destructive",
+    # `--scope organization` makes an item (and its revision history) visible to
+    # every project in the org with no downgrade endpoint -- irreversible.
+    "semantic-layer.scope.set --scope organization": "destructive",
+    "semantic-layer.model.create --scope organization": "destructive",
+    "semantic-layer.add.metric --scope organization": "destructive",
+    "semantic-layer.add.dataset --scope organization": "destructive",
+    "semantic-layer.add.relationship --scope organization": "destructive",
+    "semantic-layer.add.constraint --scope organization": "destructive",
+    "semantic-layer.add.glossary --scope organization": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real
