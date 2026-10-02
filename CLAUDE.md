@@ -1097,7 +1097,8 @@ kbagent semantic-layer token --encrypt --project P --component-id C
 #   explicit --target-project grants). --scope/--target-project are also accepted by `model
 #   create` and every `add <kind>` above. --scope omitted: `model create` makes a "project"
 #   item, `add <kind>` INHERITS its model's scope (an org-level model gets org-level children;
-#   a targeted model, its target projects). --target-project takes a registered alias OR a
+#   a targeted model, its target projects); an inherited organization scope is permission-gated
+#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). --target-project takes a registered alias OR a
 #   numeric project ID (repeatable or comma-separated; an alias must be on the owner's stack);
 #   without --scope targeted it exits 2. With --scope targeted and no --target-project: a real
 #   terminal launches an interactive picker over the other projects on the stack; --json fails

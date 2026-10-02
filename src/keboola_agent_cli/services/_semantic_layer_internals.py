@@ -40,7 +40,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._semantic_layer_fqn import append_fqn_mismatch_warnings
-from ._semantic_layer_scope import item_scope
 
 logger = logging.getLogger(__name__)
 
@@ -445,10 +444,7 @@ def run_import_loop(
                     per_type["overwritten"] += 1
                     continue
                 try:
-                    existing = existing_by_name[key]
-                    client.put_item(
-                        type_slug, existing["id"], key, attrs, scope=item_scope(existing)[0]
-                    )
+                    client.put_item(type_slug, existing_by_name[key]["id"], key, attrs)
                     per_type["overwritten"] += 1
                 except KeboolaApiError as exc:
                     per_type["failed"].append({"name": key, "reason": exc.message})
@@ -478,7 +474,7 @@ def run_promote_loop(
 ) -> dict[str, Any]:
     """Run the additive + overwrite promote loop.
 
-    NEW: POST to target. CHANGED: DELETE+POST. IDENTICAL: skip.
+    NEW: POST to target. CHANGED: in-place PUT. IDENTICAL: skip.
     Items only in target are never deleted (additive only).
     Returns ``{plural: {new, overwritten, identical, failed, changes}}``.
     """
@@ -520,10 +516,7 @@ def run_promote_loop(
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                     continue
                 try:
-                    existing = tgt_by_key[key]
-                    target_client.put_item(
-                        type_slug, existing["id"], key, src_attrs, scope=item_scope(existing)[0]
-                    )
+                    target_client.put_item(type_slug, tgt_by_key[key]["id"], key, src_attrs)
                     stats["overwritten"] += 1
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                 except KeboolaApiError as exc:

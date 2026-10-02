@@ -5781,20 +5781,23 @@ sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See
 [metastore-scope-workflow.md](metastore-scope-workflow.md) for worked
 examples. Surprises worth knowing before you touch this:
 
-- **A write that changes scope sends metastore schema `1.1.0`.** Every
-  `semantic-*` schema's `x-metastore.scope.supported` is `["project"]` ONLY at
-  `1.0.0` -- `1.1.0` adds `organization`/`targeted` (purely additive ACL/scope
-  blocks, no `data` shape change). The server resolves the EXACT version
-  string sent and never upgrades it, so kbagent sends `1.1.0` only when the
-  scope is not `project` (create) or the item being edited is not `project`
-  scoped (edit); a plain project-scope write keeps sending `1.0.0`, so a stack
-  without the 1.1.0 schemas is unaffected until someone uses a scope.
+- **kbagent never sends `schemaVersion` on create.** The metastore stores
+  the version it resolved for the item, and checks a later elevation (`PATCH
+  {"scope":"organization"}`, the elevation request) against that STORED
+  version. Every `semantic-*` schema supports only `scope=project` at `1.0.0`
+  (later schema versions add `organization`/`targeted`), so pinning `1.0.0` on a plain
+  create would make the item impossible to elevate later. With the key
+  omitted, the server uses the stack's default schema (`1.1.0` or later where
+  the PSGO-140 migrations ran). `PUT` (edit) never changes the stored version.
 - **`--scope` omitted means "inherit" for child items.** `add
   metric|dataset|relationship|constraint|glossary` take their model's scope
   (and, for `targeted`, its target projects) when `--scope` is not given;
   `model create` defaults to `project`. Pass `--scope` to override. Without
   this an org-level model would show up in consumer projects with no
-  datasets or metrics.
+  datasets or metrics. An INHERITED `organization` scope is gated exactly like
+  a typed `--scope organization` (`--deny-destructive` blocks it), and a
+  project-admin token that is not an org admin gets a 403 on it, with a hint
+  to pass `--scope project`.
 - **`--target-project` takes an alias or a numeric project ID** (repeatable or
   comma-separated), so the target need not be registered in kbagent. An alias
   must be on the owner project's stack (a project ID only means the same
@@ -5818,11 +5821,14 @@ examples. Surprises worth knowing before you touch this:
   re-creating the item as project-scoped (losing its revision history). The
   permission engine escalates `--scope organization` on `scope set`, `model
   create` and every `add <kind>` (`FLAG_ESCALATIONS`), so `--deny-destructive`
-  blocks them; a `scope set --scope organization --dry-run` is not blocked.
-- **Elevating items created before this release can fail.** The server checks
-  `PATCH {"scope":"organization"}` and the elevation request against the
-  item's STORED `schemaVersion`; an item created by an older kbagent has
-  `1.0.0`, which supports only `project`. *Not yet verified on a live stack.*
+  blocks them, `scope set --scope organization --dry-run` included (same
+  as `sync push --force`).
+- **Elevating items created by an older kbagent can fail.** Those were created
+  pinned to `schemaVersion 1.0.0`, which supports only `project`, and the
+  server checks elevation against the STORED version, so `scope set --scope
+  organization` / `scope request-create` fail with a scope-not-supported error
+  until the metastore's schema sweep moves the item to the default version.
+  *Read from the server source, not yet verified on a live stack.*
 - **A 403 vs a 404 on a scope call encodes something deliberate.** The
   metastore returns 404 (not 403) when the caller cannot see the object at
   all -- not its owner, not a granted project, not viewing an

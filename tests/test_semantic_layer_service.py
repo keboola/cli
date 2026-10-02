@@ -1581,7 +1581,7 @@ class TestEditMetric:
         mock.post_item.assert_not_called()
 
     def test_edit_keeps_scope_and_item_id(self, tmp_path: Path) -> None:
-        """PUT in place: the item keeps its id; the schemaVersion follows the item's scope."""
+        """PUT in place: the item keeps its id and (untouched by a PUT) its scope."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
         original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
@@ -1597,7 +1597,7 @@ class TestEditMetric:
         service.edit_metric("prod", None, current_name="rev", new_sql="2")
         args, kwargs = mock.put_item.call_args
         assert args[:3] == ("semantic-metric", "m1", "rev")
-        assert kwargs == {"scope": "organization"}
+        assert kwargs == {}
         mock.post_item.assert_not_called()
 
     def test_partial_state_false_when_cascade_succeeds(self, tmp_path: Path) -> None:
@@ -2040,7 +2040,7 @@ class TestImportSnapshot:
         assert result["imported"]["datasets"]["overwritten"] == 1
         args, kwargs = mock.put_item.call_args
         assert args[:3] == ("semantic-dataset", "d1", "fact_x")
-        assert kwargs == {"scope": "organization"}
+        assert kwargs == {}
         mock.delete_item.assert_not_called()
         mock.post_item.assert_not_called()
 

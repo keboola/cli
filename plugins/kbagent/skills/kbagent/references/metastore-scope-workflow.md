@@ -15,7 +15,8 @@ constraint, glossary term) carries a visibility **scope**:
 
 `add <kind>` without `--scope` **inherits its model's scope** (and target
 projects), so an org-level model gets org-level children. Pass `--scope` to
-override.
+override (a project-admin token that is not an org admin must pass
+`--scope project` under an org-level model, or it gets a 403).
 
 For one-line command reference, see
 [commands-reference.md](commands-reference.md#scope--target-project-grants--elevation-scope-sub-app-since-vnext-psgo-140).
@@ -125,14 +126,16 @@ where the owner and the admin are different people/tokens.
 
 `--scope organization` is gated as **destructive** by the permission engine
 (`--deny-destructive` blocks it, here and on `model create` / `add <kind>`);
-`--dry-run` is not blocked.
+`--dry-run` is gated too (same as `sync push --force`). An `add <kind>` that
+would INHERIT `organization` from its model is gated the same way.
 
 There is **no bulk-elevate endpoint**. "Elevate an existing project's
 objects" as a migration means one `request-create` + `set --scope
 organization` call per item, run deliberately for objects the user has named
 -- never loop this over every object in a project speculatively. Items
-created by a kbagent older than this feature may refuse elevation (their
-stored schema version only supports `project`); if so, re-create them.
+created by a kbagent older than this feature may refuse elevation (they were
+pinned to schema `1.0.0`, which only supports `project`); if so, re-create
+them.
 
 ## Workflow 4 -- Editing a scoped item
 

@@ -116,15 +116,23 @@ def _merge_targets(
 ) -> list[int]:
     """Apply an add/remove delta to the item's grants, refusing when they cannot be read.
 
-    The server returns ``meta.targetProjectIds`` only to the owning project, so
-    a non-owner (an org admin from elsewhere) would read ``None``, apply the
-    delta to an empty list, and PUT it -- silently replacing every grant.
+    The server returns ``meta.targetProjectIds`` only to the owning project (and
+    omits it when the list is empty), so a non-owner (an org admin from
+    elsewhere) would read ``None``, apply the delta to an empty list, and PUT it
+    -- silently replacing every grant. The owner check is on ``meta.projectId``,
+    never on the list being empty: an owner with no grants is a valid merge base.
     """
+    if caller_project_id is None:
+        raise KeboolaApiError(
+            message=(
+                "This project's own ID is unknown, so ownership of the item cannot be checked. "
+                "Run `kbagent project refresh` (or `project add`) first."
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
     meta = item.get("meta") or {}
     owner_id = meta.get("projectId")
-    if (owner_id is not None and owner_id != caller_project_id) or (
-        meta.get("scope", "project") == "targeted" and meta.get("targetProjectIds") is None
-    ):
+    if owner_id is not None and owner_id != caller_project_id:
         raise KeboolaApiError(
             message=(
                 "This project does not own the item, so its current target projects cannot "

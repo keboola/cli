@@ -94,6 +94,7 @@ def add_metric(
         scope=scope,
         target_project=target_project,
         owner_alias=project,
+        inherit_from_model=(model,),
     )
     result = _handle_service_call(
         ctx,
@@ -152,6 +153,7 @@ def add_dataset(
         scope=scope,
         target_project=target_project,
         owner_alias=project,
+        inherit_from_model=(model,),
     )
     result = _handle_service_call(
         ctx,
@@ -193,6 +195,7 @@ def add_relationship(
         scope=scope,
         target_project=target_project,
         owner_alias=project,
+        inherit_from_model=(model,),
     )
     result = _handle_service_call(
         ctx,
@@ -260,6 +263,7 @@ def add_constraint(
         scope=scope,
         target_project=target_project,
         owner_alias=project,
+        inherit_from_model=(model,),
     )
     result = _handle_service_call(
         ctx,
@@ -296,6 +300,7 @@ def add_glossary(
         scope=scope,
         target_project=target_project,
         owner_alias=project,
+        inherit_from_model=(model,),
     )
     result = _handle_service_call(
         ctx,

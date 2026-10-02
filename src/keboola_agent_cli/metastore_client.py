@@ -10,7 +10,7 @@ Verified contract (probed 2026-05-14 against e2e-1143):
 
 - ``GET  /api/v1/repository/{type}`` → 200 with body ``{"data": [item, ...]}``.
 - ``POST /api/v1/repository/{type}`` → 201 with body ``{"data": {type, id,
-  attributes, meta}}``. Envelope: ``{name, data, branch, schemaVersion, scope}``.
+  attributes, meta}}``. Envelope: ``{name, data, branch, scope}``.
 - ``DELETE /api/v1/repository/{type}/{id}`` → 204 empty body. Missing ID → 404
   with the standard error envelope.
 - Duplicate ``name`` on POST → **409 Conflict** with message ``"Object with
@@ -110,24 +110,13 @@ ObjectScope = Literal["project", "organization", "targeted"]
 
 # Envelope fields kept constant across every POST (per metastore contract).
 _ENVELOPE_BRANCH = "main"
-# Every semantic-* schema's x-metastore.scope.supported is
-# ["project"] ONLY at 1.0.0 -- 1.1.0 is what adds "organization"/"targeted"
-# (go-monorepo migrations/schema/semantic-*_schema_1.1.0.json, diffed against
-# 1.0.0 at commit e4f62941: purely additive x-metastore.acl/scope blocks, no
-# `data` schema change, so this is safe for every existing caller). Sending
-# scope="organization"/"targeted" against 1.0.0 gets a clean 400
-# ErrScopeNotSupported from prepareCreateSchema -- the server resolves the
-# EXACT version string sent, never silently upgrades it.
-# Only ``scope != "project"`` needs the 1.1.0 ACL schemas (additive; every
-# ``semantic-*`` type supports ``scope=project`` at 1.0.0). Project-scope writes
-# keep sending 1.0.0 so a stack without the 1.1.0 schemas is unaffected.
-_ENVELOPE_SCHEMA_VERSION = "1.0.0"
-_ACL_ENVELOPE_SCHEMA_VERSION = "1.1.0"
+# No ``schemaVersion`` is sent on create: for an empty version the metastore
+# resolves the stack's DEFAULT schema and stores that version on the item. The
+# server checks a later scope elevation (PATCH / elevation request) against the
+# STORED version, and every ``semantic-*`` schema supports only ``scope=project``
+# at 1.0.0 (the later schema versions add "organization"/"targeted"), so pinning "1.0.0" here would
+# make every item created without ``--scope`` impossible to elevate.
 _DEFAULT_SCOPE: ObjectScope = "project"
-
-
-def _schema_version(scope: str) -> str:
-    return _ENVELOPE_SCHEMA_VERSION if scope == "project" else _ACL_ENVELOPE_SCHEMA_VERSION
 
 
 class MetastoreClient(BaseHttpClient):
@@ -321,7 +310,6 @@ class MetastoreClient(BaseHttpClient):
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
-            "schemaVersion": _schema_version(scope),
             "scope": scope,
         }
         if target_project_ids is not None:
@@ -366,38 +354,40 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
-        *,
-        scope: ObjectScope = _DEFAULT_SCOPE,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
-        Unlike the DELETE+POST pattern the higher-level ``edit`` operations
-        use, ``PUT`` updates the record in place and increments
+        ``PUT`` updates the record in place (``edit``, ``import --overwrite`` and
+        ``promote`` use it) and increments
         ``meta.revision`` server-side, preserving the metastore's revision
         history. ``data`` is the inner ``attributes`` payload; the outer
         envelope is added here.
 
-        ``scope`` is the item's CURRENT scope and only selects the envelope
-        ``schemaVersion`` (an organization/targeted item needs 1.1.0); it is
-        never sent as a field. Deliberately carries no
-        ``scope``/``targetProjectIds`` -- the
-        server's request struct for this endpoint (``MetaObjectUpdatePutRequest``)
-        has no such fields, so scope/grants are untouched by a plain PUT.
+        Deliberately carries no ``scope``/``targetProjectIds``/``schemaVersion``
+        -- the server's request struct for this endpoint
+        (``MetaObjectUpdatePutRequest``) has only ``name`` and ``data``, so
+        scope, grants and the stored schema version are untouched by a plain PUT.
         Use :meth:`elevate_to_organization` / :meth:`put_target_projects`.
 
-        Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404.
+        Raises :class:`KeboolaApiError` with ``error_code=NOT_FOUND`` on 404 and
+        ``ALREADY_EXISTS`` on 409 (renaming to a name that is already taken).
         """
-        envelope = {
-            "name": name,
-            "data": data,
-            "branch": _ENVELOPE_BRANCH,
-            "schemaVersion": _schema_version(scope),
-        }
-        response = self._do_request(
-            "PUT",
-            f"/api/v1/repository/{item_type}/{item_id}",
-            json=envelope,
-        )
+        envelope = {"name": name, "data": data, "branch": _ENVELOPE_BRANCH}
+        try:
+            response = self._do_request(
+                "PUT",
+                f"/api/v1/repository/{item_type}/{item_id}",
+                json=envelope,
+            )
+        except KeboolaApiError as exc:
+            if exc.status_code == 409:
+                raise KeboolaApiError(
+                    message=f"{item_type} with name {name!r} already exists. Pick another name.",
+                    status_code=409,
+                    error_code=ErrorCode.ALREADY_EXISTS,
+                    retryable=False,
+                ) from exc
+            raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
 

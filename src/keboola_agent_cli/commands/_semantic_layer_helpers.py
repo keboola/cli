@@ -80,13 +80,16 @@ def resolve_scope_targets(
     scope: str | None,
     target_project: list[str] | None,
     owner_alias: str,
+    inherit_from_model: tuple[str | None] | None = None,
 ) -> list[str] | None:
     """Validate ``--scope`` / ``--target-project`` of a create command.
 
     Returns the ``--target-project`` values (aliases or IDs; the service
     resolves them) for ``--scope targeted``, else ``None``. ``--scope
     organization`` is gated here as destructive (``operation`` is the command's
-    permission key, e.g. ``semantic-layer.add.dataset``). ``--target-project``
+    permission key, e.g. ``semantic-layer.add.dataset``); so is an omitted
+    ``--scope`` that would inherit ``organization`` from the model
+    (``inherit_from_model=(model,)`` on the ``add`` commands). ``--target-project``
     without ``--scope targeted`` is a usage error, never silently ignored.
 
     With ``--scope targeted`` and no target, this is the "ask when uncertain"
@@ -95,6 +98,17 @@ def resolve_scope_targets(
     context it hard-fails instead of silently defaulting -- widening an
     object's visibility across projects is not a guess this CLI makes.
     """
+    engine = ctx.obj.get("permission_engine")
+    if scope is None and inherit_from_model is not None and engine is not None and engine.active:
+        # `add <kind>` without --scope takes its model's scope: an inherited
+        # organization scope widens visibility just like a typed one, so it goes
+        # through the same permission gate.
+        service = get_service(ctx, "semantic_layer_service")
+        inherited = _handle_service_call(
+            ctx, service.child_scope, alias=owner_alias, model_name_or_uuid=inherit_from_model[0]
+        )
+        if inherited == "organization":
+            check_cli_operation(ctx, f"{operation} --scope organization")
     if scope == "organization":
         check_cli_operation(ctx, f"{operation} --scope organization")
     if scope != "targeted":

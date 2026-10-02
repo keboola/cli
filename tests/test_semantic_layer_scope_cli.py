@@ -213,6 +213,35 @@ class TestCreateScopeFlags:
             )
             assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
 
+    @pytest.mark.parametrize(
+        ("model_scope", "blocked"),
+        [("organization", True), ("targeted", False), ("project", False)],
+    )
+    def test_inherited_scope_is_gated_like_a_typed_one(
+        self, store: ConfigStore, model_scope: str, blocked: bool
+    ) -> None:
+        """`add` without --scope takes the model's scope; an inherited organization scope must not
+        bypass --deny-destructive."""
+        mock = MagicMock()
+        mock.child_scope.return_value = model_scope
+        mock.add_glossary.return_value = {"id": "g", "attributes": {"term": "t"}}
+        result = _invoke(
+            ["--deny-destructive", *_sl("add", "glossary", "--project", "prod", "--term", "t")],
+            store=store,
+            sl_mock=mock,
+        )
+        assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
+        assert mock.add_glossary.called is (not blocked)
+
+    def test_no_model_lookup_when_no_permission_policy_is_active(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.add_glossary.return_value = {"id": "g", "attributes": {"term": "t"}}
+        result = _invoke(
+            _sl("add", "glossary", "--project", "prod", "--term", "t"), store=store, sl_mock=mock
+        )
+        assert result.exit_code == 0, result.output
+        mock.child_scope.assert_not_called()
+
     def test_deny_destructive_still_allows_project_scope_create(self, store: ConfigStore) -> None:
         mock = MagicMock()
         mock.create_model.return_value = {"project": "prod", "model": {"id": "u", "attributes": {}}}
@@ -394,7 +423,7 @@ class TestScopePermissions:
         ("extra", "blocked"),
         [
             (["--scope", "organization", "--yes"], True),
-            (["--scope", "organization", "--dry-run"], False),  # preview changes nothing
+            (["--scope", "organization", "--dry-run"], True),  # same gate as `sync push --force`
             (["--clear"], False),
             (["--target-project", "analytics"], False),
         ],

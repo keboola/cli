@@ -23,7 +23,6 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
-from ._semantic_layer_scope import item_scope
 
 if TYPE_CHECKING:
     from ..metastore_client import MetastoreClient, SemanticType
@@ -82,7 +81,6 @@ def edit_metric_with_cascade(
         )
     original_attrs = dict(target.get("attributes") or {})
     old_id = target["id"]
-    target_scope, _ = item_scope(target)
 
     effective_new_name = new_name if new_name is not None else current_name
     cascade_required: list[dict[str, Any]] = []
@@ -126,9 +124,7 @@ def edit_metric_with_cascade(
     if new_description is not None:
         new_attrs["description"] = new_description
 
-    new_item = client.put_item(
-        "semantic-metric", old_id, effective_new_name, new_attrs, scope=target_scope
-    )
+    new_item = client.put_item("semantic-metric", old_id, effective_new_name, new_attrs)
 
     # Cascade constraints individually (each is independent --
     # report per-constraint success/failure).
@@ -140,9 +136,7 @@ def edit_metric_with_cascade(
         cattrs["metrics"] = cmetrics
         cname = cattrs.get("name", "")
         try:
-            cascaded_item = client.put_item(
-                "semantic-constraint", c["id"], cname, cattrs, scope=item_scope(c)[0]
-            )
+            cascaded_item = client.put_item("semantic-constraint", c["id"], cname, cattrs)
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
             cascaded.append(
@@ -288,10 +282,7 @@ def edit_simple(
         if v is not None:
             new_attrs[k] = v
     effective_new = new_attrs.get(id_key) or current_key
-    target_scope, _ = item_scope(target)
-    new_item = client.put_item(
-        item_type, target["id"], effective_new, new_attrs, scope=target_scope
-    )
+    new_item = client.put_item(item_type, target["id"], effective_new, new_attrs)
     return {
         "updated": new_item,
         "cascaded_constraints": [],

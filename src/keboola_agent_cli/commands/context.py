@@ -1946,7 +1946,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     has_more}}. The org-admin's discovery queue.
 
   Child items (`add metric|dataset|...`) with --scope omitted INHERIT their
-  model's scope and target projects; pass --scope to override.
+  model's scope and target projects; pass --scope to override. An inherited
+  organization scope is gated as destructive like a typed one, and a
+  non-org-admin token gets a 403 on it (pass --scope project).
 
   Elevating an EXISTING project's semantic-layer objects in bulk: there is no
   bulk-elevate endpoint -- each object needs its own `scope request-create` +

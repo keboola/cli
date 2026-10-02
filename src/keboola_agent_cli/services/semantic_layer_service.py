@@ -686,6 +686,16 @@ class SemanticLayerService(BaseService):
             return None
         return _scope.resolve_target_project_ids(self._config_store, alias, target_projects) or None
 
+    def child_scope(self, alias: str, model_name_or_uuid: str | None) -> ObjectScope:
+        """The scope ``add <kind>`` gives a child when ``--scope`` is omitted: its model's own.
+
+        Exposed so the command layer can gate an INHERITED ``organization`` scope
+        exactly like a typed ``--scope organization``.
+        """
+        with self._new_metastore_client(self._resolve_one_project(alias)) as client:
+            model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
+            return _scope.inherited_scope(client, model_uuid)[0]
+
     def _post_scoped(
         self,
         client: MetastoreClient,
@@ -698,13 +708,28 @@ class SemanticLayerService(BaseService):
         target_projects: list[str] | None,
     ) -> dict[str, Any]:
         """POST a child item; with ``scope`` omitted it takes the scope of its model."""
-        if scope is None:
+        inherited = scope is None
+        if inherited:
             scope, target_ids = _scope.inherited_scope(client, data["modelUUID"])
         else:
             target_ids = self._target_ids(alias, scope, target_projects)
-        return client.post_item(
-            item_type, name=name, data=data, scope=scope, target_project_ids=target_ids
-        )
+        try:
+            return client.post_item(
+                item_type, name=name, data=data, scope=scope, target_project_ids=target_ids
+            )
+        except KeboolaApiError as exc:
+            if not (inherited and scope != "project" and exc.error_code == ErrorCode.ACCESS_DENIED):
+                raise
+            raise KeboolaApiError(
+                message=(
+                    f"{exc.message} The model is {scope!r}-scoped, so this child inherits that "
+                    "scope; creating at it needs an organization-admin token. Pass "
+                    "`--scope project` to create it project-only, or use an org-admin token."
+                ),
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=False,
+            ) from exc
 
     def create_model(
         self,
@@ -1207,7 +1232,7 @@ class SemanticLayerService(BaseService):
         is_tty: bool = False,
         confirm_cb: Callable[[str], bool] | None = None,
     ) -> dict[str, Any]:
-        """Edit a metric via DELETE+POST with rename-cascade on constraints.
+        """Edit a metric in place (PUT) with rename-cascade on constraints.
 
         Returns:
             ``{updated: item, cascaded_constraints: [...], rollback: None|{...}}``.
@@ -1243,7 +1268,7 @@ class SemanticLayerService(BaseService):
         new_description: str | None = None,
         new_grain: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a dataset (DELETE+POST). Renames do NOT cascade for datasets."""
+        """Edit a dataset (in-place PUT). Renames do NOT cascade for datasets."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
@@ -1273,7 +1298,7 @@ class SemanticLayerService(BaseService):
         new_severity: str | None = None,
         new_metrics: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Edit a constraint (DELETE+POST). Validates new attrs locally first."""
+        """Edit a constraint (in-place PUT). Validates new attrs locally first."""
         _validate_constraint_attrs(
             name_re=CONSTRAINT_NAME_RE,
             constraint_types=CONSTRAINT_TYPES,
@@ -1323,7 +1348,7 @@ class SemanticLayerService(BaseService):
         new_on: str | None = None,
         new_type: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a relationship (DELETE+POST). Validates ``--new-type`` locally.
+        """Edit a relationship (in-place PUT). Validates ``--new-type`` locally.
 
         Relationships are not referenced by any other entity, so no
         cascade is needed -- the result is shaped identically to
@@ -1362,7 +1387,7 @@ class SemanticLayerService(BaseService):
         new_term: str | None = None,
         new_definition: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a glossary term (DELETE+POST).
+        """Edit a glossary term (in-place PUT).
 
         Renaming via ``--new-term`` is destructive for downstream
         consumers that join on the literal term string (the term IS the
@@ -1497,7 +1522,7 @@ class SemanticLayerService(BaseService):
             types: Filter to a subset of types. ``None`` = all types.
             dry_run: When True, plan and return the action counts without
                 hitting any write API.
-            overwrite: When True, DELETE+POST conflicting items by name.
+            overwrite: When True, update conflicting items by name in place (PUT).
                 Default (False) skips conflicts.
 
         Returns:

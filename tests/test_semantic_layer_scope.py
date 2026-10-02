@@ -157,6 +157,25 @@ class TestSetTargetProjects:
         )
         client.put_target_projects.assert_called_once_with("semantic-dataset", "d1", expected)
 
+    def test_owner_with_no_grants_can_still_add(self) -> None:
+        """The server omits an empty list; that is the owner's state after `scope set --clear`."""
+        client = MagicMock()
+        client.get_item.return_value = _item({"scope": "targeted", "projectId": 5725})
+        scope_helpers.set_target_projects(
+            client, "semantic-dataset", "d1", add=[3], caller_project_id=5725
+        )
+        client.put_target_projects.assert_called_once_with("semantic-dataset", "d1", [3])
+
+    def test_unknown_own_project_id_is_refused_with_a_refresh_hint(self) -> None:
+        client = MagicMock()
+        client.get_item.return_value = _item(OWNED)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            scope_helpers.set_target_projects(
+                client, "semantic-dataset", "d1", add=[3], caller_project_id=None
+            )
+        assert "kbagent project refresh" in excinfo.value.message
+        client.put_target_projects.assert_not_called()
+
     @pytest.mark.parametrize(
         "meta",
         [
@@ -321,6 +340,37 @@ class TestChildScopeInheritance:
         assert kwargs["scope"] == expected_scope
         assert kwargs["target_project_ids"] == expected_ids
 
+    def test_inherited_org_scope_denied_gets_a_hint(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, {"scope": "organization"})
+        mock.post_item.side_effect = KeboolaApiError(
+            message="Insufficient permissions", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_glossary("prod", None, term="t", definition="d")
+        assert "--scope project" in excinfo.value.message
+        assert "organization" in excinfo.value.message
+
+    def test_explicit_scope_denied_is_not_rewritten(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, {"scope": "organization"})
+        mock.post_item.side_effect = KeboolaApiError(
+            message="Insufficient permissions", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_glossary("prod", None, term="t", scope="organization")
+        assert excinfo.value.message == "Insufficient permissions"
+
+    @pytest.mark.parametrize(
+        ("meta", "expected"),
+        [
+            (None, "project"),
+            ({"scope": "organization"}, "organization"),
+            ({"scope": "targeted"}, "targeted"),
+        ],
+    )
+    def test_child_scope_reports_the_models_scope(self, tmp_path: Path, meta, expected) -> None:
+        service, _ = _service_with_model(tmp_path, meta)
+        assert service.child_scope("prod", None) == expected
+
     def test_model_create_defaults_to_project_and_resolves_targets(self, tmp_path: Path) -> None:
         service, mock = _service_with_model(tmp_path, None)
         service.create_model("prod", "m")
@@ -357,7 +407,7 @@ class TestEditAndOverwriteKeepScope:
         service.edit_dataset("prod", None, current_name="x", new_description="d")
         args, kwargs = mock.put_item.call_args
         assert args[:2] == ("semantic-dataset", "d1")
-        assert kwargs == {"scope": "targeted"}
+        assert kwargs == {}
         mock.delete_item.assert_not_called()
         mock.post_item.assert_not_called()
 
@@ -391,6 +441,6 @@ class TestEditAndOverwriteKeepScope:
         service.promote_model(from_project="prod", to_project="analytics")
         args, kwargs = tgt.put_item.call_args
         assert args[:3] == ("semantic-metric", "tm1", "b")
-        assert kwargs == {"scope": "organization"}
+        assert kwargs == {}  # a PUT cannot carry scope, so it is untouched
         tgt.delete_item.assert_not_called()
         tgt.post_item.assert_not_called()

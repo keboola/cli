@@ -509,9 +509,8 @@ For the live-validated metastore contract surprises -- where the
 
 Quick reminders:
 
-- **POST envelope**: `{name, data, branch: "main", schemaVersion:
-  "1.0.0", scope: "project"}` (`schemaVersion: "1.1.0"` when the scope is
-  `organization`/`targeted`) -> 201 with `{data: {type, id,
+- **POST envelope**: `{name, data, branch: "main", scope: "project"}`
+  (no `schemaVersion`: the server stores the stack's default) -> 201 with `{data: {type, id,
   attributes, meta}}`. kbagent handles this.
 - **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
   `"Object with this name already exists in this project"`, or **500** with

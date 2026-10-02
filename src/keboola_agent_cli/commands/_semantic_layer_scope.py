@@ -182,8 +182,7 @@ def scope_set(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     if scope == "organization":
-        if not dry_run:
-            check_cli_operation(ctx, "semantic-layer.scope.set --scope organization")
+        check_cli_operation(ctx, "semantic-layer.scope.set --scope organization")
         if not (yes or dry_run or formatter.json_mode) and not typer.confirm(
             f"Elevate {type_} {context_id!r} to organization scope? This is IRREVERSIBLE "
             "and makes it visible to every project in the organization. Continue?"
