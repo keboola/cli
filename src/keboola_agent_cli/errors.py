@@ -164,6 +164,14 @@ class ErrorCode(StrEnum):
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
 
+    # Row-level security (CLI-17). Same role INVALID_FLOW_DEFINITION plays
+    # for conditional flows: a candidate `rls-policy` body (table/dialect/
+    # rules/condition) that fails op-name or JSON-Schema structural checks.
+    INVALID_RLS_POLICY = "INVALID_RLS_POLICY"
+    # Column-level security: same role for a candidate `cls-policy` body
+    # (table/dialect/rules/visible_columns).
+    INVALID_CLS_POLICY = "INVALID_CLS_POLICY"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.

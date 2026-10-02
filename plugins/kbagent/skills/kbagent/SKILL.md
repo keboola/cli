@@ -8,7 +8,7 @@ description: >
   Storage tables/files/snapshots, data apps,
   flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, Developer Portal, browser login,
+  layer, row-level security, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
@@ -18,7 +18,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, zero-copy clone, workspace load type,
+  restore config, rls, cls,
   set up keboola, setup, connect project, logout, sign out.
 ---
 
@@ -354,6 +354,19 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| List row-level security policies visible to a project | `kbagent rls list --project PROJECT` |
+| Show one RLS policy's full rule set | `kbagent rls detail --project PROJECT --policy-id POLICY-ID` |
+| Print the live ``rls-policy`` JSON Schema fetched from the metastore | `kbagent rls schema --project PROJECT` |
+| Create one RLS policy for one table | `kbagent rls create --project PROJECT --table TABLE --dialect DIALECT --rules RULES` |
+| Update an existing RLS policy | `kbagent rls update --project PROJECT --policy-id POLICY-ID` |
+| Delete an RLS policy | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
+| Guided RLS setup: pick tables, build a condition, preview, then write | `kbagent rls setup --project PROJECT` |
+| List column-level security policies visible to a project | `kbagent cls list --project PROJECT` |
+| Show one CLS policy's full rule set | `kbagent cls detail --project PROJECT --policy-id POLICY-ID` |
+| Print the live ``cls-policy`` JSON Schema fetched from the metastore | `kbagent cls schema --project PROJECT` |
+| Create one CLS policy for one table | `kbagent cls create --project PROJECT --table TABLE --dialect DIALECT --rules RULES` |
+| Update an existing CLS policy | `kbagent cls update --project PROJECT --policy-id POLICY-ID` |
+| Delete a CLS policy | `kbagent cls delete --project PROJECT --policy-id POLICY-ID` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
@@ -447,6 +460,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
+| **Row-level / column-level security (RLS, CLS)** -- author `rls-policy` / `cls-policy` objects, organization/targeted scope, guided RLS setup, condition primitives, column allowlists | [rls-workflow](references/rls-workflow.md) |
 | **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
 | **Config metadata** (list/get/set/delete arbitrary key-value metadata on a configuration) | [config-metadata-workflow](references/config-metadata-workflow.md) |
 | **Storage descriptions** (describe bucket / table / column, batch from YAML) | [storage-describe-workflow](references/storage-describe-workflow.md) |

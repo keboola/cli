@@ -148,6 +148,7 @@ NOT_AN_ALIAS: dict[str, str] = {
     "--project-ids": "already project IDs (org setup)",
     "--source-project-id": "already a project ID (sharing link)",
     "--target-project-ids": "already project IDs (sharing share)",
+    "--target-project": "rls/cls create|update: a project ID the policy is granted to, not an alias",
     "--all-projects": "a boolean flag",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",

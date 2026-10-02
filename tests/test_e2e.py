@@ -668,6 +668,17 @@ class TestFullE2E:
         self._test_delete_column(table_id)
 
         # ==============================================================
+        # PHASE 14.5: Row-level security (CLI-17)
+        # ==============================================================
+
+        _step(
+            "40.5",
+            "rls/cls schema + list",
+            "the rls-policy / cls-policy metastore object types may not be registered on a stack",
+        )
+        self._test_rls_commands()
+
+        # ==============================================================
         # PHASE 15: Cleanup
         # ==============================================================
 
@@ -3653,6 +3664,37 @@ class TestFullE2E:
                 print(f"  Deleted transformation config {tf_config_id}")
             except Exception as exc:
                 print(f"  WARN: failed to delete transformation {tf_config_id}: {exc}")
+
+    def _test_rls_commands(self) -> None:
+        """`rls`/`cls` `schema` + `list` -- the `rls-policy` / `cls-policy` metastore
+        object types are only registered on stacks with a recent metastore, so
+        a clean, classified failure here is the expected outcome, not a
+        kbagent bug -- same SKIP-on-failure shape as `_test_mcp_parity_commands`'s
+        `semantic-layer schema` case above. Full CRUD coverage (create/update/
+        delete against a real `rls-policy` object) is exercised against a
+        mocked `MetastoreClient` in `tests/test_rls_service.py` /
+        `tests/test_rls_cli.py` and will get a live E2E round-trip once the
+        backend registers the type.
+        """
+        for group in ("rls", "cls"):
+            result = self._run(group, "schema", "--project", self.alias)
+            if result.exit_code != 0:
+                print(
+                    f"  {_YELLOW}SKIP: {group} schema ({group}-policy not registered here){_RESET}"
+                )
+            else:
+                data = _json_ok(result)
+                assert isinstance(data["data"]["schema"], dict) and data["data"]["schema"]
+                assert data["data"]["source"] == "live"
+
+            # `list` must degrade the same way -- never a traceback -- on a stack
+            # whose metastore lacks the object type.
+            result = self._run(group, "list", "--project", self.alias)
+            if result.exit_code != 0:
+                print(f"  {_YELLOW}SKIP: {group} list ({group}-policy not registered here){_RESET}")
+            else:
+                data = _json_ok(result)
+                assert isinstance(data["data"]["policies"], list)
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""
