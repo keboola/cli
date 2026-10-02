@@ -128,6 +128,30 @@ class TestStructuralValidation:
         assert exc.value.error_code == ErrorCode.INVALID_CLS_POLICY
         assert "Schema error at table" in exc.value.message
 
+    def test_version_listing_is_resolved_to_the_real_schema_before_validating(
+        self, tmp_path: Path
+    ) -> None:
+        """The live metastore's bare endpoint returns only `{"versions": [...]}`; validating
+        against that listing would pass anything, so the default version must be fetched."""
+        service, mock = _make_service(tmp_path)
+        real_schema = {
+            "type": "object",
+            "properties": {"table": {"type": "string", "pattern": "^[a-z.]+$"}},
+        }
+        mock.get_schema.side_effect = [
+            {"versions": [{"version": "0.9.0"}, {"version": "1.0.0", "isDefault": True}]},
+            real_schema,
+        ]
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.create_policy("prod", table="BAD TABLE", dialect="snowflake", rules=_RULES)
+
+        assert [c.args + tuple(c.kwargs.items()) for c in mock.get_schema.call_args_list] == [
+            ("cls-policy",),
+            ("cls-policy", ("version", "1.0.0")),
+        ]
+        assert "Schema error at table" in exc.value.message
+
     def test_missing_schema_degrades_instead_of_blocking(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
         mock.post_item.return_value = _item()
