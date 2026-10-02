@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import ClassVar
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,6 +18,7 @@ from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.metastore_client import (
     SEMANTIC_TYPES,
     MetastoreClient,
+    fetch_resolved_schema,
 )
 
 STACK_URL_US = "https://connection.keboola.com"

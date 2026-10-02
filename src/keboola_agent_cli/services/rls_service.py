@@ -28,7 +28,12 @@ from typing import Any
 
 from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
-from ..metastore_client import MetastoreClient, MetastoreScope, SemanticType
+from ..metastore_client import (
+    MetastoreClient,
+    MetastoreScope,
+    SemanticType,
+    fetch_resolved_schema,
+)
 from ..models import ProjectConfig
 from . import _rls_condition
 from ._rls_condition import RLS_DIALECTS
@@ -116,7 +121,7 @@ class RlsService(BaseService):
         """
         with self._new_metastore_client(project) as client:
             try:
-                schema = client.get_schema(self.item_type)
+                schema, _version = fetch_resolved_schema(client, self.item_type)
             except KeboolaApiError as exc:
                 return RlsSchemaFetch(schema=None, reason=exc.message)
             except Exception as exc:  # any fetch failure must degrade, never block a write
