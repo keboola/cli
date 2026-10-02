@@ -2272,7 +2272,8 @@ config, the retry fires, and the retry destroys it for good.
   `--allow-env-manage-token` are no longer used by this command.
 - **In a terminal** (human mode, stdin and stdout a TTY, and not a
   background job) it prints the message and the links `Open the app:`
-  (`app_url`) and `Configuration:` (`ui_url`), then waits: `c` copies the
+  (`app_url`) and `Configuration:` (`ui_url`) (updated 0.96.2, #825: 0.96.1
+  labels them `App URL:` and `UI URL:`), then waits: `c` copies the
   password once, Enter / Esc / `q` finishes, and after 120 s it ends with a
   line that says the password was not copied. An arrow key does not end the
   prompt. With no clipboard tool there is no prompt; the message points to
