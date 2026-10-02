@@ -9,7 +9,7 @@ its write (create one policy per selected table) is the same
 ``POST /rls/{project}`` route below.
 
 **Every route enforces the permission policy** (``Depends(require_permission)``)
--- RLS is security-sensitive enough (org-admin-only authorship) that
+-- RLS is security-sensitive enough (admin-class writes) that
 CLI-gates-but-REST-doesn't would be a real hole, mirroring
 ``merge_requests.py`` rather than the (ungated) ``notifications.py``.
 

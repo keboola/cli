@@ -93,6 +93,7 @@ SemanticType = Literal[
     "semantic-glossary",
     "semantic-reference-data",
     "rls-policy",
+    "cls-policy",
 ]
 
 

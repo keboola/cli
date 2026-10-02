@@ -18,7 +18,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, rls, zero-copy clone, workspace load type,
+  restore config, rls, cls, zero-copy clone, workspace load type,
   multipart, import job, job-detail, upload-table no-wait,
   set up keboola, connect project, logout.
 ---

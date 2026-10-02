@@ -22,6 +22,7 @@ from ..project_ref import is_project_id, resolve_project_ref
 from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
+from ..services.cls_service import ClsService
 from ..services.component_service import ComponentService
 from ..services.config_service import ConfigService
 from ..services.data_app_git_service import DataAppGitService
@@ -120,6 +121,7 @@ class ServiceRegistry:
     dev_portal: DeveloperPortalService = field(init=False)
     semantic_layer: SemanticLayerService = field(init=False)
     rls: RlsService = field(init=False)
+    cls: ClsService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
     kai: KaiService = field(init=False)
     encrypt: EncryptService = field(init=False)
@@ -167,6 +169,7 @@ class ServiceRegistry:
         # optional metastore_client_factory; the defaults work for both.
         self.semantic_layer = SemanticLayerService(config_store=cs)
         self.rls = RlsService(config_store=cs)
+        self.cls = ClsService(config_store=cs)
         self.repo_validate = RepoValidateService(config_store=cs)
         self.kai = KaiService(config_store=cs)
         self.encrypt = EncryptService(config_store=cs)
