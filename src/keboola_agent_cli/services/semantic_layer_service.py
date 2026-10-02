@@ -718,7 +718,9 @@ class SemanticLayerService(BaseService):
                 item_type, name=name, data=data, scope=scope, target_project_ids=target_ids
             )
         except KeboolaApiError as exc:
-            if not (inherited and scope != "project" and exc.error_code == ErrorCode.ACCESS_DENIED):
+            if not (
+                inherited and scope == "organization" and exc.error_code == ErrorCode.ACCESS_DENIED
+            ):
                 raise
             raise KeboolaApiError(
                 message=(

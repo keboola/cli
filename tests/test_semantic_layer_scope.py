@@ -350,6 +350,18 @@ class TestChildScopeInheritance:
         assert "--scope project" in excinfo.value.message
         assert "organization" in excinfo.value.message
 
+    def test_inherited_targeted_scope_denied_gets_no_org_admin_hint(self, tmp_path: Path) -> None:
+        """A project admin may create `targeted`, so a 403 there has another cause."""
+        service, mock = _service_with_model(
+            tmp_path, {"scope": "targeted", "targetProjectIds": [5]}
+        )
+        mock.post_item.side_effect = KeboolaApiError(
+            message="Insufficient permissions", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_glossary("prod", None, term="t", definition="d")
+        assert excinfo.value.message == "Insufficient permissions"
+
     def test_explicit_scope_denied_is_not_rewritten(self, tmp_path: Path) -> None:
         service, mock = _service_with_model(tmp_path, {"scope": "organization"})
         mock.post_item.side_effect = KeboolaApiError(
