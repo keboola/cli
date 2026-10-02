@@ -67,6 +67,7 @@ def _make_service(
     *,
     secrets: dict[str, str] | None = None,
     apps: list[dict] | None = None,
+    encrypt_service: MagicMock | None = None,
 ) -> tuple[DataAppService, MagicMock, MagicMock]:
     ds_mock = MagicMock()
     storage_mock = MagicMock()
@@ -83,7 +84,7 @@ def _make_service(
         config_store=store,
         client_factory=lambda url, token: storage_mock,
         ds_client_factory=lambda url, token: ds_mock,
-        encrypt_service=MagicMock(),
+        encrypt_service=encrypt_service or MagicMock(),
     )
     return service, ds_mock, storage_mock
 
@@ -185,10 +186,15 @@ class TestRemovePlain:
 
 
 class TestValidateSecretKeyRequireHash:
-    def test_set_path_still_requires_hash(self, tmp_path: Path) -> None:
+    def test_require_hash_true_still_rejects_a_plain_key(self, tmp_path: Path) -> None:
+        """The strict gate still exists; since #738 no caller passes it.
+
+        `secrets-set` moved to ``require_hash=False`` so a bare ``KEY`` is a
+        valid plaintext env var, but the strict mode is kept for callers that
+        genuinely need the encryption convention enforced.
+        """
         store = _make_store(tmp_path)
         service, *_ = _make_service(store)
-        # require_hash=True (the secrets-set path) rejects a plain key.
         with pytest.raises(KeboolaApiError) as excinfo:
             service._validate_secret_key("ADMIN_EMAILS", require_hash=True)
         assert excinfo.value.error_code == ErrorCode.DATA_APP_INVALID_SECRET
@@ -347,3 +353,190 @@ class TestSecretsGetCli:
         body = json.loads(result.output)
         assert body["data"]["encrypted"] is False
         assert body["data"]["value"] == "a@x.io"
+
+
+# ---------------------------------------------------------------------------
+# set_data_app_secrets -- plaintext entries (issue #738)
+# ---------------------------------------------------------------------------
+
+
+class TestSetPlaintextEntries:
+    """A bare ``KEY`` is written in clear; a ``#KEY`` is still encrypted."""
+
+    def test_plain_key_is_written_verbatim_without_encrypting(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        encrypt = MagicMock()
+        service, _ds, storage = _make_service(store, encrypt_service=encrypt)
+
+        result = service.set_data_app_secrets(
+            alias="prod",
+            app_id="42",
+            secrets={"SCORING_BACKUP_TAG": "ppl-assessment-db"},
+        )
+
+        written = storage.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["secrets"] == {
+            "SCORING_BACKUP_TAG": "ppl-assessment-db"
+        }
+        # A payload with no '#' key must not reach the Encryption API at all --
+        # an unreachable API would otherwise fail a write needing no encryption.
+        encrypt.encrypt.assert_not_called()
+        assert result["plaintext_keys"] == ["SCORING_BACKUP_TAG"]
+        assert result["encrypted_keys"] == []
+        assert result["secrets_set"] == ["SCORING_BACKUP_TAG"]
+
+    def test_mixed_payload_encrypts_only_the_hashed_half(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        encrypt = MagicMock()
+        encrypt.encrypt.return_value = {"#API_KEY": ENCRYPTED_VALUE}
+        service, _ds, storage = _make_service(store, encrypt_service=encrypt)
+
+        result = service.set_data_app_secrets(
+            alias="prod",
+            app_id="42",
+            secrets={"#API_KEY": "s3cr3t", "LOG_LEVEL": "debug"},
+        )
+
+        assert encrypt.encrypt.call_args.kwargs["input_data"] == {"#API_KEY": "s3cr3t"}
+        written = storage.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["secrets"] == {
+            "#API_KEY": ENCRYPTED_VALUE,
+            "LOG_LEVEL": "debug",
+        }
+        assert result["encrypted_keys"] == ["API_KEY"]
+        assert result["plaintext_keys"] == ["LOG_LEVEL"]
+
+    def test_existing_entries_of_both_kinds_survive(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, _ds, storage = _make_service(
+            store, secrets={"#OLD_SECRET": ENCRYPTED_VALUE, "OLD_PLAIN": "keep-me"}
+        )
+        service.set_data_app_secrets(alias="prod", app_id="42", secrets={"NEW_PLAIN": "v"})
+
+        written = storage.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["secrets"] == {
+            "#OLD_SECRET": ENCRYPTED_VALUE,
+            "OLD_PLAIN": "keep-me",
+            "NEW_PLAIN": "v",
+        }
+
+    def test_ciphertext_value_rejected_on_a_plain_key(self, tmp_path: Path) -> None:
+        """A `KBC::` value under a bare key would be undecryptable dead weight."""
+        store = _make_store(tmp_path)
+        service, _ds, storage = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.set_data_app_secrets(
+                alias="prod", app_id="42", secrets={"TAG": ENCRYPTED_VALUE}
+            )
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_INVALID_SECRET
+        storage.update_config.assert_not_called()
+
+    def test_dry_run_shows_the_plain_value_and_masks_the_encrypted_one(
+        self, tmp_path: Path
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, _ds, storage = _make_service(store)
+        result = service.set_data_app_secrets(
+            alias="prod",
+            app_id="42",
+            secrets={"#API_KEY": "s3cr3t", "TAG": "public-tag"},
+            dry_run=True,
+        )
+
+        preview = result["put_storage_config_preview"]["configuration"]
+        block = preview["parameters"]["dataApp"]["secrets"]
+        assert block["TAG"] == "public-tag"
+        assert block["#API_KEY"] == "<encrypted at runtime>"
+        assert result["encryption_request_keys"] == ["#API_KEY"]
+        storage.update_config.assert_not_called()
+
+    def test_removing_a_plain_key_still_works(self, tmp_path: Path) -> None:
+        """`secrets-remove` already accepted bare keys; keep it wired to set."""
+        store = _make_store(tmp_path)
+        service, _ds, storage = _make_service(
+            store, secrets={"TAG": "v", "#API_KEY": ENCRYPTED_VALUE}
+        )
+        result = service.remove_data_app_secrets(alias="prod", app_id="42", keys=["TAG"])
+
+        assert result["removed"] == ["TAG"]
+        written = storage.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["secrets"] == {"#API_KEY": ENCRYPTED_VALUE}
+
+
+class TestListReportsPlaintextValues:
+    def test_list_tags_each_entry_and_shows_plain_values(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(
+            store, secrets={"#API_KEY": ENCRYPTED_VALUE, "TAG": "ppl-assessment-db"}
+        )
+        entries = service.list_data_app_secrets(alias="prod", app_id="42")["secrets"]
+        by_key = {entry["key"]: entry for entry in entries}
+
+        assert by_key["TAG"]["encrypted"] is False
+        assert by_key["TAG"]["value"] == "ppl-assessment-db"
+        # The security boundary: an encrypted entry never carries its value.
+        assert by_key["#API_KEY"]["encrypted"] is True
+        assert by_key["#API_KEY"]["value"] is None
+
+
+class TestSecretsSetCliAcceptsPlainEntries:
+    def test_cli_forwards_a_bare_key(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock = MagicMock()
+        mock.set_data_app_secrets.return_value = {
+            "message": "1 plain value(s) written.",
+            "secrets_set": ["TAG"],
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.DataAppService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = mock
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-set",
+                    "--project",
+                    "prod",
+                    "--app-id",
+                    "42",
+                    "--secret",
+                    "SCORING_BACKUP_TAG=ppl-assessment-db",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock.set_data_app_secrets.call_args.kwargs["secrets"] == {
+            "SCORING_BACKUP_TAG": "ppl-assessment-db"
+        }
+
+    def test_cli_still_rejects_an_entry_without_an_equals_sign(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock = MagicMock()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.DataAppService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = mock
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "data-app",
+                    "secrets-set",
+                    "--project",
+                    "prod",
+                    "--app-id",
+                    "42",
+                    "--secret",
+                    "NO_EQUALS",
+                ],
+            )
+
+        assert result.exit_code == 2
+        assert json.loads(result.output)["error"]["code"] == "DATA_APP_INVALID_SECRET"
+        mock.set_data_app_secrets.assert_not_called()
