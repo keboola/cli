@@ -31,7 +31,6 @@ from . import _semantic_layer_scope as _scope
 from ._semantic_layer_cascade import cascade_delete_model as _cascade_delete_model_impl
 from ._semantic_layer_crud import REMOVE_KINDS as _REMOVE_KINDS_HELPER
 from ._semantic_layer_crud import code_metric as _code_metric_helper
-from ._semantic_layer_crud import delete_then_post as _delete_then_post_helper
 from ._semantic_layer_crud import edit_metric_with_cascade as _edit_metric_helper
 from ._semantic_layer_crud import edit_simple as _edit_simple_helper
 from ._semantic_layer_crud import find_target_for_remove as _find_target_for_remove
@@ -679,6 +678,34 @@ class SemanticLayerService(BaseService):
     # Phase 4 — Model lifecycle (create / delete)
     # ------------------------------------------------------------------
 
+    def _target_ids(
+        self, alias: str, scope: ObjectScope, target_projects: list[str] | None
+    ) -> list[int] | None:
+        """Resolve ``--target-project`` values for a ``targeted`` write (``None`` otherwise)."""
+        if scope != "targeted":
+            return None
+        return _scope.resolve_target_project_ids(self._config_store, alias, target_projects) or None
+
+    def _post_scoped(
+        self,
+        client: MetastoreClient,
+        alias: str,
+        item_type: SemanticType,
+        *,
+        name: str,
+        data: dict[str, Any],
+        scope: ObjectScope | None,
+        target_projects: list[str] | None,
+    ) -> dict[str, Any]:
+        """POST a child item; with ``scope`` omitted it takes the scope of its model."""
+        if scope is None:
+            scope, target_ids = _scope.inherited_scope(client, data["modelUUID"])
+        else:
+            target_ids = self._target_ids(alias, scope, target_projects)
+        return client.post_item(
+            item_type, name=name, data=data, scope=scope, target_project_ids=target_ids
+        )
+
     def create_model(
         self,
         alias: str,
@@ -686,8 +713,8 @@ class SemanticLayerService(BaseService):
         description: str = "",
         sql_dialect: str = "Snowflake",
         *,
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a semantic-layer model and return the server-stored item."""
         project = self._resolve_one_project(alias)
@@ -695,12 +722,13 @@ class SemanticLayerService(BaseService):
             data: dict[str, Any] = {"name": name, "sql_dialect": sql_dialect}
             if description:
                 data["description"] = description
+            scope = scope or "project"
             created = client.post_item(
                 "semantic-model",
                 name=name,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_project_ids=self._target_ids(alias, scope, target_projects),
             )
         return {"project": alias, "model": created}
 
@@ -745,8 +773,8 @@ class SemanticLayerService(BaseService):
         assume_yes: bool = False,
         is_tty: bool = False,
         confirm_cb: Callable[[str], bool] | None = None,
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a metric. The ``dataset`` argument is a tableId.
 
@@ -786,12 +814,14 @@ class SemanticLayerService(BaseService):
             }
             if description:
                 data["description"] = description
-            return client.post_item(
+            return self._post_scoped(
+                client,
+                alias,
                 "semantic-metric",
                 name=name,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_projects=target_projects,
             )
 
     def add_dataset(
@@ -806,8 +836,8 @@ class SemanticLayerService(BaseService):
         primary_key: list[str] | None = None,
         deep_fields: bool = False,
         fqn: str | None = None,
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a dataset.
 
@@ -849,12 +879,14 @@ class SemanticLayerService(BaseService):
                 fields = _synthesize_role_classified_fields(detail, _classify_field_role)
                 if fields:
                     data["fields"] = fields
-            return client.post_item(
+            return self._post_scoped(
+                client,
+                alias,
                 "semantic-dataset",
                 name=name,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_projects=target_projects,
             )
 
     def add_relationship(
@@ -867,8 +899,8 @@ class SemanticLayerService(BaseService):
         to: str,
         on: str,
         type_: str,
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a relationship. ``from``/``to`` are tableIds; ``type``='left'|'inner'."""
         if type_ not in ("left", "inner"):
@@ -887,12 +919,14 @@ class SemanticLayerService(BaseService):
                 "type": type_,
                 "modelUUID": model_uuid,
             }
-            return client.post_item(
+            return self._post_scoped(
+                client,
+                alias,
                 "semantic-relationship",
                 name=name,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_projects=target_projects,
             )
 
     def add_constraint(
@@ -905,8 +939,8 @@ class SemanticLayerService(BaseService):
         rule: str,
         metrics: list[str],
         severity: str = "warning",
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a constraint after validating every field locally."""
         _validate_constraint_attrs(
@@ -941,12 +975,14 @@ class SemanticLayerService(BaseService):
                 "severity": severity,
                 "modelUUID": model_uuid,
             }
-            return client.post_item(
+            return self._post_scoped(
+                client,
+                alias,
                 "semantic-constraint",
                 name=name,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_projects=target_projects,
             )
 
     def add_glossary(
@@ -956,8 +992,8 @@ class SemanticLayerService(BaseService):
         *,
         term: str,
         definition: str = "",
-        scope: ObjectScope = "project",
-        target_project_ids: list[int] | None = None,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a glossary term. Outer envelope ``name`` must equal ``term``."""
         project = self._resolve_one_project(alias)
@@ -966,109 +1002,123 @@ class SemanticLayerService(BaseService):
             data: dict[str, Any] = {"term": term, "modelUUID": model_uuid}
             if definition:
                 data["definition"] = definition
-            return client.post_item(
+            return self._post_scoped(
+                client,
+                alias,
                 "semantic-glossary",
                 name=term,
                 data=data,
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_projects=target_projects,
             )
 
     # ------------------------------------------------------------------
     # Phase 5 — Scope / target-project / elevation (PSGO-140)
     # ------------------------------------------------------------------
 
-    def resolve_target_project_ids(self, target_projects: list[str]) -> list[int]:
-        """Resolve project aliases to numeric project IDs (for ``--target-project``)."""
-        return _scope.resolve_target_project_ids(self._config_store, target_projects)
-
-    def _resolve_scope_type(self, kind: str) -> SemanticType:
+    def _scope_item_type(self, kind: str) -> SemanticType:
         item_type = SCHEMA_TYPE_ALIAS.get(kind)
         if item_type is None:
             raise KeboolaApiError(
                 message=f"--type must be one of {sorted(SCHEMA_TYPE_ALIAS)}, got {kind!r}.",
-                error_code=ErrorCode.VALIDATION_ERROR,
+                error_code=ErrorCode.INVALID_ARGUMENT,
             )
         return item_type
 
-    def scope_status(self, alias: str, kind: str, item_id: str) -> dict[str, Any]:
+    def scope_get(self, alias: str, kind: str, context_id: str) -> dict[str, Any]:
         """Show the current scope/grants/pending-elevation state of one item."""
-        item_type = self._resolve_scope_type(kind)
-        project = self._resolve_one_project(alias)
-        with self._new_metastore_client(project) as client:
-            return _scope.item_status(client.get_item(item_type, item_id))
+        item_type = self._scope_item_type(kind)
+        with self._new_metastore_client(self._resolve_one_project(alias)) as client:
+            return _scope.item_status(client.get_item(item_type, context_id))
 
-    def scope_grant(
+    def scope_update_targets(
         self,
         alias: str,
         kind: str,
-        item_id: str,
+        context_id: str,
         *,
         add: list[str] | None = None,
         remove: list[str] | None = None,
-        replace: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Grant/revoke/replace the target-project list of a targeted-scope item.
-
-        ``add``/``remove``/``replace`` are project ALIASES, resolved to
-        numeric project IDs here before calling the metastore. ``replace``
-        (including ``[]`` to clear every grant) is a direct pass-through of
-        the server's native replace-only semantics; ``add``/``remove`` do a
-        read-modify-write merge (see :func:`_semantic_layer_scope.grant_target_projects`).
-        """
-        item_type = self._resolve_scope_type(kind)
+        """Merge ``add``/``remove`` target projects (alias or ID) into a targeted item's grants."""
+        item_type = self._scope_item_type(kind)
         project = self._resolve_one_project(alias)
+        resolve = _scope.resolve_target_project_ids
         with self._new_metastore_client(project) as client:
-            return _scope.grant_target_projects(
+            return _scope.set_target_projects(
                 client,
                 item_type,
-                item_id,
-                add=_scope.resolve_target_project_ids(self._config_store, add) if add else None,
-                remove=(
-                    _scope.resolve_target_project_ids(self._config_store, remove)
-                    if remove
-                    else None
-                ),
-                replace=(
-                    _scope.resolve_target_project_ids(self._config_store, replace)
-                    if replace is not None
-                    else None
-                ),
+                context_id,
+                add=resolve(self._config_store, alias, add),
+                remove=resolve(self._config_store, alias, remove),
+                caller_project_id=project.project_id,
             )
 
-    def scope_request_elevation(self, alias: str, kind: str, item_id: str) -> dict[str, Any]:
+    def scope_set(
+        self,
+        alias: str,
+        kind: str,
+        context_id: str,
+        *,
+        scope: str | None = None,
+        target_projects: list[str] | None = None,
+        clear: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Write the scope: elevate to ``organization``, or replace/clear the target projects.
+
+        Exactly one of ``scope`` / ``target_projects`` / ``clear`` is allowed -- the
+        metastore changes scope only to ``organization`` and accepts a target list
+        only for a ``targeted`` item, so a mixed request is refused before any call.
+        """
+        modes = [scope is not None, bool(target_projects), clear]
+        if sum(modes) != 1:
+            raise KeboolaApiError(
+                message="scope set takes exactly one of --scope organization, "
+                "--target-project, or --clear.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        if scope is not None and scope != "organization":
+            raise KeboolaApiError(
+                message="--scope can only be 'organization' (scope is one-way).",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        item_type = self._scope_item_type(kind)
+        project = self._resolve_one_project(alias)
+        replace = _scope.resolve_target_project_ids(self._config_store, alias, target_projects)
+        with self._new_metastore_client(project) as client:
+            if scope is not None:
+                return _scope.elevate_to_organization(
+                    client, item_type, context_id, dry_run=dry_run
+                )
+            if dry_run:
+                status = _scope.item_status(client.get_item(item_type, context_id))
+                return {**status, "dry_run": True, "would_set_target_project_ids": replace}
+            return _scope.set_target_projects(client, item_type, context_id, replace=replace)
+
+    def scope_request_create(self, alias: str, kind: str, context_id: str) -> dict[str, Any]:
         """Flag a project-scoped item as awaiting an org-admin's step-up decision."""
-        item_type = self._resolve_scope_type(kind)
-        project = self._resolve_one_project(alias)
-        with self._new_metastore_client(project) as client:
-            return _scope.request_elevation(client, item_type, item_id)
+        item_type = self._scope_item_type(kind)
+        with self._new_metastore_client(self._resolve_one_project(alias)) as client:
+            return _scope.request_elevation(client, item_type, context_id)
 
-    def scope_withdraw_elevation(self, alias: str, kind: str, item_id: str) -> dict[str, Any]:
+    def scope_request_delete(self, alias: str, kind: str, context_id: str) -> dict[str, Any]:
         """Clear a pending scope-elevation request. Idempotent no-op if none is pending."""
-        item_type = self._resolve_scope_type(kind)
-        project = self._resolve_one_project(alias)
-        with self._new_metastore_client(project) as client:
-            return _scope.withdraw_elevation(client, item_type, item_id)
+        item_type = self._scope_item_type(kind)
+        with self._new_metastore_client(self._resolve_one_project(alias)) as client:
+            return _scope.withdraw_elevation(client, item_type, context_id)
 
-    def scope_elevate(self, alias: str, kind: str, item_id: str) -> dict[str, Any]:
-        """Step an item up to organization scope. Requires org-admin; one-way, no downgrade."""
-        item_type = self._resolve_scope_type(kind)
-        project = self._resolve_one_project(alias)
-        with self._new_metastore_client(project) as client:
-            return _scope.elevate_to_organization(client, item_type, item_id)
-
-    def scope_pending(
+    def scope_request_list(
         self,
         alias: str,
         kind: str,
         *,
-        limit: int | None = None,
-        offset: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """List items of ``kind`` awaiting an org-admin's elevation decision."""
-        item_type = self._resolve_scope_type(kind)
-        project = self._resolve_one_project(alias)
-        with self._new_metastore_client(project) as client:
+        limit: int = _scope.DEFAULT_REQUEST_LIST_LIMIT,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """One page of ``kind`` items awaiting an org-admin's elevation decision."""
+        item_type = self._scope_item_type(kind)
+        with self._new_metastore_client(self._resolve_one_project(alias)) as client:
             return _scope.list_pending_elevations(client, item_type, limit=limit, offset=offset)
 
     # ------------------------------------------------------------------
@@ -1142,7 +1192,6 @@ class SemanticLayerService(BaseService):
     # Thin delegates to ._semantic_layer_crud helpers -- bodies live
     # there so this orchestrator stays under the services budget.
     _code_metric = staticmethod(_code_metric_helper)
-    _delete_then_post = staticmethod(_delete_then_post_helper)
 
     def edit_metric(
         self,

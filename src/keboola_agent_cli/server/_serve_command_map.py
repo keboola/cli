@@ -29,6 +29,11 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("DELETE", "/notifications/{project}/{subscription_id}"): "notification delete",
     ("DELETE", "/projects/{alias}"): "project remove",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "",
+    (
+        "DELETE",
+        "/semantic-layer/scope/{context_id}/elevation-request",
+    ): "semantic-layer scope request-delete",
+    ("DELETE", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer scope remove",
     ("DELETE", "/semantic-layer/models/{model}"): "semantic-layer model delete",
     (
         "DELETE",
@@ -130,6 +135,8 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/semantic-layer/reference-data"): "semantic-layer reference-data list",
     ("GET", "/semantic-layer/reference-data/{record_id}"): "semantic-layer reference-data get",
     ("GET", "/semantic-layer/schema"): "semantic-layer schema",
+    ("GET", "/semantic-layer/scope/elevation-requests"): "semantic-layer scope request-list",
+    ("GET", "/semantic-layer/scope/{context_id}"): "semantic-layer scope get",
     ("GET", "/semantic-layer/search-context"): "semantic-layer search-context",
     ("GET", "/semantic-layer/show"): "semantic-layer show",
     ("GET", "/semantic-layer/validate"): "semantic-layer validate",
@@ -245,6 +252,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/semantic-layer/items/{kind}"): "",
     ("POST", "/semantic-layer/models"): "semantic-layer model create",
     ("POST", "/semantic-layer/promote"): "semantic-layer promote",
+    ("POST", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer scope add",
     ("POST", "/semantic-layer/token/encrypt"): "semantic-layer token",
     ("POST", "/sharing/{project}/link"): "sharing link",
     ("POST", "/sharing/{project}/share"): "sharing share",
@@ -289,4 +297,9 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("PUT", "/projects/{alias}/description"): "project description-set",
     ("PUT", "/semantic-layer/items/{kind}/{name}"): "",
     ("PUT", "/semantic-layer/reference-data"): "semantic-layer reference-data set",
+    ("PUT", "/semantic-layer/scope/{context_id}"): "semantic-layer scope set",
+    (
+        "PUT",
+        "/semantic-layer/scope/{context_id}/elevation-request",
+    ): "semantic-layer scope request-create",
 }

@@ -169,7 +169,7 @@ class TestPostItem:
         body = json.loads(request.content)
         assert body["name"] == "rev"
         assert body["branch"] == "main"
-        assert body["schemaVersion"] == "1.1.0"
+        assert body["schemaVersion"] == "1.0.0"
         assert body["scope"] == "project"
         assert body["data"]["sql"] == "SUM(x)"
         assert body["data"]["modelUUID"] == "u"
@@ -304,7 +304,7 @@ class TestPutItem:
         body = json.loads(request.content)
         assert body["name"] == "chart_of_accounts"
         assert body["branch"] == "main"
-        assert body["schemaVersion"] == "1.1.0"
+        assert body["schemaVersion"] == "1.0.0"
         assert "scope" not in body
         assert body["data"]["dimensionName"] == "chart_of_accounts"
         assert body["data"]["members"] == []
@@ -524,6 +524,8 @@ class TestProjectScope401OverSession:
             client.close()
         assert spy.refresh_calls == 1
         assert len(httpx_mock.get_requests()) == 2
+
+
 class TestPostItemScopeValidation:
     """post_item validates scope/target_project_ids client-side (PSGO-140)."""
 
@@ -531,6 +533,50 @@ class TestPostItemScopeValidation:
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="x", data={}, scope="bogus")
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    def test_empty_target_project_ids_still_rejected_without_targeted_scope(
+        self, metastore_client
+    ) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item(
+                "semantic-metric", name="x", data={}, scope="organization", target_project_ids=[]
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+
+    @pytest.mark.parametrize(
+        ("scope", "expected"),
+        [("project", "1.0.0"), ("organization", "1.1.0"), ("targeted", "1.1.0")],
+    )
+    def test_schema_version_is_1_1_0_only_for_acl_scopes(
+        self, httpx_mock, metastore_client, scope, expected
+    ) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            json={"data": {"type": "semantic-metric", "id": "new-id", "attributes": {}}},
+            status_code=201,
+        )
+        metastore_client.post_item(
+            "semantic-metric",
+            name="x",
+            data={},
+            scope=scope,
+            target_project_ids=[1] if scope == "targeted" else None,
+        )
+        assert json.loads(httpx_mock.get_requests()[0].content)["schemaVersion"] == expected
+
+    def test_put_item_schema_version_follows_the_items_scope(
+        self, httpx_mock, metastore_client
+    ) -> None:
+        for _ in range(2):
+            httpx_mock.add_response(
+                method="PUT",
+                url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric/abc",
+                json={"data": {"type": "semantic-metric", "id": "abc", "attributes": {}}},
+            )
+        metastore_client.put_item("semantic-metric", "abc", "x", {})
+        metastore_client.put_item("semantic-metric", "abc", "x", {}, scope="organization")
+        versions = [json.loads(r.content)["schemaVersion"] for r in httpx_mock.get_requests()]
+        assert versions == ["1.0.0", "1.1.0"]
 
     def test_rejects_target_project_ids_without_targeted_scope(self, metastore_client) -> None:
         with pytest.raises(KeboolaApiError) as excinfo:

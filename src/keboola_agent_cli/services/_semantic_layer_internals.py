@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._semantic_layer_fqn import append_fqn_mismatch_warnings
+from ._semantic_layer_scope import item_scope
 
 logger = logging.getLogger(__name__)
 
@@ -444,8 +445,10 @@ def run_import_loop(
                     per_type["overwritten"] += 1
                     continue
                 try:
-                    client.delete_item(type_slug, existing_by_name[key]["id"])
-                    client.post_item(type_slug, name=key, data=attrs)
+                    existing = existing_by_name[key]
+                    client.put_item(
+                        type_slug, existing["id"], key, attrs, scope=item_scope(existing)[0]
+                    )
                     per_type["overwritten"] += 1
                 except KeboolaApiError as exc:
                     per_type["failed"].append({"name": key, "reason": exc.message})
@@ -517,8 +520,10 @@ def run_promote_loop(
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                     continue
                 try:
-                    target_client.delete_item(type_slug, tgt_by_key[key]["id"])
-                    target_client.post_item(type_slug, name=key, data=src_attrs)
+                    existing = tgt_by_key[key]
+                    target_client.put_item(
+                        type_slug, existing["id"], key, src_attrs, scope=item_scope(existing)[0]
+                    )
                     stats["overwritten"] += 1
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                 except KeboolaApiError as exc:

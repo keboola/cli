@@ -1,4 +1,4 @@
-"""Semantic-layer endpoints — 18 routes covering 30 CLI subcommands.
+"""Semantic-layer endpoints — 25 routes covering 37 CLI subcommands.
 
 Mirrors the per-subcommand surface of
 :class:`keboola_agent_cli.services.semantic_layer_service.SemanticLayerService`.
@@ -39,7 +39,26 @@ ItemKind = Literal["metric", "dataset", "relationship", "constraint", "glossary"
 # ── Pydantic body models ───────────────────────────────────────────
 
 
-class ModelCreate(BaseModel):
+class ScopeFields(BaseModel):
+    """``--scope`` / ``--target-project`` of the create commands.
+
+    ``scope`` omitted: a model is created ``project``-scoped, a child item takes
+    its model's scope. ``target_projects`` (alias or numeric ID) needs ``targeted``.
+    """
+
+    scope: Literal["project", "organization", "targeted"] | None = None
+    target_projects: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _targets_need_targeted_scope(self) -> ScopeFields:
+        if self.target_projects and self.scope != "targeted":
+            raise ValueError("target_projects requires scope='targeted'.")
+        if self.scope == "targeted" and not self.target_projects:
+            raise ValueError("scope='targeted' requires target_projects.")
+        return self
+
+
+class ModelCreate(ScopeFields):
     project: str
     name: str
     description: str = ""
@@ -71,7 +90,7 @@ class DiffRequest(BaseModel):
         return data
 
 
-class AddMetric(BaseModel):
+class AddMetric(ScopeFields):
     project: str
     model: str | None = None
     name: str
@@ -80,7 +99,7 @@ class AddMetric(BaseModel):
     description: str = ""
 
 
-class AddDataset(BaseModel):
+class AddDataset(ScopeFields):
     project: str
     model: str | None = None
     name: str
@@ -92,7 +111,7 @@ class AddDataset(BaseModel):
     fqn: str | None = None
 
 
-class AddRelationship(BaseModel):
+class AddRelationship(ScopeFields):
     project: str
     model: str | None = None
     name: str
@@ -104,7 +123,7 @@ class AddRelationship(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class AddConstraint(BaseModel):
+class AddConstraint(ScopeFields):
     project: str
     model: str | None = None
     name: str
@@ -114,7 +133,7 @@ class AddConstraint(BaseModel):
     severity: str = "warning"
 
 
-class AddGlossary(BaseModel):
+class AddGlossary(ScopeFields):
     project: str
     model: str | None = None
     term: str
@@ -235,6 +254,8 @@ def create_model(
         name=body.name,
         description=body.description,
         sql_dialect=body.sql_dialect,
+        scope=body.scope,
+        target_projects=body.target_projects,
     )
 
 
@@ -426,6 +447,8 @@ def add_item(
             description=m.description,
             assume_yes=True,
             is_tty=False,
+            scope=m.scope,
+            target_projects=m.target_projects,
         )
     if kind == "dataset":
         d = AddDataset.model_validate(body)
@@ -439,6 +462,8 @@ def add_item(
             primary_key=d.primary_key,
             deep_fields=d.deep_fields,
             fqn=d.fqn,
+            scope=d.scope,
+            target_projects=d.target_projects,
         )
     if kind == "relationship":
         r = AddRelationship.model_validate(body)
@@ -450,6 +475,8 @@ def add_item(
             to=r.to,
             on=r.on,
             type_=r.type_,
+            scope=r.scope,
+            target_projects=r.target_projects,
         )
     if kind == "constraint":
         c = AddConstraint.model_validate(body)
@@ -461,6 +488,8 @@ def add_item(
             rule=c.rule,
             metrics=c.metrics,
             severity=c.severity,
+            scope=c.scope,
+            target_projects=c.target_projects,
         )
     if kind == "glossary":
         g = AddGlossary.model_validate(body)
@@ -469,6 +498,8 @@ def add_item(
             model_name_or_uuid=g.model,
             term=g.term,
             definition=g.definition,
+            scope=g.scope,
+            target_projects=g.target_projects,
         )
     raise HTTPException(
         status_code=404,
@@ -676,6 +707,121 @@ def delete_reference_data(
 ) -> dict[str, Any]:
     """Delete a record by UUID (``--yes`` implicit on REST; server-side soft-delete)."""
     return registry.semantic_layer.delete_reference_data(alias=project, record_id=record_id)
+
+
+# ── scope (visibility, target-project grants, org-elevation requests) ──
+# Mirrors `kbagent semantic-layer scope *`. A write to `organization` scope is
+# irreversible; like every router outside /auth, these do not consult the
+# permission engine -- the bearer token of `serve` is the gate.
+
+ScopeKind = Literal["model", "dataset", "metric", "relationship", "constraint", "glossary"]
+
+
+class ScopeTargets(BaseModel):
+    project: str
+    type: ScopeKind
+    target_projects: list[str] = Field(min_length=1)
+
+
+class ScopeSet(BaseModel):
+    """Exactly one of ``scope`` ('organization'), ``target_projects`` or ``clear``."""
+
+    project: str
+    type: ScopeKind
+    scope: Literal["organization"] | None = None
+    target_projects: list[str] | None = None
+    clear: bool = False
+    dry_run: bool = False
+
+
+@router.get("/scope/elevation-requests", summary="List scope-elevation requests")
+def scope_request_list(
+    project: str,
+    type: ScopeKind,
+    limit: int = Query(50, ge=1),
+    offset: int = Query(0, ge=0),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Items of ``type`` awaiting an org-admin's elevation decision (org-admin token)."""
+    return registry.semantic_layer.scope_request_list(
+        alias=project, kind=type, limit=limit, offset=offset
+    )
+
+
+@router.get("/scope/{context_id}", summary="Get an item's scope")
+def scope_get(
+    context_id: str,
+    project: str,
+    type: ScopeKind,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    return registry.semantic_layer.scope_get(alias=project, kind=type, context_id=context_id)
+
+
+@router.put("/scope/{context_id}", summary="Set an item's scope or target projects")
+def scope_set(
+    context_id: str,
+    body: ScopeSet,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Elevate to organization (irreversible), or replace/clear the target projects."""
+    return registry.semantic_layer.scope_set(
+        alias=body.project,
+        kind=body.type,
+        context_id=context_id,
+        scope=body.scope,
+        target_projects=body.target_projects,
+        clear=body.clear,
+        dry_run=body.dry_run,
+    )
+
+
+@router.post("/scope/{context_id}/target-projects", summary="Add target projects")
+def scope_add(
+    context_id: str,
+    body: ScopeTargets,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    return registry.semantic_layer.scope_update_targets(
+        alias=body.project, kind=body.type, context_id=context_id, add=body.target_projects
+    )
+
+
+@router.delete("/scope/{context_id}/target-projects", summary="Remove target projects")
+def scope_remove(
+    context_id: str,
+    project: str,
+    type: ScopeKind,
+    target_project: list[str] = Query(min_length=1),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    return registry.semantic_layer.scope_update_targets(
+        alias=project, kind=type, context_id=context_id, remove=target_project
+    )
+
+
+@router.put("/scope/{context_id}/elevation-request", summary="Request scope elevation")
+def scope_request_create(
+    context_id: str,
+    project: str,
+    type: ScopeKind,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    return registry.semantic_layer.scope_request_create(
+        alias=project, kind=type, context_id=context_id
+    )
+
+
+@router.delete("/scope/{context_id}/elevation-request", summary="Withdraw scope elevation request")
+def scope_request_delete(
+    context_id: str,
+    project: str,
+    type: ScopeKind,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    return registry.semantic_layer.scope_request_delete(
+        alias=project, kind=type, context_id=context_id
+    )
 
 
 # Re-export the closed set of kinds for tests / docs.

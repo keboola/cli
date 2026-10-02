@@ -180,18 +180,31 @@ Versioning convention:
   verbatim instead of asserting the token is invalid. **Rotating the
   token does not fix an `AUTH_REJECTED`**; verify the token against another
   endpoint on the same stack, then escalate with the exceptionId.
-- **The reported trigger case has its own, more specific mapping: every
-  `semantic-layer` / `sl` command needs a MASTER token.** The Metastore's
-  401 `{"exception": "Failed to create project scope"}` is its master-token
-  gate: unlike the Storage API, the metastore accepts only a master (project
-  admin) Storage token, and this opaque 401 is how it answers a valid
-  non-master token -- which blocked every `semantic-layer` command while
-  `project status` reported the token healthy (issue #711; the underlying
-  `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
-  exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
-  the message. Fix: check `kbagent project info` -> `is_master_token`, and
-  register a master token (`kbagent project edit --token ...`). Do NOT
-  escalate this one to support -- it is by design.
+- **The reported trigger case has its own, more specific mapping: a
+  `semantic-layer` / `sl` WRITE needs a project-admin token.** The
+  Metastore's 401 `{"exception": "Failed to create project scope"}` is its
+  admin-token gate: writes (add/edit/remove/import/promote/build/scope
+  add|remove|set|request-*) require the token's Storage Admin role to be
+  `admin` -- a master token qualifies, so does any other project-admin
+  user's token -- and this opaque 401 was how it answered a valid non-admin
+  token, on every call, while `project status` reported the token healthy
+  (issue #711; the underlying `MasterTokenRequiredError` was swallowed
+  server-side). kbagent reclassifies exactly that 401 to
+  `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in the message. Fix:
+  check `kbagent project info` -> `is_master_token`, and register a
+  project-admin token (`kbagent project edit --token ...`). Do NOT escalate
+  this one to support -- it is by design.
+  - **(updated vNEXT -- PSGO-282, go-monorepo#596):** the "every call"
+    part above is now history. The Metastore no longer requires a master
+    token for a plain read (`show`, `model list`, `search-context`,
+    `get-context`, `validate`, `diff`, `scope get`, `scope request-list`) --
+    any valid, non-disabled, non-expired Storage token works. Only writes
+    still hit this gate. `MISSING_MASTER_TOKEN` on a read now means either
+    an outdated kbagent replaying the old client-side reclassification, or
+    a metastore deployment that predates the fix -- not a real requirement.
+    See [Metastore no longer requires a master token for reads
+    (PSGO-282)](#metastore-no-longer-requires-a-master-token-for-reads-psgo-282)
+    below for the full writeup.
 - **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
   authentication-class failures; only the diagnosis differs. A script
   branching on `$?` sees nothing new -- one branching on
@@ -1168,7 +1181,7 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — distinct from the DELETE+POST that `edit metric|…` uses.
+  exists — as `edit metric|…` does since vNEXT (before, those used DELETE+POST).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
   the `set`/`get` lookup is project-wide.** Because the dimension name is the
@@ -1594,11 +1607,12 @@ events and emits a final `done` SSE frame mirroring the same record.
 
 ## Metric rename auto-cascades through `CODE_METRIC`
 
-- `kbagent semantic-layer edit metric --new-name NEW` does DELETE+POST
-  on the metric and ALSO DELETE+POST on every constraint whose
-  `metrics[]` referenced the old name (POST new with `metrics[]`
-  updated to the new name). The metastore has no PATCH endpoint, so
-  every "edit" is a delete-then-create.
+- `kbagent semantic-layer edit metric --new-name NEW` updates the metric
+  and ALSO every constraint whose `metrics[]` referenced the old name
+  (`metrics[]` rewritten to the new name). *(updated vNEXT)* Each is an
+  in-place `PUT` -- same id, scope, grants and revision history, and a failed
+  update changes nothing; before, every "edit" was a delete-then-create with
+  a rollback re-POST.
 - The `CODE_METRIC` derived value (used in downstream SQL joins on
   `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
   ```python
@@ -1620,8 +1634,8 @@ events and emits a final `done` SSE frame mirroring the same record.
   is left in a partial state -- surface that to the operator and
   recommend running `semantic-layer validate` immediately.
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
-  the cascade has per-item rollback only (each constraint DELETE+POST
-  rolls back individually), NOT whole-operation atomicity. If the
+  the cascade is per-item only (each constraint is updated on its own;
+  *since vNEXT* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
@@ -1629,8 +1643,8 @@ events and emits a final `done` SSE frame mirroring the same record.
   buried inside `cascaded_constraints[i].status == 'failed'`).
   Human-mode CLI prints a bright red `PARTIAL STATE` banner above
   the per-entry list. Atomic two-phase commit was intentionally NOT
-  implemented: the metastore has no PATCH endpoint, so every
-  cascade 'stage' is itself a DELETE+POST that can fail; true
+  implemented: every
+  cascade 'stage' is itself a write that can fail; true
   atomicity would require side-staging every cascade item, which is
   disproportionate for a rename. Recovery recipe: `kbagent
   semantic-layer validate` to surface the dangling refs, then
@@ -5730,3 +5744,98 @@ workspaces".
   (also `--force`) keeps it and reports it as `skipped`; only `--theirs`
   deletes it. A `kbc` manifest save removes the key too (`kbc` writes back only
   the keys it knows).
+
+## Metastore no longer requires a master token for reads (PSGO-282)
+
+*(since vNEXT)* Every `semantic-layer` read (`show`, `model list`,
+`search-context`, `get-context`, `validate`, `diff`, `scope get`, `scope
+request-list`) works with any valid, non-disabled, non-expired Storage token --
+programmatic (`kbc_at_*`/`kbc_pat_*`) included. Before this, the metastore
+rejected every non-master token with an opaque 401 `"Failed to create
+project scope"` on every single endpoint, including plain reads (#711); a
+valid non-master token used to get reclassified client-side to
+`MISSING_MASTER_TOKEN` (0.92.0+, #717) because there was no other way to
+succeed. That reclassification still fires, but now only on a genuine
+authorization failure:
+
+- **Writes still need a project-admin token.** `add`/`edit`/`remove`/
+  `import`/`promote`/`build`/`scope add|remove|set`/`scope request-create`
+  all require the token's Storage `Admin.Role` to be `admin` -- a master
+  token qualifies, and so does any other project-admin user's token. A
+  non-admin token gets 403 (or `MISSING_MASTER_TOKEN` if the install is still
+  on the old reclassification path) on the write, never on a preceding read.
+- **Do not pre-flight `isMasterToken` before a read.** That workaround
+  predates the fix and now rejects tokens the server happily accepts --
+  drop it if you see it in older automation.
+- **401 body is honest now.** The metastore relays the Storage API's real
+  error message instead of the generic "Failed to create project scope",
+  so an actually-invalid/expired token surfaces as such rather than looking
+  like a master-token gate.
+
+## Metastore `scope` / `--target-project` / `scope set --scope organization` (PSGO-140)
+
+*(since vNEXT)* `model create` / `add <kind>` gained `--scope
+project|organization|targeted` + `--target-project ALIAS|ID ...`, and a new
+`semantic-layer scope <get|add|remove|set|request-create|request-delete|request-list>`
+sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See
+[metastore-scope-workflow.md](metastore-scope-workflow.md) for worked
+examples. Surprises worth knowing before you touch this:
+
+- **A write that changes scope sends metastore schema `1.1.0`.** Every
+  `semantic-*` schema's `x-metastore.scope.supported` is `["project"]` ONLY at
+  `1.0.0` -- `1.1.0` adds `organization`/`targeted` (purely additive ACL/scope
+  blocks, no `data` shape change). The server resolves the EXACT version
+  string sent and never upgrades it, so kbagent sends `1.1.0` only when the
+  scope is not `project` (create) or the item being edited is not `project`
+  scoped (edit); a plain project-scope write keeps sending `1.0.0`, so a stack
+  without the 1.1.0 schemas is unaffected until someone uses a scope.
+- **`--scope` omitted means "inherit" for child items.** `add
+  metric|dataset|relationship|constraint|glossary` take their model's scope
+  (and, for `targeted`, its target projects) when `--scope` is not given;
+  `model create` defaults to `project`. Pass `--scope` to override. Without
+  this an org-level model would show up in consumer projects with no
+  datasets or metrics.
+- **`--target-project` takes an alias or a numeric project ID** (repeatable or
+  comma-separated), so the target need not be registered in kbagent. An alias
+  must be on the owner project's stack (a project ID only means the same
+  project on its own stack; a bare ID cannot be checked and is trusted).
+  `--target-project` without `--scope targeted`, an unknown alias, or a bad
+  `--scope`/`--type` value exits 2 -- never a traceback or a silent ignore.
+- **`scope set --target-project` is a REPLACE on the wire; `scope add|remove`
+  are a client-side merge.** The underlying `PUT .../target-projects` replaces
+  the *whole* list (an empty array clears every grant); add/remove read the
+  current grants, apply the delta and PUT the result -- **not atomic** against
+  a concurrent grant change (last write wins). The server returns
+  `meta.targetProjectIds` only to the OWNING project, so add/remove from any
+  other project (an org admin elsewhere) is refused with exit 2 instead of
+  silently replacing every grant -- use `scope set --target-project` there.
+- **Creating directly at `--scope organization` needs the organization-admin
+  ROLE**, the same role `scope set --scope organization` needs -- a normal
+  project token gets `ACCESS_DENIED` (403) on both. `--scope targeted` needs a
+  project-admin token (the same gate as every write).
+- **Elevation is one-way, so `--scope organization` is destructive-class.**
+  There is no downgrade endpoint: the only way "back" is deleting and
+  re-creating the item as project-scoped (losing its revision history). The
+  permission engine escalates `--scope organization` on `scope set`, `model
+  create` and every `add <kind>` (`FLAG_ESCALATIONS`), so `--deny-destructive`
+  blocks them; a `scope set --scope organization --dry-run` is not blocked.
+- **Elevating items created before this release can fail.** The server checks
+  `PATCH {"scope":"organization"}` and the elevation request against the
+  item's STORED `schemaVersion`; an item created by an older kbagent has
+  `1.0.0`, which supports only `project`. *Not yet verified on a live stack.*
+- **A 403 vs a 404 on a scope call encodes something deliberate.** The
+  metastore returns 404 (not 403) when the caller cannot see the object at
+  all -- not its owner, not a granted project, not viewing an
+  organization-scoped object -- so a 403 never leaks "an object owned by
+  some other project exists." Do not collapse the two when surfacing errors.
+- **`edit`, `import --overwrite` and `promote` update in place (PUT).** The
+  item keeps its id, scope, grants and pending elevation request. They used to
+  DELETE+POST, which reset an organization/targeted item to `project` scope
+  (`import --overwrite`, `promote`) or could lose the item when the re-create
+  was refused (`edit`). A failed PUT changes nothing. Note that `promote`'s
+  diff compares `attributes` only, so a scope difference between source and
+  target is neither shown nor copied.
+- **No bulk-elevate.** There is no "promote every object in this project"
+  endpoint -- each item needs its own `request-create` + `set --scope
+  organization` call. Never loop this over a whole project's objects without
+  the user having named which ones should become org-wide.

@@ -110,7 +110,7 @@ ObjectScope = Literal["project", "organization", "targeted"]
 
 # Envelope fields kept constant across every POST (per metastore contract).
 _ENVELOPE_BRANCH = "main"
-# 1.1.0, not 1.0.0: every semantic-* schema's x-metastore.scope.supported is
+# Every semantic-* schema's x-metastore.scope.supported is
 # ["project"] ONLY at 1.0.0 -- 1.1.0 is what adds "organization"/"targeted"
 # (go-monorepo migrations/schema/semantic-*_schema_1.1.0.json, diffed against
 # 1.0.0 at commit e4f62941: purely additive x-metastore.acl/scope blocks, no
@@ -118,8 +118,16 @@ _ENVELOPE_BRANCH = "main"
 # scope="organization"/"targeted" against 1.0.0 gets a clean 400
 # ErrScopeNotSupported from prepareCreateSchema -- the server resolves the
 # EXACT version string sent, never silently upgrades it.
-_ENVELOPE_SCHEMA_VERSION = "1.1.0"
+# Only ``scope != "project"`` needs the 1.1.0 ACL schemas (additive; every
+# ``semantic-*`` type supports ``scope=project`` at 1.0.0). Project-scope writes
+# keep sending 1.0.0 so a stack without the 1.1.0 schemas is unaffected.
+_ENVELOPE_SCHEMA_VERSION = "1.0.0"
+_ACL_ENVELOPE_SCHEMA_VERSION = "1.1.0"
 _DEFAULT_SCOPE: ObjectScope = "project"
+
+
+def _schema_version(scope: str) -> str:
+    return _ENVELOPE_SCHEMA_VERSION if scope == "project" else _ACL_ENVELOPE_SCHEMA_VERSION
 
 
 class MetastoreClient(BaseHttpClient):
@@ -302,7 +310,7 @@ class MetastoreClient(BaseHttpClient):
                 message=f"scope must be one of 'project'|'organization'|'targeted', got {scope!r}.",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
-        if target_project_ids and scope != "targeted":
+        if target_project_ids is not None and scope != "targeted":
             raise KeboolaApiError(
                 message=(
                     f"target_project_ids is only valid with scope='targeted', got scope={scope!r}."
@@ -313,7 +321,7 @@ class MetastoreClient(BaseHttpClient):
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
-            "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
+            "schemaVersion": _schema_version(scope),
             "scope": scope,
         }
         if target_project_ids is not None:
@@ -358,6 +366,8 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
+        *,
+        scope: ObjectScope = _DEFAULT_SCOPE,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
@@ -367,7 +377,10 @@ class MetastoreClient(BaseHttpClient):
         history. ``data`` is the inner ``attributes`` payload; the outer
         envelope is added here.
 
-        Deliberately carries no ``scope``/``targetProjectIds`` -- the
+        ``scope`` is the item's CURRENT scope and only selects the envelope
+        ``schemaVersion`` (an organization/targeted item needs 1.1.0); it is
+        never sent as a field. Deliberately carries no
+        ``scope``/``targetProjectIds`` -- the
         server's request struct for this endpoint (``MetaObjectUpdatePutRequest``)
         has no such fields, so scope/grants are untouched by a plain PUT.
         Use :meth:`elevate_to_organization` / :meth:`put_target_projects`.
@@ -378,7 +391,7 @@ class MetastoreClient(BaseHttpClient):
             "name": name,
             "data": data,
             "branch": _ENVELOPE_BRANCH,
-            "schemaVersion": _ENVELOPE_SCHEMA_VERSION,
+            "schemaVersion": _schema_version(scope),
         }
         response = self._do_request(
             "PUT",

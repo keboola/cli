@@ -148,6 +148,10 @@ NOT_AN_ALIAS: dict[str, str] = {
     "--project-ids": "already project IDs (org setup)",
     "--source-project-id": "already a project ID (sharing link)",
     "--target-project-ids": "already project IDs (sharing share)",
+    "--target-project": (
+        "semantic-layer: alias OR numeric ID resolved by the service itself (a target need not "
+        "be registered); config clone's --target-project is in ALIAS_OPTIONS"
+    ),
     "--all-projects": "a boolean flag",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",
@@ -183,7 +187,7 @@ def _leaf_commands(group: Any, path: tuple[str, ...] = ()) -> dict[tuple[str, ..
 def _dummy_value(param: Any, existing_file: Path) -> str:
     """A value Click accepts for ``param`` (the command body never runs)."""
     type_name = type(param.type).__name__
-    if type_name == "TyperChoice":
+    if type_name in ("TyperChoice", "Choice"):
         return str(param.type.choices[0])
     if type_name == "TyperPath":
         return str(existing_file)

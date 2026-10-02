@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -78,454 +79,333 @@ def store(cfg_dir: Path) -> ConfigStore:
     )
 
 
+def _sl(*args: str) -> list[str]:
+    return ["--json", "semantic-layer", *args]
+
+
+ITEM = ["--project", "prod", "--type", "dataset", "--context-id", "d1"]
+
+
 # ---------------------------------------------------------------------------
 # --scope / --target-project on model create / add <kind>
 # ---------------------------------------------------------------------------
 
 
-class TestModelCreateScope:
-    def test_default_scope_is_project_and_unrequested(self, store: ConfigStore) -> None:
-        """No --scope passed: create_model still gets scope='project', no picker touched."""
+class TestCreateScopeFlags:
+    def test_omitted_scope_is_passed_as_none_so_the_service_inherits(
+        self, store: ConfigStore
+    ) -> None:
         mock = MagicMock()
-        mock.create_model.return_value = {"project": "prod", "model": {"id": "u", "attributes": {}}}
+        mock.add_metric.return_value = {"id": "m", "attributes": {"name": "n"}}
         result = _invoke(
-            ["--json", "semantic-layer", "model", "create", "--project", "prod", "--name", "n"],
+            _sl(
+                *("add", "metric", "--project", "prod", "--name", "n", "--sql", "1"),
+                *("--dataset", "t", "--yes"),
+            ),
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
-        _args, kwargs = mock.create_model.call_args
-        assert kwargs["scope"] == "project"
-        assert kwargs["target_project_ids"] is None
+        kwargs = mock.add_metric.call_args.kwargs
+        assert kwargs["scope"] is None
+        assert kwargs["target_projects"] is None
 
-    def test_targeted_scope_with_explicit_target_project(self, store: ConfigStore) -> None:
+    def test_model_create_with_targeted_scope_passes_aliases_through(
+        self, store: ConfigStore
+    ) -> None:
         mock = MagicMock()
         mock.create_model.return_value = {"project": "prod", "model": {"id": "u", "attributes": {}}}
-        mock.resolve_target_project_ids.return_value = [1234]
         result = _invoke(
             [
-                "--json",
-                "semantic-layer",
-                "model",
-                "create",
-                "--project",
-                "prod",
-                "--name",
-                "n",
-                "--scope",
-                "targeted",
+                *_sl(
+                    *("model", "create", "--project", "prod", "--name", "n", "--scope", "targeted")
+                ),
                 "--target-project",
-                "analytics",
+                "analytics,5678",
             ],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
-        mock.resolve_target_project_ids.assert_called_once_with(["analytics"])
-        _args, kwargs = mock.create_model.call_args
+        kwargs = mock.create_model.call_args.kwargs
         assert kwargs["scope"] == "targeted"
-        assert kwargs["target_project_ids"] == [1234]
+        assert kwargs["target_projects"] == ["analytics,5678"]
 
-    def test_targeted_scope_without_target_project_fails_fast_non_tty(
-        self, store: ConfigStore
+    def test_targeted_scope_without_target_fails_fast_non_tty(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            _sl(*("model", "create", "--project", "prod", "--name", "n", "--scope", "targeted")),
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+        mock.create_model.assert_not_called()
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+
+    @pytest.mark.parametrize(
+        "scope_args", [[], ["--scope", "project"], ["--scope", "organization"]]
+    )
+    def test_target_project_without_targeted_scope_is_a_usage_error(
+        self, store: ConfigStore, scope_args: list[str]
     ) -> None:
-        """No --target-project + CliRunner's non-TTY stdin/stdout -> hard fail, never a hang."""
         mock = MagicMock()
         result = _invoke(
             [
-                "--json",
-                "semantic-layer",
-                "model",
-                "create",
-                "--project",
-                "prod",
-                "--name",
-                "n",
-                "--scope",
-                "targeted",
+                *_sl("model", "create", "--project", "prod", "--name", "n", *scope_args),
+                "--target-project",
+                "analytics",
             ],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 2, result.output
         mock.create_model.assert_not_called()
-        body = json.loads(result.output)
-        assert body["error"]["code"] == "INVALID_ARGUMENT"
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
 
-    def test_organization_scope_ignores_absent_target_project(self, store: ConfigStore) -> None:
-        """--scope organization never needs --target-project; no picker, no failure."""
+    def test_unknown_target_alias_is_exit_2_not_a_traceback(self, store: ConfigStore) -> None:
         mock = MagicMock()
-        mock.create_model.return_value = {"project": "prod", "model": {"id": "u", "attributes": {}}}
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "model",
-                "create",
-                "--project",
-                "prod",
-                "--name",
-                "n",
-                "--scope",
-                "organization",
-            ],
-            store=store,
-            sl_mock=mock,
+        mock.create_model.side_effect = KeboolaApiError(
+            message="--target-project 'ghost' is neither a registered project alias nor an ID",
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
-        assert result.exit_code == 0, result.output
-        _args, kwargs = mock.create_model.call_args
-        assert kwargs["scope"] == "organization"
-        assert kwargs["target_project_ids"] is None
-        mock.resolve_target_project_ids.assert_not_called()
-
-
-class TestAddMetricScope:
-    def test_add_metric_targeted_scope(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.add_metric.return_value = {"id": "m1", "attributes": {"name": "rev"}}
-        mock.resolve_target_project_ids.return_value = [1234]
         result = _invoke(
             [
-                "--json",
-                "semantic-layer",
-                "add",
-                "metric",
-                "--project",
-                "prod",
-                "--name",
-                "rev",
-                "--sql",
-                "SUM(x)",
-                "--dataset",
-                "out.c-foo.bar",
-                "--scope",
-                "targeted",
+                *_sl(
+                    *("model", "create", "--project", "prod", "--name", "n", "--scope", "targeted")
+                ),
                 "--target-project",
-                "analytics",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        _args, kwargs = mock.add_metric.call_args
-        assert kwargs["scope"] == "targeted"
-        assert kwargs["target_project_ids"] == [1234]
-
-
-# ---------------------------------------------------------------------------
-# semantic-layer scope <status|grant|request-elevation|withdraw-elevation|elevate|pending>
-# ---------------------------------------------------------------------------
-
-
-class TestScopeStatus:
-    def test_status_success(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_status.return_value = {
-            "id": "d1",
-            "scope": "targeted",
-            "target_project_ids": [1234],
-            "scope_elevation_requested_at": None,
-        }
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "status",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        mock.scope_status.assert_called_once_with(alias="prod", kind="dataset", item_id="d1")
-        assert json.loads(result.output)["data"]["scope"] == "targeted"
-
-
-class TestScopeGrant:
-    def test_grant_add_default_merge(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_grant.return_value = {"scope": "targeted", "target_project_ids": [1234]}
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "grant",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-                "--target-project",
-                "analytics",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        mock.scope_grant.assert_called_once_with(
-            alias="prod",
-            kind="dataset",
-            item_id="d1",
-            add=["analytics"],
-            remove=None,
-            replace=None,
-        )
-
-    def test_grant_replace(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_grant.return_value = {"scope": "targeted", "target_project_ids": [1234]}
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "grant",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-                "--target-project",
-                "analytics",
-                "--replace",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        _args, kwargs = mock.scope_grant.call_args
-        assert kwargs["replace"] == ["analytics"]
-
-    def test_grant_clear(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_grant.return_value = {"scope": "targeted", "target_project_ids": []}
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "grant",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-                "--clear",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        _args, kwargs = mock.scope_grant.call_args
-        assert kwargs["replace"] == []
-
-    def test_clear_combined_with_target_project_is_usage_error(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "grant",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-                "--clear",
-                "--target-project",
-                "analytics",
+                "ghost",
             ],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 2, result.output
-        mock.scope_grant.assert_not_called()
+        assert "--target-project" in json.loads(result.output)["error"]["message"]
 
-
-class TestScopeElevation:
-    def test_request_elevation(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_request_elevation.return_value = {"scope_elevation_requested_at": "t"}
+    def test_bad_scope_value_is_a_usage_error(self, store: ConfigStore) -> None:
         result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "request-elevation",
-                "--project",
-                "prod",
-                "--type",
-                "metric",
-                "--id",
-                "m1",
-            ],
+            _sl("model", "create", "--project", "prod", "--name", "n", "--scope", "everyone"),
+            store=store,
+            sl_mock=MagicMock(),
+        )
+        assert result.exit_code == 2
+
+    @pytest.mark.parametrize(
+        ("flags", "blocked"),
+        [
+            (["--deny-destructive"], True),
+            (["--deny-writes"], True),  # any create is a write
+        ],
+    )
+    def test_organization_scope_create_is_gated_per_command(
+        self, store: ConfigStore, flags: list[str], blocked: bool
+    ) -> None:
+        for command in (
+            ["model", "create", "--name", "n"],
+            ["add", "glossary", "--term", "t"],
+            ["add", "dataset", "--name", "n", "--table-id", "a.b.c"],
+        ):
+            mock = MagicMock()
+            result = _invoke(
+                [*flags, *_sl(*command, "--project", "prod", "--scope", "organization")],
+                store=store,
+                sl_mock=mock,
+            )
+            assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
+
+    def test_deny_destructive_still_allows_project_scope_create(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.create_model.return_value = {"project": "prod", "model": {"id": "u", "attributes": {}}}
+        result = _invoke(
+            ["--deny-destructive", *_sl("model", "create", "--project", "prod", "--name", "n")],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
-        mock.scope_request_elevation.assert_called_once_with(
-            alias="prod", kind="metric", item_id="m1"
-        )
 
-    def test_withdraw_elevation(self, store: ConfigStore) -> None:
+
+# ---------------------------------------------------------------------------
+# semantic-layer scope <verb>
+# ---------------------------------------------------------------------------
+
+
+class TestScopeVerbs:
+    @pytest.mark.parametrize(
+        ("argv", "method", "expected"),
+        [
+            (["get"], "scope_get", {}),
+            (
+                ["add", "--target-project", "analytics", "--target-project", "5678"],
+                "scope_update_targets",
+                {"add": ["analytics", "5678"]},
+            ),
+            (
+                ["remove", "--target-project", "analytics,5678"],
+                "scope_update_targets",
+                {"remove": ["analytics,5678"]},
+            ),
+            (["request-create"], "scope_request_create", {}),
+            (["request-delete"], "scope_request_delete", {}),
+        ],
+    )
+    def test_verb_calls_the_service(
+        self, store: ConfigStore, argv: list[str], method: str, expected: dict
+    ) -> None:
         mock = MagicMock()
-        mock.scope_withdraw_elevation.return_value = {"scope_elevation_requested_at": None}
+        getattr(mock, method).return_value = {"scope": "targeted", "target_project_ids": []}
+        result = _invoke(_sl("scope", *argv[:1], *ITEM, *argv[1:]), store=store, sl_mock=mock)
+        assert result.exit_code == 0, result.output
+        kwargs = getattr(mock, method).call_args.kwargs
+        assert kwargs["alias"] == "prod"
+        assert kwargs["kind"] == "dataset"
+        assert kwargs["context_id"] == "d1"
+        assert {k: kwargs[k] for k in expected} == expected
+
+    @pytest.mark.parametrize("verb", ["add", "remove"])
+    def test_add_and_remove_require_a_target(self, store: ConfigStore, verb: str) -> None:
+        mock = MagicMock()
+        result = _invoke(_sl("scope", verb, *ITEM), store=store, sl_mock=mock)
+        assert result.exit_code == 2, result.output
+        mock.scope_update_targets.assert_not_called()
+
+    def test_empty_target_list_is_printed_not_hidden(self, store: ConfigStore) -> None:
+        """A targeted item with no grants ([] = owner only) must still show the field."""
+        mock = MagicMock()
+        mock.scope_get.return_value = {"scope": "targeted", "target_project_ids": []}
+        with patch("keboola_agent_cli.commands._semantic_layer_scope.get_formatter") as gf:
+            fmt = MagicMock(json_mode=False)
+            gf.return_value = fmt
+            _invoke(["semantic-layer", "scope", "get", *ITEM], store=store, sl_mock=mock)
+            human = fmt.output.call_args.args[1]
+        console = MagicMock()
+        human(console, {"scope": "targeted", "target_project_ids": []})
+        assert any("target_project_ids" in str(c) for c in console.print.call_args_list)
+
+    def test_bad_type_is_a_usage_error(self, store: ConfigStore) -> None:
         result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "withdraw-elevation",
-                "--project",
-                "prod",
-                "--type",
-                "metric",
-                "--id",
-                "m1",
-            ],
+            _sl("scope", "get", "--project", "prod", "--type", "table", "--context-id", "x"),
+            store=store,
+            sl_mock=MagicMock(),
+        )
+        assert result.exit_code == 2
+
+    def test_service_usage_error_exits_2(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.scope_set.side_effect = KeboolaApiError(
+            message="scope set takes exactly one of ...", error_code=ErrorCode.INVALID_ARGUMENT
+        )
+        result = _invoke(
+            _sl("scope", "set", *ITEM, "--clear", "--target-project", "analytics"),
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2, result.output
+
+
+class TestScopeSet:
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [
+            (["--target-project", "analytics,5678"], {"target_projects": ["analytics,5678"]}),
+            (["--clear"], {"clear": True}),
+            (["--scope", "organization", "--yes"], {"scope": "organization"}),
+            (["--scope", "organization", "--dry-run"], {"scope": "organization", "dry_run": True}),
+        ],
+    )
+    def test_modes(self, store: ConfigStore, extra: list[str], expected: dict) -> None:
+        mock = MagicMock()
+        mock.scope_set.return_value = {"scope": "organization"}
+        result = _invoke(_sl("scope", "set", *ITEM, *extra), store=store, sl_mock=mock)
+        assert result.exit_code == 0, result.output
+        kwargs = mock.scope_set.call_args.kwargs
+        assert {k: kwargs[k] for k in expected} == expected
+
+    def test_bad_scope_value_is_a_usage_error(self, store: ConfigStore) -> None:
+        result = _invoke(
+            _sl("scope", "set", *ITEM, "--scope", "project"), store=store, sl_mock=MagicMock()
+        )
+        assert result.exit_code == 2
+
+    def test_human_mode_declining_the_prompt_aborts_without_calling(
+        self, store: ConfigStore
+    ) -> None:
+        mock = MagicMock()
+        with patch("typer.confirm", return_value=False):
+            result = _invoke(
+                ["semantic-layer", "scope", "set", *ITEM, "--scope", "organization"],
+                store=store,
+                sl_mock=mock,
+            )
+        assert result.exit_code == 0
+        mock.scope_set.assert_not_called()
+
+
+class TestScopeRequestList:
+    def test_defaults_and_pagination_envelope(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.scope_request_list.return_value = {
+            "items": [{"id": "d1", "name": "x"}],
+            "limit": 50,
+            "offset": 0,
+            "has_more": False,
+        }
+        result = _invoke(
+            _sl("scope", "request-list", "--project", "prod", "--type", "dataset"),
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
-        mock.scope_withdraw_elevation.assert_called_once_with(
-            alias="prod", kind="metric", item_id="m1"
-        )
-
-    def test_elevate_with_yes_skips_prompt(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_elevate.return_value = {"scope": "organization"}
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "elevate",
-                "--project",
-                "prod",
-                "--type",
-                "metric",
-                "--id",
-                "m1",
-                "--yes",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        mock.scope_elevate.assert_called_once_with(alias="prod", kind="metric", item_id="m1")
-
-    def test_pending(self, store: ConfigStore) -> None:
-        mock = MagicMock()
-        mock.scope_pending.return_value = [
-            {"id": "d1", "name": "x", "scope_elevation_requested_at": "t"}
-        ]
-        result = _invoke(
-            [
-                "--json",
-                "semantic-layer",
-                "scope",
-                "pending",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--limit",
-                "5",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == 0, result.output
-        mock.scope_pending.assert_called_once_with(
-            alias="prod", kind="dataset", limit=5, offset=None
-        )
+        kwargs = mock.scope_request_list.call_args.kwargs
+        assert (kwargs["limit"], kwargs["offset"]) == (50, 0)
+        data = json.loads(result.output)["data"]
+        assert {"items", "limit", "offset", "has_more"} <= set(data)
 
 
 # ---------------------------------------------------------------------------
 # Permission gating
 # ---------------------------------------------------------------------------
 
+WRITE_VERBS = [
+    ["add", "--target-project", "analytics"],
+    ["remove", "--target-project", "analytics"],
+    ["set", "--clear"],
+    ["request-create"],
+    ["request-delete"],
+]
+READ_VERBS = [["get", *ITEM], ["request-list", "--project", "prod", "--type", "dataset"]]
+
 
 class TestScopePermissions:
-    def test_deny_writes_blocks_grant(self, store: ConfigStore) -> None:
+    @pytest.mark.parametrize("verb", WRITE_VERBS, ids=lambda v: v[0])
+    def test_deny_writes_blocks_write_verbs(self, store: ConfigStore, verb: list[str]) -> None:
         mock = MagicMock()
         result = _invoke(
-            [
-                "--deny-writes",
-                "--json",
-                "semantic-layer",
-                "scope",
-                "grant",
-                "--project",
-                "prod",
-                "--type",
-                "dataset",
-                "--id",
-                "d1",
-                "--target-project",
-                "analytics",
-            ],
-            store=store,
-            sl_mock=mock,
+            ["--deny-writes", *_sl("scope", verb[0], *ITEM, *verb[1:])], store=store, sl_mock=mock
         )
-        assert result.exit_code == EXIT_PERMISSION_DENIED
-        mock.scope_grant.assert_not_called()
+        assert result.exit_code == EXIT_PERMISSION_DENIED, result.output
 
-    def test_deny_destructive_blocks_elevate(self, store: ConfigStore) -> None:
+    @pytest.mark.parametrize("verb", READ_VERBS, ids=lambda v: v[0])
+    def test_deny_writes_allows_read_verbs(self, store: ConfigStore, verb: list[str]) -> None:
         mock = MagicMock()
-        result = _invoke(
-            [
-                "--deny-destructive",
-                "--json",
-                "semantic-layer",
-                "scope",
-                "elevate",
-                "--project",
-                "prod",
-                "--type",
-                "metric",
-                "--id",
-                "m1",
-                "--yes",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
-        assert result.exit_code == EXIT_PERMISSION_DENIED
-        mock.scope_elevate.assert_not_called()
-
-    def test_deny_writes_does_not_block_status(self, store: ConfigStore) -> None:
-        """--deny-writes must not block the read-only `scope status` leaf."""
-        mock = MagicMock()
-        mock.scope_status.return_value = {"scope": "project"}
-        result = _invoke(
-            [
-                "--deny-writes",
-                "--json",
-                "semantic-layer",
-                "scope",
-                "status",
-                "--project",
-                "prod",
-                "--type",
-                "metric",
-                "--id",
-                "m1",
-            ],
-            store=store,
-            sl_mock=mock,
-        )
+        result = _invoke(["--deny-writes", *_sl("scope", *verb)], store=store, sl_mock=mock)
         assert result.exit_code == 0, result.output
-        mock.scope_status.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("extra", "blocked"),
+        [
+            (["--scope", "organization", "--yes"], True),
+            (["--scope", "organization", "--dry-run"], False),  # preview changes nothing
+            (["--clear"], False),
+            (["--target-project", "analytics"], False),
+        ],
+    )
+    def test_deny_destructive_blocks_only_the_elevation(
+        self, store: ConfigStore, extra: list[str], blocked: bool
+    ) -> None:
+        mock = MagicMock()
+        mock.scope_set.return_value = {"scope": "organization"}
+        result = _invoke(
+            ["--deny-destructive", *_sl("scope", "set", *ITEM, *extra)], store=store, sl_mock=mock
+        )
+        assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
+        assert mock.scope_set.called is (not blocked)

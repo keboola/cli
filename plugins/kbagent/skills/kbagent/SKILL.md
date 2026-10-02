@@ -309,8 +309,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
 | Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
-| Edit a constraint (DELETE+POST, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
-| Edit a relationship (DELETE+POST). | `kbagent semantic-layer edit relationship --project PROJECT --name NAME` |
+| Edit a constraint (in-place update, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (in-place update). | `kbagent semantic-layer edit relationship --project PROJECT --name NAME` |
 | Edit a glossary term. | `kbagent semantic-layer edit glossary --project PROJECT --term TERM` |
 | Remove a metric. | `kbagent semantic-layer remove metric --project PROJECT --name NAME` |
 | Remove a dataset | `kbagent semantic-layer remove dataset --project PROJECT --name NAME` |
@@ -321,12 +321,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
-| Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope status --project PROJECT --type TYPE- --id ITEM-ID` |
-| Grant, revoke, or replace the target-project list of a targeted-scope item | `kbagent semantic-layer scope grant --project PROJECT --type TYPE- --id ITEM-ID` |
-| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
-| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope withdraw-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
-| Step an item up to organization scope. | `kbagent semantic-layer scope elevate --project PROJECT --type TYPE- --id ITEM-ID` |
-| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope pending --project PROJECT --type TYPE-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Add target projects to a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent semantic-layer scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope request-list --project PROJECT --type TYPE-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -348,8 +349,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
 | Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
-| Edit a constraint (DELETE+POST, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |
-| Edit a relationship (DELETE+POST). | `kbagent sl edit relationship --project PROJECT --name NAME` |
+| Edit a constraint (in-place update, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (in-place update). | `kbagent sl edit relationship --project PROJECT --name NAME` |
 | Edit a glossary term. | `kbagent sl edit glossary --project PROJECT --term TERM` |
 | Remove a metric. | `kbagent sl remove metric --project PROJECT --name NAME` |
 | Remove a dataset | `kbagent sl remove dataset --project PROJECT --name NAME` |
@@ -360,12 +361,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
-| Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope status --project PROJECT --type TYPE- --id ITEM-ID` |
-| Grant, revoke, or replace the target-project list of a targeted-scope item | `kbagent sl scope grant --project PROJECT --type TYPE- --id ITEM-ID` |
-| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
-| Withdraw a pending scope-elevation request. | `kbagent sl scope withdraw-elevation --project PROJECT --type TYPE- --id ITEM-ID` |
-| Step an item up to organization scope. | `kbagent sl scope elevate --project PROJECT --type TYPE- --id ITEM-ID` |
-| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope pending --project PROJECT --type TYPE-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Add target projects to a targeted-scope item (merges with the current grants) | `kbagent sl scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent sl scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent sl scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent sl scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope request-list --project PROJECT --type TYPE-` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
@@ -459,6 +461,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
+| **Share a semantic-layer item across projects / make it org-wide** -- `--scope`, `--target-project`, `scope get\|add\|remove\|set\|request-*` | [metastore-scope-workflow](references/metastore-scope-workflow.md) |
 | **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
 | **Config metadata** (list/get/set/delete arbitrary key-value metadata on a configuration) | [config-metadata-workflow](references/config-metadata-workflow.md) |
 | **Storage descriptions** (describe bucket / table / column, batch from YAML) | [storage-describe-workflow](references/storage-describe-workflow.md) |

@@ -834,6 +834,152 @@ def test_reference_data_delete_route(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# semantic_layer.py  scope routes + scope fields on create -> SemanticLayerService
+# ---------------------------------------------------------------------------
+
+SCOPE_ITEM = {"project": PROJECT, "type": "dataset"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs", "service_call", "expected"),
+    [
+        (
+            "get",
+            "/semantic-layer/scope/d1",
+            {"params": SCOPE_ITEM},
+            "scope_get",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "post",
+            "/semantic-layer/scope/d1/target-projects",
+            {"json": {**SCOPE_ITEM, "target_projects": ["a", "5"]}},
+            "scope_update_targets",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1", "add": ["a", "5"]},
+        ),
+        (
+            "delete",
+            "/semantic-layer/scope/d1/target-projects",
+            {"params": {**SCOPE_ITEM, "target_project": ["a", "5"]}},
+            "scope_update_targets",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1", "remove": ["a", "5"]},
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1",
+            {"json": {**SCOPE_ITEM, "scope": "organization"}},
+            "scope_set",
+            {
+                "alias": PROJECT,
+                "kind": "dataset",
+                "context_id": "d1",
+                "scope": "organization",
+                "target_projects": None,
+                "clear": False,
+                "dry_run": False,
+            },
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1",
+            {"json": {**SCOPE_ITEM, "clear": True}},
+            "scope_set",
+            {
+                "alias": PROJECT,
+                "kind": "dataset",
+                "context_id": "d1",
+                "scope": None,
+                "target_projects": None,
+                "clear": True,
+                "dry_run": False,
+            },
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1/elevation-request",
+            {"params": SCOPE_ITEM},
+            "scope_request_create",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "delete",
+            "/semantic-layer/scope/d1/elevation-request",
+            {"params": SCOPE_ITEM},
+            "scope_request_delete",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "get",
+            "/semantic-layer/scope/elevation-requests",
+            {"params": {**SCOPE_ITEM, "limit": 5, "offset": 10}},
+            "scope_request_list",
+            {"alias": PROJECT, "kind": "dataset", "limit": 5, "offset": 10},
+        ),
+    ],
+    ids=lambda v: v if isinstance(v, str) and v.startswith("scope_") else None,
+)
+def test_scope_routes(tmp_path: Path, method, path, kwargs, service_call, expected) -> None:
+    sl = MagicMock()
+    getattr(sl, service_call).return_value = {"scope": "project"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = getattr(TestClient(app), method)(path, headers=AUTH, **kwargs)
+    assert resp.status_code == 200, resp.text
+    getattr(sl, service_call).assert_called_once_with(**expected)
+
+
+def test_scope_set_body_rejects_an_unsupported_scope(tmp_path: Path) -> None:
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=MagicMock()))
+    resp = TestClient(app).put(
+        "/semantic-layer/scope/d1", json={**SCOPE_ITEM, "scope": "project"}, headers=AUTH
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"target_projects": ["a"]},
+        {"scope": "project", "target_projects": ["a"]},
+        {"scope": "targeted"},
+    ],
+)
+def test_create_model_scope_fields_are_validated(tmp_path: Path, fields) -> None:
+    """target_projects needs scope=targeted and vice versa -- same rule as the CLI."""
+    sl = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).post(
+        "/semantic-layer/models", json={"project": PROJECT, "name": "m", **fields}, headers=AUTH
+    )
+    assert resp.status_code == 422
+    sl.create_model.assert_not_called()
+
+
+def test_create_model_and_add_item_pass_scope_through(tmp_path: Path) -> None:
+    sl = MagicMock()
+    sl.create_model.return_value = {"model": {}}
+    sl.add_glossary.return_value = {"id": "g"}
+    client = TestClient(_make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl)))
+    scope = {"scope": "targeted", "target_projects": ["analytics"]}
+    assert (
+        client.post(
+            "/semantic-layer/models", json={"project": PROJECT, "name": "m", **scope}, headers=AUTH
+        ).status_code
+        == 200
+    )
+    assert sl.create_model.call_args.kwargs["scope"] == "targeted"
+    assert sl.create_model.call_args.kwargs["target_projects"] == ["analytics"]
+    assert (
+        client.post(
+            "/semantic-layer/items/glossary", json={"project": PROJECT, "term": "t"}, headers=AUTH
+        ).status_code
+        == 200
+    )
+    kwargs = sl.add_glossary.call_args.kwargs
+    assert kwargs["scope"] is None  # omitted -> the service inherits the model's scope
+    assert kwargs["target_projects"] is None
+
+
+# ---------------------------------------------------------------------------
 # flows.py  POST /flows/validate  +  GET /flows/{project}/schema
 # New in 0.57.0 -- mirror `flow validate` / `flow schema --full`.
 # ---------------------------------------------------------------------------
