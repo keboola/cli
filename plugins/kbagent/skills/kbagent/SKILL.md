@@ -18,7 +18,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, rls,
+  restore config, rls, cls,
   set up keboola, setup, connect project, logout, sign out.
 ---
 

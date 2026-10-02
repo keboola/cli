@@ -436,6 +436,19 @@ Row-level security policies (metastore-backed `rls-policy` objects), always auth
 | `PUT` | `/rls/{project}/{policy_id}` | Update an RLS policy |
 | `DELETE` | `/rls/{project}/{policy_id}` | Delete an RLS policy |
 
+### `cls` (6 operations)
+
+Column-level security policies (metastore-backed `cls-policy` objects: a per-principal `visible_columns` allowlist), always authored at `organization`/`targeted` scope -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/cls/{project}` | List CLS policies |
+| `POST` | `/cls/{project}` | Create a CLS policy |
+| `GET` | `/cls/{project}/schema` | Fetch the live cls-policy JSON Schema |
+| `GET` | `/cls/{project}/{policy_id}` | Get one CLS policy |
+| `PUT` | `/cls/{project}/{policy_id}` | Update a CLS policy |
+| `DELETE` | `/cls/{project}/{policy_id}` | Delete a CLS policy |
+
 ## AI & Tools
 
 ### `kai` (6 operations)

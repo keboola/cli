@@ -168,6 +168,9 @@ class ErrorCode(StrEnum):
     # for conditional flows: a candidate `rls-policy` body (table/dialect/
     # rules/condition) that fails op-name or JSON-Schema structural checks.
     INVALID_RLS_POLICY = "INVALID_RLS_POLICY"
+    # Column-level security: same role for a candidate `cls-policy` body
+    # (table/dialect/rules/visible_columns).
+    INVALID_CLS_POLICY = "INVALID_CLS_POLICY"
 
 
 def mask_token(token: str) -> str:

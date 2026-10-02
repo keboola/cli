@@ -13,13 +13,10 @@ scope. Authorship is centralized at ``organization`` (default) or
 restriction (RFC "Scope is organization or targeted -- never plain
 project, by design, not merely by convention").
 
-The ``rls-policy`` metastore object type does not exist on any deployed
-backend yet (go-monorepo companion work, not shipped -- see
-``keboola-mcp-server``'s ``feature_spec/rls_query_tool/PLAN.md``). Every
-method here is unit-tested against a mocked :class:`MetastoreClient`; a real
-project will answer with a schema-fetch/list/get/post failure until that
-backend work lands (see ``fetch_schema`` and the ``gotchas.md`` entry this
-PR adds).
+On a stack whose metastore predates the ``rls-policy`` schema, a real project
+answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
+``gotchas.md`` entry). Every method here is unit-tested against a mocked
+:class:`MetastoreClient`.
 """
 
 from __future__ import annotations
@@ -31,7 +28,7 @@ from typing import Any
 
 from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
-from ..metastore_client import MetastoreClient, MetastoreScope
+from ..metastore_client import MetastoreClient, MetastoreScope, SemanticType
 from ..models import ProjectConfig
 from . import _rls_condition
 from ._rls_condition import RLS_DIALECTS
@@ -39,7 +36,7 @@ from .base import BaseService, ClientFactory, make_session_aware_client_factory
 
 logger = logging.getLogger(__name__)
 
-RLS_ITEM_TYPE = "rls-policy"
+RLS_ITEM_TYPE: SemanticType = "rls-policy"
 
 __all__ = ["RLS_DIALECTS", "RLS_ITEM_TYPE", "RlsSchemaFetch", "RlsService"]
 
@@ -51,8 +48,8 @@ class RlsSchemaFetch:
     """Result of fetching the live ``rls-policy`` JSON Schema.
 
     ``schema`` is ``None`` on any failure (network error, ``KeboolaApiError``,
-    malformed/empty schema -- most likely today: the object type simply isn't
-    registered on the backend yet). A ``None`` schema must NOT block a write;
+    malformed/empty schema -- most likely: the object type isn't registered on
+    that stack's metastore). A ``None`` schema must NOT block a write;
     callers degrade to the schema-independent checks in ``_rls_condition``
     and surface ``reason`` as a warning -- mirrors
     ``FlowService._fetch_flow_schema`` / ``FlowSchemaFetch`` exactly.
@@ -70,7 +67,17 @@ class RlsService(BaseService):
     same pattern as :class:`SemanticLayerService`, so command-layer
     operations can target the metastore without polluting the Storage API
     client.
+
+    ``item_type`` / ``label`` / ``invalid_error_code`` and the two rule hooks
+    (:meth:`_local_rule_errors`, :meth:`_preview_rules`) are all that differ
+    for the column-level sibling, :class:`ClsService`, which subclasses this:
+    the scope rule, fetch-then-merge update and schema degradation are the
+    same for both policy types.
     """
+
+    item_type: SemanticType = RLS_ITEM_TYPE
+    label = "RLS"
+    invalid_error_code = ErrorCode.INVALID_RLS_POLICY
 
     def __init__(
         self,
@@ -104,18 +111,20 @@ class RlsService(BaseService):
         """Fetch the live ``rls-policy`` schema. Never raises -- any failure
 
         (network error, ``KeboolaApiError``, empty/malformed schema -- most
-        likely today: the object type isn't registered on the backend yet)
+        likely: the object type isn't registered on the stack's metastore)
         degrades to ``schema=None`` + ``reason``, never blocks a caller.
         """
         with self._new_metastore_client(project) as client:
             try:
-                schema = client.get_schema(RLS_ITEM_TYPE)
+                schema = client.get_schema(self.item_type)
             except KeboolaApiError as exc:
                 return RlsSchemaFetch(schema=None, reason=exc.message)
             except Exception as exc:  # any fetch failure must degrade, never block a write
                 return RlsSchemaFetch(schema=None, reason=str(exc))
         if not schema:
-            return RlsSchemaFetch(schema=None, reason="metastore returned no schema for rls-policy")
+            return RlsSchemaFetch(
+                schema=None, reason=f"metastore returned no schema for {self.item_type}"
+            )
         return RlsSchemaFetch(schema=schema, reason=None)
 
     @staticmethod
@@ -149,7 +158,7 @@ class RlsService(BaseService):
         errors: list[str] = []
         if dialect not in _rls_condition.RLS_DIALECTS:
             errors.append(f"dialect must be one of {_rls_condition.RLS_DIALECTS}, got {dialect!r}")
-        errors.extend(_rls_condition.validate_rules_local(rules))
+        errors.extend(self._local_rule_errors(rules))
         if errors:
             return errors
 
@@ -159,11 +168,25 @@ class RlsService(BaseService):
             errors.extend(_rls_condition.validate_policy_structural(policy_body, fetch.schema))
         return errors
 
+    def _local_rule_errors(self, rules: Any) -> list[str]:
+        """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
+        return _rls_condition.validate_rules_local(rules)
+
+    def _preview_rules(self, rules: list[dict[str, Any]], dialect: str) -> list[dict[str, Any]]:
+        """Per-rule display preview shown by ``--dry-run`` (hook for :class:`ClsService`)."""
+        return [
+            {
+                "principal": rule.get("principal") or rule.get("principals"),
+                "condition": _rls_condition.compile_condition_preview(rule["condition"], dialect),
+            }
+            for rule in rules
+        ]
+
     def _raise_invalid(self, errors: list[str]) -> None:
         raise KeboolaApiError(
-            message="RLS policy is invalid: " + "; ".join(errors),
+            message=f"{self.label} policy is invalid: " + "; ".join(errors),
             status_code=400,
-            error_code=ErrorCode.INVALID_RLS_POLICY,
+            error_code=self.invalid_error_code,
             retryable=False,
         )
 
@@ -175,14 +198,14 @@ class RlsService(BaseService):
         """List every ``rls-policy`` object visible to ``alias``'s project."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
-            raw = client.list_items(RLS_ITEM_TYPE)
+            raw = client.list_items(self.item_type)
         return {"project": alias, "policies": [self._row_from_item(item) for item in raw]}
 
     def get_policy(self, alias: str, policy_id: str) -> dict[str, Any]:
         """Fetch one ``rls-policy`` object's full attributes + meta."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
-            item = client.get_item(RLS_ITEM_TYPE, policy_id)
+            item = client.get_item(self.item_type, policy_id)
         row = self._row_from_item(item)
         row["rules"] = (item.get("attributes") or {}).get("rules", [])
         row["revision"] = (item.get("meta") or {}).get("revision")
@@ -215,13 +238,7 @@ class RlsService(BaseService):
             self._raise_invalid(errors)
 
         scope = self._resolve_scope(target_project_ids)
-        preview = [
-            {
-                "principal": rule.get("principal") or rule.get("principals"),
-                "condition": _rls_condition.compile_condition_preview(rule["condition"], dialect),
-            }
-            for rule in rules
-        ]
+        preview = self._preview_rules(rules, dialect)
         if dry_run:
             return {
                 "project": alias,
@@ -235,14 +252,16 @@ class RlsService(BaseService):
 
         with self._new_metastore_client(project) as client:
             created = client.post_item(
-                RLS_ITEM_TYPE,
+                self.item_type,
                 name=table,
                 data={"table": table, "dialect": dialect, "rules": rules},
                 scope=scope,
                 target_project_ids=target_project_ids,
             )
             if scope == "targeted" and target_project_ids:
-                client.put_target_projects(RLS_ITEM_TYPE, created.get("id", ""), target_project_ids)
+                client.put_target_projects(
+                    self.item_type, created.get("id", ""), target_project_ids
+                )
         row = self._row_from_item(created)
         row["preview"] = preview
         return row
@@ -268,7 +287,7 @@ class RlsService(BaseService):
         """
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
-            current = client.get_item(RLS_ITEM_TYPE, policy_id)
+            current = client.get_item(self.item_type, policy_id)
         attrs = current.get("attributes") or {}
         meta = current.get("meta") or {}
 
@@ -286,15 +305,7 @@ class RlsService(BaseService):
             self._raise_invalid(errors)
 
         scope = self._resolve_scope(merged_targets)
-        preview = [
-            {
-                "principal": rule.get("principal") or rule.get("principals"),
-                "condition": _rls_condition.compile_condition_preview(
-                    rule["condition"], merged_dialect
-                ),
-            }
-            for rule in merged_rules
-        ]
+        preview = self._preview_rules(merged_rules, merged_dialect)
         if dry_run:
             return {
                 "project": alias,
@@ -309,7 +320,7 @@ class RlsService(BaseService):
 
         with self._new_metastore_client(project) as client:
             updated = client.put_item(
-                RLS_ITEM_TYPE,
+                self.item_type,
                 policy_id,
                 name=merged_table,
                 data={"table": merged_table, "dialect": merged_dialect, "rules": merged_rules},
@@ -317,7 +328,7 @@ class RlsService(BaseService):
                 target_project_ids=merged_targets,
             )
             if scope == "targeted" and merged_targets:
-                client.put_target_projects(RLS_ITEM_TYPE, policy_id, merged_targets)
+                client.put_target_projects(self.item_type, policy_id, merged_targets)
         row = self._row_from_item(updated)
         row["preview"] = preview
         return row
@@ -326,5 +337,5 @@ class RlsService(BaseService):
         """Delete one ``rls-policy`` object by id."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
-            client.delete_item(RLS_ITEM_TYPE, policy_id)
+            client.delete_item(self.item_type, policy_id)
         return {"project": alias, "policy_id": policy_id, "deleted": True}
