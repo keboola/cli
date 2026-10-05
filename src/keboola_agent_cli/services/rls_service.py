@@ -26,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import jsonschema
+
 from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
 from ..metastore_client import (
@@ -133,7 +135,7 @@ class RlsService(BaseService):
         """
         with self._new_metastore_client(project) as client:
             try:
-                schema, _version = fetch_resolved_schema(client, self.item_type)
+                schema = fetch_resolved_schema(client, self.item_type).schema
             except KeboolaApiError as exc:
                 if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
                     raise
@@ -143,6 +145,15 @@ class RlsService(BaseService):
         if not schema:
             return RlsSchemaFetch(
                 schema=None, reason=f"metastore returned no schema for {self.item_type}"
+            )
+        try:
+            jsonschema.Draft7Validator.check_schema(schema)
+        except jsonschema.SchemaError as exc:
+            # A non-empty but malformed schema would make the structural validation raise a traceback;
+            # report it as unavailable instead (same as an empty one).
+            return RlsSchemaFetch(
+                schema=None,
+                reason=f"the {self.item_type} schema from the metastore is malformed: {exc.message}",
             )
         return RlsSchemaFetch(schema=schema, reason=None)
 
