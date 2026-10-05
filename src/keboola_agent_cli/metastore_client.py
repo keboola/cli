@@ -149,7 +149,7 @@ def _name_conflict(item_type: str, name: str, exc: KeboolaApiError) -> KeboolaAp
     )
 
 
-def _project_ids_as_ints(project_ids: list[Any]) -> list[int]:
+def project_ids_as_ints(project_ids: list[Any]) -> list[int]:
     """Target project ids as the metastore wants them: positive integers (``targetProjectIds`` is ``[]int``).
 
     The CLI takes ids as strings; a non-numeric or non-positive one is rejected here, before any request,
