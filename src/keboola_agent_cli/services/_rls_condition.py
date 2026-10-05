@@ -90,9 +90,17 @@ def validate_condition_ops(condition: Any) -> list[str]:
             errors.append("'true' condition must be exactly {\"true\": true}")
         return errors
     if "and" in condition or "or" in condition:
-        clauses = condition.get("and", condition.get("or"))
+        # Exactly one composition key and nothing else: `{"and": [...], "or": [...]}` would otherwise have
+        # one branch silently validated and the other dropped, so the policy would no longer be the tree
+        # the author submitted.
+        if set(condition) not in ({"and"}, {"or"}):
+            errors.append(
+                f"an 'and'/'or' condition must have exactly one of those keys and no others, got {sorted(condition)}"
+            )
+            return errors
+        key = "and" if "and" in condition else "or"
+        clauses = condition[key]
         if not isinstance(clauses, list) or len(clauses) < 2:
-            key = "and" if "and" in condition else "or"
             errors.append(f"'{key}' requires at least 2 nested conditions")
             return errors
         for clause in clauses:
@@ -113,6 +121,13 @@ def validate_condition_ops(condition: Any) -> list[str]:
         values = condition.get("values")
         if not isinstance(values, list) or not values:
             errors.append(f"condition with op {op!r} needs a non-empty list 'values'")
+    # No keys beyond the op's own shape (the schema forbids additional properties): a stray `values` on an
+    # `eq`, or a `value` on an `in`, is an authoring mistake that would otherwise be silently ignored.
+    allowed = {"column", "op"} | (
+        {"value"} if op in RLS_COMPARISON_OPS else {"values"} if op in RLS_MEMBERSHIP_OPS else set()
+    )
+    if extra := sorted(set(condition) - allowed):
+        errors.append(f"condition with op {op!r} has unexpected keys {extra}")
     return errors
 
 
@@ -170,12 +185,16 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
         if not _is_true_sentinel(condition):
             raise ValueError(f"'true' condition must be exactly {{\"true\": true}}: {condition!r}")
         return "TRUE"
-    if "and" in condition:
-        clauses = condition["and"]
-        return " AND ".join(f"({compile_condition_preview(c, dialect)})" for c in clauses)
-    if "or" in condition:
-        clauses = condition["or"]
-        return " OR ".join(f"({compile_condition_preview(c, dialect)})" for c in clauses)
+    if "and" in condition or "or" in condition:
+        if len(condition) != 1:
+            raise ValueError(
+                f"an 'and'/'or' condition must have exactly one of those keys and no others: {condition!r}"
+            )
+        if "and" in condition:
+            return " AND ".join(
+                f"({compile_condition_preview(c, dialect)})" for c in condition["and"]
+            )
+        return " OR ".join(f"({compile_condition_preview(c, dialect)})" for c in condition["or"])
 
     column = condition.get("column")
     op = condition.get("op")
