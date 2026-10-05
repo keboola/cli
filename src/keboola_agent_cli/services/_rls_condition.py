@@ -137,11 +137,24 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
     Shared by the RLS and CLS (``cls_service``) local checks -- both policy
     types use the identical principal shape.
     """
-    principals_value = rule.get("principals")
-    has_principal = bool(rule.get("principal"))
-    has_principals = isinstance(principals_value, list) and bool(principals_value)
+    # Key PRESENCE decides "exactly one" (a truthiness test would let `{"principal": "a", "principals": []}`
+    # through as if `principals` were absent); the VALUE is then checked on its own.
+    has_principal = "principal" in rule
+    has_principals = "principals" in rule
     if has_principal == has_principals:  # both or neither
         return [f"rules[{index}] must set exactly one of 'principal'/'principals'"]
+    if has_principal:
+        principal = rule["principal"]
+        if not isinstance(principal, str) or not principal:
+            return [f"rules[{index}].principal must be a non-empty string"]
+        return []
+    principals = rule["principals"]
+    if (
+        not isinstance(principals, list)
+        or not principals
+        or not all(isinstance(name, str) and name for name in principals)
+    ):
+        return [f"rules[{index}].principals must be a non-empty list of non-empty strings"]
     return []
 
 

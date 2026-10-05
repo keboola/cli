@@ -136,7 +136,8 @@ class RlsService(BaseService):
         """
         with self._new_metastore_client(project) as client:
             try:
-                schema = fetch_resolved_schema(client, self.item_type).schema
+                resolved = fetch_resolved_schema(client, self.item_type)
+                schema = resolved.schema
             except KeboolaApiError as exc:
                 if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
                     raise
@@ -146,6 +147,14 @@ class RlsService(BaseService):
         if not schema:
             return RlsSchemaFetch(
                 schema=None, reason=f"metastore returned no schema for {self.item_type}"
+            )
+        if resolved.version is None and isinstance(schema.get("versions"), list):
+            # `fetch_resolved_schema` hands back the bare version listing when it cannot pick a version
+            # (e.g. an empty listing). It is a valid, constraint-free "schema", so validating against it
+            # would silently skip every structural check -- treat it as unavailable instead.
+            return RlsSchemaFetch(
+                schema=None,
+                reason=f"the metastore returned only a version listing, no schema, for {self.item_type}",
             )
         try:
             jsonschema.Draft7Validator.check_schema(schema)
