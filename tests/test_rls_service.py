@@ -193,6 +193,27 @@ class TestFetchSchema:
         assert fetch.schema is None
         assert fetch.reason == "unavailable"
 
+    @pytest.mark.parametrize(
+        "malformed", [{"type": 123}, {"properties": {"table": {"type": "nope"}}}]
+    )
+    def test_a_non_empty_but_malformed_schema_degrades_instead_of_raising(
+        self, tmp_path: Path, malformed: dict
+    ) -> None:
+        """`Draft7Validator(schema)` would raise SchemaError mid-validation: report it as unavailable."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = malformed
+        mock.post_item.return_value = _policy_item()
+
+        fetch = service.fetch_schema("prod")
+        assert fetch.schema is None
+        assert "malformed" in (fetch.reason or "")
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
+        )
+        assert any("malformed" in w for w in result["warnings"])
+        mock.post_item.assert_called_once()
+
     def test_unexpected_error_degrades(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)

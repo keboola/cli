@@ -363,8 +363,8 @@ class SemanticLayerService(BaseService):
         listing. (The upstream MCP tool passes that bare listing through; we
         deliberately do not mirror that gap.)
         """
-        schema, version = fetch_resolved_schema(client, wire_type)
-        return {"schema": schema, "schema_version": version}
+        resolved = fetch_resolved_schema(client, wire_type)
+        return {"schema": resolved.schema, "schema_version": resolved.version}
 
     # Internal helpers (model-scoped fetches).
 

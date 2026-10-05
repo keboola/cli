@@ -18,6 +18,7 @@ from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.metastore_client import (
     SEMANTIC_TYPES,
     MetastoreClient,
+    ResolvedSchema,
     fetch_resolved_schema,
 )
 
@@ -396,7 +397,8 @@ class TestPostItemScope:
         )
         body = json.loads(httpx_mock.get_requests()[0].content)
         assert body["scope"] == "targeted"
-        assert body["targetProjectIds"] == ["111", "222"]
+        # The metastore decodes targetProjectIds as []int: integers on the wire, never strings.
+        assert body["targetProjectIds"] == [111, 222]
 
     def test_put_item_accepts_scope_too(self, httpx_mock, metastore_client) -> None:
         httpx_mock.add_response(
@@ -417,20 +419,68 @@ class TestPostItemScope:
 
 
 class TestPutTargetProjects:
-    def test_puts_project_ids_body(self, httpx_mock, metastore_client) -> None:
+    def test_puts_the_target_project_ids_as_integers(self, httpx_mock, metastore_client) -> None:
+        """The backend body is `{"targetProjectIds": [int]}` and ignores unknown fields: a wrong key
+        would be read as an EMPTY list, which clears every grant."""
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
+            status_code=204,
+        )
+
+        result = metastore_client.put_target_projects("rls-policy", "rls-1", ["111", "222"])
+
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PUT"
+        assert request.url.path.endswith("/rls-policy/rls-1/target-projects")
+        assert json.loads(request.content) == {"targetProjectIds": [111, 222]}
+        assert result == {}  # 204 No Content: there is no body to parse
+
+    def test_an_empty_list_is_sent_explicitly_to_clear_all_grants(
+        self, httpx_mock, metastore_client
+    ) -> None:
+        httpx_mock.add_response(
+            method="PUT",
+            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
+            status_code=204,
+        )
+
+        metastore_client.put_target_projects("rls-policy", "rls-1", [])
+
+        assert json.loads(httpx_mock.get_requests()[0].content) == {"targetProjectIds": []}
+
+    def test_a_response_body_is_still_returned_when_the_server_sends_one(
+        self, httpx_mock, metastore_client
+    ) -> None:
         httpx_mock.add_response(
             method="PUT",
             url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
             json={"data": {"type": "rls-policy", "id": "rls-1"}},
             status_code=200,
         )
-        result = metastore_client.put_target_projects("rls-policy", "rls-1", ["111", "222"])
-        assert result["id"] == "rls-1"
-        request = httpx_mock.get_requests()[0]
-        assert request.method == "PUT"
-        assert request.url.path.endswith("/rls-policy/rls-1/target-projects")
-        body = json.loads(request.content)
-        assert body["projectIds"] == ["111", "222"]
+
+        assert metastore_client.put_target_projects("rls-policy", "rls-1", ["111"])["id"] == "rls-1"
+
+    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-5"], ["1.5"], [None]])
+    def test_non_positive_or_non_numeric_ids_are_rejected_before_any_request(
+        self, httpx_mock, metastore_client, bad: list
+    ) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.put_target_projects("rls-policy", "rls-1", bad)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert httpx_mock.get_requests() == []
+
+    def test_post_item_rejects_a_non_numeric_target_before_any_request(
+        self, httpx_mock, metastore_client
+    ) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item(
+                "rls-policy", name="t", data={}, scope="targeted", target_project_ids=["abc"]
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert httpx_mock.get_requests() == []
 
 
 class TestProjectScope401Reclassification:

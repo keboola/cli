@@ -3694,6 +3694,7 @@ class TestFullE2E:
             # whose metastore lacks the object type.
             result = self._run(group, "list", "--project", self.alias)
             if result.exit_code != 0:
+                assert "NOT_FOUND" in result.output, result.output
                 print(f"  {_YELLOW}SKIP: {group} list ({group}-policy not registered here){_RESET}")
             else:
                 data = _json_ok(result)
