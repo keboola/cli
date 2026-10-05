@@ -107,7 +107,7 @@ def validate_condition_ops(condition: Any) -> list[str]:
             errors.extend(validate_condition_ops(clause))
         return errors
     op = condition.get("op")
-    if op not in RLS_CONDITION_OPS:
+    if not isinstance(op, str) or op not in RLS_CONDITION_OPS:
         errors.append(f"unknown condition op {op!r} (expected one of {sorted(RLS_CONDITION_OPS)})")
         return errors
     # The primitive's shape: checked here so a malformed rule fails as INVALID_RLS_POLICY even when the

@@ -677,6 +677,7 @@ class TestFullE2E:
             "the rls-policy / cls-policy metastore object types may not be registered on a stack",
         )
         self._test_rls_commands()
+        self._test_rls_cls_crud()
 
         # ==============================================================
         # PHASE 15: Cleanup
@@ -3699,6 +3700,54 @@ class TestFullE2E:
             else:
                 data = _json_ok(result)
                 assert isinstance(data["data"]["policies"], list)
+
+    def _test_rls_cls_crud(self) -> None:
+        """create -> detail -> update -> delete for both policy types, then the `rls setup` refusal.
+
+        Authoring needs an org-admin-capable token on a stack whose metastore registers the type, so a
+        classified NOT_FOUND / ACCESS_DENIED / MISSING_MASTER_TOKEN on the create is an expected skip
+        (the policy is never created then); any other failure fails the suite. The policy is always
+        deleted again. Targets a table that does not exist, so no real data is ever governed.
+        """
+        table = "in.c-kbagent-e2e-rls.policy_crud"
+        samples = {
+            "rls": '[{"principal":"e2e@example.com","condition":{"true":true}}]',
+            "cls": '[{"principal":"e2e@example.com","visible_columns":["id"]}]',
+        }
+        for group, rules in samples.items():
+            created = self._run(
+                group, "create", "--project", self.alias, "--table", table,
+                "--dialect", "snowflake", "--rules", rules,
+            )  # fmt: skip
+            if created.exit_code != 0:
+                assert any(
+                    code in created.output
+                    for code in ("NOT_FOUND", "ACCESS_DENIED", "MISSING_MASTER_TOKEN")
+                ), created.output
+                print(f"  {_YELLOW}SKIP: {group} create/update/delete (cannot author here){_RESET}")
+                continue
+            policy_id = _json_ok(created)["data"]["id"]
+            try:
+                detail = self._run_ok(
+                    group, "detail", "--project", self.alias, "--policy-id", policy_id
+                )
+                assert detail["data"]["table"] == table
+                updated = self._run_ok(
+                    group, "update", "--project", self.alias, "--policy-id", policy_id,
+                    "--dialect", "bigquery",
+                )  # fmt: skip
+                assert updated["data"]["dialect"] == "bigquery"
+                assert (
+                    updated["data"]["table"] == table
+                )  # fetch-then-merge kept the untouched field
+            finally:
+                deleted = self._run(
+                    group, "delete", "--project", self.alias, "--policy-id", policy_id
+                )
+                assert deleted.exit_code == 0, deleted.output
+        # Under --json (no terminal) the guided wizard refuses before any API call.
+        refused = self._run("rls", "setup", "--project", self.alias)
+        assert refused.exit_code == 2, refused.output
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""

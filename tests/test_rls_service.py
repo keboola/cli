@@ -492,6 +492,12 @@ class TestValidateConditionOps:
         errors = validate_condition_ops({"column": "x", "op": "bogus", "value": 1})
         assert errors and "bogus" in errors[0]
 
+    @pytest.mark.parametrize("op", [[], {}, 1, None])
+    def test_a_non_string_op_is_reported_not_a_crash(self, op: object) -> None:
+        errors = validate_condition_ops({"column": "id", "op": op, "value": 1})
+
+        assert errors and "unknown condition op" in errors[0]
+
     def test_true_sentinel_always_valid(self) -> None:
         assert validate_condition_ops({"true": True}) == []
 
