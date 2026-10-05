@@ -35,6 +35,7 @@ from ..metastore_client import (
     MetastoreScope,
     SemanticType,
     fetch_resolved_schema,
+    project_ids_as_ints,
 )
 from ..models import ProjectConfig
 from . import _rls_condition
@@ -272,6 +273,9 @@ class RlsService(BaseService):
         metastore's write endpoint at all -- only the (read-only) schema
         fetch used for validation happens.
         """
+        project_ids_as_ints(
+            target_project_ids or []
+        )  # same validation as the write, also for --dry-run
         project = self._resolve_one_project(alias)
         errors, warnings = self._validate_policy(
             table=table, dialect=dialect, rules=rules, project=project
@@ -334,6 +338,9 @@ class RlsService(BaseService):
         ``[]`` revokes them all (through the dedicated grants call). A policy keeps its current scope
         when its grants are revoked -- scope changes are not done through ``PUT``.
         """
+        project_ids_as_ints(
+            target_project_ids or []
+        )  # same validation as the write, also for --dry-run
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             current = client.get_item(self.item_type, policy_id)
@@ -354,10 +361,14 @@ class RlsService(BaseService):
             self._raise_invalid(errors)
 
         revoking = target_project_ids == [] and bool(meta.get("targetProjectIds"))
+        # An explicit, non-empty target list makes the policy `targeted`. When the option is omitted or the
+        # grants are being cleared, the current scope is kept: a `targeted` policy whose grants were cleared
+        # is legitimately `targeted` with an empty list, and an unrelated update must not turn it into
+        # `organization`.
         scope = (
-            meta.get("scope") or "organization"
-            if target_project_ids == []
-            else self._resolve_scope(merged_targets)
+            self._resolve_scope(target_project_ids)
+            if target_project_ids
+            else (meta.get("scope") or self._resolve_scope(merged_targets))
         )
         preview = self._preview_rules(merged_rules, merged_dialect)
         if dry_run:
