@@ -342,15 +342,15 @@ def test_put_items_edit_metric(http_session: dict[str, Any]) -> None:
     assert res.status_code == 200, res.text
     body = res.json()
     new_id = body["updated"]["id"]
-    # Rename leaves a fresh metric id and DELETE+POSTs the constraint —
-    # refresh tracking so cleanup hits the right rows.
+    # Edits are in-place PUTs, so ids are normally unchanged; re-track anyway so
+    # cleanup hits the right rows whichever ids come back.
     http_session["created_items"] = [
         (t, i)
         for (t, i) in http_session["created_items"]
         if not (t == "semantic-metric" and i == http_session["metric_rev_id"])
     ]
     http_session["created_items"].append(("semantic-metric", new_id))
-    # Refresh constraint id (cascade DELETE+POST).
+    # Re-read the constraint ids (cascade update).
     show = http_session["client"].get(
         f"/semantic-layer/show?project={_PROJECT_ALIAS}"
         f"&model={http_session['model_name']}&type=constraint",

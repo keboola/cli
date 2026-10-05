@@ -4479,7 +4479,7 @@ class TestFullE2E:
                 "--yes",
             )
             new_metric_id = data["data"]["updated"]["id"]
-            # Replace tracking: the old metric was DELETE+POSTed
+            # Replace tracking: edits are in-place PUTs (same id), re-tracked defensively
             created_items = [
                 (t, i)
                 for (t, i) in created_items
@@ -4490,7 +4490,7 @@ class TestFullE2E:
             assert any(c["status"] == "updated" for c in cascaded), (
                 f"Expected at least one cascaded constraint, got: {cascaded}"
             )
-            # The constraint id changed (DELETE+POST). Re-fetch the list.
+            # Re-fetch the list (the cascade updated the constraint in place).
             data = self._run_ok(
                 "semantic-layer",
                 "show",
@@ -11423,6 +11423,42 @@ class TestE2ESemanticLayerLifecycle:
             )
             created_items.append(("semantic-dataset", ds2["data"]["id"]))
 
+            # scope commands on an item created WITHOUT --scope (it must stay
+            # elevatable: no schemaVersion is pinned on create), and the in-place
+            # PUT edit keeping the item id.
+            ds1_id = ds1["data"]["id"]
+            scope_args = ("--project", self.alias, "--type", "dataset", "--context-id", ds1_id)
+            data = self._run_ok("semantic-layer", "scope", "get", *scope_args)
+            assert data["data"]["scope"] == "project"
+            data = self._run_ok("semantic-layer", "scope", "request-create", *scope_args)
+            assert data["data"]["scope_elevation_requested_at"]
+            data = self._run_ok("semantic-layer", "scope", "request-delete", *scope_args)
+            assert not data["data"]["scope_elevation_requested_at"]
+            data = self._run_ok(
+                "semantic-layer",
+                "scope",
+                "set",
+                *scope_args,
+                "--scope",
+                "organization",
+                "--dry-run",
+            )
+            assert data["data"]["would_set_scope"] == "organization"
+            data = self._run_ok(
+                "semantic-layer",
+                "edit",
+                "dataset",
+                "--project",
+                self.alias,
+                "--model",
+                model_name,
+                "--name",
+                f"{tag}_ds_a",
+                "--new-description",
+                "edited in place",
+            )
+            assert data["data"]["updated"]["id"] == ds1_id
+
             m1 = self._run_ok(
                 "semantic-layer",
                 "add",
@@ -11597,7 +11633,7 @@ class TestE2ESemanticLayerLifecycle:
             assert any(c["status"] == "updated" for c in cascaded), (
                 f"Expected constraint cascade, got: {cascaded}"
             )
-            # DELETE+POST changed the constraint id -- refresh tracking
+            # refresh tracking (cascade updated the constraint in place)
             data = self._run_ok(
                 "semantic-layer",
                 "show",
@@ -11614,7 +11650,7 @@ class TestE2ESemanticLayerLifecycle:
 
             # ---------- NB-5: edit + remove relationship / glossary ----------
 
-            _step(5.1, "edit relationship --new-on -- DELETE+POST")
+            _step(5.1, "edit relationship --new-on -- in-place PUT")
             data = self._run_ok(
                 "semantic-layer",
                 "edit",
@@ -11636,7 +11672,7 @@ class TestE2ESemanticLayerLifecycle:
             ]
             created_items.append(("semantic-relationship", new_rel_id))
 
-            _step(5.2, "edit glossary --new-definition -- DELETE+POST")
+            _step(5.2, "edit glossary --new-definition -- in-place PUT")
             data = self._run_ok(
                 "semantic-layer",
                 "edit",

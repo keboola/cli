@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**248 operations** across **216 paths** and **31 routers**.
+**255 operations** across **220 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -388,7 +388,7 @@ Build and query cross-project data lineage (table-level and column-level). Mirro
 | `GET` | `/lineage/walk` | Walk lineage graph from a node |
 | `GET` | `/lineage/mermaid` | Render lineage as Mermaid |
 
-### `semantic-layer` (21 operations)
+### `semantic-layer` (28 operations)
 
 Model, validate, import/export, diff, promote, and build semantic layer artifacts (datasets, metrics, relationships, constraints, glossary). Mirrors `kbagent semantic-layer *`.
 
@@ -415,6 +415,13 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 | `PUT` | `/semantic-layer/reference-data` | Create or replace a reference-data record |
 | `GET` | `/semantic-layer/reference-data/{record_id}` | Get one reference-data record |
 | `DELETE` | `/semantic-layer/reference-data/{record_id}` | Delete a reference-data record |
+| `GET` | `/semantic-layer/scope/elevation-requests` | List scope-elevation requests |
+| `GET` | `/semantic-layer/scope/{context_id}` | Get an item's scope |
+| `PUT` | `/semantic-layer/scope/{context_id}` | Set an item's scope or target projects |
+| `POST` | `/semantic-layer/scope/{context_id}/target-projects` | Add target projects |
+| `DELETE` | `/semantic-layer/scope/{context_id}/target-projects` | Remove target projects |
+| `PUT` | `/semantic-layer/scope/{context_id}/elevation-request` | Request scope elevation |
+| `DELETE` | `/semantic-layer/scope/{context_id}/elevation-request` | Withdraw scope elevation request |
 
 ## AI & Tools
 

@@ -1054,7 +1054,7 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
 kbagent semantic-layer model list --project P
-kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
@@ -1092,19 +1092,55 @@ kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,.
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
+# scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
+#   (owner only), "organization" (every project in the org), or "targeted" (owner +
+#   explicit --target-project grants). --scope/--target-project are also accepted by `model
+#   create` and every `add <kind>` above. --scope omitted: `model create` makes a "project"
+#   item, `add <kind>` INHERITS its model's scope (an org-level model gets org-level children;
+#   a targeted model, its target projects); an inherited organization scope is permission-gated
+#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). --target-project takes a registered alias OR a
+#   numeric project ID (repeatable or comma-separated; an alias must be on the owner's stack);
+#   without --scope targeted it exits 2. With --scope targeted and no --target-project: a real
+#   terminal launches an interactive picker over the other projects on the stack; --json fails
+#   fast (exit 2). A bad alias/ID/--scope/--type is a usage error (exit 2), never a traceback.
+#   Creating directly at --scope organization requires the organization-admin ROLE (403
+#   otherwise) -- an ordinary token instead uses `scope request-create` + an org-admin's
+#   `scope set --scope organization`. Elevation is ONE-WAY (no downgrade endpoint), which is why
+#   every `--scope organization` (here and on `model create` / `add <kind>`) is destructive-class
+#   (FLAG_ESCALATIONS). `edit`, `import --overwrite` and `promote` update in place (PUT): an item
+#   keeps its id, scope, grants and pending elevation request. `scope add|remove` merge into the
+#   grants client-side (not atomic; refused from a project that does not own the item, because
+#   the server hides the grants from a non-owner -- use `scope set --target-project` there).
+#   Verbs follow the CLI spec (#791): get / add / remove / set / request-create / request-delete /
+#   request-list; `scope set` takes exactly ONE of --scope organization, --target-project (replace
+#   the whole list) or --clear.
+kbagent semantic-layer scope get --project P --type model|dataset|metric|relationship|constraint|glossary --context-id ID
+kbagent semantic-layer scope add --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope remove --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope set --project P --type T --context-id ID (--scope organization | --target-project ALIAS|ID [...] | --clear) [--dry-run] [--yes]
+kbagent semantic-layer scope request-create --project P --type T --context-id ID
+kbagent semantic-layer scope request-delete --project P --type T --context-id ID
+kbagent semantic-layer scope request-list --project P --type T [--limit N] [--offset N]
+# scope over `kbagent serve`: GET/PUT /semantic-layer/scope/{context_id}, POST/DELETE
+#   .../target-projects, PUT/DELETE .../elevation-request, GET /semantic-layer/scope/elevation-requests;
+#   POST /semantic-layer/models and /items/{kind} take `scope` + `target_projects`.
 kbagent semantic-layer reference-data list --project P [--model M]
 kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
-# semantic-layer REQUIRES A MASTER (project admin) Storage token (#711): the Metastore's
-#   auth gate -- unlike the Storage API -- rejects every valid non-master token with an opaque
-#   401 "Failed to create project scope" (the underlying MasterTokenRequiredError is swallowed
-#   server-side). kbagent reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) with
-#   the remedy; other unexplained 401s anywhere map to AUTH_REJECTED instead of the false
-#   "Invalid or expired token" (INVALID_TOKEN stays for 401s that DO blame the credential).
-#   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
-#   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
+# semantic-layer READS work with any valid, non-disabled, non-expired Storage token
+#   (vNEXT, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES
+#   (add/edit/remove/import/promote/build/scope add|remove|set) still need a project-admin token
+#   (master token or any admin-role user token) -- a non-admin token 403s on the write. Before
+#   PSGO-282 the Metastore's auth gate rejected EVERY valid non-master token, including reads,
+#   with an opaque 401 "Failed to create project scope" (#711, MasterTokenRequiredError swallowed
+#   server-side); kbagent still reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) as
+#   a safety net for a deployment that predates the fix. Other unexplained 401s anywhere map to
+#   AUTH_REJECTED instead of the false "Invalid or expired token" (INVALID_TOKEN stays for 401s
+#   that DO blame the credential). Version gate for this entry lives in gotchas.md -- `(since
+#   vNEXT)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
+#   ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]

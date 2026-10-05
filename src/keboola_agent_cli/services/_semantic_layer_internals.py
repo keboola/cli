@@ -444,8 +444,7 @@ def run_import_loop(
                     per_type["overwritten"] += 1
                     continue
                 try:
-                    client.delete_item(type_slug, existing_by_name[key]["id"])
-                    client.post_item(type_slug, name=key, data=attrs)
+                    client.put_item(type_slug, existing_by_name[key]["id"], key, attrs)
                     per_type["overwritten"] += 1
                 except KeboolaApiError as exc:
                     per_type["failed"].append({"name": key, "reason": exc.message})
@@ -475,7 +474,7 @@ def run_promote_loop(
 ) -> dict[str, Any]:
     """Run the additive + overwrite promote loop.
 
-    NEW: POST to target. CHANGED: DELETE+POST. IDENTICAL: skip.
+    NEW: POST to target. CHANGED: in-place PUT. IDENTICAL: skip.
     Items only in target are never deleted (additive only).
     Returns ``{plural: {new, overwritten, identical, failed, changes}}``.
     """
@@ -517,8 +516,7 @@ def run_promote_loop(
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                     continue
                 try:
-                    target_client.delete_item(type_slug, tgt_by_key[key]["id"])
-                    target_client.post_item(type_slug, name=key, data=src_attrs)
+                    target_client.put_item(type_slug, tgt_by_key[key]["id"], key, src_attrs)
                     stats["overwritten"] += 1
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                 except KeboolaApiError as exc:
