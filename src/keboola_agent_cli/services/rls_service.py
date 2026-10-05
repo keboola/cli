@@ -47,6 +47,16 @@ __all__ = ["RLS_DIALECTS", "RLS_ITEM_TYPE", "RlsSchemaFetch", "RlsService"]
 
 MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
+# Failures of the caller's own credentials/permissions: never to be mistaken for "schema not available".
+_AUTH_ERROR_CODES = frozenset(
+    {
+        ErrorCode.INVALID_TOKEN,
+        ErrorCode.MISSING_MASTER_TOKEN,
+        ErrorCode.ACCESS_DENIED,
+        ErrorCode.PERMISSION_DENIED,
+    }
+)
+
 
 @dataclass(frozen=True)
 class RlsSchemaFetch:
@@ -113,16 +123,20 @@ class RlsService(BaseService):
         return self._fetch_schema_for_project(project)
 
     def _fetch_schema_for_project(self, project: ProjectConfig) -> RlsSchemaFetch:
-        """Fetch the live ``rls-policy`` schema. Never raises -- any failure
+        """Fetch the live policy schema, degrading when it is merely *unavailable*.
 
-        (network error, ``KeboolaApiError``, empty/malformed schema -- most
-        likely: the object type isn't registered on the stack's metastore)
-        degrades to ``schema=None`` + ``reason``, never blocks a caller.
+        A network error, an empty/malformed schema or a non-auth ``KeboolaApiError`` (most likely: the
+        object type isn't registered on the stack's metastore) degrades to ``schema=None`` + ``reason``
+        and never blocks a caller. An authentication/authorization failure (``INVALID_TOKEN``,
+        ``MISSING_MASTER_TOKEN``, access denied) is a real problem the user must see, so it is
+        re-raised instead of being reported as a missing schema.
         """
         with self._new_metastore_client(project) as client:
             try:
                 schema, _version = fetch_resolved_schema(client, self.item_type)
             except KeboolaApiError as exc:
+                if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
+                    raise
                 return RlsSchemaFetch(schema=None, reason=exc.message)
             except Exception as exc:  # any fetch failure must degrade, never block a write
                 return RlsSchemaFetch(schema=None, reason=str(exc))
@@ -152,26 +166,29 @@ class RlsService(BaseService):
 
     def _validate_policy(
         self, *, table: str, dialect: str, rules: list[dict[str, Any]], project: ProjectConfig
-    ) -> list[str]:
-        """Run every validation this module can, local checks first.
+    ) -> tuple[list[str], list[str]]:
+        """Run every validation this module can, local checks first; returns ``(errors, warnings)``.
 
         Local (schema-independent) checks always run. Structural (Draft7,
         against the live-fetched schema) checks run too when the fetch
-        succeeds -- when it doesn't, the caller gets a warning, not a block
-        (see :class:`RlsSchemaFetch`).
+        succeeds -- when it doesn't, the caller gets a warning (the reduced
+        validation is reported, not hidden), not a block (see :class:`RlsSchemaFetch`).
         """
         errors: list[str] = []
         if dialect not in _rls_condition.RLS_DIALECTS:
             errors.append(f"dialect must be one of {_rls_condition.RLS_DIALECTS}, got {dialect!r}")
         errors.extend(self._local_rule_errors(rules))
         if errors:
-            return errors
+            return errors, []
 
+        warnings: list[str] = []
         fetch = self._fetch_schema_for_project(project)
         if fetch.schema:
             policy_body = {"table": table, "dialect": dialect, "rules": rules}
             errors.extend(_rls_condition.validate_policy_structural(policy_body, fetch.schema))
-        return errors
+        else:
+            warnings.append(f"Live schema validation was skipped: {fetch.reason}")
+        return errors, warnings
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
@@ -186,6 +203,13 @@ class RlsService(BaseService):
             }
             for rule in rules
         ]
+
+    @staticmethod
+    def _with_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+        """Attach validation warnings (e.g. the live schema was unavailable) only when there are any."""
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def _raise_invalid(self, errors: list[str]) -> None:
         raise KeboolaApiError(
@@ -238,22 +262,27 @@ class RlsService(BaseService):
         fetch used for validation happens.
         """
         project = self._resolve_one_project(alias)
-        errors = self._validate_policy(table=table, dialect=dialect, rules=rules, project=project)
+        errors, warnings = self._validate_policy(
+            table=table, dialect=dialect, rules=rules, project=project
+        )
         if errors:
             self._raise_invalid(errors)
 
         scope = self._resolve_scope(target_project_ids)
         preview = self._preview_rules(rules, dialect)
         if dry_run:
-            return {
-                "project": alias,
-                "table": table,
-                "dialect": dialect,
-                "scope": scope,
-                "target_project_ids": target_project_ids or [],
-                "preview": preview,
-                "dry_run": True,
-            }
+            return self._with_warnings(
+                {
+                    "project": alias,
+                    "table": table,
+                    "dialect": dialect,
+                    "scope": scope,
+                    "target_project_ids": target_project_ids or [],
+                    "preview": preview,
+                    "dry_run": True,
+                },
+                warnings,
+            )
 
         with self._new_metastore_client(project) as client:
             created = client.post_item(
@@ -269,7 +298,7 @@ class RlsService(BaseService):
                 )
         row = self._row_from_item(created)
         row["preview"] = preview
-        return row
+        return self._with_warnings(row, warnings)
 
     def update_policy(
         self,
@@ -282,13 +311,17 @@ class RlsService(BaseService):
         target_project_ids: list[str] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Update one ``rls-policy`` object.
+        """Update one policy object.
 
         ``put_item`` is a whole-record replace -- fetch the current item
         first and merge only the given overrides onto it, so an ``update``
         call that only changes ``rules`` never silently wipes ``table`` or
         ``dialect`` (the failure mode this repo's own ``merge-request
         resolve`` docs warn about for exactly this kind of PUT-based API).
+
+        ``target_project_ids``: ``None`` keeps the current grants, a non-empty list replaces them, and
+        ``[]`` revokes them all (through the dedicated grants call). A policy keeps its current scope
+        when its grants are revoked -- scope changes are not done through ``PUT``.
         """
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
@@ -303,25 +336,33 @@ class RlsService(BaseService):
             target_project_ids if target_project_ids is not None else meta.get("targetProjectIds")
         )
 
-        errors = self._validate_policy(
+        errors, warnings = self._validate_policy(
             table=merged_table, dialect=merged_dialect, rules=merged_rules, project=project
         )
         if errors:
             self._raise_invalid(errors)
 
-        scope = self._resolve_scope(merged_targets)
+        revoking = target_project_ids == [] and bool(meta.get("targetProjectIds"))
+        scope = (
+            meta.get("scope") or "organization"
+            if target_project_ids == []
+            else self._resolve_scope(merged_targets)
+        )
         preview = self._preview_rules(merged_rules, merged_dialect)
         if dry_run:
-            return {
-                "project": alias,
-                "policy_id": policy_id,
-                "table": merged_table,
-                "dialect": merged_dialect,
-                "scope": scope,
-                "target_project_ids": merged_targets or [],
-                "preview": preview,
-                "dry_run": True,
-            }
+            return self._with_warnings(
+                {
+                    "project": alias,
+                    "policy_id": policy_id,
+                    "table": merged_table,
+                    "dialect": merged_dialect,
+                    "scope": scope,
+                    "target_project_ids": merged_targets or [],
+                    "preview": preview,
+                    "dry_run": True,
+                },
+                warnings,
+            )
 
         with self._new_metastore_client(project) as client:
             updated = client.put_item(
@@ -332,11 +373,13 @@ class RlsService(BaseService):
                 scope=scope,
                 target_project_ids=merged_targets,
             )
-            if scope == "targeted" and merged_targets:
+            if revoking:
+                client.put_target_projects(self.item_type, policy_id, [])
+            elif scope == "targeted" and merged_targets:
                 client.put_target_projects(self.item_type, policy_id, merged_targets)
         row = self._row_from_item(updated)
         row["preview"] = preview
-        return row
+        return self._with_warnings(row, warnings)
 
     def delete_policy(self, alias: str, policy_id: str) -> dict[str, Any]:
         """Delete one ``rls-policy`` object by id."""

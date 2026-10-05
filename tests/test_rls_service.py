@@ -88,6 +88,16 @@ def _policy_item(
 
 _RULES = [{"principal": "a@x.com", "condition": {"column": "region", "op": "eq", "value": "EU"}}]
 
+# `1 == True` and any non-True value would otherwise read as "true": only `{"true": true}` is the sentinel.
+_BAD_TRUE_SENTINELS = [
+    {"true": False},
+    {"true": 0},
+    {"true": 1},
+    {"true": None},
+    {"true": "yes"},
+    {"true": True, "extra": 1},
+]
+
 
 # ---------------------------------------------------------------------------
 # Read
@@ -144,6 +154,44 @@ class TestFetchSchema:
 
         assert fetch.schema is None
         assert fetch.reason == "not found"
+
+    @pytest.mark.parametrize(
+        ("error_code", "status"),
+        [
+            (ErrorCode.INVALID_TOKEN, 401),
+            (ErrorCode.MISSING_MASTER_TOKEN, 403),
+            (ErrorCode.ACCESS_DENIED, 403),
+            (ErrorCode.PERMISSION_DENIED, 403),
+            (ErrorCode.API_ERROR, 401),  # by status alone
+            (ErrorCode.API_ERROR, 403),
+        ],
+    )
+    def test_auth_and_permission_errors_are_not_reported_as_a_missing_schema(
+        self, tmp_path: Path, error_code: ErrorCode, status: int
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.get_schema.side_effect = KeboolaApiError(
+            message="nope", status_code=status, error_code=error_code
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.fetch_schema("prod")
+
+        assert excinfo.value.error_code == error_code
+
+    @pytest.mark.parametrize("status", [404, 500, 502])
+    def test_other_api_errors_still_degrade(self, tmp_path: Path, status: int) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.get_schema.side_effect = KeboolaApiError(
+            message="unavailable", status_code=status, error_code=ErrorCode.API_ERROR
+        )
+
+        fetch = service.fetch_schema("prod")
+
+        assert fetch.schema is None
+        assert fetch.reason == "unavailable"
 
     def test_unexpected_error_degrades(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -348,6 +396,11 @@ class TestCompileConditionPreview:
     def test_true_sentinel(self) -> None:
         assert compile_condition_preview({"true": True}, "snowflake") == "TRUE"
 
+    @pytest.mark.parametrize("bad", _BAD_TRUE_SENTINELS)
+    def test_non_true_sentinel_is_never_rendered_as_always_true(self, bad: dict) -> None:
+        with pytest.raises(ValueError, match="exactly"):
+            compile_condition_preview(bad, "snowflake")
+
     @pytest.mark.parametrize(
         "op,sql",
         [
@@ -421,6 +474,23 @@ class TestValidateConditionOps:
     def test_true_sentinel_always_valid(self) -> None:
         assert validate_condition_ops({"true": True}) == []
 
+    @pytest.mark.parametrize("bad", _BAD_TRUE_SENTINELS)
+    def test_true_sentinel_must_be_exactly_true(self, bad: dict) -> None:
+        """`{"true": false}` must not pass: it would silently author an always-true policy."""
+        errors = validate_condition_ops(bad)
+        assert errors and "exactly" in errors[0]
+
+    def test_a_false_sentinel_is_rejected_before_any_write(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        rules = [{"principal": "a@x.com", "condition": {"true": False}}]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy("prod", table="t", dialect="snowflake", rules=rules)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
+        mock.post_item.assert_not_called()
+
     def test_and_requires_at_least_two(self) -> None:
         errors = validate_condition_ops({"and": [{"true": True}]})
         assert errors
@@ -481,3 +551,151 @@ class TestValidatePolicyStructural:
         schema = {"type": "object", "required": ["table", "dialect", "rules"]}
         errors = validate_policy_structural({"table": "t"}, schema)
         assert errors
+
+
+class TestValidationWarnings:
+    def test_a_skipped_live_validation_is_reported_not_hidden(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+        mock.post_item.return_value = _policy_item()
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
+        )
+
+        assert result["warnings"] == ["Live schema validation was skipped: no schema"]
+
+    def test_dry_run_reports_it_too(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES, dry_run=True
+        )
+
+        assert result["warnings"] == ["Live schema validation was skipped: no schema"]
+
+    def test_no_warning_when_the_schema_was_available(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object"}
+        mock.post_item.return_value = _policy_item()
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
+        )
+
+        assert "warnings" not in result
+
+    def test_update_reports_it_as_well(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+        mock.get_item.return_value = _policy_item()
+        mock.put_item.return_value = _policy_item()
+
+        result = service.update_policy("prod", "p-1", dialect="bigquery")
+
+        assert result["warnings"] == ["Live schema validation was skipped: no schema"]
+
+
+class TestClearingGrants:
+    """`target_project_ids`: None keeps the grants, a list replaces them, [] revokes them all."""
+
+    def _targeted(self) -> dict[str, Any]:
+        return _policy_item(scope="targeted", target_project_ids=["7", "8"])
+
+    def test_empty_list_revokes_every_grant_and_keeps_the_scope(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = self._targeted()
+        mock.put_item.return_value = self._targeted()
+
+        result = service.update_policy("prod", "p-1", target_project_ids=[])
+
+        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
+        assert mock.put_item.call_args.kwargs["target_project_ids"] == []
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
+        assert result["id"] == "p-1"
+
+    def test_none_keeps_the_existing_grants(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = self._targeted()
+        mock.put_item.return_value = self._targeted()
+
+        service.update_policy("prod", "p-1", dialect="bigquery")
+
+        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["7", "8"])
+
+    def test_clearing_a_policy_that_has_no_grants_makes_no_grant_call(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item()  # organization scope, no targets
+        mock.put_item.return_value = _policy_item()
+
+        service.update_policy("prod", "p-1", target_project_ids=[])
+
+        assert mock.put_item.call_args.kwargs["scope"] == "organization"
+        mock.put_target_projects.assert_not_called()
+
+    def test_dry_run_previews_the_cleared_state_without_writing(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = self._targeted()
+
+        result = service.update_policy("prod", "p-1", target_project_ids=[], dry_run=True)
+
+        assert result["target_project_ids"] == []
+        mock.put_item.assert_not_called()
+        mock.put_target_projects.assert_not_called()
+
+
+class TestPrimitiveShape:
+    """The shape of a leaf condition is checked locally, so it fails as INVALID_RLS_POLICY even when the
+    live schema is unavailable (the documented state on stacks without the object type)."""
+
+    @pytest.mark.parametrize(
+        ("condition", "fragment"),
+        [
+            ({"column": "", "op": "eq", "value": 1}, "non-empty string 'column'"),
+            ({"op": "eq", "value": 1}, "non-empty string 'column'"),
+            ({"column": 5, "op": "is_null"}, "non-empty string 'column'"),
+            ({"column": "a", "op": "eq"}, "needs a 'value'"),
+            ({"column": "a", "op": "gt"}, "needs a 'value'"),
+            ({"column": "a", "op": "in"}, "non-empty list 'values'"),
+            ({"column": "a", "op": "not_in", "values": []}, "non-empty list 'values'"),
+            ({"column": "a", "op": "in", "values": "abc"}, "non-empty list 'values'"),
+        ],
+    )
+    def test_malformed_primitives_are_rejected(self, condition: dict, fragment: str) -> None:
+        errors = validate_condition_ops(condition)
+        assert errors and fragment in errors[0]
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            {"column": "a", "op": "eq", "value": 0},
+            {"column": "a", "op": "eq", "value": None},  # an explicit null value is still a value
+            {"column": "a", "op": "in", "values": [1]},
+            {"column": "a", "op": "is_null"},
+            {
+                "and": [
+                    {"column": "a", "op": "eq", "value": 1},
+                    {"column": "b", "op": "is_not_null"},
+                ]
+            },
+        ],
+    )
+    def test_well_formed_primitives_pass(self, condition: dict) -> None:
+        assert validate_condition_ops(condition) == []
+
+    def test_a_malformed_rule_never_reaches_the_preview_or_the_write(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+        rules = [{"principal": "a@x.com", "condition": {"column": "", "op": "eq"}}]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy("prod", table="t", dialect="snowflake", rules=rules, dry_run=True)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
+        mock.post_item.assert_not_called()

@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands.rls import _is_interactive
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
@@ -478,3 +480,243 @@ class TestRlsSetupCli:
         assert result.exit_code == 2
         storage_service.list_tables.assert_not_called()
         service.create_policy.assert_not_called()
+
+
+class _Stream:
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+@pytest.mark.parametrize(
+    ("stdin_tty", "stdout_tty", "expected"),
+    [(True, True, True), (True, False, False), (False, True, False), (False, False, False)],
+)
+def test_setup_is_interactive_only_when_stdin_and_stdout_are_terminals(
+    monkeypatch: pytest.MonkeyPatch, stdin_tty: bool, stdout_tty: bool, expected: bool
+) -> None:
+    """A TTY stdout with a piped stdin used to pass, so `rls setup` hit the API before the picker failed."""
+    monkeypatch.setattr("sys.stdin", _Stream(stdin_tty))
+    monkeypatch.setattr("sys.stdout", _Stream(stdout_tty))
+
+    assert _is_interactive() is expected
+
+
+class TestRlsReviewFixes:
+    def test_schema_auth_failure_is_an_error_not_a_missing_schema(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.fetch_schema.side_effect = KeboolaApiError(
+            message="bad token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+        )
+
+        result = _run(["--json", "rls", "schema", "--project", "prod"], store, service)
+
+        assert result.exit_code == 3  # authentication, not 4 (NOT_FOUND)
+        assert "INVALID_TOKEN" in result.output
+
+    def test_update_clear_target_projects_passes_an_empty_list(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.update_policy.return_value = {**_policy_row(), "preview": []}
+
+        result = _run(
+            [
+                "--json",
+                "rls",
+                "update",
+                "--project",
+                "prod",
+                "--policy-id",
+                "p-1",
+                "--clear-target-projects",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert service.update_policy.call_args.kwargs["target_project_ids"] == []
+
+    def test_update_clear_and_target_project_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--json", "rls", "update", "--project", "prod", "--policy-id", "p-1",
+                "--clear-target-projects", "--target-project", "7",
+            ],
+            store,
+            service,
+        )  # fmt: skip
+
+        assert result.exit_code == 2
+        service.update_policy.assert_not_called()
+
+    def test_update_without_the_flag_keeps_grants_unchanged(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.update_policy.return_value = {**_policy_row(), "preview": []}
+
+        _run(
+            ["--json", "rls", "update", "--project", "prod", "--policy-id", "p-1", "--yes"],
+            store,
+            service,
+        )
+
+        assert service.update_policy.call_args.kwargs["target_project_ids"] is None
+
+    def test_create_prints_the_validation_warning_in_human_mode(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {
+            **_policy_row(),
+            "preview": [],
+            "warnings": ["Live schema validation was skipped: no schema"],
+        }
+
+        result = _run(
+            [
+                "rls", "create", "--project", "prod", "--table", "in.c-crm.invoices", "--dialect", "snowflake",
+                "--rules", '[{"principal":"a@x.com","condition":{"true":true}}]', "--yes",
+            ],
+            store,
+            service,
+        )  # fmt: skip
+
+        assert result.exit_code == 0, result.output
+        assert "Live schema validation was skipped" in result.output
+
+
+class TestRlsSetupReviewFixes:
+    """`rls setup` needs a terminal, so the interactive gate and the picker are patched out."""
+
+    @staticmethod
+    def _setup_run(
+        args: list[str], store: ConfigStore, service: MagicMock, storage: MagicMock
+    ) -> Any:
+        with (
+            patch("keboola_agent_cli.commands.rls._is_interactive", return_value=True),
+            patch("keboola_agent_cli.commands.rls.checkbox_select", return_value=[0, 1]),
+        ):
+            return _run(args, store, service, storage_service=storage)
+
+    @staticmethod
+    def _storage() -> MagicMock:
+        storage = MagicMock()
+        storage.list_tables.return_value = {
+            "tables": [{"id": "in.c-crm.a", "rows_count": 1}, {"id": "in.c-crm.b", "rows_count": 2}]
+        }
+        return storage
+
+    RULES = '[{"principal":"a@x.com","condition":{"true":true}}]'
+
+    def test_an_invalid_dialect_is_rejected_before_any_api_call(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        storage = self._storage()
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "postgres",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            MagicMock(),
+            storage,
+        )
+
+        assert result.exit_code == 2
+        storage.list_tables.assert_not_called()
+
+    def test_every_table_failing_is_a_non_zero_exit(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.side_effect = KeboolaApiError(
+            message="needs a master token",
+            status_code=403,
+            error_code=ErrorCode.MISSING_MASTER_TOKEN,
+        )
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "snowflake",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            service,
+            self._storage(),
+        )
+
+        assert result.exit_code == 1
+        assert "2 of 2 policies could not be created" in result.output
+
+    def test_a_partial_failure_is_a_non_zero_exit_and_names_the_failed_table(
+        self, tmp_path: Path
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        ok = {**_policy_row(), "preview": []}
+        failure = KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR)
+        # The wizard previews each table (dry-run) first, then writes: only the second write fails.
+        service.create_policy.side_effect = [ok, ok, ok, failure]
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "snowflake",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            service,
+            self._storage(),
+        )
+
+        assert result.exit_code == 1
+        assert "1 of 2 policies could not be created: in.c-crm.b" in result.output
+
+    def test_all_tables_created_exits_zero(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {**_policy_row(), "preview": []}
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "snowflake",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            service,
+            self._storage(),
+        )
+
+        assert result.exit_code == 0, result.output

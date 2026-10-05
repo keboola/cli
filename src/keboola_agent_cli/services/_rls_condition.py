@@ -67,6 +67,13 @@ def validate_policy_structural(policy: dict[str, Any], schema: dict[str, Any]) -
     return errors
 
 
+def _is_true_sentinel(condition: dict[Any, Any]) -> bool:
+    """Exactly ``{"true": true}``. ``{"true": false}`` (or ``0``/extra keys) would otherwise read as an
+    always-true policy -- the opposite of what an author who typed ``false`` meant. ``is True`` because
+    ``1 == True`` in Python."""
+    return len(condition) == 1 and condition["true"] is True
+
+
 def validate_condition_ops(condition: Any) -> list[str]:
     """Recursively check every operator name used in ``condition`` is known.
 
@@ -79,6 +86,8 @@ def validate_condition_ops(condition: Any) -> list[str]:
     if not isinstance(condition, dict):
         return [f"condition must be an object, got {type(condition).__name__}"]
     if "true" in condition:
+        if not _is_true_sentinel(condition):
+            errors.append("'true' condition must be exactly {\"true\": true}")
         return errors
     if "and" in condition or "or" in condition:
         clauses = condition.get("and", condition.get("or"))
@@ -92,6 +101,18 @@ def validate_condition_ops(condition: Any) -> list[str]:
     op = condition.get("op")
     if op not in RLS_CONDITION_OPS:
         errors.append(f"unknown condition op {op!r} (expected one of {sorted(RLS_CONDITION_OPS)})")
+        return errors
+    # The primitive's shape: checked here so a malformed rule fails as INVALID_RLS_POLICY even when the
+    # live schema is unavailable, instead of reaching `compile_condition_preview` and crashing it.
+    column = condition.get("column")
+    if not isinstance(column, str) or not column:
+        errors.append(f"condition with op {op!r} needs a non-empty string 'column'")
+    if op in RLS_COMPARISON_OPS and "value" not in condition:
+        errors.append(f"condition with op {op!r} needs a 'value'")
+    if op in RLS_MEMBERSHIP_OPS:
+        values = condition.get("values")
+        if not isinstance(values, list) or not values:
+            errors.append(f"condition with op {op!r} needs a non-empty list 'values'")
     return errors
 
 
@@ -146,6 +167,8 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
     rendering something misleading).
     """
     if "true" in condition:
+        if not _is_true_sentinel(condition):
+            raise ValueError(f"'true' condition must be exactly {{\"true\": true}}: {condition!r}")
         return "TRUE"
     if "and" in condition:
         clauses = condition["and"]

@@ -426,3 +426,66 @@ def test_permission_check_denies_admin_writes_but_not_reads(tmp_path: Path) -> N
         "schema": "read",
     }
     assert all(OPERATION_REGISTRY[f"cls.{op}"] == "admin" for op in ("create", "update", "delete"))
+
+
+class TestClsReviewFixes:
+    def test_schema_auth_failure_is_an_error_not_a_missing_schema(self, tmp_path: Path) -> None:
+        service = MagicMock()
+        service.fetch_schema.side_effect = KeboolaApiError(
+            message="bad token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+        )
+
+        result = _run(["--json", "cls", "schema", "--project", "prod"], tmp_path, service)
+
+        assert result.exit_code == 3
+        assert "INVALID_TOKEN" in result.output
+
+    def test_update_clear_target_projects_passes_an_empty_list(self, tmp_path: Path) -> None:
+        service = MagicMock()
+        service.update_policy.return_value = {**_row(), "preview": _preview()["preview"]}
+
+        result = _run(
+            [
+                "--json",
+                "cls",
+                "update",
+                "--project",
+                "prod",
+                "--policy-id",
+                "p-1",
+                "--clear-target-projects",
+            ],
+            tmp_path,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert service.update_policy.call_args.kwargs["target_project_ids"] == []
+
+    def test_update_clear_and_target_project_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--json", "cls", "update", "--project", "prod", "--policy-id", "p-1",
+                "--clear-target-projects", "--target-project", "7",
+            ],
+            tmp_path,
+            service,
+        )  # fmt: skip
+
+        assert result.exit_code == 2
+        service.update_policy.assert_not_called()
+
+    def test_create_prints_the_validation_warning_in_human_mode(self, tmp_path: Path) -> None:
+        service = MagicMock()
+        service.create_policy.return_value = {
+            **_row(),
+            "preview": _preview()["preview"],
+            "warnings": ["Live schema validation was skipped: no schema"],
+        }
+
+        result = _run([*CREATE_ARGS, "--yes"], tmp_path, service)
+
+        assert result.exit_code == 0, result.output
+        assert "Live schema validation was skipped" in result.output

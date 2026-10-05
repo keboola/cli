@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from typing import Any
 
 import typer
@@ -39,7 +38,7 @@ from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.rls_service import RLS_DIALECTS
-from ._checkbox_select import CheckboxItem, CheckboxUnavailable, checkbox_select
+from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
     check_cli_permission,
     get_formatter,
@@ -64,9 +63,13 @@ def _rls_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "rls")
 
 
-def _is_stdout_tty() -> bool:
-    """True when stdout is an interactive terminal (picker eligibility check)."""
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+def _is_interactive() -> bool:
+    """True when BOTH stdin and stdout are terminals -- the same rule the checkbox picker applies.
+
+    Checked up front so a non-interactive `rls setup` refuses before it makes any API call, rather
+    than listing the project's tables and only then failing in the picker.
+    """
+    return _stdio_is_tty()
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +126,12 @@ def _print_preview(formatter: Any, result: dict[str, Any]) -> None:
     )
     for entry in result.get("preview", []):
         formatter.console.print(f"  {entry.get('principal')}: WHERE {entry.get('condition')}")
+
+
+def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
+    """Human mode only -- in `--json` mode the warnings are already part of the payload."""
+    for warning in result.get("warnings", []):
+        formatter.warning(warning)
 
 
 def _parse_rules_arg(
@@ -234,6 +243,9 @@ def rls_schema(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:  # an auth/permission failure is not "schema unavailable"
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if fetch.schema is None:
         formatter.error(
@@ -343,6 +355,7 @@ def rls_create(
         formatter.output(result)
         return
 
+    _print_warnings(formatter, result)
     if dry_run:
         _print_preview(formatter, result)
         return
@@ -370,6 +383,11 @@ def rls_update(
     target_project: list[str] | None = typer.Option(
         None, "--target-project", help="New target-project list (repeatable; unset = unchanged)"
     ),
+    clear_target_projects: bool = typer.Option(
+        False,
+        "--clear-target-projects",
+        help="Revoke every project the policy is shared with (cannot be combined with --target-project)",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview the compiled condition without writing"
     ),
@@ -382,6 +400,12 @@ def rls_update(
     """
     formatter = get_formatter(ctx)
     parsed_rules = _parse_rules_arg(formatter, rules) if rules is not None else None
+    if clear_target_projects and target_project:
+        formatter.error(
+            message="--clear-target-projects cannot be combined with --target-project",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
 
     if dialect is not None and dialect not in RLS_DIALECTS:
         formatter.error(
@@ -405,7 +429,7 @@ def rls_update(
             table=table,
             dialect=dialect,
             rules=parsed_rules,
-            target_project_ids=target_project,
+            target_project_ids=[] if clear_target_projects else target_project,
             dry_run=dry_run,
         )
     except ConfigError as exc:
@@ -419,6 +443,7 @@ def rls_update(
         formatter.output(result)
         return
 
+    _print_warnings(formatter, result)
     if dry_run:
         _print_preview(formatter, result)
         return
@@ -554,7 +579,13 @@ def rls_setup(
     create`` uses.
     """
     formatter = get_formatter(ctx)
-    if formatter.json_mode or not _is_stdout_tty():
+    if dialect is not None and dialect not in RLS_DIALECTS:
+        formatter.error(
+            message=f"--dialect must be one of {RLS_DIALECTS}, got {dialect!r}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+    if formatter.json_mode or not _is_interactive():
         target_console = formatter.err_console if formatter.json_mode else formatter.console
         target_console.print(_SETUP_HINT)
         raise typer.Exit(code=2)
@@ -622,6 +653,7 @@ def rls_setup(
             formatter.console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(code=0)
 
+    failed: list[str] = []
     for table_id in selected_tables:
         try:
             result = service.create_policy(
@@ -633,5 +665,15 @@ def rls_setup(
             )
         except (ConfigError, KeboolaApiError) as exc:
             formatter.warning(f"{table_id}: {exc}")
+            failed.append(table_id)
             continue
+        _print_warnings(formatter, result)
         formatter.success(f"Created RLS policy {result.get('id', '')} on {table_id}")
+    if failed:
+        # Automation must not read a partly (or wholly) failed setup as success.
+        formatter.error(
+            message=f"{len(failed)} of {len(selected_tables)} polic{'y' if len(selected_tables) == 1 else 'ies'}"
+            f" could not be created: {', '.join(failed)}",
+            error_code=ErrorCode.API_ERROR,
+        )
+        raise typer.Exit(code=1)
