@@ -1146,7 +1146,7 @@ kbagent rls list --project P
 kbagent rls detail --project P --policy-id ID
 kbagent rls schema --project P
 kbagent rls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
-kbagent rls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent rls delete --project P --policy-id ID [--yes]
 kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--yes]
 # rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
@@ -1162,7 +1162,7 @@ kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file
 #   for admin sanity-checking only, drift between the two is acceptable since the preview string
 #   is never executed. `rls setup` is a guided, interactive-terminal-only wizard (checkbox table
 #   picker + guided condition builder, reusing `storage tables` and the same write path `rls
-#   create` uses) -- it refuses under --json or a non-TTY stdout with a hint to use `rls create`
+#   create` uses) -- it refuses under --json or without an interactive terminal (stdin or stdout not a TTY) with a hint to use `rls create`
 #   directly, same carve-out as `auth register-projects`'s picker, and has no REST route.
 #   A stack whose metastore predates the `rls-policy`/`cls-policy` schemas answers a clean,
 #   classified error (schema fetch failure, NOT_FOUND); expected there, not a kbagent bug.
@@ -1174,7 +1174,7 @@ kbagent cls list --project P
 kbagent cls detail --project P --policy-id ID
 kbagent cls schema --project P
 kbagent cls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
-kbagent cls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+kbagent cls update --project P --policy-id ID [--table BUCKET.TABLE] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent cls delete --project P --policy-id ID [--yes]
 # cls: column-level security policy authoring (`cls-policy` object type, one object per
 #   protected table), sibling of `rls`: same organization/targeted-only scope, fetch-then-merge

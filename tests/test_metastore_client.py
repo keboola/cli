@@ -342,6 +342,7 @@ class TestSemanticTypes:
             "semantic-glossary",
             "semantic-reference-data",
             "rls-policy",
+            "cls-policy",
         }
 
 

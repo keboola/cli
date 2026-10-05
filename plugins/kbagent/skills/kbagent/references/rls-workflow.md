@@ -52,7 +52,7 @@ Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
 
 `rls setup` is interactive-terminal-only -- it needs a real TTY for the
 checkbox table picker and the condition-builder prompts. It refuses cleanly
-under `--json` or a piped/non-TTY stdout, printing a one-line hint instead
+under `--json` or without an interactive terminal (stdin or stdout piped), printing a one-line hint instead
 of hanging or producing malformed JSON output.
 
 ```bash

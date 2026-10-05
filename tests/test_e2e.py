@@ -3679,6 +3679,9 @@ class TestFullE2E:
         for group in ("rls", "cls"):
             result = self._run(group, "schema", "--project", self.alias)
             if result.exit_code != 0:
+                # Only a missing object type is an expected skip. An auth failure or any other error
+                # must fail the suite instead of being skipped along with it.
+                assert "NOT_FOUND" in result.output, result.output
                 print(
                     f"  {_YELLOW}SKIP: {group} schema ({group}-policy not registered here){_RESET}"
                 )

@@ -106,6 +106,7 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "semantic-glossary",
     "semantic-reference-data",
     "rls-policy",
+    "cls-policy",
 )
 
 

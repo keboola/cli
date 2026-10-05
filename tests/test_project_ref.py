@@ -153,6 +153,7 @@ NOT_AN_ALIAS: dict[str, str] = {
         "be registered); config clone's --target-project is in ALIAS_OPTIONS"
     ),
     "--all-projects": "a boolean flag",
+    "--clear-target-projects": "a boolean flag (rls/cls update): revoke every grant, takes no project",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",
 }

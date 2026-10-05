@@ -2001,7 +2001,7 @@ policies, it never executes queries against them.
     differently, only the enforcement engine's output governs actual
     filtering) without writing anything.
 
-  kbagent rls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+  kbagent rls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
     Fetch-then-merge: an omitted flag keeps its current value, never
     silently blanked (unlike a naive full-record PUT).
 
@@ -2013,7 +2013,7 @@ policies, it never executes queries against them.
     `storage tables`), then either the interactive column/op/value condition
     builder or the same --rules escape hatch `create` takes, then a preview
     + confirm, then one `rls create` call per selected table. Refuses under
-    --json or a non-TTY stdout with a one-line hint to use `rls create`
+    --json or without an interactive terminal (stdin or stdout not a TTY) with a one-line hint to use `rls create`
     directly -- there is no non-interactive path through `setup` itself.
 
 ### Column-Level Security (CLS)
@@ -2040,7 +2040,7 @@ governed table is refused there.
     {{principal|principals, visible_columns: [col, ...]}} objects. --dry-run
     prints each principal's allowed projection without writing.
 
-  kbagent cls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ...] [--dry-run] [--yes]
+  kbagent cls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
     Fetch-then-merge: an omitted flag keeps its current value.
 
   kbagent cls delete --project P --policy-id ID [--yes]
