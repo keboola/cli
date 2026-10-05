@@ -406,8 +406,10 @@ class RlsService(BaseService):
             )
             if revoking:
                 client.put_target_projects(self.item_type, policy_id, [])
-            elif scope == "targeted" and merged_targets:
-                client.put_target_projects(self.item_type, policy_id, merged_targets)
+            elif target_ids:
+                # Only an explicit list replaces the grants; an update that omits the option must not
+                # re-send the snapshot read above (it could overwrite a concurrent grant change).
+                client.put_target_projects(self.item_type, policy_id, target_ids)
         row = self._row_from_item(updated)
         row["preview"] = preview
         return self._with_warnings(row, warnings)

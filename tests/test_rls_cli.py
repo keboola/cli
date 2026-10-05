@@ -638,6 +638,74 @@ class TestRlsSetupReviewFixes:
         assert result.exit_code == 2
         storage.list_tables.assert_not_called()
 
+    def test_an_exact_create_denial_also_blocks_setup(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.models import PermissionPolicy
+
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        cfg = store.load()
+        cfg.permissions = PermissionPolicy(mode="allow", deny=["rls.create"])
+        store.save(cfg)
+        service = MagicMock()
+        storage = self._storage()
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "snowflake",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            service,
+            storage,
+        )
+
+        assert result.exit_code == 6, result.output
+        storage.list_tables.assert_not_called()
+        service.create_policy.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("error", "exit_code"),
+        [
+            (
+                KeboolaApiError(message="x", status_code=401, error_code=ErrorCode.INVALID_TOKEN),
+                3,
+            ),
+            (KeboolaApiError(message="x", status_code=500, error_code=ErrorCode.API_ERROR), 1),
+            (ConfigError("no such project"), 5),
+        ],
+    )
+    def test_every_table_failing_keeps_the_error_class_in_the_exit_code(
+        self, tmp_path: Path, error: Exception, exit_code: int
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.side_effect = error
+
+        result = self._setup_run(
+            [
+                "rls",
+                "setup",
+                "--project",
+                "prod",
+                "--dialect",
+                "snowflake",
+                "--rules",
+                self.RULES,
+                "--yes",
+            ],
+            store,
+            service,
+            self._storage(),
+        )
+
+        assert result.exit_code == exit_code
+
     def test_every_table_failing_is_a_non_zero_exit(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
@@ -664,7 +732,7 @@ class TestRlsSetupReviewFixes:
             self._storage(),
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3  # an auth-class failure keeps the authentication exit code
         assert "2 of 2 policies could not be created" in result.output
 
     def test_a_partial_failure_is_a_non_zero_exit_and_names_the_failed_table(

@@ -40,6 +40,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.rls_service import RLS_DIALECTS
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
+    check_cli_operation,
     check_cli_permission,
     get_formatter,
     get_service,
@@ -578,6 +579,8 @@ def rls_setup(
     all sharing the same rules, via the exact same write path ``rls
     create`` uses.
     """
+    # `setup` performs `create`'s writes, so an exact `rls.create` denial must cover it too.
+    check_cli_operation(ctx, "rls.create")
     formatter = get_formatter(ctx)
     if dialect is not None and dialect not in RLS_DIALECTS:
         formatter.error(
@@ -654,6 +657,7 @@ def rls_setup(
             raise typer.Exit(code=0)
 
     failed: list[str] = []
+    exit_codes: set[int] = set()
     for table_id in selected_tables:
         try:
             result = service.create_policy(
@@ -666,6 +670,7 @@ def rls_setup(
         except (ConfigError, KeboolaApiError) as exc:
             formatter.warning(f"{table_id}: {exc}")
             failed.append(table_id)
+            exit_codes.add(5 if isinstance(exc, ConfigError) else map_error_to_exit_code(exc))
             continue
         _print_warnings(formatter, result)
         formatter.success(f"Created RLS policy {result.get('id', '')} on {table_id}")
@@ -676,4 +681,6 @@ def rls_setup(
             f" could not be created: {', '.join(failed)}",
             error_code=ErrorCode.API_ERROR,
         )
-        raise typer.Exit(code=1)
+        # Same exit-code contract as `rls create`: when every failure maps to one code (auth -> 3,
+        # config -> 5, ...) use it; a mix is a general failure.
+        raise typer.Exit(code=exit_codes.pop() if len(exit_codes) == 1 else 1)
