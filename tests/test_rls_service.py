@@ -876,3 +876,77 @@ class TestCompositionAndKeysAreExact:
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
+
+
+class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
+    _COND: ClassVar[dict[str, Any]] = {"true": True}
+
+    @pytest.mark.parametrize(
+        ("rule", "fragment"),
+        [
+            ({"principal": "a", "principals": [], "condition": _COND}, "exactly one of"),
+            ({"principal": "", "principals": ["b"], "condition": _COND}, "exactly one of"),
+            ({"principal": 1, "condition": _COND}, "principal must be a non-empty string"),
+            ({"principal": "", "condition": _COND}, "principal must be a non-empty string"),
+            ({"principal": None, "condition": _COND}, "principal must be a non-empty string"),
+            ({"principal": ["a"], "condition": _COND}, "principal must be a non-empty string"),
+            ({"principals": [], "condition": _COND}, "principals must be a non-empty list"),
+            ({"principals": "a@x.com", "condition": _COND}, "principals must be a non-empty list"),
+            ({"principals": ["a", ""], "condition": _COND}, "principals must be a non-empty list"),
+            ({"principals": ["a", 2], "condition": _COND}, "principals must be a non-empty list"),
+            ({"condition": _COND}, "exactly one of"),
+        ],
+    )
+    def test_malformed_principal_fields_are_rejected_locally(
+        self, rule: dict, fragment: str
+    ) -> None:
+        errors = validate_rules_local([rule])
+        assert errors and fragment in errors[0]
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {"principal": "a@x.com", "condition": _COND},
+            {"principals": ["a@x.com", "b@x.com"], "condition": _COND},
+        ],
+    )
+    def test_well_formed_principal_fields_pass(self, rule: dict) -> None:
+        assert validate_rules_local([rule]) == []
+
+    def test_a_malformed_principal_never_reaches_a_write_when_the_schema_is_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy(
+                "prod",
+                table="t",
+                dialect="snowflake",
+                rules=[{"principal": 1, "condition": self._COND}],
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
+        mock.post_item.assert_not_called()
+
+
+class TestUnresolvedVersionListing:
+    @pytest.mark.parametrize("listing", [{"versions": []}, {"versions": [{"isDefault": True}]}])
+    def test_a_version_listing_that_cannot_be_resolved_is_unavailable_not_a_schema(
+        self, tmp_path: Path, listing: dict
+    ) -> None:
+        """It is a valid, constraint-free JSON Schema, so validating against it would silently skip every
+        structural check without the documented warning."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = listing
+        mock.post_item.return_value = _policy_item()
+
+        fetch = service.fetch_schema("prod")
+        assert fetch.schema is None
+        assert "version listing" in (fetch.reason or "")
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
+        )
+        assert any("version listing" in w for w in result["warnings"])
