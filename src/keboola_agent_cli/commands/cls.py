@@ -36,7 +36,7 @@ from rich.syntax import Syntax
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.rls_service import RLS_DIALECTS
 from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
-from .rls import _format_policy_table, _parse_rules_arg
+from .rls import _format_policy_table, _parse_rules_arg, _print_warnings
 
 cls_app = typer.Typer(
     help=(
@@ -166,6 +166,9 @@ def cls_schema(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:  # an auth/permission failure is not "schema unavailable"
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if fetch.schema is None:
         formatter.error(
@@ -240,6 +243,7 @@ def cls_create(
     if formatter.json_mode:
         formatter.output(result)
         return
+    _print_warnings(formatter, result)
     if not dry_run:
         formatter.success(f"Created CLS policy {result.get('id', '')} on {table}")
     _print_preview(formatter, result)
@@ -260,6 +264,11 @@ def cls_update(
     target_project: list[str] | None = typer.Option(
         None, "--target-project", help="New target-project list (repeatable; unset = unchanged)"
     ),
+    clear_target_projects: bool = typer.Option(
+        False,
+        "--clear-target-projects",
+        help="Revoke every project the policy is shared with (cannot be combined with --target-project)",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview the projection without writing"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
@@ -270,6 +279,12 @@ def cls_update(
     """
     formatter = get_formatter(ctx)
     parsed_rules = _parse_rules_arg(formatter, rules, _RULES_SHAPE) if rules is not None else None
+    if clear_target_projects and target_project:
+        formatter.error(
+            message="--clear-target-projects cannot be combined with --target-project",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
     _check_dialect(formatter, dialect)
     service = get_service(ctx, "cls_service")
 
@@ -284,13 +299,14 @@ def cls_update(
         table=table,
         dialect=dialect,
         rules=parsed_rules,
-        target_project_ids=target_project,
+        target_project_ids=[] if clear_target_projects else target_project,
         dry_run=dry_run,
     )
 
     if formatter.json_mode:
         formatter.output(result)
         return
+    _print_warnings(formatter, result)
     if not dry_run:
         formatter.success(f"Updated CLS policy {policy_id}")
     _print_preview(formatter, result)
