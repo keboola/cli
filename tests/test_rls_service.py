@@ -720,3 +720,96 @@ class TestPrimitiveShape:
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
+
+
+class TestScopeIsKeptWhenTargetsAreOmitted:
+    def _targeted_without_grants(self) -> dict[str, Any]:
+        """What the metastore returns after every grant was revoked: still `targeted`, empty list."""
+        return _policy_item(scope="targeted", target_project_ids=[])
+
+    def test_an_unrelated_update_does_not_turn_a_cleared_targeted_policy_into_organization(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = self._targeted_without_grants()
+        mock.put_item.return_value = self._targeted_without_grants()
+
+        service.update_policy("prod", "p-1", dialect="bigquery")  # no target option at all
+
+        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
+        mock.put_target_projects.assert_not_called()
+
+    def test_an_explicit_target_list_makes_the_policy_targeted(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item()  # organization scope
+        mock.put_item.return_value = _policy_item(scope="targeted", target_project_ids=["7"])
+
+        service.update_policy("prod", "p-1", target_project_ids=["7"])
+
+        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["7"])
+
+    def test_clearing_keeps_the_current_scope(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=["7"])
+        mock.put_item.return_value = self._targeted_without_grants()
+
+        service.update_policy("prod", "p-1", target_project_ids=[])
+
+        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
+
+
+class TestDryRunValidatesTargetIds:
+    """A preview must run the same validation as the write -- including the target project ids."""
+
+    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-3"], ["1", "x"]])
+    def test_create_dry_run_rejects_a_bad_target_before_any_network_call(
+        self, tmp_path: Path, bad: list
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy(
+                "prod",
+                table="t",
+                dialect="snowflake",
+                rules=_RULES,
+                target_project_ids=bad,
+                dry_run=True,
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.get_schema.assert_not_called()
+        mock.post_item.assert_not_called()
+
+    def test_update_dry_run_rejects_a_bad_target_before_any_network_call(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.update_policy("prod", "p-1", target_project_ids=["abc"], dry_run=True)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.get_item.assert_not_called()
+        mock.put_item.assert_not_called()
+
+    def test_valid_targets_still_preview(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+
+        result = service.create_policy(
+            "prod",
+            table="t",
+            dialect="snowflake",
+            rules=_RULES,
+            target_project_ids=["7", "8"],
+            dry_run=True,
+        )
+
+        assert result["scope"] == "targeted"
+        assert result["target_project_ids"] == ["7", "8"]
