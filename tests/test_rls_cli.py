@@ -21,6 +21,7 @@ from keboola_agent_cli.commands.rls import _is_interactive
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.output import OutputFormatter
 
 runner = CliRunner()
 TEST_TOKEN = "999-token-abc"
@@ -670,41 +671,51 @@ class TestRlsSetupReviewFixes:
         service.create_policy.assert_not_called()
 
     @pytest.mark.parametrize(
-        ("error", "exit_code"),
+        ("error", "exit_code", "error_code"),
         [
             (
                 KeboolaApiError(message="x", status_code=401, error_code=ErrorCode.INVALID_TOKEN),
                 3,
+                "INVALID_TOKEN",
             ),
-            (KeboolaApiError(message="x", status_code=500, error_code=ErrorCode.API_ERROR), 1),
-            (ConfigError("no such project"), 5),
+            (
+                KeboolaApiError(message="x", status_code=500, error_code=ErrorCode.API_ERROR),
+                1,
+                "API_ERROR",
+            ),
+            (ConfigError("no such project"), 5, "CONFIG_ERROR"),
         ],
     )
     def test_every_table_failing_keeps_the_error_class_in_the_exit_code(
-        self, tmp_path: Path, error: Exception, exit_code: int
+        self, tmp_path: Path, error: Exception, exit_code: int, error_code: str
     ) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
         service.create_policy.side_effect = error
 
-        result = self._setup_run(
-            [
-                "rls",
-                "setup",
-                "--project",
-                "prod",
-                "--dialect",
-                "snowflake",
-                "--rules",
-                self.RULES,
-                "--yes",
-            ],
-            store,
-            service,
-            self._storage(),
-        )
+        with patch("keboola_agent_cli.commands.rls.get_formatter") as get_formatter_mock:
+            real = OutputFormatter(json_mode=False)
+            get_formatter_mock.return_value = real
+            with patch.object(real, "error", wraps=real.error) as error_spy:
+                result = self._setup_run(
+                    [
+                        "rls",
+                        "setup",
+                        "--project",
+                        "prod",
+                        "--dialect",
+                        "snowflake",
+                        "--rules",
+                        self.RULES,
+                        "--yes",
+                    ],
+                    store,
+                    service,
+                    self._storage(),
+                )
 
         assert result.exit_code == exit_code
+        assert error_spy.call_args.kwargs["error_code"] == error_code  # the failures' own code
 
     def test_every_table_failing_is_a_non_zero_exit(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

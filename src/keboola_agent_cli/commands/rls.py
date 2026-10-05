@@ -658,6 +658,7 @@ def rls_setup(
 
     failed: list[str] = []
     exit_codes: set[int] = set()
+    error_codes: set[str] = set()
     for table_id in selected_tables:
         try:
             result = service.create_policy(
@@ -671,6 +672,9 @@ def rls_setup(
             formatter.warning(f"{table_id}: {exc}")
             failed.append(table_id)
             exit_codes.add(5 if isinstance(exc, ConfigError) else map_error_to_exit_code(exc))
+            error_codes.add(
+                ErrorCode.CONFIG_ERROR if isinstance(exc, ConfigError) else exc.error_code
+            )
             continue
         _print_warnings(formatter, result)
         formatter.success(f"Created RLS policy {result.get('id', '')} on {table_id}")
@@ -679,7 +683,7 @@ def rls_setup(
         formatter.error(
             message=f"{len(failed)} of {len(selected_tables)} polic{'y' if len(selected_tables) == 1 else 'ies'}"
             f" could not be created: {', '.join(failed)}",
-            error_code=ErrorCode.API_ERROR,
+            error_code=error_codes.pop() if len(error_codes) == 1 else ErrorCode.API_ERROR,
         )
         # Same exit-code contract as `rls create`: when every failure maps to one code (auth -> 3,
         # config -> 5, ...) use it; a mix is a general failure.

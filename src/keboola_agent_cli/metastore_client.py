@@ -124,6 +124,15 @@ _ENVELOPE_BRANCH = "main"
 _DEFAULT_SCOPE: ObjectScope = "project"
 
 
+def _exact_int(value: Any) -> int:
+    """``int(value)`` without its silent conversions: a bool or a non-integral float is rejected."""
+    if isinstance(value, bool):
+        raise TypeError("a bool is not a project id")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("a non-integral float is not a project id")
+    return int(value)
+
+
 def project_ids_as_ints(project_ids: list[Any]) -> list[int]:
     """Target project ids as the metastore wants them: positive integers (``targetProjectIds`` is ``[]int``).
 
@@ -131,7 +140,7 @@ def project_ids_as_ints(project_ids: list[Any]) -> list[int]:
     instead of reaching the backend as a 400 (or, in the grants call, being ignored).
     """
     try:
-        ids = [int(project_id) for project_id in project_ids]
+        ids = [_exact_int(project_id) for project_id in project_ids]
     except (TypeError, ValueError):
         ids = [0]
     if any(project_id <= 0 for project_id in ids):
