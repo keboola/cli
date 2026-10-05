@@ -22,7 +22,7 @@ answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 

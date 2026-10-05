@@ -65,7 +65,7 @@ def _policy_item(
     rules: list[dict[str, Any]] | None = None,
     scope: str = "organization",
     source_project_id: str | None = "5725",
-    target_project_ids: list[str] | None = None,
+    target_project_ids: list[Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "rls-policy",
