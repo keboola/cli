@@ -8,7 +8,7 @@ sequencing) without touching HTTP -- mirrors ``test_semantic_layer_service.py``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -813,3 +813,66 @@ class TestDryRunValidatesTargetIds:
 
         assert result["scope"] == "targeted"
         assert result["target_project_ids"] == ["7", "8"]
+
+
+class TestCompositionAndKeysAreExact:
+    """One composition key, and no keys beyond an op's own shape: nothing may be validated and then dropped."""
+
+    _LEAF: ClassVar[dict[str, Any]] = {"column": "a", "op": "eq", "value": 1}
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {
+                "and": [_LEAF, _LEAF],
+                "or": [_LEAF, _LEAF],
+            },  # the second branch used to be silently dropped
+            {"or": [_LEAF, _LEAF], "and": [_LEAF, _LEAF]},
+            {"and": [_LEAF, _LEAF], "column": "a"},
+            {"or": [_LEAF, _LEAF], "op": "eq"},
+        ],
+    )
+    def test_a_condition_with_several_composition_keys_is_rejected(self, bad: dict) -> None:
+        errors = validate_condition_ops(bad)
+        assert errors and "exactly one of those keys" in errors[0]
+        with pytest.raises(ValueError, match="exactly one of those keys"):
+            compile_condition_preview(bad, "snowflake")
+
+    @pytest.mark.parametrize(
+        ("condition", "extra"),
+        [
+            ({"column": "a", "op": "eq", "value": 1, "values": [1]}, ["values"]),
+            ({"column": "a", "op": "in", "values": [1], "value": 1}, ["value"]),
+            ({"column": "a", "op": "is_null", "value": 1}, ["value"]),
+            ({"column": "a", "op": "eq", "value": 1, "note": "x"}, ["note"]),
+        ],
+    )
+    def test_keys_beyond_the_ops_shape_are_rejected(self, condition: dict, extra: list) -> None:
+        errors = validate_condition_ops(condition)
+        assert errors and f"unexpected keys {extra}" in errors[0]
+
+    def test_a_valid_nested_tree_still_passes_and_renders(self) -> None:
+        tree = {
+            "or": [
+                {"and": [self._LEAF, {"column": "b", "op": "in", "values": [1, 2]}]},
+                {"column": "c", "op": "is_null"},
+            ]
+        }
+        assert validate_condition_ops(tree) == []
+        assert "OR" in compile_condition_preview(tree, "snowflake")
+
+    def test_a_multi_key_condition_never_reaches_a_write(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
+        rules = [
+            {
+                "principal": "a@x.com",
+                "condition": {"and": [self._LEAF, self._LEAF], "or": [self._LEAF, self._LEAF]},
+            }
+        ]
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy("prod", table="t", dialect="snowflake", rules=rules)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
+        mock.post_item.assert_not_called()
