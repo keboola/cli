@@ -49,6 +49,7 @@ live**):
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Literal, Self
 
 import httpx
@@ -146,6 +147,26 @@ def _name_conflict(item_type: str, name: str, exc: KeboolaApiError) -> KeboolaAp
         error_code=ErrorCode.ALREADY_EXISTS,
         retryable=False,
     )
+
+
+def _project_ids_as_ints(project_ids: list[Any]) -> list[int]:
+    """Target project ids as the metastore wants them: positive integers (``targetProjectIds`` is ``[]int``).
+
+    The CLI takes ids as strings; a non-numeric or non-positive one is rejected here, before any request,
+    instead of reaching the backend as a 400 (or, in the grants call, being ignored).
+    """
+    try:
+        ids = [int(project_id) for project_id in project_ids]
+    except (TypeError, ValueError):
+        ids = [0]
+    if any(project_id <= 0 for project_id in ids):
+        raise KeboolaApiError(
+            message=f"Target project IDs must be positive integers, got {project_ids!r}",
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
+    return ids
 
 
 class MetastoreClient(BaseHttpClient):
@@ -435,6 +456,8 @@ class MetastoreClient(BaseHttpClient):
             f"/api/v1/repository/{item_type}/{item_id}",
             json={"scope": "organization"},
         )
+        if not response.content:
+            return {}
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
 
