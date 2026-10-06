@@ -26,6 +26,22 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.97.0": [
+        "New (#715): semantic-layer items can now be shared with chosen projects or with the "
+        "whole organization, not only kept in the owning project (AI-3790). `model create` and "
+        "every `add <kind>` take `--scope project|targeted|organization` and `--target-project` "
+        "(a registered alias or a project ID). The new `semantic-layer scope` command group "
+        "shows and changes who sees an existing item: `get`, `add`, `remove` and `set`, plus "
+        "`request-create`, `request-delete` and `request-list` for requests to make an item "
+        "organization-wide. Without `--scope`, `model create` keeps the model in its project, "
+        "and `add <kind>` uses the scope of its model. Making an item organization-wide needs "
+        "the organization-admin role and cannot be reverted, so `--deny-destructive` blocks it. "
+        "`kbagent serve` has the same functions under `/semantic-layer/scope`.",
+        "Fix (#715): `semantic-layer edit`, `import --overwrite` and `promote` now update an item "
+        "in place, so it keeps its ID, its visibility and its history. Before, they deleted the "
+        "item and created it again with a new ID. A failed update changes nothing, so the "
+        "`rollback` field in the result is now always `null`.",
+    ],
     "0.96.2": [
         "Fix (#825): the `data-app` commands now label the app link `Open the app:` and the "
         "Keboola UI link `Configuration:`, so it is clear which link opens what. Before, the "

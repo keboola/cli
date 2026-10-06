@@ -19,7 +19,7 @@ override (a project-admin token that is not an org admin must pass
 `--scope project` under an org-level model, or it gets a 403).
 
 For one-line command reference, see
-[commands-reference.md](commands-reference.md#scope--target-project-grants--elevation-scope-sub-app-since-vnext-psgo-140).
+[commands-reference.md](commands-reference.md#scope--target-project-grants--elevation-scope-sub-app-psgo-140).
 For the schema-version / replace-vs-merge / 403-vs-404 surprises, see
 [gotchas.md](gotchas.md).
 
