@@ -194,7 +194,7 @@ Versioning convention:
   check `kbagent project info` -> `is_master_token`, and register a
   project-admin token (`kbagent project edit --token ...`). Do NOT escalate
   this one to support -- it is by design.
-  - **(updated vNEXT -- PSGO-282, go-monorepo#596):** the "every call"
+  - **(updated 0.97.0 -- PSGO-282, go-monorepo#596):** the "every call"
     part above is now history. The Metastore no longer requires a master
     token for a plain read (`show`, `model list`, `search-context`,
     `get-context`, `validate`, `diff`, `scope get`, `scope request-list`) --
@@ -1181,7 +1181,7 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — as `edit metric|…` does since vNEXT (before, those used DELETE+POST).
+  exists — as `edit metric|…` does since 0.97.0 (before, those used DELETE+POST).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
   the `set`/`get` lookup is project-wide.** Because the dimension name is the
@@ -1609,7 +1609,7 @@ events and emits a final `done` SSE frame mirroring the same record.
 
 - `kbagent semantic-layer edit metric --new-name NEW` updates the metric
   and ALSO every constraint whose `metrics[]` referenced the old name
-  (`metrics[]` rewritten to the new name). *(updated vNEXT)* Each is an
+  (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
   in-place `PUT` -- same id, scope, grants and revision history, and a failed
   update changes nothing; before, every "edit" was a delete-then-create with
   a rollback re-POST.
@@ -1635,7 +1635,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   recommend running `semantic-layer validate` immediately.
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
   the cascade is per-item only (each constraint is updated on its own;
-  *since vNEXT* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
+  *since 0.97.0* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
@@ -5750,7 +5750,7 @@ workspaces".
 
 ## Metastore no longer requires a master token for reads (PSGO-282)
 
-*(since vNEXT)* Every `semantic-layer` read (`show`, `model list`,
+*(since 0.97.0)* Every `semantic-layer` read (`show`, `model list`,
 `search-context`, `get-context`, `validate`, `diff`, `scope get`, `scope
 request-list`) works with any valid, non-disabled, non-expired Storage token --
 programmatic (`kbc_at_*`/`kbc_pat_*`) included. Before this, the metastore
@@ -5777,7 +5777,7 @@ authorization failure:
 
 ## Metastore `scope` / `--target-project` / `scope set --scope organization` (PSGO-140)
 
-*(since vNEXT)* `model create` / `add <kind>` gained `--scope
+*(since 0.97.0)* `model create` / `add <kind>` gained `--scope
 project|organization|targeted` + `--target-project ALIAS|ID ...`, and a new
 `semantic-layer scope <get|add|remove|set|request-create|request-delete|request-list>`
 sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See

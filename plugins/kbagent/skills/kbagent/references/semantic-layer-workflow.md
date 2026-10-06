@@ -5,7 +5,7 @@ of datasets, metrics, relationships, constraints, and glossary terms. It is
 served from a separate API at `metastore.<stack>` (derived from
 `connection.<stack>` by string-substitution; cloud/region-agnostic). Auth is
 the same `X-StorageApi-Token` as Storage: **reads work with any valid,
-non-disabled, non-expired token** (vNEXT, PSGO-282); **writes** (add /
+non-disabled, non-expired token** (0.97.0, PSGO-282); **writes** (add /
 edit / remove / import / promote / build / scope add|remove|set) still need
 a project-admin token -- a master token qualifies, but so does any other
 project-admin user's token. Before PSGO-282, the metastore's auth gate

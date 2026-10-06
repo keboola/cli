@@ -1130,7 +1130,7 @@ kbagent semantic-layer reference-data set --project P [--model M] --dimension D 
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 # semantic-layer READS work with any valid, non-disabled, non-expired Storage token
-#   (vNEXT, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES
+#   (0.97.0, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES
 #   (add/edit/remove/import/promote/build/scope add|remove|set) still need a project-admin token
 #   (master token or any admin-role user token) -- a non-admin token 403s on the write. Before
 #   PSGO-282 the Metastore's auth gate rejected EVERY valid non-master token, including reads,
@@ -1139,7 +1139,7 @@ kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 #   a safety net for a deployment that predates the fix. Other unexplained 401s anywhere map to
 #   AUTH_REJECTED instead of the false "Invalid or expired token" (INVALID_TOKEN stays for 401s
 #   that DO blame the credential). Version gate for this entry lives in gotchas.md -- `(since
-#   vNEXT)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
+#   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
 #   ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
