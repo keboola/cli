@@ -9,20 +9,19 @@ storage" section) -- kbagent never invents its own shape, it authors exactly
 what the enforcement engine (that repo's ``rls.py::_compile_primitive``,
 sqlglot-based) expects to read back from the metastore.
 
-``compile_condition_preview`` below is a **preview convenience only**: a
-small recursive pure-Python string renderer used for ``--dry-run`` /
-confirmation display before a write. It is deliberately NOT the enforcement
-engine and never will be -- the actual compiler that decides what SQL a
-query gets rewritten to lives in ``keboola-mcp-server`` (a different repo,
-sqlglot-based). Drift between the two renderings is acceptable here because
-this string is only ever shown to an admin for sanity-checking, never
-executed. Adding sqlglot as a kbagent dependency just to produce this
-confirmation string would be a heavier dependency than the six condition
-shapes below warrant.
+``compile_condition_preview`` below is a **preview** for ``--dry-run`` /
+confirmation display, not the enforcement engine -- that lives in
+``keboola-mcp-server`` (sqlglot-based, a different repo). It follows the
+enforcement's rendering where an admin could be misled otherwise: columns
+quoted per dialect (the enforcement matches them case-exactly), booleans as
+``TRUE``/``FALSE``. ``null`` comparisons never reach it: the enforcement would
+render ``col = NULL`` (matches nothing), so validation refuses them. Adding
+sqlglot as a kbagent dependency just for this string is not warranted.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import jsonschema
@@ -39,6 +38,14 @@ RLS_CONDITION_OPS = RLS_COMPARISON_OPS | RLS_MEMBERSHIP_OPS | RLS_NULLNESS_OPS
 # -- the same pair `rewrite_query()` on the enforcement side never transpiles
 # between (predicates are pinned to one workspace dialect per policy).
 RLS_DIALECTS: tuple[str, ...] = ("snowflake", "bigquery")
+
+# The enforcement's principal pattern (mcp-server ``rls.py``): no whitespace or control characters. A
+# principal that fails it is not ignored there -- it refuses EVERY query in the project.
+_PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
+
+# How each dialect quotes an identifier. The enforcement compiles columns quoted (case-exact), so the
+# preview must too -- an unquoted preview would hide a case mismatch the real filter does not forgive.
+_QUOTE = {"snowflake": '"', "bigquery": "`"}
 
 _COMPARISON_SQL = {
     "eq": "=",
@@ -115,12 +122,22 @@ def validate_condition_ops(condition: Any) -> list[str]:
     column = condition.get("column")
     if not isinstance(column, str) or not column:
         errors.append(f"condition with op {op!r} needs a non-empty string 'column'")
-    if op in RLS_COMPARISON_OPS and "value" not in condition:
-        errors.append(f"condition with op {op!r} needs a 'value'")
+    if op in RLS_COMPARISON_OPS:
+        if "value" not in condition:
+            errors.append(f"condition with op {op!r} needs a 'value'")
+        elif condition["value"] is None:
+            # The enforcement renders `col = NULL`, which matches no row: the principal silently sees nothing.
+            errors.append(
+                f"condition with op {op!r} cannot compare to null; use op 'is_null' / 'is_not_null'"
+            )
     if op in RLS_MEMBERSHIP_OPS:
         values = condition.get("values")
         if not isinstance(values, list) or not values:
             errors.append(f"condition with op {op!r} needs a non-empty list 'values'")
+        elif any(value is None for value in values):
+            errors.append(
+                f"condition with op {op!r} cannot list null in 'values' (it never matches); use 'is_null'"
+            )
     # No keys beyond the op's own shape (the schema forbids additional properties): a stray `values` on an
     # `eq`, or a `value` on an `in`, is an authoring mistake that would otherwise be silently ignored.
     allowed = {"column", "op"} | (
@@ -147,15 +164,52 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
         principal = rule["principal"]
         if not isinstance(principal, str) or not principal:
             return [f"rules[{index}].principal must be a non-empty string"]
-        return []
-    principals = rule["principals"]
-    if (
-        not isinstance(principals, list)
-        or not principals
-        or not all(isinstance(name, str) and name for name in principals)
-    ):
-        return [f"rules[{index}].principals must be a non-empty list of non-empty strings"]
-    return []
+        names = [principal]
+    else:
+        names = rule["principals"]
+        if (
+            not isinstance(names, list)
+            or not names
+            or not all(isinstance(name, str) and name for name in names)
+        ):
+            return [f"rules[{index}].principals must be a non-empty list of non-empty strings"]
+    return [
+        f"rules[{index}]: principal {name!r} contains whitespace or control characters"
+        for name in names
+        if not _PRINCIPAL_RE.fullmatch(name)
+    ]
+
+
+def rule_principals(rule: dict[str, Any]) -> list[str]:
+    """The principals one rule names (``principal`` or ``principals``), as written."""
+    return [rule["principal"]] if "principal" in rule else list(rule.get("principals") or [])
+
+
+def duplicate_principals(
+    rules: list[dict[str, Any]], taken: dict[str, str] | None = None
+) -> list[str]:
+    """Principals named twice on one table, case-folded -- the enforcement refuses every query then.
+
+    ``taken`` maps an already-used case-folded principal to where it is used (another policy on the
+    same table), so the same check covers duplicates inside ``rules`` and across policies.
+    """
+    seen = dict(taken or {})
+    errors: list[str] = []
+    for index, rule in enumerate(rules):
+        for name in rule_principals(rule):
+            folded = name.casefold()
+            if folded in seen:
+                errors.append(
+                    f"rules[{index}]: principal {name!r} already has a rule in {seen[folded]}"
+                )
+            else:
+                seen[folded] = f"rules[{index}]"
+    return errors
+
+
+def table_key(table: str, dialect: str) -> str:
+    """How the enforcement compares table keys: case-insensitive on Snowflake, exact on BigQuery."""
+    return table.lower() if dialect == "snowflake" else table
 
 
 def validate_rules_local(rules: Any) -> list[str]:
@@ -214,6 +268,8 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
     if not column or op is None:
         raise ValueError(f"unrecognized condition shape: {condition!r}")
 
+    quote = _QUOTE.get(dialect, '"')
+    column = f"{quote}{column}{quote}"
     if op in _COMPARISON_SQL:
         return f"{column} {_COMPARISON_SQL[op]} {_preview_literal(condition.get('value'))}"
     if op in RLS_MEMBERSHIP_OPS:
@@ -236,6 +292,8 @@ def _preview_literal(value: Any) -> str:
     """
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
+    if isinstance(value, bool):  # before the generic str(): Python's `True` is SQL's TRUE
+        return "TRUE" if value else "FALSE"
     if value is None:
         return "NULL"
     return str(value)
