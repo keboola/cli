@@ -6,7 +6,7 @@ Thin CLI layer over :class:`RlsService`. Seven subcommands:
 - ``rls detail`` -- one policy's full rules.
 - ``rls schema`` -- the live ``rls-policy`` JSON Schema from the metastore.
 - ``rls create`` -- author a policy for one table (write).
-- ``rls update`` -- fetch-then-merge update of an existing policy (write).
+- ``rls update`` -- partial (PATCH) update of an existing policy (write).
 - ``rls delete`` -- remove a policy (destructive).
 - ``rls setup`` -- guided, interactive-terminal-only wizard: pick tables via
   a checkbox picker, build conditions, preview, then create one policy per
@@ -33,10 +33,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 import typer
@@ -44,19 +42,18 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..services._rls_condition import COMPARISON_SQL
+from ..services._rls_condition import COMPARISON_SQL, Dialect
+from ..services.rls_service import PolicyScope
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
     check_cli_operation,
     check_cli_permission,
+    exit_code_for,
     get_formatter,
     get_service,
-    map_error_to_exit_code,
+    handle_service_call,
     parse_json_arg,
 )
-from ._semantic_layer_helpers import _handle_service_call
-
-logger = logging.getLogger(__name__)
 
 rls_app = typer.Typer(
     help=(
@@ -65,20 +62,6 @@ rls_app = typer.Typer(
         "are gated as admin -- see CONTRIBUTING.md."
     )
 )
-
-
-class Dialect(StrEnum):
-    """``--dialect`` values (the policy schema's enum); omitted = the project backend."""
-
-    SNOWFLAKE = "snowflake"
-    BIGQUERY = "bigquery"
-
-
-class PolicyScope(StrEnum):
-    """``--scope`` values: the schema supports no ``project`` scope for policies."""
-
-    TARGETED = "targeted"
-    ORGANIZATION = "organization"
 
 
 DIALECT_HELP = "Workspace SQL dialect; must match the project backend (default: the backend)"
@@ -99,7 +82,6 @@ class PolicyGroup:
     """What differs between the ``rls`` and ``cls`` command groups; everything else is shared."""
 
     name: str  # "rls" | "cls": the permission prefix, `<name>_service`, `<name>-policy`
-    label: str  # "RLS" | "CLS"
     rules_shape: str  # shown in the --rules parse error
     rule_text: Callable[[dict[str, Any]], str]  # one stored rule's restriction
     preview_text: Callable[[dict[str, Any]], str]  # one --dry-run preview entry's restriction
@@ -108,10 +90,13 @@ class PolicyGroup:
     def service(self) -> str:
         return f"{self.name}_service"
 
+    @property
+    def label(self) -> str:
+        return self.name.upper()
+
 
 RLS = PolicyGroup(
     name="rls",
-    label="RLS",
     rules_shape="{principal|principals, condition}",
     rule_text=lambda rule: str(rule.get("condition")),
     preview_text=lambda entry: f"WHERE {entry.get('condition')}",
@@ -216,9 +201,7 @@ def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
         formatter.warning(warning)
 
 
-def _parse_rules_arg(
-    formatter: Any, raw: str, shape: str = RLS.rules_shape
-) -> list[dict[str, Any]]:
+def _parse_rules_arg(formatter: Any, raw: str, shape: str) -> list[dict[str, Any]]:
     """Parse ``--rules``; ``shape`` is only the hint in the error."""
     try:
         parsed = parse_json_arg(raw, label="--rules")
@@ -237,7 +220,7 @@ def _parse_rules_arg(
 def list_policies(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
     formatter = get_formatter(ctx)
     service = get_service(ctx, group.service)
-    result = _handle_service_call(ctx, service.list_policies, alias=project)
+    result = handle_service_call(ctx, service.list_policies, alias=project)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -250,7 +233,7 @@ def list_policies(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
 def show_policy(ctx: typer.Context, group: PolicyGroup, project: str, policy_id: str) -> None:
     formatter = get_formatter(ctx)
     service = get_service(ctx, group.service)
-    result = _handle_service_call(ctx, service.get_policy, alias=project, policy_id=policy_id)
+    result = handle_service_call(ctx, service.get_policy, alias=project, policy_id=policy_id)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -263,7 +246,7 @@ def print_schema(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
     formatter = get_formatter(ctx)
     # An auth/permission failure is raised (not "schema unavailable") and reported by the handler.
     service = get_service(ctx, group.service)
-    fetch = _handle_service_call(ctx, service.fetch_schema, alias=project)
+    fetch = handle_service_call(ctx, service.fetch_schema, alias=project)
     if fetch.schema is None:
         formatter.error(
             message=f"Could not fetch the {group.name}-policy schema: {fetch.reason}",
@@ -306,7 +289,7 @@ def create_policy(
             _print_preview(formatter, group, service.create_policy(**kwargs, dry_run=True))
         _confirm_or_exit(formatter, f"Create {group.label} policy on {kwargs['table']}?")
 
-    result = _handle_service_call(ctx, service.create_policy, **kwargs, dry_run=dry_run)
+    result = handle_service_call(ctx, service.create_policy, **kwargs, dry_run=dry_run)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -347,7 +330,7 @@ def update_policy(
     if not dry_run and not yes and not formatter.json_mode:
         _confirm_or_exit(formatter, f"Update {group.label} policy {policy_id}?")
 
-    result = _handle_service_call(
+    result = handle_service_call(
         ctx,
         service.update_policy,
         **kwargs,
@@ -365,16 +348,26 @@ def update_policy(
     _print_preview(formatter, group, result)
 
 
-def delete_policy(ctx: typer.Context, group: PolicyGroup, effect: str, **kwargs: Any) -> None:
+def delete_policy(
+    ctx: typer.Context,
+    group: PolicyGroup,
+    effect: str,
+    *,
+    alias: str,
+    policy_id: str,
+    dry_run: bool,
+    yes: bool,
+) -> None:
     """``rls delete`` / ``cls delete``; ``--dry-run`` shows the policy that would be deleted."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, group.service)
-    policy_id, dry_run, yes = kwargs["policy_id"], kwargs["dry_run"], kwargs.pop("yes")
 
     if not dry_run and not yes and not formatter.json_mode:
         _confirm_or_exit(formatter, f"Delete {group.label} policy {policy_id}? {effect}")
 
-    result = _handle_service_call(ctx, service.delete_policy, **kwargs)
+    result = handle_service_call(
+        ctx, service.delete_policy, alias=alias, policy_id=policy_id, dry_run=dry_run
+    )
 
     if formatter.json_mode:
         formatter.output(result)
@@ -638,7 +631,7 @@ def rls_setup(
         raise typer.Exit(code=2)
 
     storage_service = get_service(ctx, "storage_service")
-    tables = _handle_service_call(ctx, storage_service.list_tables, aliases=[project]).get(
+    tables = handle_service_call(ctx, storage_service.list_tables, aliases=[project]).get(
         "tables", []
     )
     if not tables:
@@ -660,9 +653,11 @@ def rls_setup(
         raise typer.Exit(code=0)
 
     parsed_rules = (
-        _parse_rules_arg(formatter, rules) if rules is not None else _build_rules_interactively()
+        _parse_rules_arg(formatter, rules, RLS.rules_shape)
+        if rules is not None
+        else _build_rules_interactively()
     )
-    service = get_service(ctx, "rls_service")
+    service = get_service(ctx, RLS.service)
     selected_tables = [str(tables[i]["id"]) for i in indices]
     policies = f"{len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}"
     kwargs = {
@@ -693,7 +688,7 @@ def rls_setup(
         except (ConfigError, KeboolaApiError) as exc:
             formatter.warning(f"{table_id}: {exc}")
             failed.append(table_id)
-            exit_codes.add(5 if isinstance(exc, ConfigError) else map_error_to_exit_code(exc))
+            exit_codes.add(exit_code_for(exc))
             error_codes.add(
                 ErrorCode.CONFIG_ERROR if isinstance(exc, ConfigError) else exc.error_code
             )

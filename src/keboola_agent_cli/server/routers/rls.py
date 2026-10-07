@@ -29,10 +29,12 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from ...errors import ErrorCode, KeboolaApiError
 from ...permissions import PermissionEngine
+from ...services._rls_condition import Dialect
+from ...services.rls_service import PolicyScope
 from ..dependencies import (
     ServiceRegistry,
     get_permission_engine,
@@ -44,34 +46,32 @@ from ..dependencies import (
 
 
 class PolicyCreate(BaseModel):
-    """``target_projects`` takes aliases or project IDs, like the semantic-layer bodies."""
+    """``target_projects`` takes aliases or project IDs, like the semantic-layer bodies.
+
+    ``target_projects`` with ``scope: organization`` is refused by the service (400).
+    """
 
     table_id: str
     rules: list[dict[str, Any]]
-    dialect: Literal["snowflake", "bigquery"] | None = None  # None = the project backend
-    scope: Literal["targeted", "organization"] = "targeted"
+    dialect: Dialect | None = None  # None = the project backend
+    scope: PolicyScope = PolicyScope.TARGETED
     target_projects: list[str | int] | None = None
     dry_run: bool = False
-
-    @model_validator(mode="after")
-    def _targets_need_targeted_scope(self) -> PolicyCreate:
-        if self.target_projects and self.scope != "targeted":
-            raise ValueError("target_projects requires scope='targeted'.")
-        return self
 
 
 class PolicyUpdate(BaseModel):
     """Partial update: an omitted field is unchanged; ``target_projects: []`` revokes every grant."""
 
     table_id: str | None = None
-    dialect: Literal["snowflake", "bigquery"] | None = None
+    dialect: Dialect | None = None
     rules: list[dict[str, Any]] | None = None
     target_projects: list[str | int] | None = None
     dry_run: bool = False
 
 
-def build_policy_router(group: Literal["rls", "cls"], label: str) -> APIRouter:
-    """The ``/rls`` or ``/cls`` router; ``label`` is "RLS"/"CLS" in summaries."""
+def build_policy_router(group: Literal["rls", "cls"]) -> APIRouter:
+    """The ``/rls`` or ``/cls`` router."""
+    label = group.upper()
     router = APIRouter(prefix=f"/{group}", tags=[group])
 
     def perm(operation: str) -> Any:
@@ -126,7 +126,7 @@ def build_policy_router(group: Literal["rls", "cls"], label: str) -> APIRouter:
 
         Never `project` scope (the schema does not support it). Mirrors `kbagent <group> create`.
         """
-        if body.scope == "organization":
+        if body.scope == PolicyScope.ORGANIZATION:
             engine.check_or_raise(f"{group}.create --scope organization")
         return service(registry).create_policy(
             project,
@@ -175,4 +175,4 @@ def build_policy_router(group: Literal["rls", "cls"], label: str) -> APIRouter:
     return router
 
 
-router = build_policy_router("rls", "RLS")
+router = build_policy_router("rls")

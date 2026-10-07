@@ -15,11 +15,11 @@ import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.json_utils import draft7_errors
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services._rls_condition import (
     compile_condition_preview,
     validate_condition_ops,
-    validate_policy_structural,
     validate_rules_local,
 )
 from keboola_agent_cli.services.rls_service import RlsService
@@ -781,11 +781,11 @@ class TestValidatePolicyStructural:
             },
         }
         policy = {"table": "in.c-x.y", "dialect": "snowflake", "rules": [{"condition": {}}]}
-        assert validate_policy_structural(policy, schema) == []
+        assert draft7_errors(policy, schema) == []
 
     def test_missing_required_field_reported(self) -> None:
         schema = {"type": "object", "required": ["table", "dialect", "rules"]}
-        errors = validate_policy_structural({"table": "t"}, schema)
+        errors = draft7_errors({"table": "t"}, schema)
         assert errors
 
 

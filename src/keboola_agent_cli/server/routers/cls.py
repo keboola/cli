@@ -9,4 +9,4 @@ from __future__ import annotations
 
 from .rls import build_policy_router
 
-router = build_policy_router("cls", "CLS")
+router = build_policy_router("cls")
