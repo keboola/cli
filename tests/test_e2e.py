@@ -3704,20 +3704,28 @@ class TestFullE2E:
     def _test_rls_cls_crud(self) -> None:
         """create -> detail -> update -> delete for both policy types, then the `rls setup` refusal.
 
-        Authoring needs an org-admin-capable token on a stack whose metastore registers the type, so a
-        classified NOT_FOUND / ACCESS_DENIED / MISSING_MASTER_TOKEN on the create is an expected skip
-        (the policy is never created then); any other failure fails the suite. The policy is always
-        deleted again. Targets a table that does not exist, so no real data is ever governed.
+        The policy is `targeted` (the default) with no grants and the project's own dialect (the
+        default), so it only ever governs this project -- never the shared organization, where an
+        organization-scope policy would reach every project with the feature. Authoring needs a
+        master token on a stack whose metastore registers the type, so a classified NOT_FOUND /
+        ACCESS_DENIED / MISSING_MASTER_TOKEN on the create is an expected skip (the policy is never
+        created then); any other failure fails the suite. The policy is always deleted again.
+        Targets a table that does not exist, so no real data is ever governed.
         """
         table = "in.c-kbagent-e2e-rls.policy_crud"
         samples = {
-            "rls": '[{"principal":"e2e@example.com","condition":{"true":true}}]',
-            "cls": '[{"principal":"e2e@example.com","visible_columns":["id"]}]',
+            "rls": (
+                '[{"principal":"e2e@example.com","condition":{"column":"id","op":"eq","value":"x"}}]',
+                '[{"principal":"e2e-2@example.com","condition":{"column":"id","op":"eq","value":"y"}}]',
+            ),
+            "cls": (
+                '[{"principal":"e2e@example.com","visible_columns":["id"]}]',
+                '[{"principal":"e2e-2@example.com","visible_columns":["id"]}]',
+            ),
         }
-        for group, rules in samples.items():
+        for group, (rules, new_rules) in samples.items():
             created = self._run(
-                group, "create", "--project", self.alias, "--table", table,
-                "--dialect", "snowflake", "--rules", rules,
+                group, "create", "--project", self.alias, "--table-id", table, "--rules", rules,
             )  # fmt: skip
             if created.exit_code != 0:
                 assert any(
@@ -3728,18 +3736,21 @@ class TestFullE2E:
                 continue
             policy_id = _json_ok(created)["data"]["id"]
             try:
+                assert _json_ok(created)["data"]["scope"] == "targeted"
                 detail = self._run_ok(
                     group, "detail", "--project", self.alias, "--policy-id", policy_id
                 )
                 assert detail["data"]["table"] == table
                 updated = self._run_ok(
                     group, "update", "--project", self.alias, "--policy-id", policy_id,
-                    "--dialect", "bigquery",
+                    "--rules", new_rules,
                 )  # fmt: skip
-                assert updated["data"]["dialect"] == "bigquery"
-                assert (
-                    updated["data"]["table"] == table
-                )  # fetch-then-merge kept the untouched field
+                assert updated["data"]["rules"][0]["principal"] == "e2e-2@example.com"
+                assert updated["data"]["table"] == table  # the partial update kept the table
+                previewed = self._run_ok(
+                    group, "delete", "--project", self.alias, "--policy-id", policy_id, "--dry-run"
+                )
+                assert previewed["data"]["dry_run"] is True
             finally:
                 deleted = self._run(
                     group, "delete", "--project", self.alias, "--policy-id", policy_id
@@ -3748,6 +3759,7 @@ class TestFullE2E:
         # Under --json (no terminal) the guided wizard refuses before any API call.
         refused = self._run("rls", "setup", "--project", self.alias)
         assert refused.exit_code == 2, refused.output
+        assert "INVALID_ARGUMENT" in refused.output
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""
