@@ -8,10 +8,15 @@ a project's tables) is already covered by the existing ``storage`` router;
 its write (create one policy per selected table) is the same
 ``POST /rls/{project}`` route below.
 
+:func:`build_policy_router` also builds the ``cls`` router: the two groups
+differ only in the service and the rule shape, which the service validates.
+
 **Every route enforces the permission policy** (``Depends(require_permission)``)
 -- RLS is security-sensitive enough (admin-class writes) that
 CLI-gates-but-REST-doesn't would be a real hole, mirroring
-``merge_requests.py`` rather than the (ungated) ``notifications.py``.
+``merge_requests.py`` rather than the (ungated) ``notifications.py``. A
+create at ``organization`` scope is also checked as
+``<group>.create --scope organization`` (destructive), like the CLI flag.
 
 The ``GET /{project}/schema`` route is registered before
 ``GET /{project}/{policy_id}`` so ``schema`` is never shadowed by the
@@ -21,128 +26,153 @@ order.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ...errors import ErrorCode, KeboolaApiError
-from ..dependencies import ServiceRegistry, get_registry, require_permission
-
-router = APIRouter(prefix="/rls", tags=["rls"])
-
-
-def _perm(operation: str) -> Any:
-    return Depends(require_permission(f"rls.{operation}"))
-
+from ...permissions import PermissionEngine
+from ..dependencies import (
+    ServiceRegistry,
+    get_permission_engine,
+    get_registry,
+    require_permission,
+)
 
 # -- Bodies --------------------------------------------------------------------------------------
 
 
-class RlsPolicyCreate(BaseModel):
-    table: str
-    dialect: str
+class PolicyCreate(BaseModel):
+    """``target_projects`` takes aliases or project IDs, like the semantic-layer bodies."""
+
+    table_id: str
     rules: list[dict[str, Any]]
-    target_project_ids: list[int] | None = None
+    dialect: Literal["snowflake", "bigquery"] | None = None  # None = the project backend
+    scope: Literal["targeted", "organization"] = "targeted"
+    target_projects: list[str | int] | None = None
     dry_run: bool = False
 
+    @model_validator(mode="after")
+    def _targets_need_targeted_scope(self) -> PolicyCreate:
+        if self.target_projects and self.scope != "targeted":
+            raise ValueError("target_projects requires scope='targeted'.")
+        return self
 
-class RlsPolicyUpdate(BaseModel):
-    table: str | None = None
-    dialect: str | None = None
+
+class PolicyUpdate(BaseModel):
+    """Partial update: an omitted field is unchanged; ``target_projects: []`` revokes every grant."""
+
+    table_id: str | None = None
+    dialect: Literal["snowflake", "bigquery"] | None = None
     rules: list[dict[str, Any]] | None = None
-    target_project_ids: list[int] | None = None
+    target_projects: list[str | int] | None = None
     dry_run: bool = False
 
 
-# -- Reads -----------------------------------------------------------------------------------
+def build_policy_router(group: Literal["rls", "cls"], label: str) -> APIRouter:
+    """The ``/rls`` or ``/cls`` router; ``label`` is "RLS"/"CLS" in summaries."""
+    router = APIRouter(prefix=f"/{group}", tags=[group])
 
+    def perm(operation: str) -> Any:
+        return Depends(require_permission(f"{group}.{operation}"))
 
-@router.get("/{project}", summary="List RLS policies", dependencies=[_perm("list")])
-def list_policies(
-    project: str, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """List row-level security policies visible to a project. Mirrors `kbagent rls list`."""
-    return registry.rls.list_policies(project)
+    def service(registry: ServiceRegistry) -> Any:
+        return getattr(registry, group)
 
+    @router.get("/{project}", summary=f"List {label} policies", dependencies=[perm("list")])
+    def list_policies(
+        project: str, registry: ServiceRegistry = Depends(get_registry)
+    ) -> dict[str, Any]:
+        """Policies visible to a project. Mirrors `kbagent <group> list`."""
+        return service(registry).list_policies(project)
 
-@router.get(
-    "/{project}/schema",
-    summary="Fetch the live rls-policy JSON Schema",
-    dependencies=[_perm("schema")],
-)
-def get_schema(project: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Live schema from the metastore -- no offline bundled snapshot. Mirrors `kbagent rls schema`."""
-    fetch = registry.rls.fetch_schema(project)
-    if fetch.schema is None:
-        raise KeboolaApiError(
-            message=f"Could not fetch the rls-policy schema: {fetch.reason}",
-            status_code=404,
-            error_code=ErrorCode.NOT_FOUND,
-            retryable=False,
+    @router.get(
+        "/{project}/schema",
+        summary=f"Fetch the live {group}-policy JSON Schema",
+        dependencies=[perm("schema")],
+    )
+    def get_schema(
+        project: str, registry: ServiceRegistry = Depends(get_registry)
+    ) -> dict[str, Any]:
+        """Live schema from the metastore -- no offline bundled snapshot."""
+        fetch = service(registry).fetch_schema(project)
+        if fetch.schema is None:
+            raise KeboolaApiError(
+                message=f"Could not fetch the {group}-policy schema: {fetch.reason}",
+                status_code=404,
+                error_code=ErrorCode.NOT_FOUND,
+                retryable=False,
+            )
+        return {"format": "json-schema", "source": "live", "schema": fetch.schema}
+
+    @router.get(
+        "/{project}/{policy_id}", summary=f"Get one {label} policy", dependencies=[perm("detail")]
+    )
+    def get_policy(
+        project: str, policy_id: str, registry: ServiceRegistry = Depends(get_registry)
+    ) -> dict[str, Any]:
+        """Full rule set for one policy. Mirrors `kbagent <group> detail`."""
+        return service(registry).get_policy(project, policy_id)
+
+    @router.post("/{project}", summary=f"Create a {label} policy", dependencies=[perm("create")])
+    def create_policy(
+        project: str,
+        body: PolicyCreate,
+        registry: ServiceRegistry = Depends(get_registry),
+        engine: PermissionEngine = Depends(get_permission_engine),
+    ) -> dict[str, Any]:
+        """Create one policy for one table at `targeted` (default) or `organization` scope.
+
+        Never `project` scope (the schema does not support it). Mirrors `kbagent <group> create`.
+        """
+        if body.scope == "organization":
+            engine.check_or_raise(f"{group}.create --scope organization")
+        return service(registry).create_policy(
+            project,
+            table=body.table_id,
+            rules=body.rules,
+            dialect=body.dialect,
+            scope=body.scope,
+            target_projects=body.target_projects,
+            dry_run=body.dry_run,
         )
-    return {"format": "json-schema", "source": "live", "schema": fetch.schema}
 
-
-@router.get("/{project}/{policy_id}", summary="Get one RLS policy", dependencies=[_perm("detail")])
-def get_policy(
-    project: str, policy_id: str, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """Full rule set for one policy. Mirrors `kbagent rls detail`."""
-    return registry.rls.get_policy(project, policy_id)
-
-
-# -- Writes ----------------------------------------------------------------------------------
-
-
-@router.post("/{project}", summary="Create an RLS policy", dependencies=[_perm("create")])
-def create_policy(
-    project: str, body: RlsPolicyCreate, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """Create one policy for one table -- always `organization`/`targeted` scope,
-
-    never `project` scope (no such option exists on this body). Mirrors
-    `kbagent rls create`.
-    """
-    return registry.rls.create_policy(
-        project,
-        table=body.table,
-        dialect=body.dialect,
-        rules=body.rules,
-        target_project_ids=body.target_project_ids,
-        dry_run=body.dry_run,
+    @router.patch(
+        "/{project}/{policy_id}", summary=f"Update a {label} policy", dependencies=[perm("update")]
     )
+    def update_policy(
+        project: str,
+        policy_id: str,
+        body: PolicyUpdate,
+        registry: ServiceRegistry = Depends(get_registry),
+    ) -> dict[str, Any]:
+        """Partial update: an omitted field keeps its current value. Mirrors `kbagent <group> update`."""
+        return service(registry).update_policy(
+            project,
+            policy_id,
+            table=body.table_id,
+            dialect=body.dialect,
+            rules=body.rules,
+            target_projects=body.target_projects,
+            dry_run=body.dry_run,
+        )
 
-
-@router.put(
-    "/{project}/{policy_id}", summary="Update an RLS policy", dependencies=[_perm("update")]
-)
-def update_policy(
-    project: str,
-    policy_id: str,
-    body: RlsPolicyUpdate,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Fetch-then-merge: an omitted field keeps its current value, it is never
-
-    silently blanked. Mirrors `kbagent rls update`.
-    """
-    return registry.rls.update_policy(
-        project,
-        policy_id,
-        table=body.table,
-        dialect=body.dialect,
-        rules=body.rules,
-        target_project_ids=body.target_project_ids,
-        dry_run=body.dry_run,
+    @router.delete(
+        "/{project}/{policy_id}",
+        summary=f"Delete a {label} policy",
+        dependencies=[perm("delete")],
     )
+    def delete_policy(
+        project: str,
+        policy_id: str,
+        dry_run: bool = False,
+        registry: ServiceRegistry = Depends(get_registry),
+    ) -> dict[str, Any]:
+        """Delete a policy (``?dry_run=true`` only shows it). Mirrors `kbagent <group> delete`."""
+        return service(registry).delete_policy(project, policy_id, dry_run=dry_run)
+
+    return router
 
 
-@router.delete(
-    "/{project}/{policy_id}", summary="Delete an RLS policy", dependencies=[_perm("delete")]
-)
-def delete_policy(
-    project: str, policy_id: str, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """Delete a policy, un-protecting its table. Mirrors `kbagent rls delete`."""
-    return registry.rls.delete_policy(project, policy_id)
+router = build_policy_router("rls", "RLS")

@@ -12,9 +12,11 @@ Thin CLI layer over :class:`RlsService`. Seven subcommands:
   a checkbox picker, build conditions, preview, then create one policy per
   table via the same ``create_policy`` path ``create`` uses.
 
-**Every policy this group writes is authored at ``organization`` or
-``targeted`` scope, never ``project``** -- there is deliberately no
-``--scope`` flag that could select ``project`` (see the RFC in
+**Every policy this group writes is authored at ``targeted`` scope (the
+default: the owning project plus the ``--target-project`` grants) or, only
+when asked for with ``--scope organization``, at ``organization`` scope**
+(every project in the organization). ``--scope`` offers no ``project``: the
+metastore schema does not support it for policies (see the RFC in
 ``keboola-mcp-server``'s ``feature_spec/rls_query_tool/RFC.md``).
 
 On a stack whose metastore predates the ``rls-policy`` schema every command here
@@ -22,14 +24,18 @@ answers with a clean, classified error -- see ``gotchas.md``'s RLS/CLS entry.
 
 ``list``/``detail``/``schema`` are read-only and safe under ``--deny-writes``.
 ``create``/``update``/``setup`` are gated as ``admin`` (organization-level,
-not merely ``write``); ``delete`` is gated as ``admin`` too -- see
-``rls.*`` in ``OPERATION_REGISTRY`` (``permissions.py``).
+not merely ``write``); ``delete`` and ``--scope organization`` are
+``destructive`` -- see ``rls.*`` in ``OPERATION_REGISTRY`` / ``FLAG_ESCALATIONS``
+(``permissions.py``).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+from collections.abc import Callable
+from enum import StrEnum
 from typing import Any
 
 import typer
@@ -37,7 +43,6 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..services.rls_service import RLS_DIALECTS
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
     check_cli_operation,
@@ -57,6 +62,72 @@ rls_app = typer.Typer(
         "are gated as admin -- see CONTRIBUTING.md."
     )
 )
+
+
+class Dialect(StrEnum):
+    """``--dialect`` values (the policy schema's enum); omitted = the project backend."""
+
+    SNOWFLAKE = "snowflake"
+    BIGQUERY = "bigquery"
+
+
+class PolicyScope(StrEnum):
+    """``--scope`` values: the schema supports no ``project`` scope for policies."""
+
+    TARGETED = "targeted"
+    ORGANIZATION = "organization"
+
+
+DIALECT_HELP = "Workspace SQL dialect; must match the project backend (default: the backend)"
+SCOPE_HELP = (
+    "targeted (default): the owning project plus --target-project grants. organization: "
+    "EVERY project of the organization that has the row-level-security feature -- an explicit, "
+    "organization-admin-only choice, gated as destructive."
+)
+TARGET_HELP = (
+    "Project alias or ID the policy also applies to (repeatable or comma-separated; "
+    "--scope targeted only; granting needs the organization-admin role)"
+)
+TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
+
+
+def _call[T](formatter: Any, fn: Callable[..., T], **kwargs: Any) -> T:
+    """Run a service call, turning its errors into a formatted message + exit code.
+
+    A bad option value (``INVALID_ARGUMENT``) is a usage error, exit 2.
+    """
+    try:
+        return fn(**kwargs)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        code = 2 if exc.error_code == ErrorCode.INVALID_ARGUMENT else map_error_to_exit_code(exc)
+        raise typer.Exit(code=code) from None
+
+
+def _confirm_or_exit(formatter: Any, question: str) -> None:
+    if not typer.confirm(question):
+        formatter.console.print("[yellow]Aborted.[/yellow]")
+        raise typer.Exit(code=0)
+
+
+def gate_scope(ctx: typer.Context, group: str, operation: str, scope: PolicyScope) -> None:
+    """``--scope organization`` governs the table in every project: a destructive-class flag."""
+    if scope == PolicyScope.ORGANIZATION:
+        check_cli_operation(ctx, f"{group}.{operation} --scope organization")
+
+
+def reject_target_conflict(
+    formatter: Any, target_project: list[str] | None, clear_target_projects: bool
+) -> None:
+    if clear_target_projects and target_project:
+        formatter.error(
+            message="--clear-target-projects cannot be combined with --target-project",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
 
 
 @rls_app.callback(invoke_without_command=True)
@@ -85,7 +156,7 @@ def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None
         "Dialect",
         "Rules",
         "Scope",
-        "Source Project",
+        "Owner Project",
         "Target Projects",
         show_header=True,
         header_style="bold cyan",
@@ -97,7 +168,7 @@ def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None
             str(policy.get("dialect", "")),
             str(policy.get("rule_count", 0)),
             str(policy.get("scope", "")),
-            str(policy.get("source_project_id") or ""),
+            str(policy.get("owner_project_id") or "(organization)"),
             ", ".join(str(p) for p in policy.get("target_project_ids", [])),
         )
     formatter.console.print(tbl)
@@ -109,7 +180,9 @@ def _print_policy(formatter: Any, row: dict[str, Any]) -> None:
     )
     formatter.console.print(f"  Dialect:          {row.get('dialect', '')}")
     formatter.console.print(f"  Scope:            {row.get('scope', '')}")
-    formatter.console.print(f"  Source project:   {row.get('source_project_id') or '(none)'}")
+    formatter.console.print(
+        f"  Owner project:    {row.get('owner_project_id') or '(organization)'}"
+    )
     targets = row.get("target_project_ids") or []
     if targets:
         formatter.console.print(f"  Target projects:  {', '.join(str(t) for t in targets)}")
@@ -154,7 +227,7 @@ def _parse_rules_arg(
 
 
 # ---------------------------------------------------------------------------
-# rls list
+# rls list / detail / schema
 # ---------------------------------------------------------------------------
 
 
@@ -165,31 +238,14 @@ def rls_list(
 ) -> None:
     """List row-level security policies visible to a project."""
     formatter = get_formatter(ctx)
-    service = get_service(ctx, "rls_service")
-
-    try:
-        result = service.list_policies(alias=project)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    result = _call(formatter, get_service(ctx, "rls_service").list_policies, alias=project)
 
     if formatter.json_mode:
         formatter.output(result)
-        return
-
-    policies = result.get("policies", [])
-    if not policies:
+    elif not result.get("policies"):
         formatter.console.print("[dim]No RLS policies found.[/dim]")
     else:
-        _format_policy_table(formatter, policies)
-
-
-# ---------------------------------------------------------------------------
-# rls detail
-# ---------------------------------------------------------------------------
+        _format_policy_table(formatter, result["policies"])
 
 
 @rls_app.command("detail")
@@ -201,26 +257,32 @@ def rls_detail(
     """Show one RLS policy's full rule set."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "rls_service")
-
-    try:
-        result = service.get_policy(alias=project, policy_id=policy_id)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    result = _call(formatter, service.get_policy, alias=project, policy_id=policy_id)
 
     if formatter.json_mode:
         formatter.output(result)
+    else:
+        _print_policy(formatter, result)
+
+
+def print_schema(ctx: typer.Context, service_name: str, item_type: str, project: str) -> None:
+    """``rls schema`` / ``cls schema``: the live schema, no offline bundled snapshot."""
+    formatter = get_formatter(ctx)
+    # An auth/permission failure is raised (not "schema unavailable") and reported by `_call`.
+    fetch = _call(formatter, get_service(ctx, service_name).fetch_schema, alias=project)
+    if fetch.schema is None:
+        formatter.error(
+            message=f"Could not fetch the {item_type} schema: {fetch.reason}",
+            error_code=ErrorCode.NOT_FOUND,
+        )
+        raise typer.Exit(code=4)
+
+    if formatter.json_mode:
+        formatter.output({"format": "json-schema", "source": "live", "schema": fetch.schema})
         return
-
-    _print_policy(formatter, result)
-
-
-# ---------------------------------------------------------------------------
-# rls schema
-# ---------------------------------------------------------------------------
+    formatter.console.print(
+        Syntax(json.dumps(fetch.schema, indent=2), "json", theme="monokai", line_numbers=False)
+    )
 
 
 @rls_app.command("schema")
@@ -236,35 +298,11 @@ def rls_schema(
     schema is authoritative only from the live metastore, and on a stack whose
     metastore predates it, fetching fails with a clean, classified error.
     """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "rls_service")
-
-    try:
-        fetch = service.fetch_schema(project)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:  # an auth/permission failure is not "schema unavailable"
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if fetch.schema is None:
-        formatter.error(
-            message=f"Could not fetch the rls-policy schema: {fetch.reason}",
-            error_code=ErrorCode.NOT_FOUND,
-        )
-        raise typer.Exit(code=4)
-
-    if formatter.json_mode:
-        formatter.output({"format": "json-schema", "source": "live", "schema": fetch.schema})
-        return
-    formatter.console.print(
-        Syntax(json.dumps(fetch.schema, indent=2), "json", theme="monokai", line_numbers=False)
-    )
+    print_schema(ctx, "rls_service", "rls-policy", project)
 
 
 # ---------------------------------------------------------------------------
-# rls create
+# rls create / update / delete
 # ---------------------------------------------------------------------------
 
 
@@ -272,12 +310,9 @@ def rls_schema(
 def rls_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", help="Project alias -- the project this policy protects"
+        ..., "--project", help="Project alias -- the project that owns the policy"
     ),
-    table: str = typer.Option(..., "--table", help="Table key, e.g. in.c-crm.invoices"),
-    dialect: str = typer.Option(
-        ..., "--dialect", help=f"Workspace SQL dialect: {' | '.join(RLS_DIALECTS)}"
-    ),
+    table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
     rules: str = typer.Option(
         ...,
         "--rules",
@@ -286,87 +321,42 @@ def rls_create(
             "(see `rls schema` / rls-workflow.md for the condition shape)"
         ),
     ),
-    target_project: list[str] | None = typer.Option(
-        None,
-        "--target-project",
-        help=(
-            "Project ID this policy also applies to (repeatable). Omit for plain "
-            "organization scope -- still only applies where source_project_id / "
-            "target_project_ids match at read time, never by table-name text alone."
-        ),
-    ),
+    dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
+    scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
+    target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview the compiled condition without writing"
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Create one RLS policy for one table.
-
-    Always authored at ``organization`` scope, or ``targeted`` scope when
-    ``--target-project`` is given -- never plain ``project`` scope.
-    """
+    """Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``)."""
+    gate_scope(ctx, "rls", "create", scope)
     formatter = get_formatter(ctx)
-    parsed_rules = _parse_rules_arg(formatter, rules)
-
-    if dialect not in RLS_DIALECTS:
-        formatter.error(
-            message=f"--dialect must be one of {RLS_DIALECTS}, got {dialect!r}",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
-
     service = get_service(ctx, "rls_service")
+    kwargs = {
+        "alias": project,
+        "table": table_id,
+        "dialect": dialect,
+        "rules": _parse_rules_arg(formatter, rules),
+        "scope": scope.value,
+        "target_projects": target_project,
+    }
 
     if not dry_run and not yes and not formatter.json_mode:
-        try:
-            preview = service.create_policy(
-                alias=project,
-                table=table,
-                dialect=dialect,
-                rules=parsed_rules,
-                target_project_ids=target_project,
-                dry_run=True,
-            )
-        except (ConfigError, KeboolaApiError):
-            pass  # validation/network error -- let the real call below report it properly
-        else:
-            _print_preview(formatter, preview)
-        confirmed = typer.confirm(f"Create RLS policy on {table}?")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+        # A validation/network error here is reported properly by the real call below.
+        with contextlib.suppress(ConfigError, KeboolaApiError):
+            _print_preview(formatter, service.create_policy(**kwargs, dry_run=True))
+        _confirm_or_exit(formatter, f"Create RLS policy on {table_id}?")
 
-    try:
-        result = service.create_policy(
-            alias=project,
-            table=table,
-            dialect=dialect,
-            rules=parsed_rules,
-            target_project_ids=target_project,
-            dry_run=dry_run,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    result = _call(formatter, service.create_policy, **kwargs, dry_run=dry_run)
 
     if formatter.json_mode:
         formatter.output(result)
         return
-
     _print_warnings(formatter, result)
-    if dry_run:
-        _print_preview(formatter, result)
-        return
-    formatter.success(f"Created RLS policy {result.get('id', '')} on {table}")
+    if not dry_run:
+        formatter.success(f"Created RLS policy {result.get('id', '')} on {table_id}")
     _print_preview(formatter, result)
-
-
-# ---------------------------------------------------------------------------
-# rls update
-# ---------------------------------------------------------------------------
 
 
 @rls_app.command("update")
@@ -374,15 +364,15 @@ def rls_update(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
-    table: str | None = typer.Option(None, "--table", help="New table key (unset = unchanged)"),
-    dialect: str | None = typer.Option(
-        None, "--dialect", help=f"New dialect: {' | '.join(RLS_DIALECTS)} (unset = unchanged)"
+    table_id: str | None = typer.Option(None, "--table-id", help="New table (unset = unchanged)"),
+    dialect: Dialect | None = typer.Option(
+        None, "--dialect", help="New dialect, must match the project backend (unset = unchanged)"
     ),
     rules: str | None = typer.Option(
         None, "--rules", help="New JSON|@file|- rules array (unset = unchanged)"
     ),
     target_project: list[str] | None = typer.Option(
-        None, "--target-project", help="New target-project list (repeatable; unset = unchanged)"
+        None, "--target-project", help=f"{TARGET_HELP}; replaces the list (unset = unchanged)"
     ),
     clear_target_projects: bool = typer.Option(
         False,
@@ -396,65 +386,58 @@ def rls_update(
 ) -> None:
     """Update an existing RLS policy.
 
-    Fetch-then-merge: only the flags you pass are changed -- an omitted flag
-    keeps the policy's current value, it is never silently blanked.
+    Only the flags you pass change -- an omitted flag keeps the policy's
+    current value. The write is a partial update (PATCH) of just those keys.
     """
     formatter = get_formatter(ctx)
     parsed_rules = _parse_rules_arg(formatter, rules) if rules is not None else None
-    if clear_target_projects and target_project:
-        formatter.error(
-            message="--clear-target-projects cannot be combined with --target-project",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
-
-    if dialect is not None and dialect not in RLS_DIALECTS:
-        formatter.error(
-            message=f"--dialect must be one of {RLS_DIALECTS}, got {dialect!r}",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
-
+    reject_target_conflict(formatter, target_project, clear_target_projects)
     service = get_service(ctx, "rls_service")
 
     if not dry_run and not yes and not formatter.json_mode:
-        confirmed = typer.confirm(f"Update RLS policy {policy_id}?")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+        _confirm_or_exit(formatter, f"Update RLS policy {policy_id}?")
 
-    try:
-        result = service.update_policy(
-            alias=project,
-            policy_id=policy_id,
-            table=table,
-            dialect=dialect,
-            rules=parsed_rules,
-            target_project_ids=[] if clear_target_projects else target_project,
-            dry_run=dry_run,
-        )
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    result = _call(
+        formatter,
+        service.update_policy,
+        alias=project,
+        policy_id=policy_id,
+        table=table_id,
+        dialect=dialect,
+        rules=parsed_rules,
+        target_projects=[] if clear_target_projects else target_project,
+        dry_run=dry_run,
+    )
 
     if formatter.json_mode:
         formatter.output(result)
         return
-
     _print_warnings(formatter, result)
-    if dry_run:
-        _print_preview(formatter, result)
-        return
-    formatter.success(f"Updated RLS policy {policy_id}")
+    if not dry_run:
+        formatter.success(f"Updated RLS policy {policy_id}")
     _print_preview(formatter, result)
 
 
-# ---------------------------------------------------------------------------
-# rls delete
-# ---------------------------------------------------------------------------
+def delete_policy(
+    ctx: typer.Context, service_name: str, label: str, effect: str, **kwargs: Any
+) -> None:
+    """``rls delete`` / ``cls delete``; ``--dry-run`` shows the policy that would be deleted."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, service_name)
+    policy_id, dry_run, yes = kwargs["policy_id"], kwargs["dry_run"], kwargs.pop("yes")
+
+    if not dry_run and not yes and not formatter.json_mode:
+        _confirm_or_exit(formatter, f"Delete {label} policy {policy_id}? {effect}")
+
+    result = _call(formatter, service.delete_policy, **kwargs)
+
+    if formatter.json_mode:
+        formatter.output(result)
+    elif dry_run:
+        formatter.console.print(f"[bold]Would delete[/bold] {label} policy {policy_id}:")
+        formatter.console.print_json(data=result["policy"])
+    else:
+        formatter.success(f"Deleted {label} policy {policy_id}")
 
 
 @rls_app.command("delete")
@@ -462,31 +445,20 @@ def rls_delete(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Delete an RLS policy."""
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "rls_service")
-
-    if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(f"Delete RLS policy {policy_id}? This un-protects its table.")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
-
-    try:
-        result = service.delete_policy(alias=project, policy_id=policy_id)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.success(f"Deleted RLS policy {policy_id}")
+    """Delete an RLS policy -- its table's rows are no longer filtered."""
+    delete_policy(
+        ctx,
+        "rls_service",
+        "RLS",
+        "This un-protects its table.",
+        alias=project,
+        policy_id=policy_id,
+        dry_run=dry_run,
+        yes=yes,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +468,7 @@ def rls_delete(
 
 _SETUP_HINT = (
     "rls setup is an interactive picker and needs a real terminal. "
-    "Use `rls create --project P --table T --dialect D --rules '[...]'` "
+    "Use `rls create --project P --table-id T --rules '[...]'` "
     "directly instead (see rls-workflow.md)."
 )
 
@@ -508,6 +480,7 @@ _CONDITION_MENU = (
 )
 
 _COMPARISON_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
+_VALUE_HINT = 'parsed as JSON when it is one (42, 4.5, true); quote it ("42") to force a string'
 
 
 def _prompt_choice(text: str, choices: tuple[str, ...], default: str) -> str:
@@ -518,6 +491,19 @@ def _prompt_choice(text: str, choices: tuple[str, ...], default: str) -> str:
         typer.echo(f"Enter one of: {', '.join(choices)}")
 
 
+def _typed_value(raw: str) -> Any:
+    """A prompted value as the JSON scalar it spells (``42``, ``true``), else the text itself.
+
+    Without this every value would be stored as a string, and the filter would compare a numeric or
+    boolean column to a string literal. ``null`` is not a value here: it never matches (use option 3).
+    """
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return raw
+    return value if isinstance(value, str | int | float | bool) else raw
+
+
 def _prompt_condition() -> dict[str, Any]:
     typer.echo(_CONDITION_MENU)
     choice = _prompt_choice("Choice", ("1", "2", "3", "4"), default="1")
@@ -526,12 +512,12 @@ def _prompt_condition() -> dict[str, Any]:
     column = typer.prompt("Column name")
     if choice == "1":
         op = _prompt_choice("Operator", _COMPARISON_OPS, default="eq")
-        value = typer.prompt("Value")
+        value = _typed_value(typer.prompt(f"Value ({_VALUE_HINT})"))
         return {"column": column, "op": op, "value": value}
     if choice == "2":
         op = _prompt_choice("Operator", ("in", "not_in"), default="in")
-        raw_values = typer.prompt("Values (comma-separated)")
-        values = [v.strip() for v in raw_values.split(",") if v.strip()]
+        raw_values = typer.prompt(f"Values (comma-separated; each {_VALUE_HINT})")
+        values = [_typed_value(v.strip()) for v in raw_values.split(",") if v.strip()]
         return {"column": column, "op": op, "values": values}
     op = _prompt_choice("Operator", ("is_null", "is_not_null"), default="is_null")
     return {"column": column, "op": op}
@@ -559,51 +545,34 @@ def rls_setup(
     project: str = typer.Option(
         ..., "--project", help="Project alias whose tables you're protecting"
     ),
-    dialect: str | None = typer.Option(
-        None, "--dialect", help=f"Workspace SQL dialect: {' | '.join(RLS_DIALECTS)}"
-    ),
+    dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     rules: str | None = typer.Option(
         None,
         "--rules",
         help="JSON|@file|- rules array -- skips the interactive condition builder",
     ),
-    target_project: list[str] | None = typer.Option(
-        None, "--target-project", help="Project ID to also share the policy with (repeatable)"
-    ),
+    scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
+    target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the final confirmation"),
 ) -> None:
     """Guided RLS setup: pick tables, build a condition, preview, then write.
 
-    Interactive-terminal-only (no ``--json`` / non-TTY path -- use ``rls
-    create`` directly there). Creates one RLS policy per selected table,
-    all sharing the same rules, via the exact same write path ``rls
-    create`` uses.
+    Interactive-terminal-only (with ``--json`` or without a terminal it exits 2
+    with a usage error -- use ``rls create`` there). Creates one RLS policy per
+    selected table, all sharing the same rules, via the exact same write path
+    ``rls create`` uses.
     """
     # `setup` performs `create`'s writes, so an exact `rls.create` denial must cover it too.
     check_cli_operation(ctx, "rls.create")
+    gate_scope(ctx, "rls", "create", scope)
     formatter = get_formatter(ctx)
-    if dialect is not None and dialect not in RLS_DIALECTS:
-        formatter.error(
-            message=f"--dialect must be one of {RLS_DIALECTS}, got {dialect!r}",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
     if formatter.json_mode or not _is_interactive():
-        target_console = formatter.err_console if formatter.json_mode else formatter.console
-        target_console.print(_SETUP_HINT)
+        formatter.error(message=_SETUP_HINT, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2)
 
-    storage_service = get_service(ctx, "storage_service")
-    try:
-        tables_result = storage_service.list_tables(aliases=[project])
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-
-    tables = tables_result.get("tables", [])
+    tables = _call(
+        formatter, get_service(ctx, "storage_service").list_tables, aliases=[project]
+    ).get("tables", [])
     if not tables:
         formatter.console.print(f"[dim]No tables found in project '{project}'.[/dim]")
         raise typer.Exit(code=0)
@@ -615,7 +584,7 @@ def rls_setup(
     try:
         indices = checkbox_select(items, title=f"Select tables to protect with RLS in '{project}'")
     except CheckboxUnavailable:
-        formatter.console.print(f"[yellow]{_SETUP_HINT}[/yellow]")
+        formatter.error(message=_SETUP_HINT, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
     selected = indices or []
@@ -623,51 +592,39 @@ def rls_setup(
         formatter.console.print("No tables selected.")
         raise typer.Exit(code=0)
 
-    resolved_dialect = dialect or _prompt_choice("Dialect", RLS_DIALECTS, default="snowflake")
-
-    if rules is not None:
-        parsed_rules = _parse_rules_arg(formatter, rules)
-    else:
-        parsed_rules = _build_rules_interactively()
-
+    parsed_rules = (
+        _parse_rules_arg(formatter, rules) if rules is not None else _build_rules_interactively()
+    )
     service = get_service(ctx, "rls_service")
     selected_tables = [str(tables[i]["id"]) for i in selected]
+    kwargs = {
+        "alias": project,
+        "dialect": dialect,  # None = the project backend, resolved by the service
+        "rules": parsed_rules,
+        "scope": scope.value,
+        "target_projects": target_project,
+    }
 
     for table_id in selected_tables:
         try:
-            preview = service.create_policy(
-                alias=project,
-                table=table_id,
-                dialect=resolved_dialect,
-                rules=parsed_rules,
-                target_project_ids=target_project,
-                dry_run=True,
-            )
+            preview = service.create_policy(table=table_id, **kwargs, dry_run=True)
         except (ConfigError, KeboolaApiError) as exc:
             formatter.console.print(f"[yellow]{table_id}: preview failed ({exc}).[/yellow]")
             continue
         _print_preview(formatter, preview)
 
     if not yes:
-        confirmed = typer.confirm(
-            f"Create {len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}?"
+        _confirm_or_exit(
+            formatter,
+            f"Create {len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}?",
         )
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
 
     failed: list[str] = []
     exit_codes: set[int] = set()
     error_codes: set[str] = set()
     for table_id in selected_tables:
         try:
-            result = service.create_policy(
-                alias=project,
-                table=table_id,
-                dialect=resolved_dialect,
-                rules=parsed_rules,
-                target_project_ids=target_project,
-            )
+            result = service.create_policy(table=table_id, **kwargs)
         except (ConfigError, KeboolaApiError) as exc:
             formatter.warning(f"{table_id}: {exc}")
             failed.append(table_id)

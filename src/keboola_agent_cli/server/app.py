@@ -346,8 +346,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "**Development.** "
             "Row-level security policies (metastore-backed `rls-policy` "
-            "objects), always authored at `organization`/`targeted` scope -- "
-            "never `project` scope. Mirrors `kbagent rls list|detail|schema|"
+            "objects), authored at `targeted` scope unless `organization` is "
+            "asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|"
             "create|update|delete` (`rls setup`'s interactive picker has no "
             "endpoint of its own, same carve-out as "
             "`auth register-projects`)."
@@ -358,9 +358,9 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "**Development.** "
             "Column-level security policies (metastore-backed `cls-policy` "
-            "objects: a per-principal `visible_columns` allowlist), always "
-            "authored at `organization`/`targeted` scope -- never `project` "
-            "scope. Mirrors `kbagent cls list|detail|schema|create|update|"
+            "objects: a per-principal `visible_columns` allowlist), authored "
+            "at `targeted` scope unless `organization` is asked for -- never "
+            "`project` scope. Mirrors `kbagent cls list|detail|schema|create|update|"
             "delete`."
         ),
     },

@@ -1968,19 +1968,24 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per principal (never free-text SQL). Same
 metastore/master-token requirements as Semantic Layer above.
-**Scope**: every write is authored at `organization` scope (default) or
-`targeted` scope (with --target-project) -- there is NO `--scope project`
-option anywhere in this group (the metastore ACL reserves organization scope
-and cross-project grants for organization admins). A stack whose metastore
-predates the `rls-policy`/`cls-policy` schemas answers `rls schema` with a
-classified NOT_FOUND schema-fetch error -- expected there, not a kbagent
-bug. Enforcement (the actual SQL rewrite) happens in
-`keboola-mcp-server`'s `query_data`, not here -- kbagent only authors
-policies, it never executes queries against them.
+**Scope**: `targeted` by default (the owning project plus --target-project
+grants); `--scope organization` governs the table in EVERY project of the
+organization (destructive-class, organization-admin only) -- use it only
+when the user asks for org-wide. There is NO project scope. A project admin
+may write `targeted` policies of its own project without grants; grants and
+organization scope need the organization-admin role (403 otherwise).
+Enforced only where the project has the `row-level-security` feature.
+One invalid policy makes the enforcement refuse EVERY query of a project, so
+writes refuse a dialect other than the project backend and a principal with
+two rules on one table. A stack whose metastore predates the
+`rls-policy`/`cls-policy` schemas answers `rls schema` with a classified
+NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
+Enforcement (the actual SQL rewrite) happens in `keboola-mcp-server`'s
+`query_data`, not here -- kbagent only authors policies.
 
   kbagent rls list --project P
-    List RLS policies visible to a project (id, table, dialect, rule_count,
-    scope, source_project_id, target_project_ids).
+    List RLS policies visible to -- and applied in -- a project (id, table,
+    dialect, rule_count, scope, owner_project_id, target_project_ids).
 
   kbagent rls detail --project P --policy-id ID
     Full rule set for one policy.
@@ -1989,42 +1994,39 @@ policies, it never executes queries against them.
     Live rls-policy JSON Schema fetched from the metastore. No offline
     bundled snapshot (unlike `flow schema`) -- always live-only.
 
-  kbagent rls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+  kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
     Create one policy for one table. --rules is a JSON array of
     {{principal|principals, condition}} objects -- condition is a primitive
     tree (column/op/value, in/not_in, is_null/is_not_null, and/or nesting,
-    or a `{{"true": true}}` sentinel), never a raw predicate string.
-    --target-project (repeatable) shifts scope from organization to
-    targeted and registers the grant. --dry-run previews the compiled
-    condition (kbagent's OWN preview renderer -- NOT the enforcement
-    engine, which lives in keboola-mcp-server; the two may render
-    differently, only the enforcement engine's output governs actual
-    filtering) without writing anything.
+    or a `{{"true": true}}` sentinel), never a raw predicate string; use
+    is_null, never value null. --dialect defaults to the project backend.
+    --target-project (alias or ID, repeatable or comma-separated) grants
+    other projects in the create request. --dry-run previews the compiled
+    condition (columns quoted like the enforcement) without writing.
 
-  kbagent rls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
-    Fetch-then-merge: an omitted flag keeps its current value, never
-    silently blanked (unlike a naive full-record PUT).
+  kbagent rls update --project P --policy-id ID [--table-id ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+    Partial update (PATCH of the changed keys only); the merged policy is
+    validated first and the result is re-read after the write.
 
-  kbagent rls delete --project P --policy-id ID [--yes]
-    Delete a policy, un-protecting its table.
+  kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
+    Delete a policy, un-protecting its table (destructive-class).
 
-  kbagent rls setup --project P [--dialect D] [--rules JSON|@file|-] [--target-project ID ...] [--yes]
+  kbagent rls setup --project P [--dialect D] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
     Guided, INTERACTIVE-TERMINAL-ONLY wizard: checkbox table picker (reuses
     `storage tables`), then either the interactive column/op/value condition
     builder or the same --rules escape hatch `create` takes, then a preview
-    + confirm, then one `rls create` call per selected table. Refuses under
-    --json or without an interactive terminal (stdin or stdout not a TTY) with a one-line hint to use `rls create`
-    directly -- there is no non-interactive path through `setup` itself.
+    + confirm, then one `rls create` call per selected table. Under --json or
+    without an interactive terminal it exits 2 (INVALID_ARGUMENT) pointing at
+    `rls create`.
 
 ### Column-Level Security (CLS)
 
 Author `cls-policy` metastore objects: one object per protected table, a
 `visible_columns` allowlist per principal (unlisted columns are omitted from
 that principal's result; masking is not supported). Sibling of RLS above --
-same scope rule (organization/targeted, never project), fetch-then-merge
-update and master-token requirement; no `setup` wizard. `query_data` in
-`keboola-mcp-server` composes RLS and CLS; a principal with no rule for a
-governed table is refused there.
+same scope default, permissions, checks and partial update; no `setup`
+wizard. `query_data` in `keboola-mcp-server` composes RLS and CLS; a
+principal with no rule for a governed table is refused there.
 
   kbagent cls list --project P
     List CLS policies visible to a project.
@@ -2035,15 +2037,15 @@ governed table is refused there.
   kbagent cls schema --project P
     Live cls-policy JSON Schema from the metastore (live-only).
 
-  kbagent cls create --project P --table BUCKET.TABLE --dialect snowflake|bigquery --rules JSON|@file|- [--target-project ID ...] [--dry-run] [--yes]
+  kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
     Create one policy for one table. --rules is a JSON array of
     {{principal|principals, visible_columns: [col, ...]}} objects. --dry-run
     prints each principal's allowed projection without writing.
 
-  kbagent cls update --project P --policy-id ID [--table ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ID ... | --clear-target-projects] [--dry-run] [--yes]
-    Fetch-then-merge: an omitted flag keeps its current value.
+  kbagent cls update --project P --policy-id ID [--table-id ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+    Partial update, same as `rls update`.
 
-  kbagent cls delete --project P --policy-id ID [--yes]
+  kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
     Delete a policy; its table's columns become unrestricted.
 
 
