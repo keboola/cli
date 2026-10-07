@@ -175,8 +175,14 @@ def test_update_is_patch_not_put(tmp_path: Path) -> None:
     assert res.status_code == 405, res.text
 
 
-def test_target_projects_with_organization_scope_is_422(tmp_path: Path) -> None:
+def test_target_projects_with_organization_scope_is_400(tmp_path: Path) -> None:
+    """The service refuses the combination (INVALID_ARGUMENT); REST answers it as a 400."""
     rls_svc = MagicMock()
+    rls_svc.create_policy.side_effect = KeboolaApiError(
+        message="target projects require scope 'targeted'",
+        status_code=400,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+    )
     app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
     body = {
         "table_id": "t.x",
@@ -188,8 +194,7 @@ def test_target_projects_with_organization_scope_is_422(tmp_path: Path) -> None:
     with TestClient(app) as client:
         res = client.post(f"/rls/{PROJECT}", headers=AUTH, json=body)
 
-    assert res.status_code == 422, res.text
-    rls_svc.create_policy.assert_not_called()
+    assert res.status_code == 400, res.text
 
 
 def test_delete_policy_calls_service(tmp_path: Path) -> None:

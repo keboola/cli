@@ -31,15 +31,16 @@ answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, NoReturn, cast
 
 import jsonschema
 
 from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
+from ..json_utils import draft7_errors
 from ..metastore_client import (
     MetastoreClient,
     ObjectScope,
@@ -52,11 +53,9 @@ from ._rls_condition import RLS_DIALECTS
 from ._semantic_layer_scope import resolve_target_project_ids
 from .base import BaseService, ClientFactory, make_session_aware_client_factory
 
-logger = logging.getLogger(__name__)
-
 RLS_ITEM_TYPE: SemanticType = "rls-policy"
 
-__all__ = ["POLICY_SCOPES", "RLS_DIALECTS", "RLS_ITEM_TYPE", "RlsSchemaFetch", "RlsService"]
+__all__ = ["RLS_ITEM_TYPE", "PolicyScope", "RlsSchemaFetch", "RlsService"]
 
 MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
@@ -71,8 +70,11 @@ _AUTH_ERROR_CODES = frozenset(
 )
 
 
-# The scopes a policy may be authored at (the schema's `x-metastore.scope.supported`).
-POLICY_SCOPES: tuple[ObjectScope, ...] = ("targeted", "organization")
+class PolicyScope(StrEnum):
+    """The scopes a policy may be authored at (the schema's ``x-metastore.scope.supported``)."""
+
+    TARGETED = "targeted"
+    ORGANIZATION = "organization"
 
 
 @dataclass(frozen=True)
@@ -113,8 +115,6 @@ class RlsService(BaseService):
             metastore_client_factory
             or make_session_aware_client_factory(config_store, MetastoreClient)
         )
-        # Project backend per (stack, token): one `verify_token` per project, not per write.
-        self._backends: dict[tuple[str, str], str] = {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -192,11 +192,8 @@ class RlsService(BaseService):
 
     def _project_dialect(self, project: ProjectConfig) -> str:
         """The project's backend -- the only dialect the enforcement accepts for its policies."""
-        key = (project.stack_url, project.token)
-        if key not in self._backends:
-            with self._client_factory(project.stack_url, project.token) as client:
-                self._backends[key] = (client.verify_token().default_backend or "").lower()
-        backend = self._backends[key]
+        with self._client_factory(project.stack_url, project.token) as client:
+            backend = (client.verify_token().default_backend or "").lower()
         if backend not in RLS_DIALECTS:
             self._raise_invalid(
                 [
@@ -271,7 +268,7 @@ class RlsService(BaseService):
         fetch = self._fetch_schema(client)
         if not fetch.schema:
             return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
-        return PolicyValidation(_rls_condition.validate_policy_structural(policy, fetch.schema), [])
+        return PolicyValidation(draft7_errors(policy, fetch.schema), [])
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
@@ -362,8 +359,8 @@ class RlsService(BaseService):
         grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
         returns the preview without calling the write endpoint.
         """
-        if scope not in POLICY_SCOPES:
-            self._raise_usage(f"scope must be one of {POLICY_SCOPES}, got {scope!r}")
+        if scope not in tuple(PolicyScope):
+            self._raise_usage(f"scope must be one of {tuple(PolicyScope)}, got {scope!r}")
         if target_projects and scope != "targeted":
             self._raise_usage("target projects require scope 'targeted'")
         target_ids = self._resolve_targets(alias, target_projects)
@@ -392,7 +389,7 @@ class RlsService(BaseService):
                 self.item_type,
                 name=table,
                 data=policy,
-                scope=cast(ObjectScope, scope),  # checked against POLICY_SCOPES above
+                scope=cast(ObjectScope, str(scope)),  # checked against PolicyScope above
                 target_project_ids=target_ids or None,
                 conflict_hint=self._conflict_hint,
             )

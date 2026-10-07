@@ -6,7 +6,7 @@ where each rule names a principal and the columns that principal may see
 (``visible_columns`` -- an allowlist projection; masking is not supported).
 
 Everything except the rule shape is identical to :class:`RlsService` (never
-``project`` scope, fetch-then-merge update, live-schema validation that
+``project`` scope, partial (PATCH) update, live-schema validation that
 degrades to a warning), so this class only overrides the policy type and the
 two rule hooks. Enforcement happens in ``keboola-mcp-server``'s
 ``query_data``, not here -- kbagent only authors policies.

@@ -14,30 +14,18 @@ from unittest.mock import ANY, MagicMock
 
 import pytest
 
-from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
-from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.cls_service import ClsService
 
-from .test_rls_service import storage_client_factory
+from .test_rls_service import _make_store, storage_client_factory
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 _RULES = [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
 
 
 def _make_service(tmp_path: Path) -> tuple[ClsService, MagicMock]:
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    store = ConfigStore(config_dir=config_dir)
-    store.add_project(
-        "prod",
-        ProjectConfig(
-            stack_url="https://connection.keboola.com",
-            token=TEST_TOKEN,
-            project_name="prod",
-            project_id=5725,
-        ),
-    )
+    """The RLS fixtures (same store and Storage mock), with a CLS service and no live schema."""
+    store = _make_store(tmp_path)
     mock = MagicMock()
     mock.__enter__ = MagicMock(return_value=mock)
     mock.__exit__ = MagicMock(return_value=False)

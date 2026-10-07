@@ -22,23 +22,29 @@ sqlglot as a kbagent dependency just for this string is not warranted.
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import Any
 
-from ..json_utils import draft7_errors
-
-# The RFC's `condition` schema supports these operators; kept as a frozenset
-# so the CLI/service layer can validate an op before it ever reaches the
-# structural (schema) check, giving a clearer error for the common typo case.
+# The condition operators of the policy schema, checked locally so a typo gets a specific error
+# even when the live schema is unavailable. COMPARISON_SQL also renders the preview.
 COMPARISON_SQL = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 RLS_COMPARISON_OPS = frozenset(COMPARISON_SQL)
 RLS_MEMBERSHIP_OPS = frozenset({"in", "not_in"})
 RLS_NULLNESS_OPS = frozenset({"is_null", "is_not_null"})
 RLS_CONDITION_OPS = RLS_COMPARISON_OPS | RLS_MEMBERSHIP_OPS | RLS_NULLNESS_OPS
 
+
 # The metastore's `rls-policy` schema (RFC) restricts `dialect` to these two
 # -- the same pair `rewrite_query()` on the enforcement side never transpiles
 # between (predicates are pinned to one workspace dialect per policy).
-RLS_DIALECTS: tuple[str, ...] = ("snowflake", "bigquery")
+class Dialect(StrEnum):
+    """The policy schema's ``dialect`` enum (the CLI ``--dialect`` choice and the REST field)."""
+
+    SNOWFLAKE = "snowflake"
+    BIGQUERY = "bigquery"
+
+
+RLS_DIALECTS: tuple[str, ...] = tuple(Dialect)
 
 # The enforcement's principal pattern (mcp-server ``rls.py``): no whitespace or control characters. A
 # principal that fails it is not ignored there -- it refuses EVERY query in the project.
@@ -47,14 +53,6 @@ _PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
 # How each dialect quotes an identifier. The enforcement compiles columns quoted (case-exact), so the
 # preview must too -- an unquoted preview would hide a case mismatch the real filter does not forgive.
 _QUOTE = {"snowflake": '"', "bigquery": "`"}
-
-
-def validate_policy_structural(policy: dict[str, Any], schema: dict[str, Any]) -> list[str]:
-    """Draft7-validate a candidate policy body (``{"table", "dialect", "rules"}``) against a live schema.
-
-    Defense in depth -- the metastore validates on write too, but its PATCH only the patched keys.
-    """
-    return draft7_errors(policy, schema)
 
 
 def _is_true_sentinel(condition: dict[Any, Any]) -> bool:

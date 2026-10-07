@@ -8,7 +8,7 @@ rule is just a principal plus a column allowlist, so ``create`` covers it):
 - ``cls detail`` -- one policy's full rules.
 - ``cls schema`` -- the live ``cls-policy`` JSON Schema from the metastore.
 - ``cls create`` -- author a policy for one table (write).
-- ``cls update`` -- fetch-then-merge update of an existing policy (write).
+- ``cls update`` -- partial (PATCH) update of an existing policy (write).
 - ``cls delete`` -- remove a policy (destructive).
 
 Each rule is ``{principal|principals, visible_columns: [...]}``: the listed
@@ -55,7 +55,6 @@ cls_app = typer.Typer(
 
 CLS = PolicyGroup(
     name="cls",
-    label="CLS",
     rules_shape="{principal|principals, visible_columns}",
     rule_text=lambda rule: ", ".join(rule.get("visible_columns") or []),
     preview_text=lambda entry: f"SELECT {', '.join(entry.get('visible_columns') or [])}",
