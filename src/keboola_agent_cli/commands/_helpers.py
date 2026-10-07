@@ -27,7 +27,7 @@ from ..constants import (
     ENV_KBC_TOKEN,
     EXIT_PERMISSION_DENIED,
 )
-from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
 from ..permissions import FLAG_ESCALATIONS
 from ..update_crossing import print_held_warning, refusal_for
@@ -502,6 +502,32 @@ def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project:
         retryable=exc.retryable,
         details=exc.details,
     )
+
+
+def service_error_exit_code(exc: ConfigError | KeboolaApiError) -> int:
+    """The CLI exit code for a service error: config 5, a bad option value 2, else by error code."""
+    if isinstance(exc, ConfigError):
+        return 5
+    if exc.error_code == ErrorCode.INVALID_ARGUMENT:
+        return 2
+    return map_error_to_exit_code(exc)
+
+
+def handle_service_call[T](
+    ctx: typer.Context, func: Callable[..., T], *args: Any, **kwargs: Any
+) -> T:
+    """Run a service call; a ``ConfigError`` / ``KeboolaApiError`` becomes a formatted error + exit."""
+    formatter = get_formatter(ctx)
+    try:
+        return func(*args, **kwargs)
+    except ConfigError as exc:
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
+        raise typer.Exit(code=service_error_exit_code(exc)) from None
+    except KeboolaApiError as exc:
+        emit_api_error(formatter, exc)
+        raise typer.Exit(code=service_error_exit_code(exc)) from None
 
 
 def item_failure_exit_code(failed: int) -> int | None:
