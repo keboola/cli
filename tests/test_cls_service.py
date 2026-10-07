@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -215,6 +215,7 @@ class TestCreate:
             data={"table": "in.c-crm.invoices", "dialect": "snowflake", "rules": _RULES},
             scope="targeted",
             target_project_ids=None,
+            conflict_hint=ANY,
         )
         assert result["preview"] == [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
 
@@ -257,7 +258,7 @@ class TestUpdate:
         service.update_policy("prod", "p-1", rules=new_rules)
 
         mock.patch_item.assert_called_once_with(
-            "cls-policy", "p-1", name=None, data={"rules": new_rules}
+            "cls-policy", "p-1", name=None, data={"rules": new_rules}, conflict_hint=ANY
         )
 
     def test_keeps_existing_targets_and_scope(self, tmp_path: Path) -> None:

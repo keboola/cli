@@ -17,7 +17,7 @@ import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands.rls import _is_interactive
+from keboola_agent_cli.commands._checkbox_select import _stdio_is_tty
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
@@ -502,7 +502,7 @@ def test_setup_is_interactive_only_when_stdin_and_stdout_are_terminals(
     monkeypatch.setattr("sys.stdin", _Stream(stdin_tty))
     monkeypatch.setattr("sys.stdout", _Stream(stdout_tty))
 
-    assert _is_interactive() is expected
+    assert _stdio_is_tty() is expected
 
 
 class TestRlsReviewFixes:
@@ -600,7 +600,7 @@ class TestRlsSetupReviewFixes:
         args: list[str], store: ConfigStore, service: MagicMock, storage: MagicMock
     ) -> Any:
         with (
-            patch("keboola_agent_cli.commands.rls._is_interactive", return_value=True),
+            patch("keboola_agent_cli.commands.rls._stdio_is_tty", return_value=True),
             patch("keboola_agent_cli.commands.rls.checkbox_select", return_value=[0, 1]),
         ):
             return _run(args, store, service, storage_service=storage)
@@ -744,7 +744,7 @@ class TestRlsSetupReviewFixes:
         )
 
         assert result.exit_code == 3  # an auth-class failure keeps the authentication exit code
-        assert "2 of 2 policies could not be created" in result.output
+        assert "2 of 2 RLS policies could not be created" in result.output
 
     def test_a_partial_failure_is_a_non_zero_exit_and_names_the_failed_table(
         self, tmp_path: Path
@@ -774,7 +774,7 @@ class TestRlsSetupReviewFixes:
         )
 
         assert result.exit_code == 1
-        assert "1 of 2 policies could not be created: in.c-crm.b" in result.output
+        assert "1 of 2 RLS policies could not be created: in.c-crm.b" in result.output
 
     def test_all_tables_created_exits_zero(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

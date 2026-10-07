@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-import jsonschema
+from ..json_utils import draft7_errors
 
 # Operand arity per operator (semantic; the schema cannot express these counts).
 _BINARY_OPERATORS = frozenset(
@@ -30,13 +30,7 @@ def _structural_errors(
     phases: list[dict[str, Any]], tasks: list[dict[str, Any]], schema: dict[str, Any]
 ) -> list[str]:
     """Run Draft7 validation against the supplied schema, collecting ALL errors."""
-    document = {"phases": phases, "tasks": tasks}
-    validator = jsonschema.Draft7Validator(schema)
-    errors: list[str] = []
-    for err in sorted(validator.iter_errors(document), key=lambda e: list(e.path)):
-        path = "/".join(str(p) for p in err.path) or "(root)"
-        errors.append(f"Schema error at {path}: {err.message}")
-    return errors
+    return draft7_errors({"phases": phases, "tasks": tasks}, schema)
 
 
 def _condition_arity_errors(condition: Any) -> list[str]:

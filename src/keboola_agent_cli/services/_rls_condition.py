@@ -24,12 +24,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import jsonschema
+from ..json_utils import draft7_errors
 
 # The RFC's `condition` schema supports these operators; kept as a frozenset
 # so the CLI/service layer can validate an op before it ever reaches the
 # structural (schema) check, giving a clearer error for the common typo case.
-RLS_COMPARISON_OPS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
+COMPARISON_SQL = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+RLS_COMPARISON_OPS = frozenset(COMPARISON_SQL)
 RLS_MEMBERSHIP_OPS = frozenset({"in", "not_in"})
 RLS_NULLNESS_OPS = frozenset({"is_null", "is_not_null"})
 RLS_CONDITION_OPS = RLS_COMPARISON_OPS | RLS_MEMBERSHIP_OPS | RLS_NULLNESS_OPS
@@ -47,31 +48,13 @@ _PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
 # preview must too -- an unquoted preview would hide a case mismatch the real filter does not forgive.
 _QUOTE = {"snowflake": '"', "bigquery": "`"}
 
-_COMPARISON_SQL = {
-    "eq": "=",
-    "ne": "!=",
-    "gt": ">",
-    "gte": ">=",
-    "lt": "<",
-    "lte": "<=",
-}
-
 
 def validate_policy_structural(policy: dict[str, Any], schema: dict[str, Any]) -> list[str]:
-    """Draft7-validate a candidate ``rls-policy`` body against a live-fetched schema.
+    """Draft7-validate a candidate policy body (``{"table", "dialect", "rules"}``) against a live schema.
 
-    ``policy`` is the full candidate body (``{"table", "dialect", "rules"}``).
-    Defense in depth -- the metastore backend validates on write too, per the
-    RFC. Returns human-readable error strings (empty = valid); never raises
-    and never reaches the network -- ``schema`` must already be fetched by
-    the caller (see ``RlsService.fetch_schema``).
+    Defense in depth -- the metastore validates on write too, but its PATCH only the patched keys.
     """
-    validator = jsonschema.Draft7Validator(schema)
-    errors: list[str] = []
-    for err in sorted(validator.iter_errors(policy), key=lambda e: list(e.path)):
-        path = "/".join(str(p) for p in err.path) or "(root)"
-        errors.append(f"Schema error at {path}: {err.message}")
-    return errors
+    return draft7_errors(policy, schema)
 
 
 def _is_true_sentinel(condition: dict[Any, Any]) -> bool:
@@ -279,8 +262,8 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
 
     quote = _QUOTE.get(dialect, '"')
     column = f"{quote}{column}{quote}"
-    if op in _COMPARISON_SQL:
-        return f"{column} {_COMPARISON_SQL[op]} {_preview_literal(condition.get('value'))}"
+    if op in COMPARISON_SQL:
+        return f"{column} {COMPARISON_SQL[op]} {_preview_literal(condition.get('value'))}"
     if op in RLS_MEMBERSHIP_OPS:
         values = condition.get("values") or []
         rendered = ", ".join(_preview_literal(v) for v in values)

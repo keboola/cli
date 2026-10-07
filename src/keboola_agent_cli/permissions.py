@@ -357,17 +357,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
-    # Row-level security (metastore) — CLI-17. Classified `admin` (not
-    # merely `write`): RLS policy authorship is an org-level concern (see
-    # keboola-mcp-server's feature_spec/rls_query_tool/RFC.md) -- `admin`
-    # is the class this repo's own taxonomy reserves for org-level
-    # operations (see `project.add` etc. above). `setup` performs the exact
-    # same write as `create`, just via an interactive picker, so it must
-    # carry the same class or a permission policy that allows `setup` but
-    # not `create` (or vice versa) would leave a hole. `delete` is
-    # `destructive`, like every other remote delete: removing a policy removes
-    # the row filter (or column allowlist) it enforced. `create --scope
-    # organization` is escalated to `destructive` too (FLAG_ESCALATIONS).
+    # Row-level security (metastore) -- CLI-17. Writes are `admin` (policy authorship is an org-level
+    # concern); `setup` performs `create`'s write, so it carries the same class. `delete` is
+    # `destructive` like every remote delete; `create --scope organization` is escalated to
+    # `destructive` too (FLAG_ESCALATIONS).
     "rls.list": "read",
     "rls.detail": "read",
     "rls.schema": "read",

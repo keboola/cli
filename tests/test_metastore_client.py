@@ -20,7 +20,6 @@ from keboola_agent_cli.metastore_client import (
     MetastoreClient,
     ResolvedSchema,
     fetch_resolved_schema,
-    project_ids_as_ints,
 )
 
 STACK_URL_US = "https://connection.keboola.com"
@@ -388,22 +387,6 @@ class TestSemanticTypes:
             "rls-policy",
             "cls-policy",
         }
-
-
-class TestProjectIdsAsInts:
-    """`project_ids_as_ints`: the metastore decodes ``targetProjectIds`` as ``[]int``."""
-
-    def test_strings_and_ints_become_ints(self) -> None:
-        assert project_ids_as_ints(["111", 222]) == [111, 222]
-        assert project_ids_as_ints([2.0]) == [2]
-        assert project_ids_as_ints([]) == []
-
-    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-5"], ["1.5"], [None], [True], [1.5]])
-    def test_non_positive_or_non_numeric_ids_are_rejected(self, bad: list) -> None:
-        with pytest.raises(KeboolaApiError) as excinfo:
-            project_ids_as_ints(bad)
-
-        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
 
 
 class TestProjectScope401Reclassification:

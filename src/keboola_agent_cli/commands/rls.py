@@ -35,6 +35,7 @@ import contextlib
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -43,6 +44,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services._rls_condition import COMPARISON_SQL
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
     check_cli_operation,
@@ -52,6 +54,7 @@ from ._helpers import (
     map_error_to_exit_code,
     parse_json_arg,
 )
+from ._semantic_layer_helpers import _handle_service_call
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +94,38 @@ TARGET_HELP = (
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
 
 
-def _call[T](formatter: Any, fn: Callable[..., T], **kwargs: Any) -> T:
-    """Run a service call, turning its errors into a formatted message + exit code.
+@dataclass(frozen=True)
+class PolicyGroup:
+    """What differs between the ``rls`` and ``cls`` command groups; everything else is shared."""
 
-    A bad option value (``INVALID_ARGUMENT``) is a usage error, exit 2.
-    """
-    try:
-        return fn(**kwargs)
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
-        code = 2 if exc.error_code == ErrorCode.INVALID_ARGUMENT else map_error_to_exit_code(exc)
-        raise typer.Exit(code=code) from None
+    name: str  # "rls" | "cls": the permission prefix, `<name>_service`, `<name>-policy`
+    label: str  # "RLS" | "CLS"
+    rules_shape: str  # shown in the --rules parse error
+    rule_text: Callable[[dict[str, Any]], str]  # one stored rule's restriction
+    preview_text: Callable[[dict[str, Any]], str]  # one --dry-run preview entry's restriction
+
+    @property
+    def service(self) -> str:
+        return f"{self.name}_service"
+
+
+RLS = PolicyGroup(
+    name="rls",
+    label="RLS",
+    rules_shape="{principal|principals, condition}",
+    rule_text=lambda rule: str(rule.get("condition")),
+    preview_text=lambda entry: f"WHERE {entry.get('condition')}",
+)
+
+
+@rls_app.callback(invoke_without_command=True)
+def _rls_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "rls")
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers (also used by `cls`)
+# ---------------------------------------------------------------------------
 
 
 def _confirm_or_exit(formatter: Any, question: str) -> None:
@@ -114,11 +135,7 @@ def _confirm_or_exit(formatter: Any, question: str) -> None:
 
 
 def gate_scope(
-    ctx: typer.Context,
-    group: str,
-    operation: str,
-    scope: PolicyScope,
-    target_project: list[str] | None,
+    ctx: typer.Context, group: PolicyGroup, scope: PolicyScope, target_project: list[str] | None
 ) -> None:
     """Validate ``--scope`` before any API call or prompt.
 
@@ -127,7 +144,7 @@ def gate_scope(
     """
     if scope != PolicyScope.ORGANIZATION:
         return
-    check_cli_operation(ctx, f"{group}.{operation} --scope organization")
+    check_cli_operation(ctx, f"{group.name}.create --scope organization")
     if target_project:
         get_formatter(ctx).error(
             message="--target-project requires --scope targeted (organization scope has no grants)",
@@ -136,34 +153,9 @@ def gate_scope(
         raise typer.Exit(code=2)
 
 
-def reject_target_conflict(
-    formatter: Any, target_project: list[str] | None, clear_target_projects: bool
-) -> None:
-    if clear_target_projects and target_project:
-        formatter.error(
-            message="--clear-target-projects cannot be combined with --target-project",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2)
-
-
-@rls_app.callback(invoke_without_command=True)
-def _rls_permission_check(ctx: typer.Context) -> None:
-    check_cli_permission(ctx, "rls")
-
-
-def _is_interactive() -> bool:
-    """True when BOTH stdin and stdout are terminals -- the same rule the checkbox picker applies.
-
-    Checked up front so a non-interactive `rls setup` refuses before it makes any API call, rather
-    than listing the project's tables and only then failing in the picker.
-    """
-    return _stdio_is_tty()
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
+def _principal_text(item: dict[str, Any]) -> str:
+    principal = item.get("principal") or item.get("principals") or []
+    return principal if isinstance(principal, str) else ", ".join(principal)
 
 
 def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None:
@@ -191,7 +183,7 @@ def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None
     formatter.console.print(tbl)
 
 
-def _print_policy(formatter: Any, row: dict[str, Any]) -> None:
+def _print_policy(formatter: Any, group: PolicyGroup, row: dict[str, Any]) -> None:
     formatter.console.print(
         f"\n[bold]{row.get('table', '')}[/bold] [dim](id {row.get('id', '')})[/dim]"
     )
@@ -206,17 +198,16 @@ def _print_policy(formatter: Any, row: dict[str, Any]) -> None:
     rules = row.get("rules") or []
     formatter.console.print(f"  Rules ({len(rules)}):")
     for rule in rules:
-        principal = rule.get("principal") or ", ".join(rule.get("principals") or [])
-        formatter.console.print(f"    - {principal}: {rule.get('condition')}")
+        formatter.console.print(f"    - {_principal_text(rule)}: {group.rule_text(rule)}")
 
 
-def _print_preview(formatter: Any, result: dict[str, Any]) -> None:
+def _print_preview(formatter: Any, group: PolicyGroup, result: dict[str, Any]) -> None:
     formatter.console.print(
         f"\n[bold]Preview[/bold] -- {result.get('table', '')} "
         f"[dim]({result.get('dialect', '')}, scope={result.get('scope', '')})[/dim]"
     )
     for entry in result.get("preview", []):
-        formatter.console.print(f"  {entry.get('principal')}: WHERE {entry.get('condition')}")
+        formatter.console.print(f"  {_principal_text(entry)}: {group.preview_text(entry)}")
 
 
 def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
@@ -226,9 +217,9 @@ def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
 
 
 def _parse_rules_arg(
-    formatter: Any, raw: str, shape: str = "{principal|principals, condition}"
+    formatter: Any, raw: str, shape: str = RLS.rules_shape
 ) -> list[dict[str, Any]]:
-    """Parse ``--rules``; ``shape`` is only the hint in the error (``cls`` passes its own)."""
+    """Parse ``--rules``; ``shape`` is only the hint in the error."""
     try:
         parsed = parse_json_arg(raw, label="--rules")
     except ValueError as exc:
@@ -243,53 +234,39 @@ def _parse_rules_arg(
     return parsed
 
 
-# ---------------------------------------------------------------------------
-# rls list / detail / schema
-# ---------------------------------------------------------------------------
-
-
-@rls_app.command("list")
-def rls_list(
-    ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
-) -> None:
-    """List row-level security policies visible to a project."""
+def list_policies(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
     formatter = get_formatter(ctx)
-    result = _call(formatter, get_service(ctx, "rls_service").list_policies, alias=project)
+    service = get_service(ctx, group.service)
+    result = _handle_service_call(ctx, service.list_policies, alias=project)
 
     if formatter.json_mode:
         formatter.output(result)
     elif not result.get("policies"):
-        formatter.console.print("[dim]No RLS policies found.[/dim]")
+        formatter.console.print(f"[dim]No {group.label} policies found.[/dim]")
     else:
         _format_policy_table(formatter, result["policies"])
 
 
-@rls_app.command("detail")
-def rls_detail(
-    ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
-    policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
-) -> None:
-    """Show one RLS policy's full rule set."""
+def show_policy(ctx: typer.Context, group: PolicyGroup, project: str, policy_id: str) -> None:
     formatter = get_formatter(ctx)
-    service = get_service(ctx, "rls_service")
-    result = _call(formatter, service.get_policy, alias=project, policy_id=policy_id)
+    service = get_service(ctx, group.service)
+    result = _handle_service_call(ctx, service.get_policy, alias=project, policy_id=policy_id)
 
     if formatter.json_mode:
         formatter.output(result)
     else:
-        _print_policy(formatter, result)
+        _print_policy(formatter, group, result)
 
 
-def print_schema(ctx: typer.Context, service_name: str, item_type: str, project: str) -> None:
-    """``rls schema`` / ``cls schema``: the live schema, no offline bundled snapshot."""
+def print_schema(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
+    """The live schema, no offline bundled snapshot."""
     formatter = get_formatter(ctx)
-    # An auth/permission failure is raised (not "schema unavailable") and reported by `_call`.
-    fetch = _call(formatter, get_service(ctx, service_name).fetch_schema, alias=project)
+    # An auth/permission failure is raised (not "schema unavailable") and reported by the handler.
+    service = get_service(ctx, group.service)
+    fetch = _handle_service_call(ctx, service.fetch_schema, alias=project)
     if fetch.schema is None:
         formatter.error(
-            message=f"Could not fetch the {item_type} schema: {fetch.reason}",
+            message=f"Could not fetch the {group.name}-policy schema: {fetch.reason}",
             error_code=ErrorCode.NOT_FOUND,
         )
         raise typer.Exit(code=4)
@@ -300,6 +277,136 @@ def print_schema(ctx: typer.Context, service_name: str, item_type: str, project:
     formatter.console.print(
         Syntax(json.dumps(fetch.schema, indent=2), "json", theme="monokai", line_numbers=False)
     )
+
+
+def create_policy(
+    ctx: typer.Context,
+    group: PolicyGroup,
+    *,
+    rules: str,
+    scope: PolicyScope,
+    target_project: list[str] | None,
+    dry_run: bool,
+    yes: bool,
+    **kwargs: Any,
+) -> None:
+    """``rls create`` / ``cls create``; ``kwargs`` are ``alias``/``table``/``dialect``."""
+    gate_scope(ctx, group, scope, target_project)
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, group.service)
+    kwargs |= {
+        "rules": _parse_rules_arg(formatter, rules, group.rules_shape),
+        "scope": scope.value,
+        "target_projects": target_project,
+    }
+
+    if not dry_run and not yes and not formatter.json_mode:
+        # A validation/network error here is reported properly by the real call below.
+        with contextlib.suppress(ConfigError, KeboolaApiError):
+            _print_preview(formatter, group, service.create_policy(**kwargs, dry_run=True))
+        _confirm_or_exit(formatter, f"Create {group.label} policy on {kwargs['table']}?")
+
+    result = _handle_service_call(ctx, service.create_policy, **kwargs, dry_run=dry_run)
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+    _print_warnings(formatter, result)
+    if not dry_run:
+        formatter.success(
+            f"Created {group.label} policy {result.get('id', '')} on {kwargs['table']}"
+        )
+    _print_preview(formatter, group, result)
+
+
+def update_policy(
+    ctx: typer.Context,
+    group: PolicyGroup,
+    *,
+    rules: str | None,
+    target_project: list[str] | None,
+    clear_target_projects: bool,
+    dry_run: bool,
+    yes: bool,
+    **kwargs: Any,
+) -> None:
+    """``rls update`` / ``cls update``; ``kwargs`` are ``alias``/``policy_id``/``table``/``dialect``."""
+    formatter = get_formatter(ctx)
+    parsed_rules = (
+        _parse_rules_arg(formatter, rules, group.rules_shape) if rules is not None else None
+    )
+    if clear_target_projects and target_project:
+        formatter.error(
+            message="--clear-target-projects cannot be combined with --target-project",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+    service = get_service(ctx, group.service)
+    policy_id = kwargs["policy_id"]
+
+    if not dry_run and not yes and not formatter.json_mode:
+        _confirm_or_exit(formatter, f"Update {group.label} policy {policy_id}?")
+
+    result = _handle_service_call(
+        ctx,
+        service.update_policy,
+        **kwargs,
+        rules=parsed_rules,
+        target_projects=[] if clear_target_projects else target_project,
+        dry_run=dry_run,
+    )
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+    _print_warnings(formatter, result)
+    if not dry_run:
+        formatter.success(f"Updated {group.label} policy {policy_id}")
+    _print_preview(formatter, group, result)
+
+
+def delete_policy(ctx: typer.Context, group: PolicyGroup, effect: str, **kwargs: Any) -> None:
+    """``rls delete`` / ``cls delete``; ``--dry-run`` shows the policy that would be deleted."""
+    formatter = get_formatter(ctx)
+    service = get_service(ctx, group.service)
+    policy_id, dry_run, yes = kwargs["policy_id"], kwargs["dry_run"], kwargs.pop("yes")
+
+    if not dry_run and not yes and not formatter.json_mode:
+        _confirm_or_exit(formatter, f"Delete {group.label} policy {policy_id}? {effect}")
+
+    result = _handle_service_call(ctx, service.delete_policy, **kwargs)
+
+    if formatter.json_mode:
+        formatter.output(result)
+    elif dry_run:
+        formatter.console.print(f"[bold]Would delete[/bold] {group.label} policy {policy_id}:")
+        formatter.console.print_json(data=result["policy"])
+    else:
+        formatter.success(f"Deleted {group.label} policy {policy_id}")
+
+
+# ---------------------------------------------------------------------------
+# rls commands
+# ---------------------------------------------------------------------------
+
+
+@rls_app.command("list")
+def rls_list(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+) -> None:
+    """List row-level security policies visible to a project."""
+    list_policies(ctx, RLS, project)
+
+
+@rls_app.command("detail")
+def rls_detail(
+    ctx: typer.Context,
+    project: str = typer.Option(..., "--project", help="Project alias"),
+    policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
+) -> None:
+    """Show one RLS policy's full rule set."""
+    show_policy(ctx, RLS, project, policy_id)
 
 
 @rls_app.command("schema")
@@ -315,12 +422,7 @@ def rls_schema(
     schema is authoritative only from the live metastore, and on a stack whose
     metastore predates it, fetching fails with a clean, classified error.
     """
-    print_schema(ctx, "rls_service", "rls-policy", project)
-
-
-# ---------------------------------------------------------------------------
-# rls create / update / delete
-# ---------------------------------------------------------------------------
+    print_schema(ctx, RLS, project)
 
 
 @rls_app.command("create")
@@ -347,33 +449,18 @@ def rls_create(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``)."""
-    gate_scope(ctx, "rls", "create", scope, target_project)
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "rls_service")
-    kwargs = {
-        "alias": project,
-        "table": table_id,
-        "dialect": dialect,
-        "rules": _parse_rules_arg(formatter, rules),
-        "scope": scope.value,
-        "target_projects": target_project,
-    }
-
-    if not dry_run and not yes and not formatter.json_mode:
-        # A validation/network error here is reported properly by the real call below.
-        with contextlib.suppress(ConfigError, KeboolaApiError):
-            _print_preview(formatter, service.create_policy(**kwargs, dry_run=True))
-        _confirm_or_exit(formatter, f"Create RLS policy on {table_id}?")
-
-    result = _call(formatter, service.create_policy, **kwargs, dry_run=dry_run)
-
-    if formatter.json_mode:
-        formatter.output(result)
-        return
-    _print_warnings(formatter, result)
-    if not dry_run:
-        formatter.success(f"Created RLS policy {result.get('id', '')} on {table_id}")
-    _print_preview(formatter, result)
+    create_policy(
+        ctx,
+        RLS,
+        alias=project,
+        table=table_id,
+        dialect=dialect,
+        rules=rules,
+        scope=scope,
+        target_project=target_project,
+        dry_run=dry_run,
+        yes=yes,
+    )
 
 
 @rls_app.command("update")
@@ -406,55 +493,19 @@ def rls_update(
     Only the flags you pass change -- an omitted flag keeps the policy's
     current value. The write is a partial update (PATCH) of just those keys.
     """
-    formatter = get_formatter(ctx)
-    parsed_rules = _parse_rules_arg(formatter, rules) if rules is not None else None
-    reject_target_conflict(formatter, target_project, clear_target_projects)
-    service = get_service(ctx, "rls_service")
-
-    if not dry_run and not yes and not formatter.json_mode:
-        _confirm_or_exit(formatter, f"Update RLS policy {policy_id}?")
-
-    result = _call(
-        formatter,
-        service.update_policy,
+    update_policy(
+        ctx,
+        RLS,
         alias=project,
         policy_id=policy_id,
         table=table_id,
         dialect=dialect,
-        rules=parsed_rules,
-        target_projects=[] if clear_target_projects else target_project,
+        rules=rules,
+        target_project=target_project,
+        clear_target_projects=clear_target_projects,
         dry_run=dry_run,
+        yes=yes,
     )
-
-    if formatter.json_mode:
-        formatter.output(result)
-        return
-    _print_warnings(formatter, result)
-    if not dry_run:
-        formatter.success(f"Updated RLS policy {policy_id}")
-    _print_preview(formatter, result)
-
-
-def delete_policy(
-    ctx: typer.Context, service_name: str, label: str, effect: str, **kwargs: Any
-) -> None:
-    """``rls delete`` / ``cls delete``; ``--dry-run`` shows the policy that would be deleted."""
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, service_name)
-    policy_id, dry_run, yes = kwargs["policy_id"], kwargs["dry_run"], kwargs.pop("yes")
-
-    if not dry_run and not yes and not formatter.json_mode:
-        _confirm_or_exit(formatter, f"Delete {label} policy {policy_id}? {effect}")
-
-    result = _call(formatter, service.delete_policy, **kwargs)
-
-    if formatter.json_mode:
-        formatter.output(result)
-    elif dry_run:
-        formatter.console.print(f"[bold]Would delete[/bold] {label} policy {policy_id}:")
-        formatter.console.print_json(data=result["policy"])
-    else:
-        formatter.success(f"Deleted {label} policy {policy_id}")
 
 
 @rls_app.command("delete")
@@ -468,8 +519,7 @@ def rls_delete(
     """Delete an RLS policy -- its table's rows are no longer filtered."""
     delete_policy(
         ctx,
-        "rls_service",
-        "RLS",
+        RLS,
         "This un-protects its table.",
         alias=project,
         policy_id=policy_id,
@@ -496,7 +546,7 @@ _CONDITION_MENU = (
     "  4) always true (no filtering for this principal)"
 )
 
-_COMPARISON_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
+_COMPARISON_OPS = tuple(COMPARISON_SQL)  # eq, ne, gt, gte, lt, lte
 _VALUE_HINT = 'parsed as JSON when it is one (42, 4.5, true); quote it ("42") to force a string'
 
 
@@ -581,15 +631,16 @@ def rls_setup(
     """
     # `setup` performs `create`'s writes, so an exact `rls.create` denial must cover it too.
     check_cli_operation(ctx, "rls.create")
-    gate_scope(ctx, "rls", "create", scope, target_project)
+    gate_scope(ctx, RLS, scope, target_project)
     formatter = get_formatter(ctx)
-    if formatter.json_mode or not _is_interactive():
+    if formatter.json_mode or not _stdio_is_tty():
         formatter.error(message=_SETUP_HINT, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2)
 
-    tables = _call(
-        formatter, get_service(ctx, "storage_service").list_tables, aliases=[project]
-    ).get("tables", [])
+    storage_service = get_service(ctx, "storage_service")
+    tables = _handle_service_call(ctx, storage_service.list_tables, aliases=[project]).get(
+        "tables", []
+    )
     if not tables:
         formatter.console.print(f"[dim]No tables found in project '{project}'.[/dim]")
         raise typer.Exit(code=0)
@@ -604,8 +655,7 @@ def rls_setup(
         formatter.error(message=_SETUP_HINT, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
-    selected = indices or []
-    if not selected:
+    if not indices:
         formatter.console.print("No tables selected.")
         raise typer.Exit(code=0)
 
@@ -613,7 +663,8 @@ def rls_setup(
         _parse_rules_arg(formatter, rules) if rules is not None else _build_rules_interactively()
     )
     service = get_service(ctx, "rls_service")
-    selected_tables = [str(tables[i]["id"]) for i in selected]
+    selected_tables = [str(tables[i]["id"]) for i in indices]
+    policies = f"{len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}"
     kwargs = {
         "alias": project,
         "dialect": dialect,  # None = the project backend, resolved by the service
@@ -628,13 +679,10 @@ def rls_setup(
         except (ConfigError, KeboolaApiError) as exc:
             formatter.console.print(f"[yellow]{table_id}: preview failed ({exc}).[/yellow]")
             continue
-        _print_preview(formatter, preview)
+        _print_preview(formatter, RLS, preview)
 
     if not yes:
-        _confirm_or_exit(
-            formatter,
-            f"Create {len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}?",
-        )
+        _confirm_or_exit(formatter, f"Create {policies}?")
 
     failed: list[str] = []
     exit_codes: set[int] = set()
@@ -655,8 +703,7 @@ def rls_setup(
     if failed:
         # Automation must not read a partly (or wholly) failed setup as success.
         formatter.error(
-            message=f"{len(failed)} of {len(selected_tables)} polic{'y' if len(selected_tables) == 1 else 'ies'}"
-            f" could not be created: {', '.join(failed)}",
+            message=f"{len(failed)} of {policies} could not be created: {', '.join(failed)}",
             error_code=error_codes.pop() if len(error_codes) == 1 else ErrorCode.API_ERROR,
         )
         # Same exit-code contract as `rls create`: when every failure maps to one code (auth -> 3,
