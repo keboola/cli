@@ -49,7 +49,6 @@ live**):
 
 import logging
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Self
 
@@ -159,24 +158,25 @@ def _exact_int(value: Any) -> int:
     return int(value)
 
 
-def project_ids_as_ints(project_ids: Sequence[Any]) -> list[int]:
-    """Target project ids as the metastore wants them: positive integers (``targetProjectIds`` is ``[]int``).
+_PICK_ANOTHER_NAME = "Pick another name."
 
-    Callers may hand over strings (CLI) or ints (REST); a non-numeric or non-positive id is rejected here,
-    before any request, instead of reaching the backend as a 400 (or, in the grants call, being ignored).
+
+def _already_exists(
+    exc: KeboolaApiError, item_type: str, name: str | None, hint: str | None
+) -> KeboolaApiError:
+    """A duplicate-name conflict as a clean ``ALREADY_EXISTS``; ``hint`` is the caller's remedy.
+
+    Without a hint (the semantic-layer callers) the message explains the metastore's uniqueness
+    rule instead (:func:`_name_conflict`).
     """
-    try:
-        ids = [_exact_int(project_id) for project_id in project_ids]
-    except (TypeError, ValueError):
-        ids = [0]
-    if any(project_id <= 0 for project_id in ids):
-        raise KeboolaApiError(
-            message=f"Target project IDs must be positive integers, got {project_ids!r}",
-            status_code=400,
-            error_code=ErrorCode.INVALID_ARGUMENT,
-            retryable=False,
-        )
-    return ids
+    if hint is None:
+        return _name_conflict(item_type, name or "", exc)
+    return KeboolaApiError(
+        message=f"{item_type} with name {name!r} already exists. {hint}",
+        status_code=exc.status_code,
+        error_code=ErrorCode.ALREADY_EXISTS,
+        retryable=False,
+    )
 
 
 class MetastoreClient(BaseHttpClient):
@@ -334,6 +334,7 @@ class MetastoreClient(BaseHttpClient):
         *,
         scope: ObjectScope = _DEFAULT_SCOPE,
         target_project_ids: list[int] | None = None,
+        conflict_hint: str | None = None,
     ) -> dict[str, Any]:
         """Create an item. Returns the server's stored representation.
 
@@ -395,7 +396,7 @@ class MetastoreClient(BaseHttpClient):
                 exc.status_code == 500 and "Failed to create meta object" in exc.message
             )
             if is_duplicate:
-                raise _name_conflict(item_type, name, exc) from exc
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
@@ -406,6 +407,7 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
+        conflict_hint: str | None = None,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
@@ -433,7 +435,7 @@ class MetastoreClient(BaseHttpClient):
             )
         except KeboolaApiError as exc:
             if exc.status_code == 409:
-                raise _name_conflict(item_type, name, exc) from exc
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
@@ -445,6 +447,7 @@ class MetastoreClient(BaseHttpClient):
         *,
         name: str | None = None,
         data: dict[str, Any] | None = None,
+        conflict_hint: str = _PICK_ANOTHER_NAME,
     ) -> dict[str, Any]:
         """Partially update an item via ``PATCH`` -- only the given fields change.
 
@@ -472,12 +475,7 @@ class MetastoreClient(BaseHttpClient):
             )
         except KeboolaApiError as exc:
             if exc.status_code == 409:
-                raise KeboolaApiError(
-                    message=f"{item_type} with name {name!r} already exists. Pick another name.",
-                    status_code=409,
-                    error_code=ErrorCode.ALREADY_EXISTS,
-                    retryable=False,
-                ) from exc
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
