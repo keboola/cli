@@ -273,6 +273,48 @@ class TestDeleteItem:
         assert excinfo.value.error_code == ErrorCode.NOT_FOUND
 
 
+class TestPatchItem:
+    """patch_item sends only the given fields -- the server merges them into the stored record."""
+
+    _URL = f"{METASTORE_URL_US}/api/v1/repository/rls-policy/p-1"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "body"),
+        [
+            ({"data": {"rules": []}}, {"data": {"rules": []}}),
+            ({"name": "t.x", "data": {"table": "t.x"}}, {"name": "t.x", "data": {"table": "t.x"}}),
+        ],
+    )
+    def test_sends_only_the_given_fields(self, httpx_mock, kwargs: dict, body: dict) -> None:
+        httpx_mock.add_response(
+            method="PATCH", url=self._URL, json={"data": {"id": "p-1"}}, status_code=200
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            stored = client.patch_item("rls-policy", "p-1", **kwargs)
+        finally:
+            client.close()
+        assert stored == {"id": "p-1"}
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PATCH"
+        assert json.loads(request.content) == body  # never scope, branch or unchanged keys
+
+    @pytest.mark.parametrize(
+        ("status", "code"), [(409, ErrorCode.ALREADY_EXISTS), (404, ErrorCode.NOT_FOUND)]
+    )
+    def test_errors_are_classified(self, httpx_mock, status: int, code: ErrorCode) -> None:
+        httpx_mock.add_response(
+            method="PATCH", url=self._URL, json={"error": "x"}, status_code=status
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.patch_item("rls-policy", "p-1", name="t.x", data={"table": "t.x"})
+        finally:
+            client.close()
+        assert excinfo.value.error_code == code
+
+
 class TestPutItem:
     """put_item wraps the same envelope as post_item but targets PUT /{type}/{id}."""
 

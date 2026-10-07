@@ -52,6 +52,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3712,7 +3713,8 @@ class TestFullE2E:
         created then); any other failure fails the suite. The policy is always deleted again.
         Targets a table that does not exist, so no real data is ever governed.
         """
-        table = "in.c-kbagent-e2e-rls.policy_crud"
+        # Policies are named by table: a unique table keeps concurrent runs from colliding (409).
+        table = f"in.c-kbagent-e2e-rls.policy_crud_{uuid.uuid4().hex[:8]}"
         samples = {
             "rls": (
                 '[{"principal":"e2e@example.com","condition":{"column":"id","op":"eq","value":"x"}}]',
