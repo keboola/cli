@@ -171,7 +171,7 @@ def cls_create(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Create one CLS policy for one table (``targeted`` scope unless ``--scope organization``)."""
-    gate_scope(ctx, "cls", "create", scope)
+    gate_scope(ctx, "cls", "create", scope, target_project)
     formatter = get_formatter(ctx)
     service = get_service(ctx, "cls_service")
     kwargs = {

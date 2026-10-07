@@ -844,6 +844,10 @@ class TestPrimitiveShape:
             # `col = NULL` / `IN (NULL)` match no row: the principal would silently see nothing.
             ({"column": "a", "op": "eq", "value": None}, "use op 'is_null'"),
             ({"column": "a", "op": "in", "values": [1, None]}, "cannot list null"),
+            # Only scalar literals: an object/array must not slip through when the live schema is unavailable.
+            ({"column": "a", "op": "eq", "value": {"x": 1}}, "string, number or boolean 'value'"),
+            ({"column": "a", "op": "gt", "value": [1]}, "string, number or boolean 'value'"),
+            ({"column": "a", "op": "in", "values": [1, [2]]}, "string, number or boolean 'values'"),
         ],
     )
     def test_malformed_primitives_are_rejected(self, condition: dict, fragment: str) -> None:
