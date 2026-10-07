@@ -26,8 +26,7 @@ refused here before any write.
 
 On a stack whose metastore predates the ``rls-policy`` schema, a real project
 answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
-``gotchas.md`` entry). Every method here is unit-tested against a mocked
-:class:`MetastoreClient`.
+``gotchas.md`` entry).
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn, cast
 
 import jsonschema
 
@@ -86,15 +85,7 @@ class PolicyValidation:
 
 @dataclass(frozen=True)
 class RlsSchemaFetch:
-    """Result of fetching the live ``rls-policy`` JSON Schema.
-
-    ``schema`` is ``None`` on any failure (network error, ``KeboolaApiError``,
-    malformed/empty schema -- most likely: the object type isn't registered on
-    that stack's metastore). A ``None`` schema must NOT block a write;
-    callers degrade to the schema-independent checks in ``_rls_condition``
-    and surface ``reason`` as a warning -- mirrors
-    ``FlowService._fetch_flow_schema`` / ``FlowSchemaFetch`` exactly.
-    """
+    """The live policy schema, or ``schema=None`` + ``reason`` when it is unavailable (never blocks)."""
 
     schema: dict[str, Any] | None
     reason: str | None
@@ -103,17 +94,8 @@ class RlsSchemaFetch:
 class RlsService(BaseService):
     """Business logic for the ``rls`` command group.
 
-    Inherits multi-project resolution (``resolve_projects``) from
-    :class:`BaseService`. Adds a dedicated :class:`MetastoreClient` factory,
-    same pattern as :class:`SemanticLayerService`, so command-layer
-    operations can target the metastore without polluting the Storage API
-    client.
-
-    ``item_type`` / ``label`` / ``invalid_error_code`` and the two rule hooks
-    (:meth:`_local_rule_errors`, :meth:`_preview_rules`) are all that differ
-    for the column-level sibling, :class:`ClsService`, which subclasses this:
-    the scope rule, fetch-then-merge update and schema degradation are the
-    same for both policy types.
+    :class:`ClsService` overrides only ``item_type`` / ``label`` / ``invalid_error_code`` and the two
+    rule hooks (:meth:`_local_rule_errors`, :meth:`_preview_rules`).
     """
 
     item_type: SemanticType = RLS_ITEM_TYPE
@@ -131,6 +113,8 @@ class RlsService(BaseService):
             metastore_client_factory
             or make_session_aware_client_factory(config_store, MetastoreClient)
         )
+        # Project backend per (stack, token): one `verify_token` per project, not per write.
+        self._backends: dict[tuple[str, str], str] = {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -144,11 +128,12 @@ class RlsService(BaseService):
         return self._metastore_factory(project.stack_url, project.token)
 
     def fetch_schema(self, alias: str) -> RlsSchemaFetch:
-        """Public schema fetch (used by ``rls schema`` and every write path)."""
+        """The live schema (``rls schema``); writes reuse their open client instead."""
         project = self._resolve_one_project(alias)
-        return self._fetch_schema_for_project(project)
+        with self._new_metastore_client(project) as client:
+            return self._fetch_schema(client)
 
-    def _fetch_schema_for_project(self, project: ProjectConfig) -> RlsSchemaFetch:
+    def _fetch_schema(self, client: MetastoreClient) -> RlsSchemaFetch:
         """Fetch the live policy schema, degrading when it is merely *unavailable*.
 
         A network error, an empty/malformed schema or a non-auth ``KeboolaApiError`` (most likely: the
@@ -157,16 +142,15 @@ class RlsService(BaseService):
         ``MISSING_MASTER_TOKEN``, access denied) is a real problem the user must see, so it is
         re-raised instead of being reported as a missing schema.
         """
-        with self._new_metastore_client(project) as client:
-            try:
-                resolved = fetch_resolved_schema(client, self.item_type)
-                schema = resolved.schema
-            except KeboolaApiError as exc:
-                if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
-                    raise
-                return RlsSchemaFetch(schema=None, reason=exc.message)
-            except Exception as exc:  # any fetch failure must degrade, never block a write
-                return RlsSchemaFetch(schema=None, reason=str(exc))
+        try:
+            resolved = fetch_resolved_schema(client, self.item_type)
+            schema = resolved.schema
+        except KeboolaApiError as exc:
+            if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
+                raise
+            return RlsSchemaFetch(schema=None, reason=exc.message)
+        except Exception as exc:  # any fetch failure must degrade, never block a write
+            return RlsSchemaFetch(schema=None, reason=str(exc))
         if not schema:
             return RlsSchemaFetch(
                 schema=None, reason=f"metastore returned no schema for {self.item_type}"
@@ -208,8 +192,11 @@ class RlsService(BaseService):
 
     def _project_dialect(self, project: ProjectConfig) -> str:
         """The project's backend -- the only dialect the enforcement accepts for its policies."""
-        with self._client_factory(project.stack_url, project.token) as client:
-            backend = (client.verify_token().default_backend or "").lower()
+        key = (project.stack_url, project.token)
+        if key not in self._backends:
+            with self._client_factory(project.stack_url, project.token) as client:
+                self._backends[key] = (client.verify_token().default_backend or "").lower()
+        backend = self._backends[key]
         if backend not in RLS_DIALECTS:
             self._raise_invalid(
                 [
@@ -249,7 +236,6 @@ class RlsService(BaseService):
     def _validate_policy(
         self,
         client: MetastoreClient,
-        project: ProjectConfig,
         *,
         policy: dict[str, Any],
         backend: str,
@@ -282,7 +268,7 @@ class RlsService(BaseService):
         if errors:
             return PolicyValidation(errors, [])
 
-        fetch = self._fetch_schema_for_project(project)
+        fetch = self._fetch_schema(client)
         if not fetch.schema:
             return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
         return PolicyValidation(_rls_condition.validate_policy_structural(policy, fetch.schema), [])
@@ -308,7 +294,7 @@ class RlsService(BaseService):
             result["warnings"] = warnings
         return result
 
-    def _raise_invalid(self, errors: list[str]) -> None:
+    def _raise_invalid(self, errors: list[str]) -> NoReturn:
         raise KeboolaApiError(
             message=f"{self.label} policy is invalid: " + "; ".join(errors),
             status_code=400,
@@ -317,22 +303,18 @@ class RlsService(BaseService):
         )
 
     @staticmethod
-    def _raise_usage(message: str) -> None:
+    def _raise_usage(message: str) -> NoReturn:
         raise KeboolaApiError(
             message=message, status_code=400, error_code=ErrorCode.INVALID_ARGUMENT, retryable=False
         )
 
-    def _already_exists(self, table: str, exc: KeboolaApiError) -> KeboolaApiError:
-        """The client's generic 409 message talks about semantic models; policies are named by table."""
-        return KeboolaApiError(
-            message=(
-                f"An {self.label} policy for table {table!r} already exists in this project. "
-                f"Change it with `{self.label.lower()} update --policy-id ...`, "
-                f"or `{self.label.lower()} delete` it first."
-            ),
-            status_code=exc.status_code,
-            error_code=ErrorCode.ALREADY_EXISTS,
-            retryable=False,
+    @property
+    def _conflict_hint(self) -> str:
+        """The 409 remedy: policies are named by their table, one per table and project."""
+        group = self.label.lower()
+        return (
+            f"This project already has an {self.label} policy for that table: change it with "
+            f"`{group} update --policy-id ...`, or `{group} delete` it first."
         )
 
     # ------------------------------------------------------------------
@@ -390,7 +372,7 @@ class RlsService(BaseService):
         policy = {"table": table, "dialect": dialect or backend, "rules": rules}
 
         with self._new_metastore_client(project) as client:
-            check = self._validate_policy(client, project, policy=policy, backend=backend)
+            check = self._validate_policy(client, policy=policy, backend=backend)
             if check.errors:
                 self._raise_invalid(check.errors)
             preview = self._preview_rules(rules, policy["dialect"])
@@ -406,18 +388,14 @@ class RlsService(BaseService):
                     },
                     check.warnings,
                 )
-            try:
-                created = client.post_item(
-                    self.item_type,
-                    name=table,
-                    data=policy,
-                    scope="organization" if scope == "organization" else "targeted",
-                    target_project_ids=target_ids or None,
-                )
-            except KeboolaApiError as exc:
-                if exc.error_code == ErrorCode.ALREADY_EXISTS:
-                    raise self._already_exists(table, exc) from exc
-                raise
+            created = client.post_item(
+                self.item_type,
+                name=table,
+                data=policy,
+                scope=cast(ObjectScope, scope),  # checked against POLICY_SCOPES above
+                target_project_ids=target_ids or None,
+                conflict_hint=self._conflict_hint,
+            )
         row = self._row_from_item(created)
         row["preview"] = preview
         return self._with_warnings(row, check.warnings)
@@ -477,7 +455,7 @@ class RlsService(BaseService):
                 **changes,
             }
             check = self._validate_policy(
-                client, project, policy=policy, backend=backend, exclude_id=policy_id
+                client, policy=policy, backend=backend, exclude_id=policy_id
             )
             if check.errors:
                 self._raise_invalid(check.errors)
@@ -502,12 +480,13 @@ class RlsService(BaseService):
             if target_ids is not None:
                 client.put_target_projects(self.item_type, policy_id, target_ids)
             if changes:
-                try:
-                    client.patch_item(self.item_type, policy_id, name=table, data=changes)
-                except KeboolaApiError as exc:
-                    if exc.error_code == ErrorCode.ALREADY_EXISTS:
-                        raise self._already_exists(policy["table"], exc) from exc
-                    raise
+                client.patch_item(
+                    self.item_type,
+                    policy_id,
+                    name=table,
+                    data=changes,
+                    conflict_hint=self._conflict_hint,
+                )
             row = self._detail_row(client.get_item(self.item_type, policy_id))
         row["preview"] = preview
         return self._with_warnings(row, check.warnings)

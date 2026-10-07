@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, ClassVar
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -329,23 +329,19 @@ class TestCreatePolicy:
 
         mock.post_item.assert_not_called()
 
-    def test_a_duplicate_name_gets_a_policy_message_not_the_semantic_one(
+    def test_a_duplicate_name_gets_a_policy_remedy_not_the_semantic_one(
         self, tmp_path: Path
     ) -> None:
+        """Policies are named by table: the 409 remedy names `rls update` / `rls delete`."""
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.post_item.side_effect = KeboolaApiError(
-            message="already exists in the target model",
-            status_code=409,
-            error_code=ErrorCode.ALREADY_EXISTS,
-        )
+        mock.post_item.return_value = _policy_item()
 
-        with pytest.raises(KeboolaApiError) as excinfo:
-            service.create_policy("prod", table="t.x", rules=_RULES)
+        service.create_policy("prod", table="t.x", rules=_RULES)
 
-        assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
-        assert "rls update --policy-id" in excinfo.value.message
-        assert "model" not in excinfo.value.message
+        hint = mock.post_item.call_args.kwargs["conflict_hint"]
+        assert "rls update --policy-id" in hint
+        assert "rls delete" in hint
 
     @pytest.mark.parametrize(
         "bad_rules",
@@ -447,7 +443,7 @@ class TestUpdatePolicy:
         service.update_policy("prod", "p-1", rules=_RULES)
 
         mock.patch_item.assert_called_once_with(
-            "rls-policy", "p-1", name=None, data={"rules": _RULES}
+            "rls-policy", "p-1", name=None, data={"rules": _RULES}, conflict_hint=ANY
         )
         mock.put_item.assert_not_called()
 
@@ -459,7 +455,11 @@ class TestUpdatePolicy:
         service.update_policy("prod", "p-1", table="in.c-crm.new")
 
         mock.patch_item.assert_called_once_with(
-            "rls-policy", "p-1", name="in.c-crm.new", data={"table": "in.c-crm.new"}
+            "rls-policy",
+            "p-1",
+            name="in.c-crm.new",
+            data={"table": "in.c-crm.new"},
+            conflict_hint=ANY,
         )
 
     def test_nothing_to_update_is_a_usage_error(self, tmp_path: Path) -> None:
