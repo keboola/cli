@@ -425,20 +425,20 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 
 ### `rls` (6 operations)
 
-Row-level security policies (metastore-backed `rls-policy` objects), always authored at `organization`/`targeted` scope -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
+Row-level security policies (metastore-backed `rls-policy` objects), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
 
 | Method | Path | Summary |
 |---|---|---|
 | `GET` | `/rls/{project}` | List RLS policies |
-| `POST` | `/rls/{project}` | Create an RLS policy |
+| `POST` | `/rls/{project}` | Create a RLS policy |
 | `GET` | `/rls/{project}/schema` | Fetch the live rls-policy JSON Schema |
 | `GET` | `/rls/{project}/{policy_id}` | Get one RLS policy |
-| `PUT` | `/rls/{project}/{policy_id}` | Update an RLS policy |
-| `DELETE` | `/rls/{project}/{policy_id}` | Delete an RLS policy |
+| `PATCH` | `/rls/{project}/{policy_id}` | Update a RLS policy |
+| `DELETE` | `/rls/{project}/{policy_id}` | Delete a RLS policy |
 
 ### `cls` (6 operations)
 
-Column-level security policies (metastore-backed `cls-policy` objects: a per-principal `visible_columns` allowlist), always authored at `organization`/`targeted` scope -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
+Column-level security policies (metastore-backed `cls-policy` objects: a per-principal `visible_columns` allowlist), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
 
 | Method | Path | Summary |
 |---|---|---|
@@ -446,7 +446,7 @@ Column-level security policies (metastore-backed `cls-policy` objects: a per-pri
 | `POST` | `/cls/{project}` | Create a CLS policy |
 | `GET` | `/cls/{project}/schema` | Fetch the live cls-policy JSON Schema |
 | `GET` | `/cls/{project}/{policy_id}` | Get one CLS policy |
-| `PUT` | `/cls/{project}/{policy_id}` | Update a CLS policy |
+| `PATCH` | `/cls/{project}/{policy_id}` | Update a CLS policy |
 | `DELETE` | `/cls/{project}/{policy_id}` | Delete a CLS policy |
 
 ## AI & Tools

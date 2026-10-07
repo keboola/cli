@@ -8,8 +8,8 @@ description: >
   Storage tables/files/snapshots, data apps,
   flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, row-level security, Developer Portal, browser login,
-  first-time setup and logout in any client.
+  layer, row/column-level security, Developer Portal, login,
+  setup, logout.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   merge request,
@@ -18,7 +18,7 @@ description: >
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, rls, cls,
+  restore config, zero-copy clone, workspace load type, rls, cls,
   set up keboola, setup, connect project, logout, sign out.
 ---
 
@@ -371,16 +371,16 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List row-level security policies visible to a project | `kbagent rls list --project PROJECT` |
 | Show one RLS policy's full rule set | `kbagent rls detail --project PROJECT --policy-id POLICY-ID` |
 | Print the live ``rls-policy`` JSON Schema fetched from the metastore | `kbagent rls schema --project PROJECT` |
-| Create one RLS policy for one table | `kbagent rls create --project PROJECT --table TABLE --dialect DIALECT --rules RULES` |
+| Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``) | `kbagent rls create --project PROJECT --table-id TABLE-ID --rules RULES` |
 | Update an existing RLS policy | `kbagent rls update --project PROJECT --policy-id POLICY-ID` |
-| Delete an RLS policy | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
+| Delete an RLS policy -- its table's rows are no longer filtered | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
 | Guided RLS setup: pick tables, build a condition, preview, then write | `kbagent rls setup --project PROJECT` |
 | List column-level security policies visible to a project | `kbagent cls list --project PROJECT` |
 | Show one CLS policy's full rule set | `kbagent cls detail --project PROJECT --policy-id POLICY-ID` |
 | Print the live ``cls-policy`` JSON Schema fetched from the metastore | `kbagent cls schema --project PROJECT` |
-| Create one CLS policy for one table | `kbagent cls create --project PROJECT --table TABLE --dialect DIALECT --rules RULES` |
+| Create one CLS policy for one table (``targeted`` scope unless ``--scope organization``) | `kbagent cls create --project PROJECT --table-id TABLE-ID --rules RULES` |
 | Update an existing CLS policy | `kbagent cls update --project PROJECT --policy-id POLICY-ID` |
-| Delete a CLS policy | `kbagent cls delete --project PROJECT --policy-id POLICY-ID` |
+| Delete a CLS policy -- its table's columns become unrestricted | `kbagent cls delete --project PROJECT --policy-id POLICY-ID` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
