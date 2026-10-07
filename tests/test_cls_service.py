@@ -19,6 +19,8 @@ from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.cls_service import ClsService
 
+from .test_rls_service import storage_client_factory
+
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 _RULES = [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
 
@@ -42,7 +44,13 @@ def _make_service(tmp_path: Path) -> tuple[ClsService, MagicMock]:
     mock.get_schema.side_effect = KeboolaApiError(
         message="no schema", status_code=404, error_code=ErrorCode.NOT_FOUND
     )
-    return ClsService(config_store=store, metastore_client_factory=lambda url, token: mock), mock
+    mock.list_items.return_value = []
+    service = ClsService(
+        config_store=store,
+        client_factory=storage_client_factory(),
+        metastore_client_factory=lambda url, token: mock,
+    )
+    return service, mock
 
 
 def _item(rules: list[dict[str, Any]] | None = None, **meta: Any) -> dict[str, Any]:
@@ -103,11 +111,13 @@ class TestLocalRuleValidation:
             {"principal": ["a@x.com", "b@x.com"], "visible_columns": ["id"]}
         ]
 
-    def test_bad_dialect_is_rejected_before_any_write(self, tmp_path: Path) -> None:
+    def test_a_dialect_other_than_the_backend_is_rejected_before_any_write(
+        self, tmp_path: Path
+    ) -> None:
         service, mock = _make_service(tmp_path)
 
-        with pytest.raises(KeboolaApiError, match="dialect must be one of"):
-            service.create_policy("prod", table="in.c-crm.t", dialect="oracle", rules=_RULES)
+        with pytest.raises(KeboolaApiError, match="does not match the project backend"):
+            service.create_policy("prod", table="in.c-crm.t", dialect="bigquery", rules=_RULES)
 
         mock.post_item.assert_not_called()
 
@@ -193,71 +203,66 @@ class TestReads:
 
 
 class TestCreate:
-    def test_writes_cls_policy_at_organization_scope(self, tmp_path: Path) -> None:
+    def test_writes_cls_policy_at_targeted_scope_by_default(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
-        mock.post_item.return_value = _item()
+        mock.post_item.return_value = _item(scope="targeted")
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.invoices", dialect="snowflake", rules=_RULES
-        )
+        result = service.create_policy("prod", table="in.c-crm.invoices", rules=_RULES)
 
         mock.post_item.assert_called_once_with(
             "cls-policy",
             name="in.c-crm.invoices",
             data={"table": "in.c-crm.invoices", "dialect": "snowflake", "rules": _RULES},
-            scope="organization",
+            scope="targeted",
             target_project_ids=None,
         )
-        mock.put_target_projects.assert_not_called()
         assert result["preview"] == [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
 
-    def test_target_projects_make_it_targeted_and_grant(self, tmp_path: Path) -> None:
+    def test_target_projects_are_granted_in_the_create_request(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
         mock.post_item.return_value = _item(scope="targeted")
 
         service.create_policy(
-            "prod",
-            table="in.c-crm.invoices",
-            dialect="bigquery",
-            rules=_RULES,
-            target_project_ids=["7", "8"],
+            "prod", table="in.c-crm.invoices", rules=_RULES, target_projects=["7,8"]
         )
 
-        assert mock.post_item.call_args.kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("cls-policy", "p-1", [7, 8])
+        assert mock.post_item.call_args.kwargs["target_project_ids"] == [7, 8]
+        mock.put_target_projects.assert_not_called()
+
+    def test_duplicate_principals_are_rejected(self, tmp_path: Path) -> None:
+        service, mock = _make_service(tmp_path)
+        rules = [*_RULES, {"principal": "A@x.com", "visible_columns": ["id"]}]
+
+        with pytest.raises(KeboolaApiError, match="already has a rule"):
+            service.create_policy("prod", table="in.c-crm.t", rules=rules)
+
+        mock.post_item.assert_not_called()
 
     def test_dry_run_never_writes(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES, dry_run=True
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES, dry_run=True)
 
         assert result["dry_run"] is True
-        assert result["scope"] == "organization"
+        assert result["scope"] == "targeted"
         mock.post_item.assert_not_called()
 
 
 class TestUpdate:
-    def test_merges_only_the_given_fields(self, tmp_path: Path) -> None:
+    def test_patches_only_the_given_fields(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
         mock.get_item.return_value = _item()
-        mock.put_item.return_value = _item()
         new_rules = [{"principal": "b@x.com", "visible_columns": ["id"]}]
 
         service.update_policy("prod", "p-1", rules=new_rules)
 
-        mock.put_item.assert_called_once_with(
-            "cls-policy",
-            "p-1",
-            name="in.c-crm.invoices",
-            data={"table": "in.c-crm.invoices", "dialect": "snowflake", "rules": new_rules},
+        mock.patch_item.assert_called_once_with(
+            "cls-policy", "p-1", name=None, data={"rules": new_rules}
         )
 
     def test_keeps_existing_targets_and_scope(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
         mock.get_item.return_value = _item(scope="targeted", targetProjectIds=["7"])
-        mock.put_item.return_value = _item(scope="targeted")
 
         service.update_policy("prod", "p-1", table="in.c-crm.other")
 
@@ -267,11 +272,11 @@ class TestUpdate:
         service, mock = _make_service(tmp_path)
         mock.get_item.return_value = _item()
 
-        result = service.update_policy("prod", "p-1", dialect="bigquery", dry_run=True)
+        result = service.update_policy("prod", "p-1", table="in.c-crm.other", dry_run=True)
 
         assert result["dry_run"] is True
-        assert result["dialect"] == "bigquery"
-        mock.put_item.assert_not_called()
+        assert result["table"] == "in.c-crm.other"
+        mock.patch_item.assert_not_called()
 
     def test_invalid_merged_rules_are_rejected(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
@@ -281,7 +286,7 @@ class TestUpdate:
             service.update_policy("prod", "p-1", rules=[{"principal": "a@x.com"}])
 
         assert exc.value.error_code == ErrorCode.INVALID_CLS_POLICY
-        mock.put_item.assert_not_called()
+        mock.patch_item.assert_not_called()
 
 
 def test_delete_uses_cls_item_type(tmp_path: Path) -> None:

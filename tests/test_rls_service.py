@@ -54,8 +54,22 @@ def _make_service(
     mock = metastore_mock or MagicMock()
     mock.__enter__ = MagicMock(return_value=mock)
     mock.__exit__ = MagicMock(return_value=False)
-    service = RlsService(config_store=store, metastore_client_factory=lambda url, token: mock)
+    service = RlsService(
+        config_store=store,
+        client_factory=storage_client_factory(),
+        metastore_client_factory=lambda url, token: mock,
+    )
+    mock.list_items.return_value = []
     return service, mock
+
+
+def storage_client_factory(backend: str = "snowflake") -> Any:
+    """A Storage client factory whose token belongs to a project on ``backend``."""
+    storage = MagicMock()
+    storage.__enter__ = MagicMock(return_value=storage)
+    storage.__exit__ = MagicMock(return_value=False)
+    storage.verify_token.return_value.default_backend = backend
+    return lambda url, token: storage
 
 
 def _policy_item(
@@ -208,9 +222,7 @@ class TestFetchSchema:
         assert fetch.schema is None
         assert "malformed" in (fetch.reason or "")
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
         assert any("malformed" in w for w in result["warnings"])
         mock.post_item.assert_called_once()
 
@@ -241,76 +253,119 @@ class TestFetchSchema:
 
 
 class TestCreatePolicy:
-    def test_default_scope_is_organization_never_project(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+    def test_default_scope_is_targeted_with_no_grants(self, tmp_path: Path) -> None:
+        """The schema's own default: only the owning project is governed until grants are added."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.post_item.return_value = _policy_item(scope="targeted")
+
+        service.create_policy("prod", table="in.c-crm.invoices", rules=_RULES)
+
+        kwargs = mock.post_item.call_args.kwargs
+        assert kwargs["scope"] == "targeted"
+        assert kwargs["target_project_ids"] is None
+        assert kwargs["data"]["dialect"] == "snowflake"  # defaulted from the project backend
+        mock.put_target_projects.assert_not_called()
+
+    def test_organization_scope_only_when_asked_for(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
         mock.post_item.return_value = _policy_item()
 
-        service.create_policy("prod", table="in.c-crm.invoices", dialect="snowflake", rules=_RULES)
+        service.create_policy("prod", table="t.x", rules=_RULES, scope="organization")
 
-        _, kwargs = mock.post_item.call_args
-        assert kwargs["scope"] == "organization"
-        assert kwargs["scope"] != "project"
+        assert mock.post_item.call_args.kwargs["scope"] == "organization"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "fragment"),
+        [
+            ({"scope": "project"}, "scope must be one of"),
+            ({"scope": "organization", "target_projects": ["7"]}, "require scope 'targeted'"),
+        ],
+    )
+    def test_bad_scope_combinations_are_usage_errors(
+        self, tmp_path: Path, kwargs: dict, fragment: str
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError, match=fragment) as excinfo:
+            service.create_policy("prod", table="t.x", rules=_RULES, **kwargs)
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.post_item.assert_not_called()
+
+    def test_target_projects_go_in_the_create_request_only(self, tmp_path: Path) -> None:
+        """The POST stores the grants; a second grants call could fail after the policy exists."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.post_item.return_value = _policy_item(scope="targeted", target_project_ids=[999])
+
+        service.create_policy("prod", table="t.x", rules=_RULES, target_projects=["999", "999"])
+
+        assert mock.post_item.call_args.kwargs["target_project_ids"] == [999]  # de-duplicated
         mock.put_target_projects.assert_not_called()
 
-    def test_target_projects_use_targeted_scope_and_manage_grants(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.post_item.return_value = _policy_item(scope="targeted", target_project_ids=["999"])
+    @pytest.mark.parametrize(
+        ("backend", "dialect"), [("snowflake", "bigquery"), ("bigquery", "snowflake")]
+    )
+    def test_a_dialect_other_than_the_backend_is_refused(
+        self, tmp_path: Path, backend: str, dialect: str
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        service._client_factory = storage_client_factory(backend)
 
-        service.create_policy(
-            "prod",
-            table="in.c-crm.invoices",
-            dialect="snowflake",
-            rules=_RULES,
-            target_project_ids=["999"],
-        )
-
-        _, kwargs = mock.post_item.call_args
-        assert kwargs["scope"] == "targeted"
-        assert kwargs["target_project_ids"] == [999]
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [999])
-
-    def test_invalid_dialect_rejected_before_any_write(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-
-        with pytest.raises(KeboolaApiError) as excinfo:
-            service.create_policy("prod", table="t", dialect="postgres", rules=_RULES)
+        with pytest.raises(KeboolaApiError, match="does not match the project backend") as excinfo:
+            service.create_policy("prod", table="t.x", dialect=dialect, rules=_RULES)
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
-        mock.get_schema.assert_not_called()
 
-    def test_unknown_condition_op_rejected_before_any_write(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-        bad_rules = [
-            {"principal": "a@x.com", "condition": {"column": "x", "op": "bogus", "value": 1}}
-        ]
+    def test_a_backend_without_policy_support_is_refused(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        service._client_factory = storage_client_factory("synapse")
 
-        with pytest.raises(KeboolaApiError):
-            service.create_policy("prod", table="t", dialect="snowflake", rules=bad_rules)
+        with pytest.raises(KeboolaApiError, match="synapse"):
+            service.create_policy("prod", table="t.x", rules=_RULES)
 
         mock.post_item.assert_not_called()
 
-    def test_rule_with_both_principal_and_principals_rejected(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-        bad_rules = [
-            {"principal": "a@x.com", "principals": ["b@x.com"], "condition": {"true": True}}
-        ]
+    def test_a_duplicate_name_gets_a_policy_message_not_the_semantic_one(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.post_item.side_effect = KeboolaApiError(
+            message="already exists in the target model",
+            status_code=409,
+            error_code=ErrorCode.ALREADY_EXISTS,
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy("prod", table="t.x", rules=_RULES)
+
+        assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
+        assert "rls update --policy-id" in excinfo.value.message
+        assert "model" not in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        "bad_rules",
+        [
+            [{"principal": "a@x.com", "condition": {"column": "x", "op": "bogus", "value": 1}}],
+            [{"principal": "a@x.com", "principals": ["b@x.com"], "condition": {"true": True}}],
+        ],
+    )
+    def test_malformed_rules_are_rejected_before_any_write(
+        self, tmp_path: Path, bad_rules: list
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
 
         with pytest.raises(KeboolaApiError):
-            service.create_policy("prod", table="t", dialect="snowflake", rules=bad_rules)
+            service.create_policy("prod", table="t.x", rules=bad_rules)
 
         mock.post_item.assert_not_called()
 
     def test_structural_validation_runs_when_schema_available(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+        service, mock = _make_service(_make_store(tmp_path))
         # A schema that requires a `description` field the candidate body lacks.
         mock.get_schema.return_value = {
             "type": "object",
@@ -318,23 +373,62 @@ class TestCreatePolicy:
         }
 
         with pytest.raises(KeboolaApiError) as excinfo:
-            service.create_policy("prod", table="t", dialect="snowflake", rules=_RULES)
+            service.create_policy("prod", table="t.x", rules=_RULES)
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
 
     def test_dry_run_never_calls_post_item(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+        service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
 
-        result = service.create_policy(
-            "prod", table="t", dialect="snowflake", rules=_RULES, dry_run=True
-        )
+        result = service.create_policy("prod", table="t.x", rules=_RULES, dry_run=True)
 
         mock.post_item.assert_not_called()
         assert result["dry_run"] is True
-        assert result["preview"][0]["condition"] == "region = 'EU'"
+        assert result["scope"] == "targeted"
+        assert result["preview"][0]["condition"] == "\"region\" = 'EU'"
+
+
+class TestDuplicatePrincipals:
+    """One principal with two rules on one table makes the enforcement refuse every query."""
+
+    def test_within_one_policy_case_insensitively(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        rules = [
+            {"principal": "a@x.com", "condition": {"true": True}},
+            {"principals": ["b@x.com", "A@X.com"], "condition": {"true": True}},
+        ]
+
+        with pytest.raises(KeboolaApiError, match=r"'A@X.com' already has a rule in rules\[0\]"):
+            service.create_policy("prod", table="t.x", rules=rules, dry_run=True)
+
+        mock.post_item.assert_not_called()
+
+    def test_across_policies_on_the_same_table(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        # Snowflake table keys compare case-insensitively.
+        mock.list_items.return_value = [_policy_item(item_id="other", table="IN.C-CRM.T")]
+
+        with pytest.raises(KeboolaApiError, match="already has a rule in policy other"):
+            service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
+
+        mock.post_item.assert_not_called()
+
+    def test_policies_on_other_tables_and_the_policy_itself_do_not_count(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.list_items.return_value = [
+            _policy_item(item_id="other", table="in.c-crm.other"),
+            _policy_item(item_id="p-1", table="in.c-crm.invoices"),
+        ]
+        mock.get_item.return_value = _policy_item(item_id="p-1")
+
+        service.update_policy("prod", "p-1", rules=_RULES)
+
+        mock.patch_item.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -343,55 +437,156 @@ class TestCreatePolicy:
 
 
 class TestUpdatePolicy:
-    def test_partial_override_preserves_untouched_fields(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+    def test_patches_only_the_changed_keys_and_validates_the_merged_policy(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
         mock.get_item.return_value = _policy_item(table="in.c-crm.invoices", dialect="snowflake")
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.put_item.return_value = _policy_item()
+        mock.get_schema.return_value = {"type": "object", "required": ["table", "dialect", "rules"]}
 
         service.update_policy("prod", "p-1", rules=_RULES)
 
-        _, kwargs = mock.put_item.call_args
-        assert kwargs["data"]["table"] == "in.c-crm.invoices"  # unchanged, not wiped
-        assert kwargs["data"]["dialect"] == "snowflake"  # unchanged, not wiped
-        assert kwargs["data"]["rules"] == _RULES  # the one field we changed
+        mock.patch_item.assert_called_once_with(
+            "rls-policy", "p-1", name=None, data={"rules": _RULES}
+        )
+        mock.put_item.assert_not_called()
+
+    def test_a_new_table_renames_the_policy(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item()
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+
+        service.update_policy("prod", "p-1", table="in.c-crm.new")
+
+        mock.patch_item.assert_called_once_with(
+            "rls-policy", "p-1", name="in.c-crm.new", data={"table": "in.c-crm.new"}
+        )
+
+    def test_nothing_to_update_is_a_usage_error(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.update_policy("prod", "p-1")
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.get_item.assert_not_called()
+
+    def test_the_result_is_re_read_after_the_write(self, tmp_path: Path) -> None:
+        """The grants change after the PATCH response was built -- report what is stored now."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        before = _policy_item(scope="targeted", target_project_ids=[7])
+        after = _policy_item(scope="targeted", target_project_ids=[8])
+        mock.get_item.side_effect = [before, after]
+
+        result = service.update_policy("prod", "p-1", target_projects=["8"])
+
+        assert result["target_project_ids"] == [8]
+
+    def test_grants_change_before_the_rules(self, tmp_path: Path) -> None:
+        """Granting is organization-admin only: when it is refused, the rules stay unwritten."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted")
+        mock.put_target_projects.side_effect = KeboolaApiError(
+            message="Insufficient permissions", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+
+        with pytest.raises(KeboolaApiError):
+            service.update_policy("prod", "p-1", rules=_RULES, target_projects=["8"])
+
+        mock.patch_item.assert_not_called()
 
     def test_an_organization_policy_cannot_be_narrowed_to_target_projects(
         self, tmp_path: Path
     ) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-        mock.get_item.return_value = _policy_item(scope="organization", target_project_ids=[])
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item(scope="organization")
 
         with pytest.raises(KeboolaApiError) as excinfo:
-            service.update_policy("prod", "p-1", target_project_ids=["42"])
+            service.update_policy("prod", "p-1", target_projects=["42"])
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
-        mock.put_item.assert_not_called()
+        mock.patch_item.assert_not_called()
         mock.put_target_projects.assert_not_called()
 
-    def test_invalid_override_rejected_before_write(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+    def test_a_dialect_other_than_the_backend_is_refused(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
         mock.get_item.return_value = _policy_item()
 
-        with pytest.raises(KeboolaApiError):
-            service.update_policy("prod", "p-1", dialect="postgres")
+        with pytest.raises(KeboolaApiError, match="does not match the project backend"):
+            service.update_policy("prod", "p-1", dialect="bigquery")
 
-        mock.put_item.assert_not_called()
+        mock.patch_item.assert_not_called()
 
-    def test_dry_run_never_calls_put_item(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
-        mock.get_item.return_value = _policy_item()
+    def test_dry_run_never_writes(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
 
         result = service.update_policy("prod", "p-1", rules=_RULES, dry_run=True)
 
-        mock.put_item.assert_not_called()
+        mock.patch_item.assert_not_called()
+        mock.put_target_projects.assert_not_called()
         assert result["dry_run"] is True
+        assert result["target_project_ids"] == [7]
+
+
+class TestGrants:
+    """`target_projects`: None keeps the grants, a list replaces them, [] revokes them all."""
+
+    @pytest.mark.parametrize(
+        ("targets", "expected_call"),
+        [(None, None), ([], []), (["7", "8,9"], [7, 8, 9])],
+    )
+    def test_target_projects_semantics(
+        self, tmp_path: Path, targets: list | None, expected_call: list | None
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
+
+        service.update_policy("prod", "p-1", rules=_RULES, target_projects=targets)
+
+        if expected_call is None:
+            mock.put_target_projects.assert_not_called()
+        else:
+            mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", expected_call)
+
+    def test_a_registered_alias_resolves_to_its_project_id(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        store.add_project(
+            "shared",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com", token=TEST_TOKEN, project_id=77
+            ),
+        )
+        service, mock = _make_service(store)
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+
+        result = service.create_policy(
+            "prod", table="t.x", rules=_RULES, target_projects=["shared"], dry_run=True
+        )
+
+        assert result["target_project_ids"] == [77]
+
+    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-3"], ["1", "x"]])
+    def test_a_bad_target_is_rejected_before_any_network_call(
+        self, tmp_path: Path, bad: list
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        for call in (
+            lambda: service.create_policy(
+                "prod", table="t.x", rules=_RULES, target_projects=bad, dry_run=True
+            ),
+            lambda: service.update_policy("prod", "p-1", target_projects=bad, dry_run=True),
+        ):
+            with pytest.raises(KeboolaApiError) as excinfo:
+                call()
+            assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.get_item.assert_not_called()
+        mock.post_item.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -401,13 +596,22 @@ class TestUpdatePolicy:
 
 class TestDeletePolicy:
     def test_calls_delete_item(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
-        service, mock = _make_service(store)
+        service, mock = _make_service(_make_store(tmp_path))
 
         result = service.delete_policy("prod", "p-1")
 
         mock.delete_item.assert_called_once_with("rls-policy", "p-1")
         assert result == {"project": "prod", "policy_id": "p-1", "deleted": True}
+
+    def test_dry_run_shows_the_policy_and_deletes_nothing(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item()
+
+        result = service.delete_policy("prod", "p-1", dry_run=True)
+
+        mock.delete_item.assert_not_called()
+        assert result["dry_run"] is True
+        assert result["policy"]["id"] == "p-1"
 
 
 # ---------------------------------------------------------------------------
@@ -425,61 +629,64 @@ class TestCompileConditionPreview:
             compile_condition_preview(bad, "snowflake")
 
     @pytest.mark.parametrize(
-        "op,sql",
+        ("condition", "dialect", "sql"),
         [
-            ("eq", "region = 'EU'"),
-            ("ne", "region != 'EU'"),
-            ("gt", "region > 'EU'"),
-            ("gte", "region >= 'EU'"),
-            ("lt", "region < 'EU'"),
-            ("lte", "region <= 'EU'"),
+            *(
+                (
+                    {"column": "region", "op": op, "value": "EU"},
+                    "snowflake",
+                    f"\"region\" {sql} 'EU'",
+                )
+                for op, sql in [
+                    ("eq", "="),
+                    ("ne", "!="),
+                    ("gt", ">"),
+                    ("gte", ">="),
+                    ("lt", "<"),
+                    ("lte", "<="),
+                ]
+            ),
+            # Quoted per dialect, like the enforcement (so a column-case mismatch is visible).
+            ({"column": "Region", "op": "eq", "value": "EU"}, "bigquery", "`Region` = 'EU'"),
+            (
+                {"column": "region", "op": "in", "values": ["EU", "US"]},
+                "snowflake",
+                "\"region\" IN ('EU', 'US')",
+            ),
+            (
+                {"column": "region", "op": "not_in", "values": ["EU"]},
+                "snowflake",
+                "\"region\" NOT IN ('EU')",
+            ),
+            ({"column": "d", "op": "is_null"}, "snowflake", '"d" IS NULL'),
+            ({"column": "d", "op": "is_not_null"}, "snowflake", '"d" IS NOT NULL'),
+            ({"column": "amount", "op": "gt", "value": 100}, "snowflake", '"amount" > 100'),
+            ({"column": "active", "op": "eq", "value": True}, "snowflake", '"active" = TRUE'),
+            ({"column": "o", "op": "eq", "value": "O'Brien"}, "snowflake", "\"o\" = 'O''Brien'"),
+            (
+                {
+                    "and": [
+                        {"column": "r", "op": "eq", "value": "EU"},
+                        {"column": "s", "op": "ne", "value": "x"},
+                    ]
+                },
+                "snowflake",
+                "(\"r\" = 'EU') AND (\"s\" != 'x')",
+            ),
+            (
+                {
+                    "or": [
+                        {"column": "r", "op": "eq", "value": "EU"},
+                        {"column": "r", "op": "eq", "value": "US"},
+                    ]
+                },
+                "snowflake",
+                "(\"r\" = 'EU') OR (\"r\" = 'US')",
+            ),
         ],
     )
-    def test_comparison_ops(self, op: str, sql: str) -> None:
-        condition = {"column": "region", "op": op, "value": "EU"}
-        assert compile_condition_preview(condition, "snowflake") == sql
-
-    def test_in_op(self) -> None:
-        condition = {"column": "region", "op": "in", "values": ["EU", "US"]}
-        assert compile_condition_preview(condition, "snowflake") == "region IN ('EU', 'US')"
-
-    def test_not_in_op(self) -> None:
-        condition = {"column": "region", "op": "not_in", "values": ["EU"]}
-        assert compile_condition_preview(condition, "snowflake") == "region NOT IN ('EU')"
-
-    def test_is_null(self) -> None:
-        condition = {"column": "deleted_at", "op": "is_null"}
-        assert compile_condition_preview(condition, "snowflake") == "deleted_at IS NULL"
-
-    def test_is_not_null(self) -> None:
-        condition = {"column": "deleted_at", "op": "is_not_null"}
-        assert compile_condition_preview(condition, "snowflake") == "deleted_at IS NOT NULL"
-
-    def test_and_nesting(self) -> None:
-        condition = {
-            "and": [
-                {"column": "region", "op": "eq", "value": "EU"},
-                {"column": "status", "op": "ne", "value": "draft"},
-            ]
-        }
-        assert compile_condition_preview(condition, "snowflake") == (
-            "(region = 'EU') AND (status != 'draft')"
-        )
-
-    def test_or_nesting(self) -> None:
-        condition = {
-            "or": [
-                {"column": "region", "op": "eq", "value": "EU"},
-                {"column": "region", "op": "eq", "value": "US"},
-            ]
-        }
-        assert compile_condition_preview(condition, "snowflake") == (
-            "(region = 'EU') OR (region = 'US')"
-        )
-
-    def test_numeric_and_null_literals_not_quoted(self) -> None:
-        condition = {"column": "amount", "op": "gt", "value": 100}
-        assert compile_condition_preview(condition, "snowflake") == "amount > 100"
+    def test_renders_like_the_enforcement(self, condition: dict, dialect: str, sql: str) -> None:
+        assert compile_condition_preview(condition, dialect) == sql
 
     def test_unrecognized_shape_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -588,9 +795,7 @@ class TestValidationWarnings:
         mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
         mock.post_item.return_value = _policy_item()
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
 
         assert result["warnings"] == ["Live schema validation was skipped: no schema"]
 
@@ -598,9 +803,7 @@ class TestValidationWarnings:
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES, dry_run=True
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES, dry_run=True)
 
         assert result["warnings"] == ["Live schema validation was skipped: no schema"]
 
@@ -609,9 +812,7 @@ class TestValidationWarnings:
         mock.get_schema.return_value = {"type": "object"}
         mock.post_item.return_value = _policy_item()
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
 
         assert "warnings" not in result
 
@@ -619,57 +820,10 @@ class TestValidationWarnings:
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
         mock.get_item.return_value = _policy_item()
-        mock.put_item.return_value = _policy_item()
 
-        result = service.update_policy("prod", "p-1", dialect="bigquery")
+        result = service.update_policy("prod", "p-1", rules=_RULES)
 
         assert result["warnings"] == ["Live schema validation was skipped: no schema"]
-
-
-class TestClearingGrants:
-    """`target_project_ids`: None keeps the grants, a list replaces them, [] revokes them all."""
-
-    def _targeted(self) -> dict[str, Any]:
-        return _policy_item(scope="targeted", target_project_ids=["7", "8"])
-
-    def test_empty_list_revokes_every_grant_and_keeps_the_scope(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = self._targeted()
-        mock.put_item.return_value = self._targeted()
-
-        result = service.update_policy("prod", "p-1", target_project_ids=[])
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
-        assert result["id"] == "p-1"
-
-    def test_none_keeps_the_existing_grants(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = self._targeted()
-        mock.put_item.return_value = self._targeted()
-
-        service.update_policy("prod", "p-1", dialect="bigquery")
-        mock.put_target_projects.assert_not_called()  # the omitted option re-sends nothing
-
-    def test_clearing_a_policy_that_has_no_grants_makes_no_grant_call(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = _policy_item()  # organization scope, no targets
-        mock.put_item.return_value = _policy_item()
-
-        service.update_policy("prod", "p-1", target_project_ids=[])
-        mock.put_target_projects.assert_not_called()
-
-    def test_dry_run_previews_the_cleared_state_without_writing(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = self._targeted()
-
-        result = service.update_policy("prod", "p-1", target_project_ids=[], dry_run=True)
-
-        assert result["target_project_ids"] == []
-        mock.put_item.assert_not_called()
-        mock.put_target_projects.assert_not_called()
 
 
 class TestPrimitiveShape:
@@ -687,6 +841,9 @@ class TestPrimitiveShape:
             ({"column": "a", "op": "in"}, "non-empty list 'values'"),
             ({"column": "a", "op": "not_in", "values": []}, "non-empty list 'values'"),
             ({"column": "a", "op": "in", "values": "abc"}, "non-empty list 'values'"),
+            # `col = NULL` / `IN (NULL)` match no row: the principal would silently see nothing.
+            ({"column": "a", "op": "eq", "value": None}, "use op 'is_null'"),
+            ({"column": "a", "op": "in", "values": [1, None]}, "cannot list null"),
         ],
     )
     def test_malformed_primitives_are_rejected(self, condition: dict, fragment: str) -> None:
@@ -697,7 +854,6 @@ class TestPrimitiveShape:
         "condition",
         [
             {"column": "a", "op": "eq", "value": 0},
-            {"column": "a", "op": "eq", "value": None},  # an explicit null value is still a value
             {"column": "a", "op": "in", "values": [1]},
             {"column": "a", "op": "is_null"},
             {
@@ -721,97 +877,6 @@ class TestPrimitiveShape:
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
-
-
-class TestScopeIsKeptWhenTargetsAreOmitted:
-    def _targeted_without_grants(self) -> dict[str, Any]:
-        """What the metastore returns after every grant was revoked: still `targeted`, empty list."""
-        return _policy_item(scope="targeted", target_project_ids=[])
-
-    def test_an_unrelated_update_does_not_turn_a_cleared_targeted_policy_into_organization(
-        self, tmp_path: Path
-    ) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = self._targeted_without_grants()
-        mock.put_item.return_value = self._targeted_without_grants()
-
-        service.update_policy("prod", "p-1", dialect="bigquery")  # no target option at all
-        mock.put_target_projects.assert_not_called()
-
-    def test_an_explicit_target_list_replaces_the_grants_of_a_targeted_policy(
-        self, tmp_path: Path
-    ) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = self._targeted_without_grants()
-        mock.put_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
-
-        service.update_policy("prod", "p-1", target_project_ids=["7"])
-
-        assert "scope" not in mock.put_item.call_args.kwargs  # a PUT never carries scope
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [7])
-
-    def test_clearing_keeps_the_current_scope(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=["7"])
-        mock.put_item.return_value = self._targeted_without_grants()
-
-        service.update_policy("prod", "p-1", target_project_ids=[])
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
-
-
-class TestDryRunValidatesTargetIds:
-    """A preview must run the same validation as the write -- including the target project ids."""
-
-    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-3"], ["1", "x"]])
-    def test_create_dry_run_rejects_a_bad_target_before_any_network_call(
-        self, tmp_path: Path, bad: list
-    ) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-
-        with pytest.raises(KeboolaApiError) as excinfo:
-            service.create_policy(
-                "prod",
-                table="t",
-                dialect="snowflake",
-                rules=_RULES,
-                target_project_ids=bad,
-                dry_run=True,
-            )
-
-        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
-        mock.get_schema.assert_not_called()
-        mock.post_item.assert_not_called()
-
-    def test_update_dry_run_rejects_a_bad_target_before_any_network_call(
-        self, tmp_path: Path
-    ) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-
-        with pytest.raises(KeboolaApiError) as excinfo:
-            service.update_policy("prod", "p-1", target_project_ids=["abc"], dry_run=True)
-
-        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
-        mock.get_item.assert_not_called()
-        mock.put_item.assert_not_called()
-
-    def test_valid_targets_still_preview(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-
-        result = service.create_policy(
-            "prod",
-            table="t",
-            dialect="snowflake",
-            rules=_RULES,
-            target_project_ids=["7", "8"],
-            dry_run=True,
-        )
-
-        assert result["scope"] == "targeted"
-        assert result["target_project_ids"] == [7, 8]
 
 
 class TestCompositionAndKeysAreExact:
@@ -945,7 +1010,5 @@ class TestUnresolvedVersionListing:
         assert fetch.schema is None
         assert "version listing" in (fetch.reason or "")
 
-        result = service.create_policy(
-            "prod", table="in.c-crm.t", dialect="snowflake", rules=_RULES
-        )
+        result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
         assert any("version listing" in w for w in result["warnings"])

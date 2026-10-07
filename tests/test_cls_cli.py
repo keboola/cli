@@ -27,7 +27,7 @@ CREATE_ARGS = [
     "create",
     "--project",
     "prod",
-    "--table",
+    "--table-id",
     "in.c-crm.invoices",
     "--dialect",
     "snowflake",
@@ -237,7 +237,7 @@ class TestCreate:
 
         assert result.exit_code == 0, result.output
         service.create_policy.assert_called_once()
-        assert service.create_policy.call_args.kwargs["target_project_ids"] == ["7", "8"]
+        assert service.create_policy.call_args.kwargs["target_projects"] == ["7", "8"]
 
     def test_invalid_dialect_exits_2_before_any_call(self, tmp_path: Path) -> None:
         service = MagicMock()
@@ -413,11 +413,11 @@ class TestDelete:
         )
 
         assert "Deleted CLS policy p-1" in result.output
-        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1")
+        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1", dry_run=False)
 
 
-def test_permission_check_denies_admin_writes_but_not_reads(tmp_path: Path) -> None:
-    """`cls.*` is registered in OPERATION_REGISTRY: create/update/delete=admin, reads=read."""
+def test_permission_classes_of_the_cls_operations(tmp_path: Path) -> None:
+    """`cls.*` in OPERATION_REGISTRY: create/update=admin, delete=destructive, reads=read."""
     from keboola_agent_cli.permissions import OPERATION_REGISTRY
 
     assert {op: OPERATION_REGISTRY[f"cls.{op}"] for op in ("list", "detail", "schema")} == {
@@ -425,7 +425,8 @@ def test_permission_check_denies_admin_writes_but_not_reads(tmp_path: Path) -> N
         "detail": "read",
         "schema": "read",
     }
-    assert all(OPERATION_REGISTRY[f"cls.{op}"] == "admin" for op in ("create", "update", "delete"))
+    assert all(OPERATION_REGISTRY[f"cls.{op}"] == "admin" for op in ("create", "update"))
+    assert OPERATION_REGISTRY["cls.delete"] == "destructive"
 
 
 class TestClsReviewFixes:
@@ -460,7 +461,7 @@ class TestClsReviewFixes:
         )
 
         assert result.exit_code == 0, result.output
-        assert service.update_policy.call_args.kwargs["target_project_ids"] == []
+        assert service.update_policy.call_args.kwargs["target_projects"] == []
 
     def test_update_clear_and_target_project_are_mutually_exclusive(self, tmp_path: Path) -> None:
         service = MagicMock()
@@ -489,3 +490,54 @@ class TestClsReviewFixes:
 
         assert result.exit_code == 0, result.output
         assert "Live schema validation was skipped" in result.output
+
+
+class TestDestructiveGates:
+    """`--scope organization` and `delete` are destructive-class: `--deny-destructive` blocks them."""
+
+    @pytest.mark.parametrize(("extra", "exit_code"), [([], 0), (["--scope", "organization"], 6)])
+    def test_deny_destructive_blocks_only_organization_scope(
+        self, tmp_path: Path, extra: list[str], exit_code: int
+    ) -> None:
+        service = MagicMock()
+        service.create_policy.return_value = {**_row(), "preview": _preview()["preview"]}
+
+        result = _run(["--json", "--deny-destructive", *CREATE_ARGS, *extra], tmp_path, service)
+
+        assert result.exit_code == exit_code, result.output
+        assert service.create_policy.called is (exit_code == 0)
+
+    def test_deny_destructive_blocks_delete(self, tmp_path: Path) -> None:
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "cls",
+                "delete",
+                "--project",
+                "prod",
+                "--policy-id",
+                "p-1",
+            ],
+            tmp_path,
+            service,
+        )
+
+        assert result.exit_code == 6
+        service.delete_policy.assert_not_called()
+
+    def test_delete_dry_run_needs_no_confirm(self, tmp_path: Path) -> None:
+        service = MagicMock()
+        service.delete_policy.return_value = {"project": "prod", "policy": _row(), "dry_run": True}
+
+        result = _run(
+            ["cls", "delete", "--project", "prod", "--policy-id", "p-1", "--dry-run"],
+            tmp_path,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Would delete" in result.output
+        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1", dry_run=True)

@@ -366,13 +366,16 @@ OPERATION_REGISTRY: dict[str, str] = {
     # operations (see `project.add` etc. above). `setup` performs the exact
     # same write as `create`, just via an interactive picker, so it must
     # carry the same class or a permission policy that allows `setup` but
-    # not `create` (or vice versa) would leave a hole.
+    # not `create` (or vice versa) would leave a hole. `delete` is
+    # `destructive`, like every other remote delete: removing a policy removes
+    # the row filter (or column allowlist) it enforced. `create --scope
+    # organization` is escalated to `destructive` too (FLAG_ESCALATIONS).
     "rls.list": "read",
     "rls.detail": "read",
     "rls.schema": "read",
     "rls.create": "admin",
     "rls.update": "admin",
-    "rls.delete": "admin",
+    "rls.delete": "destructive",
     "rls.setup": "admin",
     # Column-level security: same classes as rls.* for the same reason.
     "cls.list": "read",
@@ -380,7 +383,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "cls.schema": "read",
     "cls.create": "admin",
     "cls.update": "admin",
-    "cls.delete": "admin",
+    "cls.delete": "destructive",
     # `scope` sub-app: visibility scope / target-project grants / elevation
     # requests (PSGO-140). Parent key at the least-privileged level (read),
     # same pattern as `reference-data` above. `set --scope organization` is
@@ -502,6 +505,10 @@ FLAG_ESCALATIONS: dict[str, str] = {
     "semantic-layer.import --scope organization": "destructive",
     "semantic-layer.promote --scope organization": "destructive",
     "semantic-layer.build --scope organization": "destructive",
+    # An organization-scope policy governs its table in EVERY project of the
+    # organization (one invalid policy refuses all of their queries).
+    "rls.create --scope organization": "destructive",
+    "cls.create --scope organization": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

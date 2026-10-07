@@ -207,7 +207,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "in.c-crm.invoices",
                 "--dialect",
                 "snowflake",
@@ -232,7 +232,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "t",
                 "--dialect",
                 "postgres",
@@ -257,7 +257,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "t",
                 "--dialect",
                 "snowflake",
@@ -282,7 +282,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "t",
                 "--dialect",
                 "snowflake",
@@ -309,7 +309,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "t",
                 "--dialect",
                 "snowflake",
@@ -340,7 +340,7 @@ class TestRlsCreateCli:
                 "create",
                 "--project",
                 "prod",
-                "--table",
+                "--table-id",
                 "t",
                 "--dialect",
                 "snowflake",
@@ -374,7 +374,7 @@ class TestRlsUpdateCli:
                 "prod",
                 "--policy-id",
                 "p-1",
-                "--table",
+                "--table-id",
                 "in.c-crm.invoices",
             ],
             store,
@@ -407,7 +407,7 @@ class TestRlsDeleteCli:
         )
 
         assert result.exit_code == 0, result.output
-        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1")
+        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1", dry_run=False)
 
     def test_human_mode_without_yes_aborts_on_no(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -539,7 +539,7 @@ class TestRlsReviewFixes:
         )
 
         assert result.exit_code == 0, result.output
-        assert service.update_policy.call_args.kwargs["target_project_ids"] == []
+        assert service.update_policy.call_args.kwargs["target_projects"] == []
 
     def test_update_clear_and_target_project_are_mutually_exclusive(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -568,7 +568,7 @@ class TestRlsReviewFixes:
             service,
         )
 
-        assert service.update_policy.call_args.kwargs["target_project_ids"] is None
+        assert service.update_policy.call_args.kwargs["target_projects"] is None
 
     def test_create_prints_the_validation_warning_in_human_mode(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -581,7 +581,7 @@ class TestRlsReviewFixes:
 
         result = _run(
             [
-                "rls", "create", "--project", "prod", "--table", "in.c-crm.invoices", "--dialect", "snowflake",
+                "rls", "create", "--project", "prod", "--table-id", "in.c-crm.invoices", "--dialect", "snowflake",
                 "--rules", '[{"principal":"a@x.com","condition":{"true":true}}]', "--yes",
             ],
             store,
@@ -799,3 +799,119 @@ class TestRlsSetupReviewFixes:
         )
 
         assert result.exit_code == 0, result.output
+
+
+class TestScopeAndDestructiveGates:
+    """`--scope organization` and `delete` are destructive-class: `--deny-destructive` blocks them."""
+
+    RULES = '[{"principal":"a@x.com","condition":{"true":true}}]'
+
+    @pytest.mark.parametrize(("extra", "exit_code"), [([], 0), (["--scope", "organization"], 6)])
+    def test_deny_destructive_blocks_only_organization_scope(
+        self, tmp_path: Path, extra: list[str], exit_code: int
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {**_policy_row(), "preview": []}
+
+        result = _run(
+            [
+                "--json", "--deny-destructive", "rls", "create", "--project", "prod",
+                "--table-id", "in.c-crm.t", "--rules", self.RULES, *extra,
+            ],
+            store,
+            service,
+        )  # fmt: skip
+
+        assert result.exit_code == exit_code, result.output
+        assert service.create_policy.called is (exit_code == 0)
+
+    def test_scope_is_passed_to_the_service(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {**_policy_row(), "preview": []}
+
+        _run(
+            [
+                "--json", "rls", "create", "--project", "prod", "--table-id", "in.c-crm.t",
+                "--rules", self.RULES, "--scope", "organization",
+            ],
+            store,
+            service,
+        )  # fmt: skip
+
+        kwargs = service.create_policy.call_args.kwargs
+        assert kwargs["scope"] == "organization"
+        assert kwargs["dialect"] is None  # omitted: the service uses the project backend
+
+    def test_deny_destructive_blocks_delete(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--json",
+                "--deny-destructive",
+                "rls",
+                "delete",
+                "--project",
+                "prod",
+                "--policy-id",
+                "p-1",
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 6
+        service.delete_policy.assert_not_called()
+
+    def test_delete_dry_run_needs_no_confirm_and_deletes_nothing(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.delete_policy.return_value = {
+            "project": "prod",
+            "policy": _policy_row(),
+            "dry_run": True,
+        }
+
+        result = _run(
+            ["rls", "delete", "--project", "prod", "--policy-id", "p-1", "--dry-run"],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Would delete" in result.output
+        service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1", dry_run=True)
+
+    def test_a_service_usage_error_exits_2(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.side_effect = KeboolaApiError(
+            message="--target-project 'ghost' is neither ...",
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+
+        result = _run(
+            [
+                "--json", "rls", "create", "--project", "prod", "--table-id", "t.x",
+                "--rules", self.RULES, "--target-project", "ghost",
+            ],
+            store,
+            service,
+        )  # fmt: skip
+
+        assert result.exit_code == 2
+
+    def test_setup_json_prints_a_json_error_envelope(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+
+        result = _run(["--json", "rls", "setup", "--project", "prod"], store, MagicMock())
+
+        assert result.exit_code == 2
+        envelope = json.loads(result.output)
+        assert envelope["status"] == "error"
+        assert envelope["error"]["code"] == "INVALID_ARGUMENT"
+        assert "rls create" in envelope["error"]["message"]
