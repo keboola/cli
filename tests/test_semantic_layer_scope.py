@@ -97,7 +97,8 @@ class TestResolveTargetProjectIds:
     @pytest.mark.parametrize(
         ("target", "needle"),
         [
-            ("ghost", "neither a registered project alias nor a numeric project ID"),
+            ("ghost", "neither a registered project alias nor a positive numeric project ID"),
+            ("0", "neither a registered project alias nor a positive numeric project ID"),
             ("eu-project", "different stack"),
         ],
     )
