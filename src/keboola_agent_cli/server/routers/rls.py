@@ -43,7 +43,7 @@ class RlsPolicyCreate(BaseModel):
     table: str
     dialect: str
     rules: list[dict[str, Any]]
-    target_project_ids: list[str] | None = None
+    target_project_ids: list[int] | None = None
     dry_run: bool = False
 
 
@@ -51,7 +51,7 @@ class RlsPolicyUpdate(BaseModel):
     table: str | None = None
     dialect: str | None = None
     rules: list[dict[str, Any]] | None = None
-    target_project_ids: list[str] | None = None
+    target_project_ids: list[int] | None = None
     dry_run: bool = False
 
 
