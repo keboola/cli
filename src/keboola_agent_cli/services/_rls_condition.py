@@ -81,6 +81,11 @@ def _is_true_sentinel(condition: dict[Any, Any]) -> bool:
     return len(condition) == 1 and condition["true"] is True
 
 
+def _is_scalar(value: Any) -> bool:
+    """A literal the primitives allow: string, number or boolean -- never an object or array."""
+    return isinstance(value, str | int | float | bool)
+
+
 def validate_condition_ops(condition: Any) -> list[str]:
     """Recursively check every operator name used in ``condition`` is known.
 
@@ -130,6 +135,8 @@ def validate_condition_ops(condition: Any) -> list[str]:
             errors.append(
                 f"condition with op {op!r} cannot compare to null; use op 'is_null' / 'is_not_null'"
             )
+        elif not _is_scalar(condition["value"]):
+            errors.append(f"condition with op {op!r} needs a string, number or boolean 'value'")
     if op in RLS_MEMBERSHIP_OPS:
         values = condition.get("values")
         if not isinstance(values, list) or not values:
@@ -138,6 +145,8 @@ def validate_condition_ops(condition: Any) -> list[str]:
             errors.append(
                 f"condition with op {op!r} cannot list null in 'values' (it never matches); use 'is_null'"
             )
+        elif not all(_is_scalar(value) for value in values):
+            errors.append(f"condition with op {op!r} needs string, number or boolean 'values'")
     # No keys beyond the op's own shape (the schema forbids additional properties): a stray `values` on an
     # `eq`, or a `value` on an `in`, is an authoring mistake that would otherwise be silently ignored.
     allowed = {"column", "op"} | (

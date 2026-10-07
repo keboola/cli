@@ -113,10 +113,27 @@ def _confirm_or_exit(formatter: Any, question: str) -> None:
         raise typer.Exit(code=0)
 
 
-def gate_scope(ctx: typer.Context, group: str, operation: str, scope: PolicyScope) -> None:
-    """``--scope organization`` governs the table in every project: a destructive-class flag."""
-    if scope == PolicyScope.ORGANIZATION:
-        check_cli_operation(ctx, f"{group}.{operation} --scope organization")
+def gate_scope(
+    ctx: typer.Context,
+    group: str,
+    operation: str,
+    scope: PolicyScope,
+    target_project: list[str] | None,
+) -> None:
+    """Validate ``--scope`` before any API call or prompt.
+
+    ``--scope organization`` governs the table in every project: a destructive-class flag. It has
+    no grants, so ``--target-project`` with it is a usage error (exit 2).
+    """
+    if scope != PolicyScope.ORGANIZATION:
+        return
+    check_cli_operation(ctx, f"{group}.{operation} --scope organization")
+    if target_project:
+        get_formatter(ctx).error(
+            message="--target-project requires --scope targeted (organization scope has no grants)",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
 
 
 def reject_target_conflict(
@@ -330,7 +347,7 @@ def rls_create(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``)."""
-    gate_scope(ctx, "rls", "create", scope)
+    gate_scope(ctx, "rls", "create", scope, target_project)
     formatter = get_formatter(ctx)
     service = get_service(ctx, "rls_service")
     kwargs = {
@@ -564,7 +581,7 @@ def rls_setup(
     """
     # `setup` performs `create`'s writes, so an exact `rls.create` denial must cover it too.
     check_cli_operation(ctx, "rls.create")
-    gate_scope(ctx, "rls", "create", scope)
+    gate_scope(ctx, "rls", "create", scope, target_project)
     formatter = get_formatter(ctx)
     if formatter.json_mode or not _is_interactive():
         formatter.error(message=_SETUP_HINT, error_code=ErrorCode.INVALID_ARGUMENT)

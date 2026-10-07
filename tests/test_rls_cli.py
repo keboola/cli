@@ -905,6 +905,24 @@ class TestScopeAndDestructiveGates:
 
         assert result.exit_code == 2
 
+    @pytest.mark.parametrize(
+        "command", [["rls", "setup"], ["rls", "create", "--table-id", "t.x", "--rules", "[]"]]
+    )
+    def test_organization_scope_with_target_project_fails_before_any_call(
+        self, tmp_path: Path, command: list[str]
+    ) -> None:
+        """No grants on organization scope: a usage error before the table listing or any write."""
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service, storage = MagicMock(), MagicMock()
+        args = [*command, "--project", "prod", "--scope", "organization", "--target-project", "7"]
+
+        result = _run(args, store, service, storage_service=storage)
+
+        assert result.exit_code == 2, result.output
+        assert "--target-project requires --scope targeted" in result.output
+        storage.list_tables.assert_not_called()
+        service.create_policy.assert_not_called()
+
     def test_setup_json_prints_a_json_error_envelope(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
 
