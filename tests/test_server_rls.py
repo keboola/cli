@@ -2,10 +2,9 @@
 
 Two families, mirroring ``test_server_router_calls.py`` (kwarg parity via a
 mocked ``ServiceRegistry``) and ``test_server_permissions.py`` (persisted
-policy -> 403). RLS is classified ``admin`` for every write -- these tests
-pin that ``cli:admin`` (not merely ``cli:write``) is what has to be denied
-to block ``create``/``update``/``delete``, and that ``list``/``detail``/
-``schema`` stay reachable under that same denial.
+policy -> 403). RLS ``create``/``update`` are ``admin``, ``delete`` and a
+create at ``organization`` scope are ``destructive``; ``list``/``detail``/
+``schema`` stay reachable under either denial.
 """
 
 from __future__ import annotations
@@ -129,10 +128,10 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
     rls_svc.create_policy.return_value = {"id": POLICY_ID}
     app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
     body = {
-        "table": "in.c-crm.invoices",
+        "table_id": "in.c-crm.invoices",
         "dialect": "snowflake",
         "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
-        "target_project_ids": [999],
+        "target_projects": [999, "analytics"],
         "dry_run": False,
     }
 
@@ -144,7 +143,8 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
     assert kwargs["table"] == "in.c-crm.invoices"
     assert kwargs["dialect"] == "snowflake"
     assert kwargs["rules"] == body["rules"]
-    assert kwargs["target_project_ids"] == [999]
+    assert kwargs["scope"] == "targeted"  # the default
+    assert kwargs["target_projects"] == [999, "analytics"]
     assert kwargs["dry_run"] is False
 
 
@@ -154,13 +154,42 @@ def test_update_policy_passes_kwargs(tmp_path: Path) -> None:
     app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
 
     with TestClient(app) as client:
-        res = client.put(f"/rls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"table": "new.table"})
+        res = client.patch(
+            f"/rls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"table_id": "new.table"}
+        )
 
     assert res.status_code == 200, res.text
     args, kwargs = rls_svc.update_policy.call_args
     assert args == (PROJECT, POLICY_ID)
     assert kwargs["table"] == "new.table"
     assert kwargs["rules"] is None
+    assert kwargs["target_projects"] is None
+
+
+def test_update_is_patch_not_put(tmp_path: Path) -> None:
+    app = _make_app_with_registry(tmp_path, _mock_registry(rls=MagicMock()))
+
+    with TestClient(app) as client:
+        res = client.put(f"/rls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"table_id": "x"})
+
+    assert res.status_code == 405, res.text
+
+
+def test_target_projects_with_organization_scope_is_422(tmp_path: Path) -> None:
+    rls_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
+    body = {
+        "table_id": "t.x",
+        "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+        "scope": "organization",
+        "target_projects": [7],
+    }
+
+    with TestClient(app) as client:
+        res = client.post(f"/rls/{PROJECT}", headers=AUTH, json=body)
+
+    assert res.status_code == 422, res.text
+    rls_svc.create_policy.assert_not_called()
 
 
 def test_delete_policy_calls_service(tmp_path: Path) -> None:
@@ -170,9 +199,12 @@ def test_delete_policy_calls_service(tmp_path: Path) -> None:
 
     with TestClient(app) as client:
         res = client.delete(f"/rls/{PROJECT}/{POLICY_ID}", headers=AUTH)
+        dry = client.delete(f"/rls/{PROJECT}/{POLICY_ID}?dry_run=true", headers=AUTH)
 
     assert res.status_code == 200, res.text
-    rls_svc.delete_policy.assert_called_once_with(PROJECT, POLICY_ID)
+    assert dry.status_code == 200, dry.text
+    assert [c.kwargs["dry_run"] for c in rls_svc.delete_policy.call_args_list] == [False, True]
+    assert rls_svc.delete_policy.call_args.args == (PROJECT, POLICY_ID)
 
 
 def test_keboola_api_error_from_service_maps_to_http_status(tmp_path: Path) -> None:
@@ -189,7 +221,7 @@ def test_keboola_api_error_from_service_maps_to_http_status(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# Permission gating -- RLS writes are `admin`, not merely `write`
+# Permission gating -- create/update `admin`; delete and organization scope `destructive`
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +236,7 @@ class TestPermissionGating:
                 f"/rls/{PROJECT}",
                 headers=AUTH,
                 json={
-                    "table": "t",
+                    "table_id": "t",
                     "dialect": "snowflake",
                     "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
                 },
@@ -214,16 +246,38 @@ class TestPermissionGating:
         assert res.json()["error"]["code"] == "PERMISSION_DENIED"
         rls_svc.create_policy.assert_not_called()
 
-    def test_denying_cli_admin_blocks_delete(self, tmp_path: Path) -> None:
-        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:admin"]))
+    @pytest.mark.parametrize(("deny", "status"), [("cli:destructive", 403), ("cli:admin", 200)])
+    def test_delete_is_destructive_not_admin(self, tmp_path: Path, deny: str, status: int) -> None:
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=[deny]))
         rls_svc = MagicMock()
+        rls_svc.delete_policy.return_value = {"deleted": True}
         app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
 
         with TestClient(app) as client:
             res = client.delete(f"/rls/{PROJECT}/{POLICY_ID}", headers=AUTH)
 
-        assert res.status_code == 403, res.text
-        rls_svc.delete_policy.assert_not_called()
+        assert res.status_code == status, res.text
+        assert rls_svc.delete_policy.called is (status == 200)
+
+    @pytest.mark.parametrize(("scope", "status"), [("targeted", 200), ("organization", 403)])
+    def test_denying_cli_destructive_blocks_only_organization_scope(
+        self, tmp_path: Path, scope: str, status: int
+    ) -> None:
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:destructive"]))
+        rls_svc = MagicMock()
+        rls_svc.create_policy.return_value = {"id": POLICY_ID}
+        app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
+        body = {
+            "table_id": "t.x",
+            "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+            "scope": scope,
+        }
+
+        with TestClient(app) as client:
+            res = client.post(f"/rls/{PROJECT}", headers=AUTH, json=body)
+
+        assert res.status_code == status, res.text
+        assert rls_svc.create_policy.called is (status == 200)
 
     def test_denying_cli_admin_still_allows_reads(self, tmp_path: Path) -> None:
         _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:admin"]))

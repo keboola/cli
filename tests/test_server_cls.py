@@ -1,7 +1,8 @@
 """Tests for `server/routers/cls.py` -- router -> service call parity + permission gating.
 
 Mirrors ``test_server_rls.py``: kwarg parity via a mocked ``ServiceRegistry``
-and persisted-policy -> 403. CLS writes are ``admin``, like RLS.
+and persisted-policy -> 403. Same classes as RLS: create/update ``admin``,
+delete ``destructive``.
 """
 
 from __future__ import annotations
@@ -90,20 +91,20 @@ def test_create_and_update_pass_kwargs(tmp_path: Path) -> None:
     svc.create_policy.return_value = {"id": POLICY_ID}
     svc.update_policy.return_value = {"id": POLICY_ID}
     body = {
-        "table": "in.c-crm.invoices",
+        "table_id": "in.c-crm.invoices",
         "dialect": "snowflake",
         "rules": RULES,
-        "target_project_ids": [999],
+        "target_projects": [999],
     }
 
     with TestClient(_app(tmp_path, svc)) as client:
         assert client.post(f"/cls/{PROJECT}", headers=AUTH, json=body).status_code == 200
-        res = client.put(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"rules": RULES})
+        res = client.patch(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"rules": RULES})
         assert res.status_code == 200, res.text
 
     create_kwargs = svc.create_policy.call_args.kwargs
     assert create_kwargs["rules"] == RULES
-    assert create_kwargs["target_project_ids"] == [999]
+    assert create_kwargs["target_projects"] == [999]
     assert create_kwargs["dry_run"] is False
     args, update_kwargs = svc.update_policy.call_args
     assert args == (PROJECT, POLICY_ID)
@@ -119,7 +120,7 @@ def test_delete_calls_service(tmp_path: Path) -> None:
         res = client.delete(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH)
 
     assert res.status_code == 200, res.text
-    svc.delete_policy.assert_called_once_with(PROJECT, POLICY_ID)
+    svc.delete_policy.assert_called_once_with(PROJECT, POLICY_ID, dry_run=False)
 
 
 def test_service_error_maps_to_http_status(tmp_path: Path) -> None:
@@ -135,25 +136,33 @@ def test_service_error_maps_to_http_status(tmp_path: Path) -> None:
 
 
 class TestPermissionGating:
-    @pytest.mark.parametrize("deny", ["cli:admin", "cli:write"])
-    def test_denied_policy_blocks_every_write(self, tmp_path: Path, deny: str) -> None:
+    @pytest.mark.parametrize(
+        ("deny", "blocked"),
+        [
+            ("cli:admin", {"create", "update"}),
+            ("cli:destructive", {"delete"}),
+            ("cli:write", {"create", "update", "delete"}),  # spans write+destructive+admin
+        ],
+    )
+    def test_each_write_is_gated_by_its_class(
+        self, tmp_path: Path, deny: str, blocked: set[str]
+    ) -> None:
         _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=[deny]))
         svc = MagicMock()
-        body = {"table": "t", "dialect": "snowflake", "rules": RULES}
+        for method in ("create_policy", "update_policy", "delete_policy"):
+            getattr(svc, method).return_value = {"id": POLICY_ID}
+        body = {"table_id": "t.x", "rules": RULES}
 
         with TestClient(_app(tmp_path, svc)) as client:
-            responses = [
-                client.post(f"/cls/{PROJECT}", headers=AUTH, json=body),
-                client.put(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"table": "t"}),
-                client.delete(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH),
-            ]
+            statuses = {
+                "create": client.post(f"/cls/{PROJECT}", headers=AUTH, json=body).status_code,
+                "update": client.patch(
+                    f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH, json={"table_id": "t.y"}
+                ).status_code,
+                "delete": client.delete(f"/cls/{PROJECT}/{POLICY_ID}", headers=AUTH).status_code,
+            }
 
-        for res in responses:
-            assert res.status_code == 403, res.text
-            assert res.json()["error"]["code"] == "PERMISSION_DENIED"
-        svc.create_policy.assert_not_called()
-        svc.update_policy.assert_not_called()
-        svc.delete_policy.assert_not_called()
+        assert statuses == {op: 403 if op in blocked else 200 for op in statuses}
 
     def test_denying_cli_admin_still_allows_reads(self, tmp_path: Path) -> None:
         _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:admin"]))

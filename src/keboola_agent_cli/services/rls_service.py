@@ -6,12 +6,23 @@ shape for the same kind of metastore-backed object type -- but scaled down
 to one object type instead of seven.
 
 The one structural rule every write path in this module enforces: an
-``rls-policy`` object is **never** created or updated at plain ``project``
-scope. Authorship is centralized at ``organization`` (default) or
-``targeted`` scope only -- this command surface does not even have a
-``--scope`` flag that could select ``project``, matching the backend's own
-restriction (RFC "Scope is organization or targeted -- never plain
-project, by design, not merely by convention").
+``rls-policy`` object is **never** created at plain ``project`` scope (the
+metastore schema supports only ``organization`` and ``targeted``). The
+default is ``targeted`` -- the schema's own default: the policy governs the
+owning project plus the target projects it is granted to. ``organization``
+governs the table in EVERY project of the organization, so it is only ever
+an explicit choice (RFC: "org-wide scope is a deliberate choice an admin
+makes, not a default").
+
+Who may write (metastore schema ACL): a project admin (master token with the
+admin role) may create/update/delete ``targeted`` policies of its own project
+WITHOUT target projects; granting target projects and ``organization`` scope
+need the organization-admin role.
+
+The enforcement (keboola-mcp-server ``query_data``) refuses EVERY query of a
+project when one policy it loads is invalid -- a dialect other than the
+project backend, or one principal with two rules on one table. Both are
+refused here before any write.
 
 On a stack whose metastore predates the ``rls-policy`` schema, a real project
 answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
@@ -35,18 +46,18 @@ from ..metastore_client import (
     ObjectScope,
     SemanticType,
     fetch_resolved_schema,
-    project_ids_as_ints,
 )
 from ..models import ProjectConfig
 from . import _rls_condition
 from ._rls_condition import RLS_DIALECTS
+from ._semantic_layer_scope import resolve_target_project_ids
 from .base import BaseService, ClientFactory, make_session_aware_client_factory
 
 logger = logging.getLogger(__name__)
 
 RLS_ITEM_TYPE: SemanticType = "rls-policy"
 
-__all__ = ["RLS_DIALECTS", "RLS_ITEM_TYPE", "RlsSchemaFetch", "RlsService"]
+__all__ = ["POLICY_SCOPES", "RLS_DIALECTS", "RLS_ITEM_TYPE", "RlsSchemaFetch", "RlsService"]
 
 MetastoreClientFactory = Callable[[str, str], MetastoreClient]
 
@@ -59,6 +70,18 @@ _AUTH_ERROR_CODES = frozenset(
         ErrorCode.PERMISSION_DENIED,
     }
 )
+
+
+# The scopes a policy may be authored at (the schema's `x-metastore.scope.supported`).
+POLICY_SCOPES: tuple[ObjectScope, ...] = ("targeted", "organization")
+
+
+@dataclass(frozen=True)
+class PolicyValidation:
+    """Outcome of :meth:`RlsService._validate_policy`: blocking ``errors`` and non-blocking ``warnings``."""
+
+    errors: list[str]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -177,39 +200,92 @@ class RlsService(BaseService):
             "dialect": attrs.get("dialect", ""),
             "rule_count": len(attrs.get("rules") or []),
             "scope": meta.get("scope", ""),
+            # The owning project; the metastore omits it for an organization-scope policy.
+            "owner_project_id": meta.get("projectId"),
             "source_project_id": meta.get("sourceProjectId"),
             "target_project_ids": meta.get("targetProjectIds") or [],
         }
 
-    def _resolve_scope(self, target_project_ids: list[int] | None) -> ObjectScope:
-        """Never ``"project"`` -- ``targeted`` iff target projects were given."""
-        return "targeted" if target_project_ids else "organization"
+    def _project_dialect(self, project: ProjectConfig) -> str:
+        """The project's backend -- the only dialect the enforcement accepts for its policies."""
+        with self._client_factory(project.stack_url, project.token) as client:
+            backend = (client.verify_token().default_backend or "").lower()
+        if backend not in RLS_DIALECTS:
+            self._raise_invalid(
+                [
+                    f"the project backend is {backend or 'unknown'!r}; policies support {RLS_DIALECTS} only"
+                ]
+            )
+        return backend
+
+    def _resolve_targets(self, alias: str, targets: Sequence[int | str] | None) -> list[int]:
+        """``--target-project`` values (alias or project ID, comma lists) -> unique project IDs."""
+        return resolve_target_project_ids(
+            self._config_store, alias, [str(t) for t in targets or []]
+        )
+
+    def _taken_principals(
+        self, client: MetastoreClient, table: str, dialect: str, exclude_id: str | None
+    ) -> dict[str, str]:
+        """Principals other policies on the same table already have a rule for (case-folded).
+
+        Best effort: the metastore lists only the policies this token may read -- for a project admin,
+        those its project owns -- so a clash with a policy owned elsewhere is not visible here.
+        """
+        key = _rls_condition.table_key(table, dialect)
+        taken: dict[str, str] = {}
+        for item in client.list_items(self.item_type):
+            attrs = item.get("attributes") or {}
+            if item.get("id") == exclude_id or not isinstance(attrs.get("table"), str):
+                continue
+            if _rls_condition.table_key(attrs["table"], dialect) != key:
+                continue
+            for rule in attrs.get("rules") or []:
+                if isinstance(rule, dict):
+                    for name in _rls_condition.rule_principals(rule):
+                        taken.setdefault(str(name).casefold(), f"policy {item.get('id')}")
+        return taken
 
     def _validate_policy(
-        self, *, table: str, dialect: str, rules: list[dict[str, Any]], project: ProjectConfig
-    ) -> tuple[list[str], list[str]]:
-        """Run every validation this module can, local checks first; returns ``(errors, warnings)``.
+        self,
+        client: MetastoreClient,
+        project: ProjectConfig,
+        *,
+        policy: dict[str, Any],
+        backend: str,
+        exclude_id: str | None = None,
+    ) -> PolicyValidation:
+        """Run every check this module can on the WHOLE policy, local checks first.
 
-        Local (schema-independent) checks always run. Structural (Draft7,
-        against the live-fetched schema) checks run too when the fetch
-        succeeds -- when it doesn't, the caller gets a warning (the reduced
-        validation is reported, not hidden), not a block (see :class:`RlsSchemaFetch`).
+        Local (schema-independent) checks always run: the dialect matches the project backend, the
+        rules are well-formed and no principal has two rules on the table (within the policy or across
+        the other visible policies). Structural (Draft7, against the live schema) checks run when the
+        fetch succeeds -- when it doesn't, the caller gets a warning, not a block (see
+        :class:`RlsSchemaFetch`). The whole policy is validated even for a partial update, because the
+        metastore's PATCH validates only the keys it receives.
         """
+        table, dialect, rules = policy["table"], policy["dialect"], policy["rules"]
         errors: list[str] = []
-        if dialect not in _rls_condition.RLS_DIALECTS:
-            errors.append(f"dialect must be one of {_rls_condition.RLS_DIALECTS}, got {dialect!r}")
+        if dialect != backend:
+            errors.append(
+                f"dialect {dialect!r} does not match the project backend {backend!r} "
+                "(the enforcement refuses every query of a project with such a policy)"
+            )
         errors.extend(self._local_rule_errors(rules))
         if errors:
-            return errors, []
+            return PolicyValidation(errors, [])
+        errors.extend(
+            _rls_condition.duplicate_principals(
+                rules, self._taken_principals(client, table, dialect, exclude_id)
+            )
+        )
+        if errors:
+            return PolicyValidation(errors, [])
 
-        warnings: list[str] = []
         fetch = self._fetch_schema_for_project(project)
-        if fetch.schema:
-            policy_body = {"table": table, "dialect": dialect, "rules": rules}
-            errors.extend(_rls_condition.validate_policy_structural(policy_body, fetch.schema))
-        else:
-            warnings.append(f"Live schema validation was skipped: {fetch.reason}")
-        return errors, warnings
+        if not fetch.schema:
+            return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
+        return PolicyValidation(_rls_condition.validate_policy_structural(policy, fetch.schema), [])
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
@@ -240,22 +316,43 @@ class RlsService(BaseService):
             retryable=False,
         )
 
+    @staticmethod
+    def _raise_usage(message: str) -> None:
+        raise KeboolaApiError(
+            message=message, status_code=400, error_code=ErrorCode.INVALID_ARGUMENT, retryable=False
+        )
+
+    def _already_exists(self, table: str, exc: KeboolaApiError) -> KeboolaApiError:
+        """The client's generic 409 message talks about semantic models; policies are named by table."""
+        return KeboolaApiError(
+            message=(
+                f"An {self.label} policy for table {table!r} already exists in this project. "
+                f"Change it with `{self.label.lower()} update --policy-id ...`, "
+                f"or `{self.label.lower()} delete` it first."
+            ),
+            status_code=exc.status_code,
+            error_code=ErrorCode.ALREADY_EXISTS,
+            retryable=False,
+        )
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
 
     def list_policies(self, alias: str) -> dict[str, Any]:
-        """List every ``rls-policy`` object visible to ``alias``'s project."""
+        """List every policy object visible to ``alias``'s project."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             raw = client.list_items(self.item_type)
         return {"project": alias, "policies": [self._row_from_item(item) for item in raw]}
 
     def get_policy(self, alias: str, policy_id: str) -> dict[str, Any]:
-        """Fetch one ``rls-policy`` object's full attributes + meta."""
+        """Fetch one policy object's full attributes + meta."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
-            item = client.get_item(self.item_type, policy_id)
+            return self._detail_row(client.get_item(self.item_type, policy_id))
+
+    def _detail_row(self, item: dict[str, Any]) -> dict[str, Any]:
         row = self._row_from_item(item)
         row["rules"] = (item.get("attributes") or {}).get("rules", [])
         row["revision"] = (item.get("meta") or {}).get("revision")
@@ -270,55 +367,60 @@ class RlsService(BaseService):
         alias: str,
         *,
         table: str,
-        dialect: str,
         rules: list[dict[str, Any]],
-        target_project_ids: Sequence[int | str] | None = None,
+        dialect: str | None = None,
+        scope: str = "targeted",
+        target_projects: Sequence[int | str] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Create one ``rls-policy`` object -- always at ``organization``/``targeted`` scope.
+        """Create one policy -- at ``targeted`` scope (default) or, explicitly, ``organization``.
 
-        ``dry_run=True`` returns the same preview shape a real write would
-        produce (compiled condition previews per rule) without calling the
-        metastore's write endpoint at all -- only the (read-only) schema
-        fetch used for validation happens.
+        ``dialect`` defaults to the project backend and must equal it. ``target_projects`` (aliases or
+        project IDs) only with ``targeted``; they go in the create request itself, which stores the
+        grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
+        returns the preview without calling the write endpoint.
         """
-        target_ids = project_ids_as_ints(target_project_ids or [])  # also validates for --dry-run
+        if scope not in POLICY_SCOPES:
+            self._raise_usage(f"scope must be one of {POLICY_SCOPES}, got {scope!r}")
+        if target_projects and scope != "targeted":
+            self._raise_usage("target projects require scope 'targeted'")
+        target_ids = self._resolve_targets(alias, target_projects)
         project = self._resolve_one_project(alias)
-        errors, warnings = self._validate_policy(
-            table=table, dialect=dialect, rules=rules, project=project
-        )
-        if errors:
-            self._raise_invalid(errors)
-
-        scope = self._resolve_scope(target_ids)
-        preview = self._preview_rules(rules, dialect)
-        if dry_run:
-            return self._with_warnings(
-                {
-                    "project": alias,
-                    "table": table,
-                    "dialect": dialect,
-                    "scope": scope,
-                    "target_project_ids": target_ids,
-                    "preview": preview,
-                    "dry_run": True,
-                },
-                warnings,
-            )
+        backend = self._project_dialect(project)
+        policy = {"table": table, "dialect": dialect or backend, "rules": rules}
 
         with self._new_metastore_client(project) as client:
-            created = client.post_item(
-                self.item_type,
-                name=table,
-                data={"table": table, "dialect": dialect, "rules": rules},
-                scope=scope,
-                target_project_ids=target_ids or None,
-            )
-            if target_ids:
-                client.put_target_projects(self.item_type, created.get("id", ""), target_ids)
+            check = self._validate_policy(client, project, policy=policy, backend=backend)
+            if check.errors:
+                self._raise_invalid(check.errors)
+            preview = self._preview_rules(rules, policy["dialect"])
+            if dry_run:
+                return self._with_warnings(
+                    {
+                        "project": alias,
+                        **policy,
+                        "scope": scope,
+                        "target_project_ids": target_ids,
+                        "preview": preview,
+                        "dry_run": True,
+                    },
+                    check.warnings,
+                )
+            try:
+                created = client.post_item(
+                    self.item_type,
+                    name=table,
+                    data=policy,
+                    scope="organization" if scope == "organization" else "targeted",
+                    target_project_ids=target_ids or None,
+                )
+            except KeboolaApiError as exc:
+                if exc.error_code == ErrorCode.ALREADY_EXISTS:
+                    raise self._already_exists(table, exc) from exc
+                raise
         row = self._row_from_item(created)
         row["preview"] = preview
-        return self._with_warnings(row, warnings)
+        return self._with_warnings(row, check.warnings)
 
     def update_policy(
         self,
@@ -328,95 +430,97 @@ class RlsService(BaseService):
         table: str | None = None,
         dialect: str | None = None,
         rules: list[dict[str, Any]] | None = None,
-        target_project_ids: Sequence[int | str] | None = None,
+        target_projects: Sequence[int | str] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Update one policy object.
+        """Update one policy: only the given fields change.
 
-        ``put_item`` is a whole-record replace -- fetch the current item
-        first and merge only the given overrides onto it, so an ``update``
-        call that only changes ``rules`` never silently wipes ``table`` or
-        ``dialect`` (the failure mode this repo's own ``merge-request
-        resolve`` docs warn about for exactly this kind of PUT-based API).
+        Reads the policy to validate the MERGED result (the metastore's PATCH validates only the keys
+        it receives) and for the ``--dry-run`` preview, then sends a ``PATCH`` with only the changed
+        keys -- unknown keys and concurrent changes to other keys survive.
 
-        ``target_project_ids``: ``None`` keeps the current grants, a non-empty list replaces them, and
-        ``[]`` revokes them all (through the dedicated grants call). A policy keeps its current scope
-        when its grants are revoked -- scope changes are not done through ``PUT``.
+        ``target_projects``: ``None`` keeps the grants, a list replaces them, ``[]`` revokes them all.
+        Grants change first (an organization-admin-only call): when that is refused, nothing is written.
+        The result is re-read after the write, so it shows the grants as they now are.
         """
+        changes = {
+            key: value
+            for key, value in (("table", table), ("dialect", dialect), ("rules", rules))
+            if value is not None
+        }
+        if not changes and target_projects is None:
+            self._raise_usage("nothing to update: pass a table, dialect, rules or target projects")
         target_ids = (
-            project_ids_as_ints(target_project_ids) if target_project_ids is not None else None
-        )  # also validates for --dry-run
+            self._resolve_targets(alias, target_projects) if target_projects is not None else None
+        )
         project = self._resolve_one_project(alias)
+        backend = self._project_dialect(project)
+
         with self._new_metastore_client(project) as client:
             current = client.get_item(self.item_type, policy_id)
-        attrs = current.get("attributes") or {}
-        meta = current.get("meta") or {}
-
-        merged_table = table if table is not None else attrs.get("table", "")
-        merged_dialect = dialect if dialect is not None else attrs.get("dialect", "")
-        merged_rules = rules if rules is not None else attrs.get("rules", [])
-        merged_targets = (
-            target_ids
-            if target_ids is not None
-            else project_ids_as_ints(meta.get("targetProjectIds") or [])
-        )
-
-        errors, warnings = self._validate_policy(
-            table=merged_table, dialect=merged_dialect, rules=merged_rules, project=project
-        )
-        if errors:
-            self._raise_invalid(errors)
-
-        revoking = target_ids == [] and bool(meta.get("targetProjectIds"))
-        # A plain PUT never changes scope, and grants only exist on `targeted` policies, so the scope is
-        # always the current one: a `targeted` policy whose grants were cleared stays `targeted` with an
-        # empty list, and an `organization` policy cannot be narrowed to specific projects.
-        scope = meta.get("scope") or self._resolve_scope(merged_targets)
-        if target_ids and scope != "targeted":
-            self._raise_invalid(
-                [
-                    (
-                        f"the policy has {scope!r} scope, which cannot be narrowed to target projects; "
-                        "delete it and create a new one with --target-project"
-                    )
-                ]
+            attrs = current.get("attributes") or {}
+            meta = current.get("meta") or {}
+            scope = meta.get("scope", "")
+            if target_ids is not None and scope != "targeted":
+                self._raise_invalid(
+                    [
+                        (
+                            f"the policy has {scope!r} scope, which has no target projects "
+                            "(organization scope already applies everywhere and cannot be narrowed)"
+                        )
+                    ]
+                )
+            policy = {
+                "table": attrs.get("table", ""),
+                "dialect": attrs.get("dialect", ""),
+                "rules": attrs.get("rules", []),
+                **changes,
+            }
+            check = self._validate_policy(
+                client, project, policy=policy, backend=backend, exclude_id=policy_id
             )
-        preview = self._preview_rules(merged_rules, merged_dialect)
-        if dry_run:
-            return self._with_warnings(
-                {
-                    "project": alias,
-                    "policy_id": policy_id,
-                    "table": merged_table,
-                    "dialect": merged_dialect,
-                    "scope": scope,
-                    "target_project_ids": merged_targets or [],
-                    "preview": preview,
-                    "dry_run": True,
-                },
-                warnings,
-            )
-
-        with self._new_metastore_client(project) as client:
-            updated = client.put_item(
-                self.item_type,
-                policy_id,
-                name=merged_table,
-                data={"table": merged_table, "dialect": merged_dialect, "rules": merged_rules},
-            )
-            if revoking:
-                client.put_target_projects(self.item_type, policy_id, [])
-            elif target_ids:
-                # Only an explicit list replaces the grants; an update that omits the option must not
-                # re-send the snapshot read above (it could overwrite a concurrent grant change).
+            if check.errors:
+                self._raise_invalid(check.errors)
+            preview = self._preview_rules(policy["rules"], policy["dialect"])
+            if dry_run:
+                return self._with_warnings(
+                    {
+                        "project": alias,
+                        "policy_id": policy_id,
+                        **policy,
+                        "scope": scope,
+                        "target_project_ids": (
+                            target_ids
+                            if target_ids is not None
+                            else meta.get("targetProjectIds") or []
+                        ),
+                        "preview": preview,
+                        "dry_run": True,
+                    },
+                    check.warnings,
+                )
+            if target_ids is not None:
                 client.put_target_projects(self.item_type, policy_id, target_ids)
-        row = self._row_from_item(updated)
+            if changes:
+                try:
+                    client.patch_item(self.item_type, policy_id, name=table, data=changes)
+                except KeboolaApiError as exc:
+                    if exc.error_code == ErrorCode.ALREADY_EXISTS:
+                        raise self._already_exists(policy["table"], exc) from exc
+                    raise
+            row = self._detail_row(client.get_item(self.item_type, policy_id))
         row["preview"] = preview
-        return self._with_warnings(row, warnings)
+        return self._with_warnings(row, check.warnings)
 
-    def delete_policy(self, alias: str, policy_id: str) -> dict[str, Any]:
-        """Delete one ``rls-policy`` object by id."""
+    def delete_policy(self, alias: str, policy_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+        """Delete one policy by id; ``dry_run`` shows what would be deleted (one read, no write)."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
+            if dry_run:
+                return {
+                    "project": alias,
+                    "policy": self._detail_row(client.get_item(self.item_type, policy_id)),
+                    "dry_run": True,
+                }
             client.delete_item(self.item_type, policy_id)
         return {"project": alias, "policy_id": policy_id, "deleted": True}
