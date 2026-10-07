@@ -426,6 +426,50 @@ class MetastoreClient(BaseHttpClient):
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
 
+    def patch_item(
+        self,
+        item_type: SemanticType,
+        item_id: str,
+        *,
+        name: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Partially update an item via ``PATCH`` -- only the given fields change.
+
+        The server merges ``data`` into the stored record one TOP-LEVEL key at
+        a time (go-monorepo ``simpleJSONMerge``): a key in ``data`` replaces the
+        stored value wholesale, every key it does not name is kept, all inside
+        one transaction under a row lock. So unknown keys survive and a
+        concurrent change to another key is not overwritten -- unlike
+        :meth:`put_item`. Caveat: the server validates only the patched keys,
+        never the merged record, so the caller must validate the merged result
+        itself. Never sends ``scope`` (a scope step-up cannot be combined with
+        name/data -- :meth:`elevate_to_organization`).
+
+        Raises ``NOT_FOUND`` on 404 and ``ALREADY_EXISTS`` on 409 (a rename to
+        a taken name).
+        """
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if data is not None:
+            body["data"] = data
+        try:
+            response = self._do_request(
+                "PATCH", f"/api/v1/repository/{item_type}/{item_id}", json=body
+            )
+        except KeboolaApiError as exc:
+            if exc.status_code == 409:
+                raise KeboolaApiError(
+                    message=f"{item_type} with name {name!r} already exists. Pick another name.",
+                    status_code=409,
+                    error_code=ErrorCode.ALREADY_EXISTS,
+                    retryable=False,
+                ) from exc
+            raise
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
     def delete_item(self, item_type: SemanticType, item_id: str) -> None:
         """Delete an item by its UUID. Returns silently on 204.
 
