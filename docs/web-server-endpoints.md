@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**255 operations** across **220 paths** and **31 routers**.
+**267 operations** across **226 paths** and **33 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.

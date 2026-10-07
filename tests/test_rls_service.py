@@ -270,8 +270,8 @@ class TestCreatePolicy:
 
         _, kwargs = mock.post_item.call_args
         assert kwargs["scope"] == "targeted"
-        assert kwargs["target_project_ids"] == ["999"]
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["999"])
+        assert kwargs["target_project_ids"] == [999]
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [999])
 
     def test_invalid_dialect_rejected_before_any_write(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -357,18 +357,20 @@ class TestUpdatePolicy:
         assert kwargs["data"]["dialect"] == "snowflake"  # unchanged, not wiped
         assert kwargs["data"]["rules"] == _RULES  # the one field we changed
 
-    def test_targeted_scope_derived_from_merged_targets(self, tmp_path: Path) -> None:
+    def test_an_organization_policy_cannot_be_narrowed_to_target_projects(
+        self, tmp_path: Path
+    ) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
         mock.get_item.return_value = _policy_item(scope="organization", target_project_ids=[])
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.put_item.return_value = _policy_item(scope="targeted", target_project_ids=["42"])
 
-        service.update_policy("prod", "p-1", target_project_ids=["42"])
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.update_policy("prod", "p-1", target_project_ids=["42"])
 
-        _, kwargs = mock.put_item.call_args
-        assert kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["42"])
+        assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
+        mock.put_item.assert_not_called()
+        mock.put_target_projects.assert_not_called()
 
     def test_invalid_override_rejected_before_write(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -637,9 +639,6 @@ class TestClearingGrants:
         mock.put_item.return_value = self._targeted()
 
         result = service.update_policy("prod", "p-1", target_project_ids=[])
-
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
-        assert mock.put_item.call_args.kwargs["target_project_ids"] == []
         mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
         assert result["id"] == "p-1"
 
@@ -650,9 +649,7 @@ class TestClearingGrants:
         mock.put_item.return_value = self._targeted()
 
         service.update_policy("prod", "p-1", dialect="bigquery")
-
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["7", "8"])
+        mock.put_target_projects.assert_not_called()  # the omitted option re-sends nothing
 
     def test_clearing_a_policy_that_has_no_grants_makes_no_grant_call(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -661,8 +658,6 @@ class TestClearingGrants:
         mock.put_item.return_value = _policy_item()
 
         service.update_policy("prod", "p-1", target_project_ids=[])
-
-        assert mock.put_item.call_args.kwargs["scope"] == "organization"
         mock.put_target_projects.assert_not_called()
 
     def test_dry_run_previews_the_cleared_state_without_writing(self, tmp_path: Path) -> None:
@@ -742,20 +737,20 @@ class TestScopeIsKeptWhenTargetsAreOmitted:
         mock.put_item.return_value = self._targeted_without_grants()
 
         service.update_policy("prod", "p-1", dialect="bigquery")  # no target option at all
-
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
         mock.put_target_projects.assert_not_called()
 
-    def test_an_explicit_target_list_makes_the_policy_targeted(self, tmp_path: Path) -> None:
+    def test_an_explicit_target_list_replaces_the_grants_of_a_targeted_policy(
+        self, tmp_path: Path
+    ) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.get_item.return_value = _policy_item()  # organization scope
-        mock.put_item.return_value = _policy_item(scope="targeted", target_project_ids=["7"])
+        mock.get_item.return_value = self._targeted_without_grants()
+        mock.put_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
 
         service.update_policy("prod", "p-1", target_project_ids=["7"])
 
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", ["7"])
+        assert "scope" not in mock.put_item.call_args.kwargs  # a PUT never carries scope
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [7])
 
     def test_clearing_keeps_the_current_scope(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -764,8 +759,6 @@ class TestScopeIsKeptWhenTargetsAreOmitted:
         mock.put_item.return_value = self._targeted_without_grants()
 
         service.update_policy("prod", "p-1", target_project_ids=[])
-
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
         mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [])
 
 
@@ -818,7 +811,7 @@ class TestDryRunValidatesTargetIds:
         )
 
         assert result["scope"] == "targeted"
-        assert result["target_project_ids"] == ["7", "8"]
+        assert result["target_project_ids"] == [7, 8]
 
 
 class TestCompositionAndKeysAreExact:

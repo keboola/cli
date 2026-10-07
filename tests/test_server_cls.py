@@ -93,7 +93,7 @@ def test_create_and_update_pass_kwargs(tmp_path: Path) -> None:
         "table": "in.c-crm.invoices",
         "dialect": "snowflake",
         "rules": RULES,
-        "target_project_ids": ["999"],
+        "target_project_ids": [999],
     }
 
     with TestClient(_app(tmp_path, svc)) as client:
@@ -103,7 +103,7 @@ def test_create_and_update_pass_kwargs(tmp_path: Path) -> None:
 
     create_kwargs = svc.create_policy.call_args.kwargs
     assert create_kwargs["rules"] == RULES
-    assert create_kwargs["target_project_ids"] == ["999"]
+    assert create_kwargs["target_project_ids"] == [999]
     assert create_kwargs["dry_run"] is False
     args, update_kwargs = svc.update_policy.call_args
     assert args == (PROJECT, POLICY_ID)

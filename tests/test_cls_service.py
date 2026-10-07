@@ -224,7 +224,7 @@ class TestCreate:
         )
 
         assert mock.post_item.call_args.kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("cls-policy", "p-1", ["7", "8"])
+        mock.put_target_projects.assert_called_once_with("cls-policy", "p-1", [7, 8])
 
     def test_dry_run_never_writes(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
@@ -252,8 +252,6 @@ class TestUpdate:
             "p-1",
             name="in.c-crm.invoices",
             data={"table": "in.c-crm.invoices", "dialect": "snowflake", "rules": new_rules},
-            scope="organization",
-            target_project_ids=None,
         )
 
     def test_keeps_existing_targets_and_scope(self, tmp_path: Path) -> None:
@@ -263,8 +261,7 @@ class TestUpdate:
 
         service.update_policy("prod", "p-1", table="in.c-crm.other")
 
-        assert mock.put_item.call_args.kwargs["scope"] == "targeted"
-        mock.put_target_projects.assert_called_once_with("cls-policy", "p-1", ["7"])
+        mock.put_target_projects.assert_not_called()  # the omitted option re-sends no grants
 
     def test_dry_run_never_writes(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)

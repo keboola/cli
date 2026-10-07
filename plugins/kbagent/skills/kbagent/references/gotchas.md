@@ -5848,3 +5848,81 @@ examples. Surprises worth knowing before you touch this:
   endpoint -- each item needs its own `request-create` + `set --scope
   organization` call. Never loop this over a whole project's objects without
   the user having named which ones should become org-wide.
+## Row-Level and Column-Level Security (RLS, CLS): organization/targeted scope only
+
+*(since vNEXT)*
+
+`kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
+enforces anything itself: the actual SQL rewrite happens in `keboola-mcp-server`'s `query_data`
+tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes.
+
+- **Availability depends on the stack's metastore.** The `rls-policy` and `cls-policy` object types are
+  registered by the metastore's `2026-09-29` schema migrations. A stack whose metastore predates the `rls-policy`/`cls-policy` schema migrations answers `rls schema`/`cls schema` with a classified `NOT_FOUND` (schema-fetch failure) -- expected there, not a kbagent bug. Check with
+  `kbagent --json rls schema --project P` / `cls schema`. All commands are covered by
+  `tests/test_rls_*.py` / `tests/test_cls_*.py` / `tests/test_server_{rls,cls}.py` against a mocked
+  `MetastoreClient`.
+- **`--scope project` does not exist anywhere in this group, on purpose.** Every write
+  (`create`/`update`/`setup`) is issued at `organization` scope (default) or `targeted` scope
+  (`--target-project`, repeatable) -- never `project`. This is structural, not merely validated:
+  the command surface has no flag that could even attempt `project` scope, the metastore ACL reserves
+  `organization` scope and cross-project grants for organization admins (it additionally lets the
+  owning project's admin author `targeted` policies for that project). `--project` on every command
+  names which project's tables/metastore instance you're working against.
+- **One `rls-policy` object per protected table**, never one blob per project. `rls setup`
+  creates one policy per table selected in the checkbox picker, all sharing the same rules --
+  if tables need different rules, run `setup`/`create` again per table.
+- **`organization` scope is visible org-wide but only APPLIES where it matches.** A fetched policy
+  is visible to every project in the org once it's `organization` scope, but the enforcement
+  engine (and `rls list`/`rls detail`'s own `source_project_id`/`target_project_ids` fields) only
+  ever applies it to the project it names -- never merely because a table name matches. Do not
+  read a policy in `rls list` as protecting the current project without checking
+  `source_project_id` (or `target_project_ids` for `targeted` scope).
+- **`condition` is a fixed six-shape primitive vocabulary, never a free-text predicate.**
+  Comparison (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`), membership (`in`/`not_in` with `values`), nullness
+  (`is_null`/`is_not_null`), `and`/`or` (2+ nested conditions each), or the `{"true": true}`
+  sentinel. Anything else fails local validation (`INVALID_RLS_POLICY`, exit determined by
+  `map_error_to_exit_code`) before any network call -- there is no server round-trip needed to
+  catch a typo'd operator name.
+- **`--dry-run`'s compiled-condition preview is NOT the enforcement engine.** It's a small,
+  local, pure-Python renderer (`services/_rls_condition.py::compile_condition_preview`) meant only
+  for human sanity-checking before a write -- the actual compiler that decides what a real query
+  returns is `keboola-mcp-server`'s `rls.py::_compile_primitive` (sqlglot-based, a different repo
+  entirely). The two are deliberately allowed to render differently; never treat kbagent's preview
+  string as proof of what will be enforced.
+- **`rls update` is fetch-then-merge, not a raw PUT passthrough.** The metastore's `PUT` replaces
+  the whole record; the service fetches the current item first and only overwrites the fields you
+  actually passed (`--table`/`--dialect`/`--rules`/`--target-project`), so an update that only
+  changes `--rules` can never silently blank `table` or `dialect`.
+- **`rls setup` is interactive-terminal-only and has no REST route.** Same carve-out as `auth
+  register-projects`'s picker: it refuses under `--json` or without an interactive terminal (stdin or stdout not a TTY) with a one-line hint
+  to use `rls create` directly, rather than hanging or emitting malformed JSON. `kbagent serve`
+  has no `/rls/{project}/setup` endpoint -- the CLI's checkbox picker has no HTTP equivalent, and
+  its write is the same `POST /rls/{project}` route `rls create` already uses.
+- **Writes are classified `admin`, not merely `write`.** `rls.create`/`update`/`delete`/`setup`
+  all sit in the `admin` risk category in `OPERATION_REGISTRY` (`permissions.py`). Denying
+  `cli:admin` blocks exactly them (and the other admin operations); denying `cli:write` blocks them
+  too, because `cli:write` spans write, destructive AND admin. A policy that denies only `cli:destructive`
+  or only `cli:read` leaves them reachable. Every REST route is gated the same way
+  `merge-request`'s routes are (`Depends(require_permission(...))`), unlike `notifications.py`'s
+  routes, which currently enforce nothing over HTTP -- RLS was built gated from the start.
+- **`cls` is the column-level sibling of `rls`.** `kbagent cls list|detail|schema|create|update|delete`
+  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals, visible_columns}]}`) with the
+  same scope rule (`organization`/`targeted`, never `project`), fetch-then-merge `update`, `admin`
+  permission class for writes, and `/cls/{project}` REST mirror as `rls`. `ClsService` subclasses
+  `RlsService` (only the item type, error code and rule hooks differ). Differences: `visible_columns` is a
+  non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
+  principal's projection instead of a SQL condition, validation failures raise `INVALID_CLS_POLICY`, and
+  there is no `cls setup` wizard.
+- **`rls|cls update` can revoke grants, and `schema`/writes tell you when validation was reduced.**
+  `--clear-target-projects` (mutually exclusive with `--target-project`) revokes every project the policy is
+  shared with through the dedicated grants call; the policy keeps its current scope (scope is not changed by
+  `PUT`). If the live schema could not be fetched, `create`/`update` still run the local checks (including the
+  shape of every condition primitive) but add a `warnings` entry saying structural validation was skipped. An
+  authentication/permission failure while fetching the schema (`INVALID_TOKEN`, `MISSING_MASTER_TOKEN`,
+  access denied) is raised as that error -- only an unavailable schema (e.g. `NOT_FOUND`) is degraded.
+  `rls setup` exits non-zero when any selected table's policy could not be created.
+- **`--target-project` takes numeric project IDs.** The metastore decodes `targetProjectIds` as integers and
+  the grants call as `{"targetProjectIds": [int]}` (an empty list clears every grant), so a non-numeric or
+  non-positive ID is rejected up front with `INVALID_ARGUMENT` instead of reaching the backend. Earlier builds
+  sent string IDs under the wrong key to the grants endpoint, which the backend read as an empty list.
+

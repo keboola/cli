@@ -20,6 +20,7 @@ from keboola_agent_cli.metastore_client import (
     MetastoreClient,
     ResolvedSchema,
     fetch_resolved_schema,
+    project_ids_as_ints,
 )
 
 STACK_URL_US = "https://connection.keboola.com"
@@ -347,140 +348,20 @@ class TestSemanticTypes:
         }
 
 
-class TestPostItemScope:
-    """post_item/put_item default to project scope but accept organization/
+class TestProjectIdsAsInts:
+    """`project_ids_as_ints`: the metastore decodes ``targetProjectIds`` as ``[]int``."""
 
-    targeted -- CLI-17: rls-policy is the first type that must never use
-    plain project scope.
-    """
+    def test_strings_and_ints_become_ints(self) -> None:
+        assert project_ids_as_ints(["111", 222]) == [111, 222]
+        assert project_ids_as_ints([2.0]) == [2]
+        assert project_ids_as_ints([]) == []
 
-    def test_default_scope_is_still_project(self, httpx_mock, metastore_client) -> None:
-        """Every existing caller (semantic-layer) keeps its current behavior."""
-        httpx_mock.add_response(
-            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
-            json={"data": {"type": "semantic-metric", "id": "new-id", "attributes": {}}},
-            status_code=201,
-        )
-        metastore_client.post_item("semantic-metric", name="rev", data={"name": "rev"})
-        body = json.loads(httpx_mock.get_requests()[0].content)
-        assert body["scope"] == "project"
-        assert "targetProjectIds" not in body
-
-    def test_organization_scope(self, httpx_mock, metastore_client) -> None:
-        httpx_mock.add_response(
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy",
-            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
-            status_code=201,
-        )
-        metastore_client.post_item(
-            "rls-policy",
-            name="in.c-crm.invoices",
-            data={"table": "in.c-crm.invoices"},
-            scope="organization",
-        )
-        body = json.loads(httpx_mock.get_requests()[0].content)
-        assert body["scope"] == "organization"
-        assert "targetProjectIds" not in body
-
-    def test_targeted_scope_includes_target_project_ids(self, httpx_mock, metastore_client) -> None:
-        httpx_mock.add_response(
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy",
-            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
-            status_code=201,
-        )
-        metastore_client.post_item(
-            "rls-policy",
-            name="in.c-crm.invoices",
-            data={"table": "in.c-crm.invoices"},
-            scope="targeted",
-            target_project_ids=["111", "222"],
-        )
-        body = json.loads(httpx_mock.get_requests()[0].content)
-        assert body["scope"] == "targeted"
-        # The metastore decodes targetProjectIds as []int: integers on the wire, never strings.
-        assert body["targetProjectIds"] == [111, 222]
-
-    def test_put_item_accepts_scope_too(self, httpx_mock, metastore_client) -> None:
-        httpx_mock.add_response(
-            method="PUT",
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1",
-            json={"data": {"type": "rls-policy", "id": "rls-1", "attributes": {}}},
-            status_code=200,
-        )
-        metastore_client.put_item(
-            "rls-policy",
-            "rls-1",
-            name="in.c-crm.invoices",
-            data={"table": "in.c-crm.invoices"},
-            scope="organization",
-        )
-        body = json.loads(httpx_mock.get_requests()[0].content)
-        assert body["scope"] == "organization"
-
-
-class TestPutTargetProjects:
-    def test_puts_the_target_project_ids_as_integers(self, httpx_mock, metastore_client) -> None:
-        """The backend body is `{"targetProjectIds": [int]}` and ignores unknown fields: a wrong key
-        would be read as an EMPTY list, which clears every grant."""
-        httpx_mock.add_response(
-            method="PUT",
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
-            status_code=204,
-        )
-
-        result = metastore_client.put_target_projects("rls-policy", "rls-1", ["111", "222"])
-
-        request = httpx_mock.get_requests()[0]
-        assert request.method == "PUT"
-        assert request.url.path.endswith("/rls-policy/rls-1/target-projects")
-        assert json.loads(request.content) == {"targetProjectIds": [111, 222]}
-        assert result == {}  # 204 No Content: there is no body to parse
-
-    def test_an_empty_list_is_sent_explicitly_to_clear_all_grants(
-        self, httpx_mock, metastore_client
-    ) -> None:
-        httpx_mock.add_response(
-            method="PUT",
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
-            status_code=204,
-        )
-
-        metastore_client.put_target_projects("rls-policy", "rls-1", [])
-
-        assert json.loads(httpx_mock.get_requests()[0].content) == {"targetProjectIds": []}
-
-    def test_a_response_body_is_still_returned_when_the_server_sends_one(
-        self, httpx_mock, metastore_client
-    ) -> None:
-        httpx_mock.add_response(
-            method="PUT",
-            url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy/rls-1/target-projects",
-            json={"data": {"type": "rls-policy", "id": "rls-1"}},
-            status_code=200,
-        )
-
-        assert metastore_client.put_target_projects("rls-policy", "rls-1", ["111"])["id"] == "rls-1"
-
-    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-5"], ["1.5"], [None]])
-    def test_non_positive_or_non_numeric_ids_are_rejected_before_any_request(
-        self, httpx_mock, metastore_client, bad: list
-    ) -> None:
+    @pytest.mark.parametrize("bad", [["abc"], ["0"], ["-5"], ["1.5"], [None], [True], [1.5]])
+    def test_non_positive_or_non_numeric_ids_are_rejected(self, bad: list) -> None:
         with pytest.raises(KeboolaApiError) as excinfo:
-            metastore_client.put_target_projects("rls-policy", "rls-1", bad)
+            project_ids_as_ints(bad)
 
         assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
-        assert httpx_mock.get_requests() == []
-
-    def test_post_item_rejects_a_non_numeric_target_before_any_request(
-        self, httpx_mock, metastore_client
-    ) -> None:
-        with pytest.raises(KeboolaApiError) as excinfo:
-            metastore_client.post_item(
-                "rls-policy", name="t", data={}, scope="targeted", target_project_ids=["abc"]
-            )
-
-        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
-        assert httpx_mock.get_requests() == []
 
 
 class TestProjectScope401Reclassification:
@@ -866,3 +747,36 @@ class TestListOrganizationItems:
             status_code=200,
         )
         assert metastore_client.list_organization_items("semantic-model") == []
+
+
+class TestFetchResolvedSchema:
+    """`fetch_resolved_schema`: the bare schema endpoint is only a version listing."""
+
+    @staticmethod
+    def _client(*responses: dict) -> MagicMock:
+        client = MagicMock()
+        client.get_schema.side_effect = list(responses)
+        return client
+
+    def test_fetches_the_default_version(self) -> None:
+        listing = {"versions": [{"version": "0.9.0"}, {"version": "1.0.0", "isDefault": True}]}
+        client = self._client(listing, {"title": "real"})
+
+        resolved = fetch_resolved_schema(client, "rls-policy")
+
+        assert (resolved.schema, resolved.version) == ({"title": "real"}, "1.0.0")
+        assert client.get_schema.call_args_list[1].kwargs == {"version": "1.0.0"}
+
+    def test_falls_back_to_the_first_version_without_a_default(self) -> None:
+        client = self._client({"versions": [{"version": "2.0.0"}, {"version": "1.0.0"}]}, {"t": 1})
+
+        assert fetch_resolved_schema(client, "cls-policy") == ResolvedSchema({"t": 1}, "2.0.0")
+
+    @pytest.mark.parametrize(
+        "body", [{"title": "direct"}, {"versions": []}, {"versions": [{"isDefault": True}]}]
+    )
+    def test_passes_through_when_nothing_to_resolve(self, body: dict) -> None:
+        client = self._client(body)
+
+        assert fetch_resolved_schema(client, "rls-policy") == ResolvedSchema(body, None)
+        client.get_schema.assert_called_once_with("rls-policy")

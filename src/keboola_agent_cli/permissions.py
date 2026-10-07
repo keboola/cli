@@ -357,6 +357,28 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # Row-level security (metastore) — CLI-17. Classified `admin` (not
+    # merely `write`): RLS policy authorship is an org-level concern (see
+    # keboola-mcp-server's feature_spec/rls_query_tool/RFC.md) -- `admin`
+    # is the class this repo's own taxonomy reserves for org-level
+    # operations (see `project.add` etc. above). `setup` performs the exact
+    # same write as `create`, just via an interactive picker, so it must
+    # carry the same class or a permission policy that allows `setup` but
+    # not `create` (or vice versa) would leave a hole.
+    "rls.list": "read",
+    "rls.detail": "read",
+    "rls.schema": "read",
+    "rls.create": "admin",
+    "rls.update": "admin",
+    "rls.delete": "admin",
+    "rls.setup": "admin",
+    # Column-level security: same classes as rls.* for the same reason.
+    "cls.list": "read",
+    "cls.detail": "read",
+    "cls.schema": "read",
+    "cls.create": "admin",
+    "cls.update": "admin",
+    "cls.delete": "admin",
     # `scope` sub-app: visibility scope / target-project grants / elevation
     # requests (PSGO-140). Parent key at the least-privileged level (read),
     # same pattern as `reference-data` above. `set --scope organization` is

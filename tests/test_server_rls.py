@@ -132,7 +132,7 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
         "table": "in.c-crm.invoices",
         "dialect": "snowflake",
         "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
-        "target_project_ids": ["999"],
+        "target_project_ids": [999],
         "dry_run": False,
     }
 
@@ -144,7 +144,7 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
     assert kwargs["table"] == "in.c-crm.invoices"
     assert kwargs["dialect"] == "snowflake"
     assert kwargs["rules"] == body["rules"]
-    assert kwargs["target_project_ids"] == ["999"]
+    assert kwargs["target_project_ids"] == [999]
     assert kwargs["dry_run"] is False
 
 

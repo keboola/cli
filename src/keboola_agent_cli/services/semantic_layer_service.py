@@ -24,7 +24,7 @@ from typing import Any, ClassVar
 from ..auth.sentinel import require_static_token
 from ..config_store import ConfigStore
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..metastore_client import MetastoreClient, ObjectScope, SemanticType
+from ..metastore_client import MetastoreClient, ObjectScope, SemanticType, fetch_resolved_schema
 from ..models import ProjectConfig
 from . import _semantic_layer_reference_data as _refdata
 from . import _semantic_layer_scope as _scope

@@ -203,10 +203,13 @@ meant," never as proof of what will be enforced.
 
 ## Workflow 5 -- Share a policy across sibling projects (targeted scope)
 
-`--target-project` (repeatable, on `create`/`update`/`setup`) shifts scope
-from `organization` to `targeted` and registers each listed project as a
-grant. Use this when one org-authored policy should apply identically
-across specific sibling customer projects, not the whole org.
+`--target-project` (repeatable, on `create`/`setup`) creates the policy at
+`targeted` scope instead of `organization` and registers each listed project
+as a grant. On `update` it replaces the grants of an already-`targeted`
+policy; an `organization` policy cannot be narrowed (the metastore has no
+downgrade), so delete it and create a new one. Use this when one org-authored
+policy should apply identically across specific sibling customer projects,
+not the whole org.
 
 ```bash
 kbagent --json rls create \
@@ -217,7 +220,7 @@ kbagent --json rls create \
   --target-project 22222 \
   --target-project 33333 \
   --dry-run
-# -> {"scope": "targeted", "target_project_ids": ["22222", "33333"], ...}
+# -> {"scope": "targeted", "target_project_ids": [22222, 33333], ...}
 ```
 
 Omitting `--target-project` on a later `rls update` call leaves the current

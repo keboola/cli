@@ -137,8 +137,8 @@ def _exact_int(value: Any) -> int:
 def project_ids_as_ints(project_ids: Sequence[Any]) -> list[int]:
     """Target project ids as the metastore wants them: positive integers (``targetProjectIds`` is ``[]int``).
 
-    The CLI takes ids as strings; a non-numeric or non-positive one is rejected here, before any request,
-    instead of reaching the backend as a 400 (or, in the grants call, being ignored).
+    Callers may hand over strings (CLI) or ints (REST); a non-numeric or non-positive id is rejected here,
+    before any request, instead of reaching the backend as a 400 (or, in the grants call, being ignored).
     """
     try:
         ids = [_exact_int(project_id) for project_id in project_ids]
@@ -389,9 +389,6 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
-        *,
-        scope: MetastoreScope = _ENVELOPE_SCOPE,
-        target_project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
@@ -454,8 +451,6 @@ class MetastoreClient(BaseHttpClient):
             f"/api/v1/repository/{item_type}/{item_id}",
             json={"scope": "organization"},
         )
-        if not response.content:
-            return {}
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
 
@@ -531,3 +526,34 @@ class MetastoreClient(BaseHttpClient):
         )
         body = response.json()
         return body.get("data", []) if isinstance(body, dict) else []
+
+
+@dataclass(frozen=True)
+class ResolvedSchema:
+    """A type's JSON Schema together with the version it was resolved from (``None`` if none was)."""
+
+    schema: dict[str, Any]
+    version: str | None
+
+
+def fetch_resolved_schema(client: MetastoreClient, item_type: SemanticType) -> ResolvedSchema:
+    """Fetch the actual JSON Schema for a type, resolving the default version.
+
+    Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
+    endpoint returns only a ``{"versions": [...]}`` listing (metadata, no
+    schema body); the real JSON Schema lives at ``/{version}``. This resolves
+    ``isDefault`` (falling back to the first entry) and fetches the versioned
+    document. If the server someday returns the schema directly (no
+    ``versions`` key) it is passed through unchanged, with ``version=None``.
+    """
+    body = client.get_schema(item_type)
+    versions = body.get("versions")
+    if not isinstance(versions, list) or not versions:
+        return ResolvedSchema(schema=body, version=None)
+    default = next((v for v in versions if v.get("isDefault")), versions[0])
+    version_id = str(default.get("version", ""))
+    if not version_id:
+        return ResolvedSchema(schema=body, version=None)
+    return ResolvedSchema(
+        schema=client.get_schema(item_type, version=version_id), version=version_id
+    )

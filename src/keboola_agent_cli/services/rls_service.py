@@ -32,7 +32,7 @@ from ..config_store import ConfigStore
 from ..errors import ErrorCode, KeboolaApiError
 from ..metastore_client import (
     MetastoreClient,
-    MetastoreScope,
+    ObjectScope,
     SemanticType,
     fetch_resolved_schema,
     project_ids_as_ints,
@@ -181,7 +181,7 @@ class RlsService(BaseService):
             "target_project_ids": meta.get("targetProjectIds") or [],
         }
 
-    def _resolve_scope(self, target_project_ids: list[str] | None) -> MetastoreScope:
+    def _resolve_scope(self, target_project_ids: list[int] | None) -> ObjectScope:
         """Never ``"project"`` -- ``targeted`` iff target projects were given."""
         return "targeted" if target_project_ids else "organization"
 
@@ -272,7 +272,7 @@ class RlsService(BaseService):
         table: str,
         dialect: str,
         rules: list[dict[str, Any]],
-        target_project_ids: list[str] | None = None,
+        target_project_ids: Sequence[int | str] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Create one ``rls-policy`` object -- always at ``organization``/``targeted`` scope.
@@ -282,9 +282,7 @@ class RlsService(BaseService):
         metastore's write endpoint at all -- only the (read-only) schema
         fetch used for validation happens.
         """
-        project_ids_as_ints(
-            target_project_ids or []
-        )  # same validation as the write, also for --dry-run
+        target_ids = project_ids_as_ints(target_project_ids or [])  # also validates for --dry-run
         project = self._resolve_one_project(alias)
         errors, warnings = self._validate_policy(
             table=table, dialect=dialect, rules=rules, project=project
@@ -292,7 +290,7 @@ class RlsService(BaseService):
         if errors:
             self._raise_invalid(errors)
 
-        scope = self._resolve_scope(target_project_ids)
+        scope = self._resolve_scope(target_ids)
         preview = self._preview_rules(rules, dialect)
         if dry_run:
             return self._with_warnings(
@@ -301,7 +299,7 @@ class RlsService(BaseService):
                     "table": table,
                     "dialect": dialect,
                     "scope": scope,
-                    "target_project_ids": target_project_ids or [],
+                    "target_project_ids": target_ids,
                     "preview": preview,
                     "dry_run": True,
                 },
@@ -314,12 +312,10 @@ class RlsService(BaseService):
                 name=table,
                 data={"table": table, "dialect": dialect, "rules": rules},
                 scope=scope,
-                target_project_ids=target_project_ids,
+                target_project_ids=target_ids or None,
             )
-            if scope == "targeted" and target_project_ids:
-                client.put_target_projects(
-                    self.item_type, created.get("id", ""), target_project_ids
-                )
+            if target_ids:
+                client.put_target_projects(self.item_type, created.get("id", ""), target_ids)
         row = self._row_from_item(created)
         row["preview"] = preview
         return self._with_warnings(row, warnings)
@@ -332,7 +328,7 @@ class RlsService(BaseService):
         table: str | None = None,
         dialect: str | None = None,
         rules: list[dict[str, Any]] | None = None,
-        target_project_ids: list[str] | None = None,
+        target_project_ids: Sequence[int | str] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Update one policy object.
@@ -347,9 +343,9 @@ class RlsService(BaseService):
         ``[]`` revokes them all (through the dedicated grants call). A policy keeps its current scope
         when its grants are revoked -- scope changes are not done through ``PUT``.
         """
-        project_ids_as_ints(
-            target_project_ids or []
-        )  # same validation as the write, also for --dry-run
+        target_ids = (
+            project_ids_as_ints(target_project_ids) if target_project_ids is not None else None
+        )  # also validates for --dry-run
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             current = client.get_item(self.item_type, policy_id)
@@ -360,7 +356,9 @@ class RlsService(BaseService):
         merged_dialect = dialect if dialect is not None else attrs.get("dialect", "")
         merged_rules = rules if rules is not None else attrs.get("rules", [])
         merged_targets = (
-            target_project_ids if target_project_ids is not None else meta.get("targetProjectIds")
+            target_ids
+            if target_ids is not None
+            else project_ids_as_ints(meta.get("targetProjectIds") or [])
         )
 
         errors, warnings = self._validate_policy(
@@ -369,16 +367,20 @@ class RlsService(BaseService):
         if errors:
             self._raise_invalid(errors)
 
-        revoking = target_project_ids == [] and bool(meta.get("targetProjectIds"))
-        # An explicit, non-empty target list makes the policy `targeted`. When the option is omitted or the
-        # grants are being cleared, the current scope is kept: a `targeted` policy whose grants were cleared
-        # is legitimately `targeted` with an empty list, and an unrelated update must not turn it into
-        # `organization`.
-        scope = (
-            self._resolve_scope(target_project_ids)
-            if target_project_ids
-            else (meta.get("scope") or self._resolve_scope(merged_targets))
-        )
+        revoking = target_ids == [] and bool(meta.get("targetProjectIds"))
+        # A plain PUT never changes scope, and grants only exist on `targeted` policies, so the scope is
+        # always the current one: a `targeted` policy whose grants were cleared stays `targeted` with an
+        # empty list, and an `organization` policy cannot be narrowed to specific projects.
+        scope = meta.get("scope") or self._resolve_scope(merged_targets)
+        if target_ids and scope != "targeted":
+            self._raise_invalid(
+                [
+                    (
+                        f"the policy has {scope!r} scope, which cannot be narrowed to target projects; "
+                        "delete it and create a new one with --target-project"
+                    )
+                ]
+            )
         preview = self._preview_rules(merged_rules, merged_dialect)
         if dry_run:
             return self._with_warnings(
@@ -401,8 +403,6 @@ class RlsService(BaseService):
                 policy_id,
                 name=merged_table,
                 data={"table": merged_table, "dialect": merged_dialect, "rules": merged_rules},
-                scope=scope,
-                target_project_ids=merged_targets,
             )
             if revoking:
                 client.put_target_projects(self.item_type, policy_id, [])
