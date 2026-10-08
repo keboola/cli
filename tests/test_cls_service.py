@@ -61,10 +61,10 @@ class TestLocalRuleValidation:
             (None, "non-empty array"),
             ([], "non-empty array"),
             (["x"], "must be an object"),
-            ([{"visible_columns": ["id"]}], "exactly one of 'principal'/'principals'"),
+            ([{"visible_columns": ["id"]}], "exactly one of principal/principals/groups"),
             (
                 [{"principal": "a@x.com", "principals": ["b@x.com"], "visible_columns": ["id"]}],
-                "exactly one of 'principal'/'principals'",
+                "exactly one of principal/principals/groups",
             ),
             ([{"principal": "a@x.com"}], "non-empty 'visible_columns'"),
             ([{"principal": "a@x.com", "visible_columns": []}], "non-empty 'visible_columns'"),
@@ -96,8 +96,19 @@ class TestLocalRuleValidation:
         )
 
         assert result["preview"] == [
-            {"principal": ["a@x.com", "b@x.com"], "visible_columns": ["id"]}
+            {"principals": ["a@x.com", "b@x.com"], "visible_columns": ["id"]}
         ]
+
+    def test_accepts_groups_and_rejects_default(self, tmp_path: Path) -> None:
+        """1.1.0: a groups selector; a cls-policy has no `default`."""
+        service, _ = _make_service(tmp_path)
+        rules = [{"groups": ["sales-eu"], "visible_columns": ["id"]}]
+
+        result = service.create_policy("prod", table="in.c-crm.t", rules=rules, dry_run=True)
+
+        assert result["preview"] == [{"groups": ["sales-eu"], "visible_columns": ["id"]}]
+        with pytest.raises(KeboolaApiError, match="'default' is not supported"):
+            service.create_policy("prod", table="in.c-crm.t", rules=rules, default={"false": True})
 
     def test_a_dialect_other_than_the_backend_is_rejected_before_any_write(
         self, tmp_path: Path
@@ -218,14 +229,15 @@ class TestCreate:
         assert mock.post_item.call_args.kwargs["target_project_ids"] == [7, 8]
         mock.put_target_projects.assert_not_called()
 
-    def test_duplicate_principals_are_rejected(self, tmp_path: Path) -> None:
+    def test_one_identity_in_several_rules_is_accepted(self, tmp_path: Path) -> None:
+        """1.1.0: an identity several rules match sees the union of their columns."""
         service, mock = _make_service(tmp_path)
+        mock.post_item.return_value = _item()
         rules = [*_RULES, {"principal": "A@x.com", "visible_columns": ["id"]}]
 
-        with pytest.raises(KeboolaApiError, match="already has a rule"):
-            service.create_policy("prod", table="in.c-crm.t", rules=rules)
+        service.create_policy("prod", table="in.c-crm.t", rules=rules)
 
-        mock.post_item.assert_not_called()
+        mock.post_item.assert_called_once()
 
     def test_dry_run_never_writes(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)

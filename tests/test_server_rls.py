@@ -132,6 +132,7 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
         "dialect": "snowflake",
         "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
         "target_projects": [999, "analytics"],
+        "default": {"false": True},
         "dry_run": False,
     }
 
@@ -145,6 +146,7 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
     assert kwargs["rules"] == body["rules"]
     assert kwargs["scope"] == "targeted"  # the default
     assert kwargs["target_projects"] == [999, "analytics"]
+    assert kwargs["default"] == {"false": True}
     assert kwargs["dry_run"] is False
 
 
@@ -163,6 +165,7 @@ def test_update_policy_passes_kwargs(tmp_path: Path) -> None:
     assert args == (PROJECT, POLICY_ID)
     assert kwargs["table"] == "new.table"
     assert kwargs["rules"] is None
+    assert kwargs["default"] is None  # omitted = unchanged
     assert kwargs["target_projects"] is None
 
 

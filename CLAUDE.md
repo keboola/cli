@@ -1145,8 +1145,8 @@ kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 kbagent rls list --project P
 kbagent rls detail --project P --policy-id ID
 kbagent rls schema --project P
-kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
-kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
 kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
 # rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
@@ -1156,13 +1156,17 @@ kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file
 #   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
 #   write `targeted` policies of its own project without grants; grants and organization scope
 #   need the organization-admin role (403 otherwise). Enforced only where the project has the
-#   `row-level-security` feature. One invalid policy refuses EVERY query of a project in the
-#   enforcement, so writes refuse a --dialect other than the project backend (it defaults to the
-#   backend) and a principal with two rules on one table (case-insensitive, also across visible
-#   policies). --rules is a JSON array of {principal|principals, condition}; condition is a
-#   declarative primitive tree (column/op/value comparisons, in/not_in, is_null/is_not_null,
-#   and/or nesting, or {"true": true}) -- never a free-text predicate; a null comparison is
-#   refused (use is_null). `update` reads the policy, validates the MERGED result, then PATCHes
+#   `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
+#   identities by principal, principals or IdP `groups`; every rule matching one identity applies
+#   and the conditions combine with OR; `--default` is the condition for identities no rule
+#   matches (absent = refused; {"false": true} = no rows; to remove a default, recreate the
+#   policy). Writes refuse a --dialect other than the project backend (it defaults to the
+#   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
+#   {principal|principals|groups, condition}; condition is a declarative primitive tree
+#   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
+#   or {"false": true}) -- never a free-text predicate; a null comparison is refused (use
+#   is_null); `value: {"$identity": "email"}` / `values: {"$identity": "groups"}` are resolved
+#   per reader by the enforcement. `update` reads the policy, validates the MERGED result, then PATCHes
 #   only the changed keys (grants first); the result is re-read. `delete` is destructive-class.
 #   `--dry-run` previews with columns quoted like the enforcement (keboola-mcp-server
 #   `query_data`), but it is not the enforcement. `rls setup` is interactive-terminal-only
@@ -1180,10 +1184,11 @@ kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--diale
 kbagent cls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
 # cls: column-level security policy authoring (`cls-policy` object type, one object per
-#   protected table), sibling of `rls`: same scope default, write permissions, dialect and
-#   duplicate-principal checks, partial update and permission classes. --rules is a JSON array
-#   of {principal|principals, visible_columns: [col, ...]} objects -- an allowlist projection
-#   (masking is not supported). `--dry-run` prints each principal's projection. No `setup`
+#   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
+#   partial update and permission classes. --rules is a JSON array of
+#   {principal|principals|groups, visible_columns: [col, ...]} objects -- an allowlist projection
+#   (masking is not supported); an identity several rules match sees the union of their
+#   columns; no `--default`. `--dry-run` prints each selector's projection. No `setup`
 #   wizard; the REST routes under /cls/{project} mirror /rls.
 #   New error code: INVALID_CLS_POLICY. Version gate lives in gotchas.md.
 

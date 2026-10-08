@@ -5872,25 +5872,29 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   `--scope organization` need the organization-admin role -- a master token alone gets a 403
   (`ACCESS_DENIED`). A project admin reads only the policies its project owns. Policies are enforced only
   where the consuming project has the `row-level-security` feature.
-- **One invalid policy refuses every query of a project.** The enforcement refuses ALL `query_data`
-  calls of a project when a policy it loads has a `dialect` other than the project backend, or names one
-  principal (case-insensitive) twice on one table -- in one policy or across policies. The metastore
-  accepts both, so kbagent refuses them before writing (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`).
-  `--dialect` defaults to the project backend (`verify_token` -> `defaultBackend`). The cross-policy check
-  only sees policies the token can read. An `organization` policy also reaches projects on the OTHER
-  backend, where it blocks every query -- prefer `targeted` in a mixed-backend organization.
+- **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
+  `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Every rule matching
+  one identity applies: RLS conditions combine with OR, CLS `visible_columns` are united -- so one
+  identity in several rules (or policies) is no longer an error. RLS `--default` is the condition for
+  identities no rule matches (absent = refused; `{"false": true}` = no rows); an `update` cannot remove a
+  default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
+  resolved per reader by the enforcement. `dialect` is optional in the schema; kbagent still sends the
+  project backend and refuses another one (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`), because the
+  enforcement refuses every read of a table whose policy names another dialect. An `organization`
+  policy also reaches projects on the OTHER backend -- prefer `targeted` in a mixed-backend organization.
 - **One `rls-policy` object per protected table**, never one blob per project, named by its table: a
   second policy on the same table in the same project answers `ALREADY_EXISTS` (update or delete the
   first). `rls setup` creates one policy per selected table, all sharing the same rules.
 - **`condition` is a fixed six-shape primitive vocabulary, never a free-text predicate.**
   Comparison (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`), membership (`in`/`not_in` with `values`), nullness
-  (`is_null`/`is_not_null`), `and`/`or` (2+ nested conditions each, no `not`), or the `{"true": true}`
-  sentinel. A `null` comparison value (or `null` in `values`) is refused: the enforcement renders
-  `col = NULL`, which matches nothing -- use `is_null`. A principal with whitespace or control
-  characters is refused (the enforcement would reject the whole policy).
+  (`is_null`/`is_not_null`), `and`/`or` (2+ nested conditions each, no `not`), or the `{"true": true}` /
+  `{"false": true}` sentinels. A `null` comparison value (or `null` in `values`) is refused: the
+  enforcement renders `col = NULL`, which matches nothing -- use `is_null`. A principal with whitespace or
+  control characters, or a group with control characters, is refused.
 - **The `--dry-run` preview follows the enforcement's rendering but is not the enforcement.** Columns
   are quoted per dialect (`"col"` / `` `col` ``, so matching is case-exact), booleans render
-  `TRUE`/`FALSE`. The compiler that decides what a query returns is `keboola-mcp-server`'s
+  `TRUE`/`FALSE`, `$identity` placeholders `<identity.email>` / `(<identity.groups>)`, a default as
+  `default_preview`. The compiler that decides what a query returns is `keboola-mcp-server`'s
   `rls.py::_compile_primitive` (sqlglot).
 - **`rls update` sends a partial update (`PATCH`) of only the changed keys.** It still reads the policy
   first: the metastore's PATCH validates only the keys it receives, so kbagent validates the MERGED
@@ -5909,15 +5913,16 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   interactive terminal it exits 2 with an `INVALID_ARGUMENT` error (a JSON envelope under `--json`)
   pointing at `rls create`. A prompted value is read as JSON when it is one (`42`, `true`); quote it to
   keep a string. Exits non-zero when any selected table's policy could not be created.
-- **REST mirror.** `POST /rls/{project}` (`table_id`, `rules`, `dialect?`, `scope`, `target_projects`),
-  `PATCH /rls/{project}/{policy_id}` (partial; `target_projects: []` revokes), `DELETE ...?dry_run=true`;
+- **REST mirror.** `POST /rls/{project}` (`table_id`, `rules`, `default?`, `dialect?`, `scope`,
+  `target_projects`), `PATCH /rls/{project}/{policy_id}` (partial; `target_projects: []` revokes), `DELETE ...?dry_run=true`;
   same for `/cls`. Every route is permission-gated; `scope: "organization"` is also checked as
   `<group>.create --scope organization`.
 - **`cls` is the column-level sibling of `rls`.** `kbagent cls list|detail|schema|create|update|delete`
-  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals, visible_columns}]}`) with the
-  same scope, permissions, checks and partial `update` as `rls`. Differences: `visible_columns` is a
-  non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
-  principal's projection, validation failures raise `INVALID_CLS_POLICY`, and there is no `cls setup`.
+  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals|groups, visible_columns}]}`)
+  with the same scope, permissions, checks and partial `update` as `rls`. Differences: `visible_columns` is
+  a non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
+  selector's projection, validation failures raise `INVALID_CLS_POLICY`, there is no `default`, and there
+  is no `cls setup`.
 - **Reduced validation is reported.** If the live schema could not be fetched, writes still run every
   local check but add a `warnings` entry; an authentication/permission failure while fetching the schema
   is raised as that error.

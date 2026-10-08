@@ -192,6 +192,58 @@ class TestRlsSchemaCli:
 # ---------------------------------------------------------------------------
 
 
+class TestRlsDefaultOption:
+    """`--default` (schema 1.1.0): a JSON condition passed through; anything else is a usage error."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [["create", "--table-id", "t.x", "--rules", "[]"], ["update", "--policy-id", "p-1"]],
+    )
+    def test_default_is_parsed_and_passed_to_the_service(
+        self, tmp_path: Path, command: list[str]
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {**_policy_row(), "preview": []}
+        service.update_policy.return_value = {**_policy_row(), "preview": []}
+
+        result = _run(
+            ["--json", "rls", *command, "--project", "prod", "--default", '{"false": true}'],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 0, result.output
+        method = service.create_policy if command[0] == "create" else service.update_policy
+        assert method.call_args.kwargs["default"] == {"false": True}
+
+    @pytest.mark.parametrize("raw", ["[1]", "not json"])
+    def test_a_non_object_default_is_a_usage_error(self, tmp_path: Path, raw: str) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            [
+                "--json",
+                "rls",
+                "create",
+                "--project",
+                "prod",
+                "--table-id",
+                "t.x",
+                "--rules",
+                "[]",
+                "--default",
+                raw,
+            ],
+            store,
+            service,
+        )
+
+        assert result.exit_code == 2, result.output
+        service.create_policy.assert_not_called()
+
+
 class TestRlsCreateCli:
     _RULES_JSON = '[{"principal": "a@x.com", "condition": {"true": true}}]'
 

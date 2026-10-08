@@ -7,7 +7,11 @@ The condition/rules shape mirrored here is the one defined in
 ``keboola-mcp-server``'s RFC (``feature_spec/rls_query_tool/RFC.md``, "Rule
 storage" section) -- kbagent never invents its own shape, it authors exactly
 what the enforcement engine (that repo's ``rls.py::_compile_primitive``,
-sqlglot-based) expects to read back from the metastore.
+sqlglot-based) expects to read back from the metastore. The checks follow the policy
+schema 1.1.0 (go-monorepo ``rls-policy_schema_1.1.0.json``): a rule selects identities by
+``principal``, ``principals`` or IdP ``groups``; every rule matching one identity applies (the
+conditions combine with OR); ``{"false": true}`` matches no row; a literal may be the
+``{"$identity": ...}`` placeholder the engine resolves per reader.
 
 ``compile_condition_preview`` below is a **preview** for ``--dry-run`` /
 confirmation display, not the enforcement engine -- that lives in
@@ -15,7 +19,8 @@ confirmation display, not the enforcement engine -- that lives in
 enforcement's rendering where an admin could be misled otherwise: columns
 quoted per dialect (the enforcement matches them case-exactly), booleans as
 ``TRUE``/``FALSE``. ``null`` comparisons never reach it: the enforcement would
-render ``col = NULL`` (matches nothing), so validation refuses them. Adding
+render ``col = NULL`` (matches nothing), so validation refuses them. ``$identity``
+placeholders render as ``<identity.email>`` / ``(<identity.groups>)``. Adding
 sqlglot as a kbagent dependency just for this string is not warranted.
 """
 
@@ -46,20 +51,27 @@ class Dialect(StrEnum):
 
 RLS_DIALECTS: tuple[str, ...] = tuple(Dialect)
 
-# The enforcement's principal pattern (mcp-server ``rls.py``): no whitespace or control characters. A
-# principal that fails it is not ignored there -- it refuses EVERY query in the project.
+# The enforcement's principal pattern (mcp-server ``rls.py``): no whitespace or control characters.
 _PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
+# IdP group names may contain spaces ("Sales EU"); only control characters are refused.
+_GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
+
+# The rule selectors of schema 1.1.0 -- each rule names exactly one.
+SELECTORS: tuple[str, ...] = ("principal", "principals", "groups")
+
+# The `$identity` placeholders: `value` may be the reader's email, `values` the reader's groups.
+IDENTITY_EMAIL = {"$identity": "email"}
+IDENTITY_GROUPS = {"$identity": "groups"}
 
 # How each dialect quotes an identifier. The enforcement compiles columns quoted (case-exact), so the
 # preview must too -- an unquoted preview would hide a case mismatch the real filter does not forgive.
 _QUOTE = {"snowflake": '"', "bigquery": "`"}
 
 
-def _is_true_sentinel(condition: dict[Any, Any]) -> bool:
-    """Exactly ``{"true": true}``. ``{"true": false}`` (or ``0``/extra keys) would otherwise read as an
-    always-true policy -- the opposite of what an author who typed ``false`` meant. ``is True`` because
-    ``1 == True`` in Python."""
-    return len(condition) == 1 and condition["true"] is True
+def _is_sentinel(condition: dict[Any, Any], key: str) -> bool:
+    """Exactly ``{"true": true}`` / ``{"false": true}``. ``{"true": false}`` (or ``0``/extra keys) would
+    otherwise read as the opposite of what the author typed. ``is True`` because ``1 == True``."""
+    return len(condition) == 1 and condition[key] is True
 
 
 def _is_scalar(value: Any) -> bool:
@@ -78,10 +90,11 @@ def validate_condition_ops(condition: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(condition, dict):
         return [f"condition must be an object, got {type(condition).__name__}"]
-    if "true" in condition:
-        if not _is_true_sentinel(condition):
-            errors.append("'true' condition must be exactly {\"true\": true}")
-        return errors
+    for sentinel in ("true", "false"):
+        if sentinel in condition:
+            if not _is_sentinel(condition, sentinel):
+                errors.append(f"'{sentinel}' condition must be exactly {{\"{sentinel}\": true}}")
+            return errors
     if "and" in condition or "or" in condition:
         # Exactly one composition key and nothing else: `{"and": [...], "or": [...]}` would otherwise have
         # one branch silently validated and the other dropped, so the policy would no longer be the tree
@@ -116,12 +129,19 @@ def validate_condition_ops(condition: Any) -> list[str]:
             errors.append(
                 f"condition with op {op!r} cannot compare to null; use op 'is_null' / 'is_not_null'"
             )
-        elif not _is_scalar(condition["value"]):
-            errors.append(f"condition with op {op!r} needs a string, number or boolean 'value'")
+        elif not _is_scalar(condition["value"]) and condition["value"] != IDENTITY_EMAIL:
+            errors.append(
+                f"condition with op {op!r} needs a string, number or boolean 'value', "
+                f"or {IDENTITY_EMAIL}"
+            )
     if op in RLS_MEMBERSHIP_OPS:
         values = condition.get("values")
-        if not isinstance(values, list) or not values:
-            errors.append(f"condition with op {op!r} needs a non-empty list 'values'")
+        if values == IDENTITY_GROUPS:
+            pass
+        elif not isinstance(values, list) or not values:
+            errors.append(
+                f"condition with op {op!r} needs a non-empty list 'values', or {IDENTITY_GROUPS}"
+            )
         elif any(value is None for value in values):
             errors.append(
                 f"condition with op {op!r} cannot list null in 'values' (it never matches); use 'is_null'"
@@ -139,78 +159,49 @@ def validate_condition_ops(condition: Any) -> list[str]:
 
 
 def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
-    """Each rule names exactly one of ``principal``/``principals`` (the schema's ``oneOf``).
+    """Each rule names exactly one selector: ``principal``, ``principals`` or ``groups``.
 
-    Shared by the RLS and CLS (``cls_service``) local checks -- both policy
-    types use the identical principal shape.
+    Shared by the RLS and CLS (``cls_service``) local checks -- both policy types use the identical
+    selector shape. Key PRESENCE decides "exactly one" (a truthiness test would let
+    ``{"principal": "a", "principals": []}`` through); the value is then checked on its own.
     """
-    # Key PRESENCE decides "exactly one" (a truthiness test would let `{"principal": "a", "principals": []}`
-    # through as if `principals` were absent); the VALUE is then checked on its own.
-    has_principal = "principal" in rule
-    has_principals = "principals" in rule
-    if has_principal == has_principals:  # both or neither
-        return [f"rules[{index}] must set exactly one of 'principal'/'principals'"]
-    if has_principal:
-        principal = rule["principal"]
-        if not isinstance(principal, str) or not principal:
-            return [f"rules[{index}].principal must be a non-empty string"]
-        names = [principal]
-    else:
-        names = rule["principals"]
-        if (
-            not isinstance(names, list)
-            or not names
-            or not all(isinstance(name, str) and name for name in names)
-        ):
-            return [f"rules[{index}].principals must be a non-empty list of non-empty strings"]
+    present = [key for key in SELECTORS if key in rule]
+    if len(present) != 1:
+        return [f"rules[{index}] must set exactly one of {'/'.join(SELECTORS)}"]
+    key = present[0]
+    names = [rule[key]] if key == "principal" else rule[key]
+    if (
+        not isinstance(names, list)
+        or not names
+        or not all(isinstance(name, str) and name for name in names)
+    ):
+        shape = (
+            "a non-empty string" if key == "principal" else "a non-empty list of non-empty strings"
+        )
+        return [f"rules[{index}].{key} must be {shape}"]
+    pattern, problem = (
+        (_GROUP_RE, "control characters")
+        if key == "groups"
+        else (_PRINCIPAL_RE, "whitespace or control characters")
+    )
     return [
-        f"rules[{index}]: principal {name!r} contains whitespace or control characters"
+        f"rules[{index}]: {key} entry {name!r} contains {problem}"
         for name in names
-        if not _PRINCIPAL_RE.fullmatch(name)
+        if not pattern.fullmatch(name)
     ]
 
 
-def rule_principals(rule: dict[str, Any]) -> list[str]:
-    """The principals one rule names (``principal`` or ``principals``), as written."""
-    return [rule["principal"]] if "principal" in rule else list(rule.get("principals") or [])
-
-
-def duplicate_principals(
-    rules: list[dict[str, Any]], taken: dict[str, str] | None = None
-) -> list[str]:
-    """Principals named twice on one table, case-folded -- the enforcement refuses every query then.
-
-    ``taken`` maps an already-used case-folded principal to where it is used (another policy on the
-    same table), so the same check covers duplicates inside ``rules`` and across policies.
-    """
-    seen = dict(taken or {})
-    errors: list[str] = []
-    for index, rule in enumerate(rules):
-        for name in rule_principals(rule):
-            folded = name.casefold()
-            if folded in seen:
-                errors.append(
-                    f"rules[{index}]: principal {name!r} already has a rule in {seen[folded]}"
-                )
-            else:
-                seen[folded] = f"rules[{index}]"
-    return errors
-
-
-def table_key(table: str, dialect: str) -> str:
-    """How the enforcement compares table keys: case-insensitive on Snowflake, exact on BigQuery."""
-    return table.lower() if dialect == "snowflake" else table
+def rule_selector(rule: dict[str, Any]) -> dict[str, Any]:
+    """The rule's selector as written (``{"principal": ...}``, ``{"principals": [...]}`` or ``{"groups": [...]}``)."""
+    return {key: rule[key] for key in SELECTORS if key in rule}
 
 
 def validate_rules_local(rules: Any) -> list[str]:
     """Semantic checks on ``rules`` that hold regardless of schema availability.
 
-    Runs even when the live schema fetch degraded (see
-    ``RlsService.fetch_schema``) -- the one check this module can still make
-    with no network access at all: each rule names exactly one of
-    ``principal``/``principals`` (the RFC's ``oneOf``, which a Draft7
-    validator would otherwise be the only thing checking) and every
-    ``condition`` uses a known operator (:func:`validate_condition_ops`).
+    Runs even when the live schema fetch degraded (see ``RlsService._fetch_schema``): each rule names
+    exactly one selector (:func:`validate_principal_fields`) and a well-formed ``condition``
+    (:func:`validate_condition_ops`). Rules naming the same identity are fine -- the engine ORs them.
     Returns human-readable error strings (empty = valid).
     """
     errors: list[str] = []
@@ -238,10 +229,13 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
     validation first; this function stays strict rather than silently
     rendering something misleading).
     """
-    if "true" in condition:
-        if not _is_true_sentinel(condition):
-            raise ValueError(f"'true' condition must be exactly {{\"true\": true}}: {condition!r}")
-        return "TRUE"
+    for sentinel in ("true", "false"):
+        if sentinel in condition:
+            if not _is_sentinel(condition, sentinel):
+                raise ValueError(
+                    f"'{sentinel}' condition must be exactly {{\"{sentinel}\": true}}: {condition!r}"
+                )
+            return sentinel.upper()
     if "and" in condition or "or" in condition:
         if len(condition) != 1:
             raise ValueError(
@@ -264,7 +258,11 @@ def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
         return f"{column} {COMPARISON_SQL[op]} {_preview_literal(condition.get('value'))}"
     if op in RLS_MEMBERSHIP_OPS:
         values = condition.get("values") or []
-        rendered = ", ".join(_preview_literal(v) for v in values)
+        rendered = (
+            "<identity.groups>"
+            if values == IDENTITY_GROUPS
+            else ", ".join(_preview_literal(v) for v in values)
+        )
         keyword = "IN" if op == "in" else "NOT IN"
         return f"{column} {keyword} ({rendered})"
     if op == "is_null":
@@ -280,10 +278,10 @@ def _preview_literal(value: Any) -> str:
     on purpose -- this output is never executed, only displayed for human
     review (see module docstring).
     """
+    if value == IDENTITY_EMAIL:
+        return "<identity.email>"
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
     if isinstance(value, bool):  # before the generic str(): Python's `True` is SQL's TRUE
         return "TRUE" if value else "FALSE"
-    if value is None:
-        return "NULL"
     return str(value)

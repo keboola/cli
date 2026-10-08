@@ -2,13 +2,15 @@
 
 The ``cls-policy`` metastore object is the column-level sibling of
 ``rls-policy``: one object per protected table, ``{table, dialect, rules}``,
-where each rule names a principal and the columns that principal may see
-(``visible_columns`` -- an allowlist projection; masking is not supported).
+where each rule selects identities (``principal``, ``principals`` or IdP
+``groups``) and the columns they may see (``visible_columns`` -- an allowlist
+projection; masking is not supported). Under schema 1.1.0 an identity several
+rules match sees the union of their columns; there is no ``default``.
 
 Everything except the rule shape is identical to :class:`RlsService` (never
 ``project`` scope, partial (PATCH) update, live-schema validation that
 degrades to a warning), so this class only overrides the policy type and the
-two rule hooks. Enforcement happens in ``keboola-mcp-server``'s
+rule / default hooks. Enforcement happens in ``keboola-mcp-server``'s
 ``query_data``, not here -- kbagent only authors policies.
 """
 
@@ -59,11 +61,13 @@ class ClsService(RlsService):
         return errors
 
     def _preview_rules(self, rules: list[dict[str, Any]], dialect: str) -> list[dict[str, Any]]:
-        """Show each principal's allowed projection (``dialect`` is unused: no SQL is rendered)."""
+        """Show each selector's allowed projection (``dialect`` is unused: no SQL is rendered)."""
         return [
-            {
-                "principal": rule.get("principal") or rule.get("principals"),
-                "visible_columns": rule["visible_columns"],
-            }
+            {**_rls_condition.rule_selector(rule), "visible_columns": rule["visible_columns"]}
             for rule in rules
         ]
+
+    @staticmethod
+    def _default_errors(default: Any) -> list[str]:
+        """A ``cls-policy`` has no ``default``: an identity no rule matches is refused."""
+        return [] if default is None else ["'default' is not supported by a CLS policy"]

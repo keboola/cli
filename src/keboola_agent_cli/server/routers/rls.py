@@ -54,6 +54,7 @@ class PolicyCreate(BaseModel):
     table_id: str
     rules: list[dict[str, Any]]
     dialect: Dialect | None = None  # None = the project backend
+    default: dict[str, Any] | None = None  # rls only: condition for identities no rule matches
     scope: PolicyScope = PolicyScope.TARGETED
     target_projects: list[str | int] | None = None
     dry_run: bool = False
@@ -65,6 +66,7 @@ class PolicyUpdate(BaseModel):
     table_id: str | None = None
     dialect: Dialect | None = None
     rules: list[dict[str, Any]] | None = None
+    default: dict[str, Any] | None = None  # rls only; omitted = unchanged
     target_projects: list[str | int] | None = None
     dry_run: bool = False
 
@@ -133,6 +135,7 @@ def build_policy_router(group: Literal["rls", "cls"]) -> APIRouter:
             table=body.table_id,
             rules=body.rules,
             dialect=body.dialect,
+            default=body.default,
             scope=body.scope,
             target_projects=body.target_projects,
             dry_run=body.dry_run,
@@ -154,6 +157,7 @@ def build_policy_router(group: Literal["rls", "cls"]) -> APIRouter:
             table=body.table_id,
             dialect=body.dialect,
             rules=body.rules,
+            default=body.default,
             target_projects=body.target_projects,
             dry_run=body.dry_run,
         )
