@@ -9,8 +9,8 @@ storage" section) -- kbagent never invents its own shape, it authors exactly
 what the enforcement engine (that repo's ``rls.py::_compile_primitive``,
 sqlglot-based) expects to read back from the metastore. The checks follow the policy
 schema 1.1.0 (go-monorepo ``rls-policy_schema_1.1.0.json``): a rule selects identities by
-``principal``, ``principals`` or IdP ``groups``; every rule matching one identity applies (the
-conditions combine with OR); ``{"false": true}`` matches no row; a literal may be the
+``principal``, ``principals`` or IdP ``groups``; within a policy every rule matching one identity
+applies (the conditions combine with OR; policies on one table combine with AND); ``{"false": true}`` matches no row; a literal may be the
 ``{"$identity": ...}`` placeholder the engine resolves per reader.
 
 ``compile_condition_preview`` below is a **preview** for ``--dry-run`` /
