@@ -463,6 +463,11 @@ FLAG_ESCALATIONS: dict[str, str] = {
     "semantic-layer.add.relationship --scope organization": "destructive",
     "semantic-layer.add.constraint --scope organization": "destructive",
     "semantic-layer.add.glossary --scope organization": "destructive",
+    # `import`, `promote` and `build --model` create new items at the TARGET model's scope, so
+    # into an organization-scope model they widen visibility like a typed `--scope organization`.
+    "semantic-layer.import --scope organization": "destructive",
+    "semantic-layer.promote --scope organization": "destructive",
+    "semantic-layer.build --scope organization": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

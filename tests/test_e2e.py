@@ -79,6 +79,9 @@ from keboola_agent_cli.models import ProjectConfig, normalize_stack_url
 
 ENV_TOKEN = "E2E_API_TOKEN"
 ENV_URL = "E2E_URL"
+# A second project of the same organization and stack, used as the target of a
+# `--scope targeted` semantic-layer model. Optional: the tests that need it skip without it.
+ENV_SL_TARGET_PROJECT = "E2E_SL_TARGET_PROJECT_ID"
 
 # Config-dir mode: populate the token/URL env vars from an existing kbagent
 # config.json (selected by KBAGENT_E2E_CONFIG_DIR + KBAGENT_E2E_ALIAS) so the
@@ -11921,6 +11924,107 @@ class TestE2ESemanticLayerLifecycle:
             except _ApiError as exc:
                 print(f"  WARN: residue scan failed: {exc}")
 
+    def test_semantic_layer_copy_into_shared_model(self) -> None:
+        """`import` into a shared model, the duplicate-name message and elevation of an old item.
+
+        1. An item that `import` creates in a `targeted` model takes the model's scope and
+           target projects, so the target project sees it (it used to be project-only).
+        2. Item names are unique per project, not per model: the same name in a second model
+           fails with ALREADY_EXISTS that says "in this project".
+        3. An item stored at schema version 1.0.0 cannot be elevated: the error names the
+           stored version and the way out.
+        """
+        from keboola_agent_cli.metastore_client import SEMANTIC_TYPES, MetastoreClient
+
+        target_project = os.environ.get(ENV_SL_TARGET_PROJECT)
+        if not target_project:
+            pytest.skip(f"{ENV_SL_TARGET_PROJECT} not set (a second project of the organization)")
+
+        tag = f"kbagent_e2e_copy_{int(time.time())}"
+        shared_name, other_name, old_name = f"{tag}_shared", f"{tag}_other", f"{tag}_old"
+
+        def _metastore() -> MetastoreClient:
+            return MetastoreClient(stack_url=self.url, token=self.token)
+
+        try:
+            _step(1, "model create --scope targeted, then import a glossary item into it")
+            data = self._run_ok(
+                "semantic-layer", "model", "create", "--project", self.alias,
+                "--name", shared_name, "--scope", "targeted", "--target-project", target_project,
+            )  # fmt: skip
+            shared_id = data["data"]["model"]["id"]
+
+            snapshot = self.work_dir / "snapshot.json"
+            term = f"{tag}_term"
+            snapshot.write_text(
+                json.dumps({"glossary": [{"attributes": {"term": term, "definition": "e2e"}}]}),
+                encoding="utf-8",
+            )
+            data = self._run_ok(
+                "semantic-layer", "import", "--project", self.alias, "--model", shared_name,
+                "--file", str(snapshot), "--yes",
+            )  # fmt: skip
+            assert data["data"]["imported"]["glossary"]["created"] == 1, data
+            with _metastore() as mc:
+                (imported,) = mc.list_items("semantic-glossary", shared_id)
+            meta = imported.get("meta") or {}
+            assert meta.get("scope") == "targeted", meta
+            assert meta.get("targetProjectIds") == [int(target_project)], meta
+
+            _step(2, "the same item name in a second model is ALREADY_EXISTS 'in this project'")
+            self._run_ok(
+                "semantic-layer", "model", "create", "--project", self.alias, "--name", other_name,
+            )  # fmt: skip
+            result = self._run(
+                "semantic-layer", "add", "glossary", "--project", self.alias,
+                "--model", other_name, "--term", term, "--definition", "e2e",
+            )  # fmt: skip
+            assert result.exit_code != 0, result.output
+            error = json.loads(result.output)["error"]
+            assert error["code"] == "ALREADY_EXISTS", error
+            assert "in this project" in error["message"], error
+
+            _step(3, "an item stored at schema version 1.0.0 cannot be elevated, and says why")
+            with _metastore() as mc:
+                response = mc._do_request(
+                    "POST",
+                    "/api/v1/repository/semantic-model",
+                    json={
+                        "name": old_name,
+                        "data": {"name": old_name, "sql_dialect": "Snowflake"},
+                        "branch": "main",
+                        "schemaVersion": "1.0.0",
+                        "scope": "project",
+                    },
+                )
+            old_id = response.json()["data"]["id"]
+            result = self._run(
+                "semantic-layer", "scope", "request-create", "--project", self.alias,
+                "--type", "model", "--context-id", old_id,
+            )  # fmt: skip
+            assert result.exit_code != 0, result.output
+            message = json.loads(result.output)["error"]["message"]
+            assert "schema version 1.0.0" in message, message
+        finally:
+            print("\n--- SEMANTIC LAYER COPY CLEANUP ---")
+            for model_name in (shared_name, other_name, old_name):
+                result = self._run(
+                    "semantic-layer", "model", "delete", "--project", self.alias,
+                    "--model", model_name, "--yes",
+                )  # fmt: skip
+                print(f"  model delete {model_name}: exit {result.exit_code}")
+            with _metastore() as mc:
+                residue = [
+                    f"{stype}:{item.get('id', '')}"
+                    for stype in SEMANTIC_TYPES
+                    for item in mc.list_items(stype)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+                    if str(
+                        (item.get("attributes") or {}).get("name")
+                        or (item.get("attributes") or {}).get("term", "")
+                    ).startswith(tag)
+                ]
+            assert not residue, f"Cleanup left residue (manual teardown required): {residue}"
+
     def test_semantic_layer_reference_data_roundtrip(self) -> None:
         """Exercise `reference-data` set (create) → list → get → set (replace) → delete."""
         from keboola_agent_cli.metastore_client import MetastoreClient
@@ -12128,6 +12232,8 @@ class TestE2ESemanticLayerLifecycle:
                 shared_ds_a,
                 "--table-id",
                 "out.c-syn.fact_cascade_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_cascade_a"',
             )
             self._run_ok(
                 "semantic-layer",
@@ -12141,6 +12247,8 @@ class TestE2ESemanticLayerLifecycle:
                 shared_ds_b,
                 "--table-id",
                 "out.c-syn.fact_cascade_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_cascade_b"',
             )
             self._run_ok(
                 "semantic-layer",
@@ -12243,6 +12351,8 @@ class TestE2ESemanticLayerLifecycle:
                 shared_ds_a,  # same name as model A's first dataset
                 "--table-id",
                 "out.c-syn.fact_cascade_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_cascade_a"',
             )
             model_b_items.append(("semantic-dataset", ds_a_resp["data"]["id"]))
 
@@ -12258,6 +12368,8 @@ class TestE2ESemanticLayerLifecycle:
                 shared_ds_b,
                 "--table-id",
                 "out.c-syn.fact_cascade_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_cascade_b"',
             )
             model_b_items.append(("semantic-dataset", ds_b_resp["data"]["id"]))
 

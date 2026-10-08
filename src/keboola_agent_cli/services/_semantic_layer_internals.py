@@ -40,11 +40,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._semantic_layer_fqn import append_fqn_mismatch_warnings
+from ._semantic_layer_scope import inherited_scope, post_child
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..metastore_client import SemanticType
+    from ..metastore_client import ObjectScope, SemanticType
     from .storage_service import StorageService
 
 # Re-exported from the main module to avoid a circular import; pulled in
@@ -401,12 +402,16 @@ def run_import_loop(
     type_filter: set[str] | None,
     dry_run: bool,
     overwrite: bool,
+    scope: ObjectScope = "project",
+    target_project_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Replay a snapshot into the target model.
 
     Returns the per-type stats dict matching the orchestrator's contract.
     Push order is :data:`PUSH_ORDER`. Errors are accumulated per item;
-    one failure does not abort the rest.
+    one failure does not abort the rest. A NEW item is created at ``scope`` /
+    ``target_project_ids`` (the target model's own, see :func:`inherited_scope`),
+    the same rule ``add <kind>`` follows; an overwritten item keeps its scope.
     """
     imported: dict[str, Any] = {}
     for plural, type_slug in PUSH_ORDER:
@@ -454,7 +459,16 @@ def run_import_loop(
                 per_type["created"] += 1
                 continue
             try:
-                client.post_item(type_slug, name=key, data=attrs)
+                post_child(
+                    client,
+                    type_slug,
+                    name=key,
+                    data=attrs,
+                    scope=scope,
+                    target_project_ids=target_project_ids,
+                    inherited=True,
+                    remedy="Import into a project-scoped model, or use an org-admin token.",
+                )
                 per_type["created"] += 1
             except KeboolaApiError as exc:
                 per_type["failed"].append({"name": key, "reason": exc.message})
@@ -471,10 +485,13 @@ def run_promote_loop(
     target_model_uuid: str,
     type_filter: set[str] | None,
     dry_run: bool,
+    scope: ObjectScope = "project",
+    target_project_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Run the additive + overwrite promote loop.
 
-    NEW: POST to target. CHANGED: in-place PUT. IDENTICAL: skip.
+    NEW: POST to target, at ``scope`` / ``target_project_ids`` (the target model's
+    own). CHANGED: in-place PUT, scope unchanged. IDENTICAL: skip.
     Items only in target are never deleted (additive only).
     Returns ``{plural: {new, overwritten, identical, failed, changes}}``.
     """
@@ -527,7 +544,16 @@ def run_promote_loop(
                 stats["new"] += 1
                 continue
             try:
-                target_client.post_item(type_slug, name=key, data=src_attrs)
+                post_child(
+                    target_client,
+                    type_slug,
+                    name=key,
+                    data=src_attrs,
+                    scope=scope,
+                    target_project_ids=target_project_ids,
+                    inherited=True,
+                    remedy="Promote into a project-scoped model, or use an org-admin token.",
+                )
                 stats["new"] += 1
             except KeboolaApiError as exc:
                 stats["failed"].append({"name": key, "reason": exc.message})
@@ -574,6 +600,10 @@ def push_built_model(
         model_uuid, _ = resolve_model_fn(client, model_name_or_uuid)
         model_item = None
         model_created_here = False
+    # Children take the model's scope, as with `add <kind>`: a model created here is `project`.
+    scope, target_project_ids = (
+        ("project", None) if model_created_here else inherited_scope(client, model_uuid)
+    )
 
     posted_children: list[tuple[SemanticType, str, str]] = []
     counts: dict[str, int] = {plural: 0 for plural, _ in PUSH_ORDER}
@@ -598,7 +628,16 @@ def push_built_model(
                     continue
                 attrs = dict(item)
                 attrs["modelUUID"] = model_uuid
-                posted = client.post_item(type_slug, name=name, data=attrs)
+                posted = post_child(
+                    client,
+                    type_slug,
+                    name=name,
+                    data=attrs,
+                    scope=scope,
+                    target_project_ids=target_project_ids,
+                    inherited=True,
+                    remedy="Build into a project-scoped model, or use an org-admin token.",
+                )
                 posted_id = str(posted.get("id", "") or "") if isinstance(posted, dict) else ""
                 if not posted_id:
                     # Defensive: the metastore always returns `id` in a

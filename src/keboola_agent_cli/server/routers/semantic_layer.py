@@ -137,7 +137,7 @@ class AddGlossary(ScopeFields):
     project: str
     model: str | None = None
     term: str
-    definition: str = ""
+    definition: str  # required by every semantic-glossary schema version
 
 
 class EditMetric(BaseModel):

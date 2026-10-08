@@ -368,7 +368,7 @@ class TestChildScopeInheritance:
             message="Insufficient permissions", status_code=403, error_code=ErrorCode.ACCESS_DENIED
         )
         with pytest.raises(KeboolaApiError) as excinfo:
-            service.add_glossary("prod", None, term="t", scope="organization")
+            service.add_glossary("prod", None, term="t", definition="d", scope="organization")
         assert excinfo.value.message == "Insufficient permissions"
 
     @pytest.mark.parametrize(
@@ -456,3 +456,175 @@ class TestEditAndOverwriteKeepScope:
         assert kwargs == {}  # a PUT cannot carry scope, so it is untouched
         tgt.delete_item.assert_not_called()
         tgt.post_item.assert_not_called()
+
+
+class TestCopiedItemsTakeTheTargetModelsScope:
+    """`import`, `promote` and `build --model` create NEW items at the target model's scope.
+
+    Before, they always created them at `project` scope, so an import into a targeted or
+    organization-scope model produced items that no other project could see.
+    """
+
+    @pytest.mark.parametrize(
+        ("model_meta", "expected_scope", "expected_ids"),
+        [
+            (None, "project", None),
+            ({"scope": "targeted", "targetProjectIds": [5, 6]}, "targeted", [5, 6]),
+            ({"scope": "organization"}, "organization", None),
+        ],
+    )
+    def test_import_creates_new_items_at_the_models_scope(
+        self, tmp_path: Path, model_meta, expected_scope, expected_ids
+    ) -> None:
+        service, mock = _service_with_model(tmp_path, model_meta)
+        mock.list_items.side_effect = lambda t, m=None: (
+            [mock.get_item.return_value] if t == "semantic-model" else []
+        )
+        snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t"})]}
+        result = service.import_snapshot_from_dict("prod", snapshot=snapshot)
+        assert result["imported"]["glossary"]["created"] == 1
+        kwargs = mock.post_item.call_args.kwargs
+        assert kwargs["scope"] == expected_scope
+        assert kwargs["target_project_ids"] == expected_ids
+
+    def test_import_overwrite_keeps_the_existing_items_scope(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, {"scope": "organization"})
+        existing = _child_item("semantic-glossary", "g1", {"term": "t"}, {"scope": "project"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [mock.get_item.return_value] if t == "semantic-model" else [existing]
+        )
+        snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t", "x": 1})]}
+        service.import_snapshot_from_dict("prod", snapshot=snapshot, overwrite=True)
+        args, kwargs = mock.put_item.call_args
+        assert args[:2] == ("semantic-glossary", "g1")
+        assert kwargs == {}
+        mock.post_item.assert_not_called()
+
+    def test_import_into_org_model_denied_gets_a_hint(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, {"scope": "organization"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [mock.get_item.return_value] if t == "semantic-model" else []
+        )
+        mock.post_item.side_effect = KeboolaApiError(
+            message="Access denied", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t"})]}
+        result = service.import_snapshot_from_dict("prod", snapshot=snapshot)
+        (failure,) = result["imported"]["glossary"]["failed"]
+        assert "organization-admin token" in failure["reason"]
+        assert "project-scoped model" in failure["reason"]
+
+    def test_promote_creates_new_items_at_the_target_models_scope(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        src, tgt = MagicMock(), MagicMock()
+        for m in (src, tgt):
+            m.__enter__ = MagicMock(return_value=m)
+            m.__exit__ = MagicMock(return_value=False)
+        clients = iter([src, tgt])
+        service = SemanticLayerService(
+            config_store=store, metastore_client_factory=lambda url, token: next(clients)
+        )
+        src.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U_S", "src")]
+            if t == "semantic-model"
+            else [_child_item("semantic-glossary", "s1", {"term": "t"})]
+            if t == "semantic-glossary"
+            else []
+        )
+        target_model = _model_item("U_T", "tgt")
+        target_model["meta"] = {"scope": "targeted", "targetProjectIds": [9]}
+        tgt.list_items.side_effect = lambda t, m=None: (
+            [target_model] if t == "semantic-model" else []
+        )
+        tgt.get_item.return_value = target_model
+        tgt.post_item.return_value = {"id": "new"}
+        service.promote_model(from_project="prod", to_project="analytics")
+        tgt.get_item.assert_called_once_with("semantic-model", "U_T")
+        kwargs = tgt.post_item.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_project_ids"]) == ("targeted", [9])
+        src.post_item.assert_not_called()
+
+
+class TestBuildPushScope:
+    def _generated(self) -> dict[str, Any]:
+        return {"name": "m", "glossary": [{"term": "t"}]}
+
+    def test_build_into_an_existing_model_takes_its_scope(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import push_built_model
+
+        client = MagicMock()
+        client.get_item.return_value = {"id": "U", "meta": {"scope": "organization"}}
+        client.post_item.return_value = {"id": "new"}
+        push_built_model(
+            client,
+            generated=self._generated(),
+            model_name_or_uuid="m",
+            resolve_model_fn=lambda c, name: ("U", {}),
+        )
+        kwargs = client.post_item.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_project_ids"]) == ("organization", None)
+
+    def test_build_of_a_new_model_creates_project_items_without_a_lookup(self) -> None:
+        from keboola_agent_cli.services._semantic_layer_internals import push_built_model
+
+        client = MagicMock()
+        client.post_item.side_effect = [{"id": "U"}, {"id": "child"}]
+        push_built_model(
+            client,
+            generated=self._generated(),
+            model_name_or_uuid=None,
+            resolve_model_fn=lambda c, name: ("U", {}),
+        )
+        client.get_item.assert_not_called()
+        child_kwargs = client.post_item.call_args_list[1].kwargs
+        assert (child_kwargs["scope"], child_kwargs["target_project_ids"]) == ("project", None)
+
+
+class TestElevationOfAnOldItem:
+    """Elevation is checked against the item's STORED schema version; 1.0.0 supports only project."""
+
+    def _client(self, error_message: str) -> MagicMock:
+        client = MagicMock()
+        error = KeboolaApiError(
+            message=error_message, status_code=400, error_code=ErrorCode.API_ERROR
+        )
+        client.request_scope_elevation.side_effect = error
+        client.elevate_to_organization.side_effect = error
+        client.get_item.return_value = {"id": "m1", "meta": {"schemaVersion": "1.0.0"}}
+        return client
+
+    @pytest.mark.parametrize("call", ["request", "elevate"])
+    def test_scope_not_supported_names_the_stored_version_and_the_fix(self, call: str) -> None:
+        client = self._client(
+            'API error 400: scope "organization" not supported for object type semantic-model'
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            if call == "request":
+                scope_helpers.request_elevation(client, "semantic-model", "m1")
+            else:
+                scope_helpers.elevate_to_organization(client, "semantic-model", "m1")
+        message = excinfo.value.message
+        assert "schema version 1.0.0" in message
+        assert "export" in message and "import" in message
+        assert excinfo.value.retryable is False
+
+    def test_other_400_is_not_rewritten(self) -> None:
+        client = self._client("API error 400: something else")
+        with pytest.raises(KeboolaApiError) as excinfo:
+            scope_helpers.request_elevation(client, "semantic-model", "m1")
+        assert excinfo.value.message == "API error 400: something else"
+        client.get_item.assert_not_called()
+
+
+class TestGlossaryDefinitionRequired:
+    def test_empty_definition_is_refused_before_any_call(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, None)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_glossary("prod", None, term="t", definition="  ")
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.post_item.assert_not_called()
+
+    def test_definition_is_sent(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, None)
+        service.add_glossary("prod", None, term="t", definition="d")
+        assert mock.post_item.call_args.kwargs["data"]["definition"] == "d"

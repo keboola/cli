@@ -306,7 +306,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
-| Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
+| Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
 | Edit a constraint (in-place update, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
@@ -346,7 +346,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
-| Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
+| Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
 | Edit a constraint (in-place update, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |

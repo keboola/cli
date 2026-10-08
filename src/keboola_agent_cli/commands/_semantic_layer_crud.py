@@ -287,7 +287,9 @@ def add_glossary(
     project: str = typer.Option(..., "--project", help="Project alias"),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Glossary term"),
-    definition: str = typer.Option("", "--definition", help="Optional definition"),
+    definition: str = typer.Option(
+        ..., "--definition", help="Definition of the term (the metastore requires one)"
+    ),
     scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
     target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:

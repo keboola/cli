@@ -24,7 +24,12 @@ from ._helpers import (
     get_service,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
-from ._semantic_layer_helpers import ScopeChoice, _handle_service_call, resolve_scope_targets
+from ._semantic_layer_helpers import (
+    ScopeChoice,
+    _handle_service_call,
+    gate_inherited_organization_scope,
+    resolve_scope_targets,
+)
 from ._semantic_layer_reference_data import reference_data_app
 from ._semantic_layer_scope import scope_app
 
@@ -516,6 +521,10 @@ def semantic_layer_build(
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
+    if model is not None:
+        gate_inherited_organization_scope(
+            ctx, operation="semantic-layer.build", alias=project, model=model
+        )
 
     result = _handle_service_call(
         ctx,
@@ -577,6 +586,9 @@ def semantic_layer_promote(
     ):
         formatter.console.print("Aborted.")
         raise typer.Exit(code=0)
+    gate_inherited_organization_scope(
+        ctx, operation="semantic-layer.promote", alias=to_project, model=to_model
+    )
 
     result = _handle_service_call(
         ctx,
@@ -625,6 +637,9 @@ def semantic_layer_import(
     # still opt into destructive overwrite via --overwrite.
     _ = yes  # explicit (no behavioural effect when --overwrite is False)
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    gate_inherited_organization_scope(
+        ctx, operation="semantic-layer.import", alias=project, model=model
+    )
     result = _handle_service_call(
         ctx,
         service.import_snapshot,
