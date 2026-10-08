@@ -3,16 +3,17 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, workspace SQL debugging, GitOps config sync,
-  bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots, data apps,
-  flows and schedules, invitations,
-  feature flags, OTLP data streams, scoped Storage tokens, the semantic
+  lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
+  bucket sharing/linking, encrypting secrets,
+  Storage tables/files/snapshots, data apps,
+  flows/schedules, invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, semantic
   layer, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  data app, streamlit deploy, semantic layer, sl, dev-portal,
+  merge request,
+  data app, python-js app, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
@@ -77,6 +78,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
@@ -142,7 +144,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
-| Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
@@ -153,6 +154,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -238,11 +240,35 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
+| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
 | Delete a branch metadata entry by its numeric ID | `kbagent branch metadata-delete --project PROJECT --metadata-id METADATA-ID` |
+| List the project's merge requests, newest first | `kbagent merge-request list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent mr list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent mr update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent mr merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -277,14 +303,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
 | Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
-| Edit a constraint (DELETE+POST, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
-| Edit a relationship (DELETE+POST). | `kbagent semantic-layer edit relationship --project PROJECT --name NAME` |
+| Edit a constraint (in-place update, with local validators) | `kbagent semantic-layer edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (in-place update). | `kbagent semantic-layer edit relationship --project PROJECT --name NAME` |
 | Edit a glossary term. | `kbagent semantic-layer edit glossary --project PROJECT --term TERM` |
 | Remove a metric. | `kbagent semantic-layer remove metric --project PROJECT --name NAME` |
 | Remove a dataset | `kbagent semantic-layer remove dataset --project PROJECT --name NAME` |
@@ -295,6 +321,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Add target projects to a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent semantic-layer scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope request-list --project PROJECT --type TYPE-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent sl promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -310,14 +343,14 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent sl model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
 | Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
-| Edit a constraint (DELETE+POST, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |
-| Edit a relationship (DELETE+POST). | `kbagent sl edit relationship --project PROJECT --name NAME` |
+| Edit a constraint (in-place update, with local validators) | `kbagent sl edit constraint --project PROJECT --name NAME` |
+| Edit a relationship (in-place update). | `kbagent sl edit relationship --project PROJECT --name NAME` |
 | Edit a glossary term. | `kbagent sl edit glossary --project PROJECT --term TERM` |
 | Remove a metric. | `kbagent sl remove metric --project PROJECT --name NAME` |
 | Remove a dataset | `kbagent sl remove dataset --project PROJECT --name NAME` |
@@ -328,6 +361,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
 | Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Add target projects to a targeted-scope item (merges with the current grants) | `kbagent sl scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent sl scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent sl scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent sl scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope request-list --project PROJECT --type TYPE-` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
@@ -411,6 +451,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
@@ -420,6 +461,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
+| **Share a semantic-layer item across projects / make it org-wide** -- `--scope`, `--target-project`, `scope get\|add\|remove\|set\|request-*` | [metastore-scope-workflow](references/metastore-scope-workflow.md) |
 | **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
 | **Config metadata** (list/get/set/delete arbitrary key-value metadata on a configuration) | [config-metadata-workflow](references/config-metadata-workflow.md) |
 | **Storage descriptions** (describe bucket / table / column, batch from YAML) | [storage-describe-workflow](references/storage-describe-workflow.md) |

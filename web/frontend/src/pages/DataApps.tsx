@@ -141,7 +141,7 @@ export function DataAppsPage() {
 
   return (
     <div className="space-y-4">
-      <PageTitle title="Data Apps" description="Custom Streamlit / Python data apps deployed on Keboola." />
+      <PageTitle title="Data Apps" description="Custom Python/JS data apps deployed on Keboola." />
       {!project ? (
         <Empty title="Select a project" />
       ) : q.isLoading ? (

@@ -4,8 +4,9 @@ Covers two new surfaces:
 
 * ``changelog.headline`` -- first-sentence extraction with version-number and
   abbreviation guards, max-char truncation, and dangling-backtick cleanup.
-* ``commands/changelog`` -- default one-line summary vs ``--full``, the
-  ``(+N more)`` indicator, the footer hint, and BREAKING prefix styling.
+* ``commands/changelog`` -- default headlines vs ``--full`` (every BREAKING
+  note, plus the first other notes until at least two show), the ``(+N more)``
+  indicator, the footer hint, and BREAKING prefix styling.
 
 Renderer tests drive ``_format_changelog_human`` with a synthetic entries dict
 (not the live ``CHANGELOG``) so they stay green as real release notes change.
@@ -37,8 +38,9 @@ def _render(entries: dict[str, list[str]], *, full: bool) -> str:
     return buf.getvalue()
 
 
-# A multi-version fixture: 1.2.0 has three notes (so a summary hides two),
-# 1.1.0 has a single short one (so a summary hides nothing).
+# A multi-version fixture: 1.2.0 has three notes and no BREAKING one (so a
+# summary shows two and hides one), 1.1.0 has a single short one (so a summary
+# hides nothing).
 _ENTRIES: dict[str, list[str]] = {
     "1.2.0": [
         "New: alpha thing. Detail about alpha that stays hidden.",
@@ -88,13 +90,43 @@ class TestHeadline:
 
 
 class TestRendererSummary:
-    def test_shows_headline_and_more_count(self) -> None:
+    def test_without_breaking_shows_first_two_headlines_and_more_count(self) -> None:
         out = _render(_ENTRIES, full=False)
         assert "New: alpha thing." in out
-        assert "(+2 more)" in out  # 3 notes -> 2 hidden
+        assert "Fix: beta thing.  (+1 more)" in out  # count on the last shown note
         assert "Detail about alpha" not in out  # detail hidden
-        assert "Fix: beta thing." not in out  # sibling notes hidden
+        assert "Internal: gamma thing." not in out  # third note hidden
         assert "--full" in out  # footer hint present
+
+    def test_shows_every_breaking_headline_and_only_those(self) -> None:
+        notes = [
+            "New: alpha thing.",
+            "BREAKING (#1): beta removed. Migration detail stays hidden.",
+            "Fix: gamma thing.",
+            "Breaking: delta renamed.",
+        ]
+        out = _render({"2.0.0": notes}, full=False)
+        assert "BREAKING (#1): beta removed." in out
+        assert "Breaking: delta renamed.  (+2 more)" in out
+        assert "Migration detail" not in out
+        assert "New: alpha thing." not in out  # non-breaking notes hidden
+        assert "Fix: gamma thing." not in out
+        assert out.index("beta removed") < out.index("delta renamed")  # changelog order
+
+    def test_single_breaking_note_is_filled_up_with_the_first_other_note(self) -> None:
+        notes = ["New: alpha thing.", "Fix: beta thing.", "BREAKING: gamma removed."]
+        out = _render({"2.1.0": notes}, full=False)
+        assert "New: alpha thing." in out  # first other note fills the second line
+        assert "BREAKING: gamma removed.  (+1 more)" in out
+        assert "Fix: beta thing." not in out
+        assert out.index("alpha thing") < out.index("gamma removed")  # changelog order
+
+    def test_two_short_notes_hide_nothing(self) -> None:
+        out = _render({"1.3.0": ["New: one.", "Fix: two."]}, full=False)
+        assert "New: one." in out
+        assert "Fix: two." in out
+        assert "(+" not in out
+        assert "--full" not in out  # nothing hidden -> no hint
 
     def test_single_short_note_has_no_more_and_no_footer(self) -> None:
         out = _render({"1.1.0": ["Change: single short note."]}, full=False)

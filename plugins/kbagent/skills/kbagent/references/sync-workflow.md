@@ -88,8 +88,10 @@ kbagent sync diff --project prod
 Related semantics (all since v0.72.0):
 
 - Plain `sync pull` re-materializes a tracked config whose local dir was
-  deleted (delete-dir-then-pull refetches; delete-dir-then-PUSH still deletes
-  the remote config -- the direction of the command picks the winner).
+  deleted (delete-dir-then-pull refetches; delete-dir-then-`push --force`
+  deletes the remote config -- the direction of the command picks the winner).
+  *(since 0.96.1, #792)* A plain `sync push` deletes nothing: it lists the
+  deletion under `skipped_deletions` and says to add `--force`.
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
   shows the drift, push updates the remote state when the key is present.
@@ -144,6 +146,12 @@ kbagent sync push --project prod --branch 388072
 
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
+
+Promoting is idempotent (since 0.96.1): a config the dev branch lacks is created
+there once, and the manifest records that dev copy for the same `main/`
+directory. Re-running the same push creates nothing; a later edit in `main/`
+updates the dev copy, never production. Older versions created another dev copy
+on every push (see gotchas.md).
 
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
@@ -408,14 +416,21 @@ Stored in `.keboola/branch-mapping.json`:
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
 | CONFLICT | Both sides changed | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
-| DELETED | Local file removed | Push deletes from remote |
+| DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
+| REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.1)* |
 
 ## Key behaviors
 
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
 - **Pull protects local edits**: locally-modified files are skipped by default
+  -- and "locally modified" covers the whole config, not only `_config.yml`:
+  an edit to a companion file (`transform.sql`, `code.py`, `_description.md`,
+  ...) protects the config the same way *(since 0.96.1, #792)*. Before, such an
+  edit was silently overwritten whenever the remote changed, plain or `--force`
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
-- **Push only sends local changes**: remote_modified and conflict changes are skipped
+- **Push only sends local changes**: remote_modified, conflict and remote_deleted
+  changes are skipped (`skipped` in the result), and local deletions are applied
+  only with `--force` (`skipped_deletions` otherwise) *(since 0.96.1, #792)*
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
   read-back), never from the files on disk. Before 0.91.0 the two producers
@@ -444,7 +459,11 @@ internal state:
 - **Always ignored** -- `keboola.sandboxes` (Workspaces API) and
   `keboola.mcp-server-tool` (the Keboola MCP server auto-creates one empty
   workspace-record config per project it touches, `configuration: {}`, name
-  like `mcp-workspace-<hex>`). This is a hardcoded floor; no flag disables it.
+  like `mcp-workspace-<hex>`). This is a hardcoded floor. The one exception
+  *(since 0.96.1)*: the manifest key `syncWorkspaces` takes `keboola.sandboxes`
+  off the list for its shared SQL workspaces, see
+  [Shared SQL workspaces](#shared-sql-workspaces). `keboola.mcp-server-tool`
+  stays ignored.
 - **Project-configurable** -- the manifest field `ignoredComponents` in
   `.keboola/manifest.json` adds project-specific exclusions on top of the
   hardcoded list, without waiting for an upstream kbagent release:
@@ -469,10 +488,83 @@ internal state:
 - **Un-ignoring** a component: remove it from `ignoredComponents` and run
   `sync pull` again -- it re-materializes like any newly-tracked config.
 
+## Shared SQL workspaces
+
+*(since 0.96.1)* A tree can sync the shared SQL workspaces (Snowflake,
+BigQuery) of a project. It is opt-in per tree, with the manifest key
+`syncWorkspaces`:
+
+```bash
+kbagent sync init --project prod --with-workspaces        # new tree
+kbagent sync init --project prod --adopt-existing --with-workspaces   # existing tree
+```
+
+or set `"syncWorkspaces": true` in `.keboola/manifest.json`. Without the key,
+sync skips `keboola.sandboxes` exactly as before.
+
+- **Scope.** Only `keboola.sandboxes` configs WITHOUT `parameters.id` and with
+  `runtime.shared: true`. A config with `parameters.id` is a Python/R
+  (container) workspace, or a legacy SQL sandbox from before the SQL editor;
+  both stay skipped. The official CLI tells SQL from Python/R by the same key.
+  A non-shared workspace is visible only to its creator in the UI, so pull
+  does not fetch it. A workspace already tracked stays tracked when someone
+  turns `runtime.shared` off: diff reports the change as `remote_modified`.
+- **Pull / diff.** A normal `_config.yml`: `parameters.blocks` (the SQL
+  scripts), `parameters.backendSize`, `input` / `output` (including
+  `read_only_storage_access` when it is off), and under
+  `_configuration_extra` the `runtime.shared` flag and the
+  `shared_code_id` / `shared_code_row_ids` / `variables_id` /
+  `variables_values_id` links of a workspace created from a transformation.
+  The config holds no credentials.
+- **Push create / update** writes the Storage configuration only: no Queue
+  job, no SQL editor session, no table load. The UI creates the session when
+  a user opens the workspace. When `parameters.backendSize` changes, push adds
+  a `workspace_backend_size` warning: an existing session keeps its size, the
+  new size applies only to a session created later. Dev branches work the
+  same way (config only).
+- **Push delete** needs `--force`, like every delete: a plain push lists the
+  workspace under `skipped_deletions` and touches neither its sessions nor its
+  configuration; `skipped_deletions_reason` then says what `--force` also
+  deletes. `push --force` first deletes the workspace's SQL editor
+  sessions in the push branch, of every user, then the configuration, like
+  `kbc remote workspace delete`. Deleting a session also drops its backend
+  workspace, which a config restore does not bring back. When the sessions
+  cannot be listed, or one cannot be deleted (for example it is still
+  initializing), push keeps the configuration and reports the error. The
+  deleted session ids are in `pushed_details[].deleted_session_ids`.
+  `push --dry-run --force` adds one `workspace_sessions` warning per deleted
+  workspace with `session_count` and `session_ids`; a plain `push --dry-run`
+  previews no session delete. A tracked workspace whose
+  config now has `parameters.id` (backed by a Data Science app) is not
+  deleted: push reports a `VALIDATION_ERROR`, and `push --dry-run --force`
+  reports `workspace_delete_refused` for it instead of a session list. When
+  the config delete fails after the sessions were deleted, the error names
+  those sessions. `sync push --force` needs the
+  destructive permission class (`--deny-destructive` blocks it).
+- **Clone** creates the workspace configs like other configs; `bucket_map`
+  rewrites their input mapping. Clone creates buckets, never tables, so the
+  clone result carries one `workspace_input_tables_missing` warning per
+  workspace whose input tables do not exist in the target.
+- **Turning it off.** Remove the key: the next `sync pull` drops the workspace
+  entries and their directories with action `"ignored"`. A workspace edited
+  locally and not pushed is kept instead (entry and directory), reported with
+  action `"skipped"` and the reason; plain pull and `--force` both keep it,
+  only `--theirs` deletes it. Diff and push ignore the kept entry, so set the
+  key again and push to apply the edit. An `ignoredComponents` entry for
+  `keboola.sandboxes` wins over the key.
+- **Mixed trees.** `kbc` reads the manifest with unknown keys ignored, so the
+  key does not break it. A manifest save by `kbc` writes only the keys `kbc`
+  knows, so it removes `syncWorkspaces`. `kbc` itself always ignores
+  `keboola.sandboxes`: it logs a warning for each workspace entry in the
+  manifest and skips it.
+
 ## `sync pull --force` is conflict-aware (since 0.53.0)
 
 `--force` no longer blindly overwrites locally-modified configs. It branches on
-the 3-way diff state per config (and per row):
+the 3-way diff state per config (and per row). "Local edited" means any file
+of the config -- `_config.yml` or a companion file such as `transform.sql`
+*(since 0.96.1, #792)*; before, a companion-only edit was never a conflict and
+was overwritten:
 
 - **Local edited, remote UNCHANGED** -> the file and its sync baseline are
   **preserved**. The pending delta stays visible to `sync diff` / `sync push`.
@@ -483,11 +575,26 @@ the 3-way diff state per config (and per row):
   error code `SYNC_CONFLICT`, listing every conflicting config/row. Resolve with
   `sync diff`, then `sync push` your edits (or discard them), then pull again.
 - **Local untouched, remote changed** -> `--force` takes remote as before.
+- **Local edited, remote DELETED** *(since 0.96.1, #792)* -> `--force` aborts
+  with `SYNC_CONFLICT` (conflict `reason: "deleted on remote"`). Plain pull
+  keeps the edited directory and its manifest entry and reports it as
+  `skipped` (`locally modified, deleted on remote`). Only `--theirs` deletes it.
+  A kept directory stays tracked, but `sync push` does not re-create the config
+  (it diffs as `remote_deleted`); delete the directory if the remote delete was
+  intended, or restore the config with `kbagent config restore` to keep it.
+
+> A config deleted and re-created remotely under the same name *(since 0.96.1,
+> #792)* is written to a suffixed directory while the old one is removed; the
+> next pull renames it back. Before, the sweep deleted the new config's files
+> and the next push deleted the new config remotely.
 
 > Safe to run `sync pull --force` to refresh an unrelated config even while you
 > have un-pushed edits elsewhere: non-conflicting edits survive; a real conflict
 > stops you loudly instead of losing work. To intentionally drop a local edit,
-> delete the file (or the config directory) and pull.
+> run `sync pull --theirs`, or delete the whole config directory and pull.
+> Deleting only a companion file (`transform.sql`, ...) counts as a local edit
+> *(since 0.96.1, #792)* -- `sync diff` / `sync push` read it that way too -- so
+> plain pull keeps it deleted.
 
 ## Migrating a legacy sync tree (#686)
 
@@ -550,12 +657,41 @@ nested mapping, list, or empty (`null`) value is rejected with `CONFIG_ERROR`
 (exit 5) naming the offending key and its actual type, instead of being
 silently stringified into a bogus ID.
 
+**Storage buckets (since 0.96.1):** clone copies configs, not storage — a cloned
+config's input/output mappings point at buckets a fresh target does not have. By
+default clone reads the `storage/buckets.json` pull export and creates the missing
+buckets in the target. Pass `--no-create-buckets` to skip it — a clone is a
+complete clone by default, so bucket creation is opt-out, not opt-in. It is
+idempotent: an existing bucket is skipped, a per-bucket API failure is collected
+in `bucket_errors`, and the created id is `--bucket-map`-remapped so it matches the
+rewritten refs. Each bucket is created on the backend the export recorded. A
+**linked (shared) bucket is linked** to the same source as in the reference, under
+the same id: nothing in the project writes into a linked bucket, so an empty bucket
+in its place would stay empty. The source project's sharing settings decide whether
+the target may link it — a refused link is collected in `bucket_errors`. Each link
+is listed in `linked_buckets` with its source project and bucket id. A tree pulled
+by an older version does not record which buckets are linked, so clone creates no
+bucket from it and records one `bucket_errors` entry — re-pull the reference, or
+pass `--no-create-buckets`. Only the buckets are created — their **tables and data are not** in
+the export, so populate tables by bucket sharing, `storage upload-table`, or by
+running the flows. Pull the source **with** its storage (`sync pull` without
+`--no-storage`) so `buckets.json` exists in the reference tree.
+
 **Why it just works on a fresh target:** the reference's config ids do not exist
 in the target project, so the push diff classifies every config as `added` and
 assigns new ULIDs. Because the push's `created_id_map` is keyed by the reference
 id, the **Phase-C** transformation variable links **and the Phase-D
 `keboola.flow` task `configId`s** remap reference→ULID automatically — no manual
 "remap orchestrator task" pass. The push result carries `flow_task_remaps`.
+
+Since 0.96.1 push also remaps a transformation's shared code (`shared_code_id`, `shared_code_row_ids` and the `{{<row id>}}` script placeholders), legacy `keboola.orchestrator` task `configId`s, task `configRowIds`, and a schedule's `target.configurationId`. The result carries `link_remaps` with one count per kind. A link push cannot set is an `errors[]` entry (`shared_code_link`, `flow_task_link`, `schedule_target_link`). After a failed PUT the next `sync push` or clone re-run sends the link again.
+
+**Check `warnings[]` after a clone (since 0.96.1).** Some configs need an action in the target. The clone result lists each one in `warnings[]` next to the push warnings, also for `--dry-run`, and human mode prints them. Only the run that creates the configs reports them, so keep them from the first run:
+
+- `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config.
+- `encrypted_values_copied`: `KBC::` values that only the reference project can decrypt, as `_config.yml` paths. For `secret_keys` put the plaintext into the clone's `_config.yml` and run `sync push`. `unencryptable_keys` need `kbagent encrypt values`, `oauth_keys` a new authorization.
+- `data_app_not_deployed`: run `kbagent data-app deploy`.
+- `schedule_not_active`: clone never activates a schedule, so the new project starts no jobs by itself. `kbagent flow schedule --flow-id ...` activates it; with several schedules on one flow, use the Keboola UI.
 
 **Idempotent:** re-running with an existing `--target-dir` skips the copy +
 overrides and just pushes, so a completed clone reports `no_changes` /
@@ -567,7 +703,7 @@ stranger's config. Use a new/empty target project.
 
 **Target branch:** a fresh clone re-points the manifest onto the target
 project's default (production) branch. It resolves that branch from the API the
-same way `sync init` does (since vNEXT). So `--branch` is optional. Pass
+same way `sync init` does (since v0.93.1). So `--branch` is optional. Pass
 `--branch <id>` only to clone into a specific dev branch of the target. Before
 this fix the copied manifest kept the source project's branch id. A clone with
 no `--branch` then failed with `Branch id "<source-branch>" does not exists`

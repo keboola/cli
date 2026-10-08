@@ -8,16 +8,17 @@ encrypted secrets, slug, runtime size. Both must stay in sync; see
 
 URL derivation: ``https://data-science.<stack-suffix>`` from the project's
 connection URL via ``BaseHttpClient._derive_service_url``. Auth: same
-``X-StorageApi-Token`` as the Storage API. The single exception is
-``GET /apps/{id}/password`` which additionally requires
-``X-KBC-ManageApiToken`` -- the manage token is passed per-call so the
-client itself stays project-scoped.
+``X-StorageApi-Token`` as the Storage API (or, for a browser-login session,
+``Authorization: Bearer`` + ``X-KBC-ProjectId`` through ``http_auth``). Every
+endpoint below, ``GET /apps/{id}/password`` included, needs only a token of
+the app's own project.
 
 Verified shapes (writeup §2 / §6 / §9, replayed in this PR's live
 validation):
 
     POST   /apps                          -> 201, {id, configId, ...}
-    GET    /apps                          -> 200, [{id, configId, state, desiredState, url}, ...]
+    GET    /apps?limit=N&offset=M         -> 200, [{id, configId, state, desiredState, url}, ...]
+                                              (paginated; default page = 100)
     GET    /apps/{id}                     -> 200, full deployment record
     PATCH  /apps/{id}                     -> 200, deployment record (only
                                               desiredState / configVersion /
@@ -25,9 +26,8 @@ validation):
                                               ``config:{...}`` is silently
                                               dropped)
     DELETE /apps/{id}                     -> 202, cascades to Storage config
-    GET    /apps/{id}/password            -> 200, {password: "<20 hex>"}
-                                              (requires both Storage and
-                                              Manage tokens)
+    GET    /apps/{id}/password            -> 200, {password: "<20 hex>" | null}
+                                              (null = no password yet)
     GET    /apps/{id}/logs/tail           -> 200, text/plain container log
                                               tail. ``lines=N`` and
                                               ``since=ISO8601`` are mutually
@@ -41,7 +41,13 @@ import logging
 from typing import Any, Self
 from urllib.parse import quote
 
-from .constants import DEFAULT_TIMEOUT
+import httpx
+
+from .constants import (
+    DATA_SCIENCE_APPS_MAX_PAGES,
+    DATA_SCIENCE_APPS_PAGE_SIZE,
+    DEFAULT_TIMEOUT,
+)
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
@@ -53,19 +59,18 @@ class DataScienceClient(BaseHttpClient):
     Inherits retry / backoff / token-masking from ``BaseHttpClient``.
     """
 
-    SESSION_AUTH_FEATURE = "The Data Science Service (data apps)"
-
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         ds_base_url = self._derive_service_url(self._stack_url, "data-science")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
         super().__init__(
             base_url=ds_base_url,
             token=token,
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
+            http_auth=http_auth,
         )
 
     def __enter__(self) -> Self:
@@ -75,16 +80,43 @@ class DataScienceClient(BaseHttpClient):
         self.close()
 
     def list_apps(self) -> list[dict[str, Any]]:
-        """Return the thin index of data apps in the project (no body filter).
+        """Return the thin index of ALL deployments in the project (no body filter).
 
-        The Data Science API scopes responses by the token's project; there
-        is no ``branchId`` query parameter on the list endpoint.
+        The Data Science API scopes responses by the token's project. The list
+        endpoint also accepts ``componentId``, ``type`` and ``branchId``
+        filters; this method sends none of them.
+
+        ``GET /apps`` is paginated: without ``limit``/``offset`` it returns
+        only a default first page (100 items) that mixes workspace
+        deployments (``keboola.sandboxes``) with data apps
+        (``keboola.data-apps``). Callers filter client-side, so a project with
+        many workspaces could have every data app beyond that first page and
+        ``data-app list`` reported "No data apps found." (#798). We therefore
+        page with ``limit``/``offset`` until a short (or empty) page.
         """
-        response = self._do_request("GET", "/apps")
-        body = response.json()
-        # Some stacks wrap the list in {"data": [...]}; fall back gracefully.
-        apps = (body.get("data") or body.get("apps") or []) if isinstance(body, dict) else body
-        return apps if isinstance(apps, list) else []
+        apps: list[dict[str, Any]] = []
+        page_size = DATA_SCIENCE_APPS_PAGE_SIZE
+        for page in range(DATA_SCIENCE_APPS_MAX_PAGES):
+            response = self._do_request(
+                "GET", "/apps", params={"limit": page_size, "offset": page * page_size}
+            )
+            body = response.json()
+            # Some stacks wrap the list in {"data": [...]}; fall back gracefully.
+            items = (body.get("data") or body.get("apps") or []) if isinstance(body, dict) else body
+            if not isinstance(items, list):
+                break
+            apps.extend(items)
+            if len(items) < page_size:
+                break
+        else:
+            # Guard against a server that ignores ``offset`` and keeps
+            # returning full pages -- never loop forever, but say so.
+            logger.warning(
+                "GET /apps: stopped after %d pages of %d; the listing may be incomplete",
+                DATA_SCIENCE_APPS_MAX_PAGES,
+                page_size,
+            )
+        return apps
 
     def get_app(self, app_id: str) -> dict[str, Any]:
         """Fetch a single deployment record by numeric app id."""
@@ -210,28 +242,16 @@ class DataScienceClient(BaseHttpClient):
         """
         self._do_request("DELETE", f"/apps/{quote(str(app_id), safe='')}")
 
-    def get_app_password(self, app_id: str, manage_token: str) -> dict[str, Any]:
-        """Retrieve the auto-generated simpleAuth password.
+    def get_app_password(self, app_id: str) -> dict[str, Any]:
+        """Return ``{"password": str | None}`` for a password-protected app.
 
-        Requires both the project's Storage token (already on
-        ``self._client``) AND a Manage API token, supplied per-call so the
-        manage token never lives on the client instance.
-
-        The 20-character hex password is auto-generated at app create time
-        and is NOT rotatable -- to change it you must delete and recreate
-        the app (writeup §11.2).
+        The sandboxes-service authorizes this call with the project token
+        alone (``StorageApiTokenAuth`` + ``CanManageApp``, which only checks
+        that the token's project is the app's project), the same call the
+        Keboola UI makes. ``password`` is ``None`` while the app has no
+        password yet.
         """
-        path = f"/apps/{quote(str(app_id), safe='')}/password"
-        # Pass the Manage token via per-request `headers=`. httpx merges these
-        # with the client's persistent headers for this call only, so the
-        # manage token never lives on `self._client`. Using `_do_request`
-        # gives us the same retry/backoff and uniform error mapping as every
-        # other call in this client (no bespoke try/except needed).
-        response = self._do_request(
-            "GET",
-            path,
-            headers={"X-KBC-ManageApiToken": manage_token},
-        )
+        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/password")
         return response.json()
 
     def tail_app_logs(

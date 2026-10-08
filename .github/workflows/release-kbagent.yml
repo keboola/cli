@@ -36,11 +36,6 @@ env:
   # Pin the interpreter uv uses across all jobs for reproducible release builds
   # (project requires-python >=3.12; CI gates on 3.12).
   UV_PYTHON: "3.12"
-  # Apple notarization identifiers — public (not secret); kept here so rotating the
-  # account/team is a one-line change rather than editing the freeze step's env. The
-  # macOS sign step inherits these; the actual secrets stay in that step.
-  APPLE_ACCOUNT_USERNAME: apple@keboola.com
-  APPLE_TEAM_ID: "46P6KJ65M2"
 
 # Least-privilege default: every job is read-only unless it overrides this with the
 # narrower scope it actually needs (see the per-job `permissions:` below). Only three
@@ -102,7 +97,7 @@ jobs:
           PY=$(sed -n -E 's/^version = "([^"]+)"/\1/p' pyproject.toml | head -1)
           [ "$PY" = "$VERSION" ] || { echo "::error::tag v$VERSION does not match pyproject version $PY"; exit 1; }
       - uses: astral-sh/setup-uv@v7
-        with: { version: "0.11.16" }
+        with: { version: "0.12.15" }
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: uv sync --extra server
@@ -212,7 +207,7 @@ jobs:
           - { os: macos-latest, platform: darwin, arch: arm64 }
           - { os: windows-latest, platform: windows, arch: amd64 }
     runs-on: ${{ matrix.os }}
-    environment: release # so APPLE_*/WINDOWS_* signing secrets resolve
+    environment: release # so the WINDOWS_* signing secrets resolve
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -232,19 +227,6 @@ jobs:
             --collect-all keboola_agent_cli \
             --distpath dist \
             build/package/entry.py
-
-      # macOS: sign + notarize. On a pre-release tag this runs as a NON-FATAL
-      # signature check (continue-on-error) so a dev tag verifies the Apple creds
-      # without blocking the build; on a real tag it is required.
-      - name: Sign & notarize (macOS)
-        if: ${{ matrix.platform == 'darwin' }}
-        continue-on-error: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
-        env:
-          APPLE_DEVELOPER_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          APPLE_DEVELOPER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-          APPLE_ACCOUNT_PASSWORD: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
-          # APPLE_ACCOUNT_USERNAME / APPLE_TEAM_ID inherited from the workflow-level env.
-        run: bash build/package/macos/sign_notarize.sh "dist/$BIN_NAME"
 
       # Windows: Authenticode sign the .exe. Non-fatal on pre-release (signature
       # check only); required on a real tag.
@@ -619,29 +601,24 @@ jobs:
 
   # ── WinGet: submit a PR to microsoft/winget-pkgs via wingetcreate.
   #
-  # DISABLED (if: false): `wingetcreate update` fails on every tag because the
-  # `Keboola.KeboolaCLI2` package has never had its FIRST submission to
-  # microsoft/winget-pkgs -- there is no manifest to update, so the job has been
-  # red on every release since it was added, masking real failures. Re-enable by
-  # restoring the original condition (kept below) AFTER the bootstrap submission
-  # lands; see the NOTE in the first step for what that submission must contain.
+  # The one-time bootstrap `wingetcreate submit` this job used to be blocked on
+  # has already happened by hand: `Keboola.KeboolaCLI2` has a manifest on
+  # microsoft/winget-pkgs starting at 0.79.0 (winget-pkgs PR #409446). That
+  # manifest is what `wingetcreate update` below now bumps on every release.
   winget:
     needs: [version, chocolatey, publish-s3]
-    # Original condition, restore when re-enabling:
-    #   needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
-    if: false
+    if: needs.version.outputs.IS_PRERELEASE == 'false' && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     environment: release
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
-      # NOTE for whoever gets this job working: `wingetcreate update` only bumps
-      # the version and installer URL -- it does NOT write locale fields. The
-      # FIRST successful submission must therefore set `License: Apache-2.0`
-      # itself, because every later run inherits whatever that manifest said.
-      # Do not copy the existing `Keboola.KeboolaCLI` manifest: that is the
-      # legacy Go CLI from keboola/keboola-as-code, a different product under a
-      # different (MIT) licence. `Keboola.KeboolaCLI2` has never been submitted.
+      # `wingetcreate update` only bumps the version and installer URL -- it
+      # does NOT write locale fields, so it depends on the bootstrap manifest
+      # (see above) already having set them, e.g. `License: Apache-2.0`. Do
+      # not confuse this with `Keboola.KeboolaCLI`: that is the legacy Go CLI
+      # from keboola/keboola-as-code, a different product under a different
+      # (MIT) licence.
       - name: Submit to winget-pkgs
         shell: bash
         env:

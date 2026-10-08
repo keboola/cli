@@ -2,7 +2,7 @@
 
 Covers: input validation, the §9 redeploy contract, cleanup-in-finally,
 the §8 pitfall #1 (transient stopped during initial deploy), encryption
-round-trip, and password retrieval.
+round-trip, and password retrieval (auth gating, null password, UI URL).
 
 The tests speak to a fully-mocked Data Science + Storage + Encryption
 stack -- they verify orchestration, not HTTP shapes (those live in
@@ -11,6 +11,7 @@ test_data_science_client.py / test_e2e.py).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,10 @@ import pytest
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._data_app_bodies import (
+    _build_public_auth_block,
+    _build_simple_auth_block,
+)
 from keboola_agent_cli.services.data_app_service import (
     DataAppService,
     _redact_git_block,
@@ -28,7 +33,6 @@ from keboola_agent_cli.services.data_app_service import (
 )
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
-TEST_MANAGE_TOKEN = "manage-test-token"
 
 
 # ---------------------------------------------------------------------------
@@ -1318,24 +1322,116 @@ class TestDataAppPoll:
 # ---------------------------------------------------------------------------
 
 
+def _stub_password_app(
+    ds_mock: MagicMock,
+    storage_mock: MagicMock,
+    *,
+    authorization: dict[str, Any] | None,
+    branch_id: Any = None,
+    password: str | None = "deadbeefcafe",
+) -> None:
+    """A deployed app record, its Storage config (auth block) and its password."""
+    ds_mock.get_app.return_value = {
+        "id": 42,
+        "configId": "cfg-1",
+        "branchId": branch_id,
+        "url": "https://app-42.hub.keboola.com",
+    }
+    configuration = {} if authorization is None else {"authorization": authorization}
+    storage_mock.get_config_detail.return_value = {"id": "cfg-1", "configuration": configuration}
+    ds_mock.get_app_password.return_value = {"password": password}
+
+
 class TestDataAppPassword:
-    def test_returns_password(self, tmp_path: Path) -> None:
+    def test_returns_metadata_and_password_apart(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
-        service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app_password.return_value = {"password": "deadbeefcafe"}
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
 
-        result = service.get_data_app_password(
-            alias="prod", app_id="42", manage_token=TEST_MANAGE_TOKEN
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.password == "deadbeefcafe"
+        assert result.metadata() == {
+            "project_alias": "prod",
+            "app_id": "42",
+            "auth": "password",
+            "app_url": "https://app-42.hub.keboola.com",
+            "ui_url": (
+                "https://connection.keboola.com/admin/projects/5725/branch/default/data-apps/cfg-1"
+            ),
+        }
+        # Neither the metadata nor the repr carries the password.
+        assert "deadbeefcafe" not in repr(result)
+        assert "deadbeefcafe" not in str(result.metadata())
+        # Only the project token: no Manage token argument any more.
+        ds_mock.get_app_password.assert_called_once_with("42")
+        storage_mock.get_config_detail.assert_called_once_with(
+            "keboola.data-apps", "cfg-1", branch_id=None
         )
-        assert result["password"] == "deadbeefcafe"
-        ds_mock.get_app_password.assert_called_once_with("42", manage_token=TEST_MANAGE_TOKEN)
+        ds_mock.close.assert_called_once()
+        storage_mock.close.assert_called_once()
 
-    def test_missing_manage_token(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("authorization", "auth_kind"),
+        [
+            (
+                {"app_proxy": {"auth_providers": [{"id": "oidc", "type": "oidc"}]}},
+                "oidc",
+            ),
+            (_build_public_auth_block(), "public"),
+            (None, "missing"),
+        ],
+    )
+    def test_non_password_auth_is_refused_before_the_password_call(
+        self, tmp_path: Path, authorization: dict[str, Any] | None, auth_kind: str
+    ) -> None:
         store = _make_store(tmp_path)
-        service, _ds, _storage, _enc = _make_service(store)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=authorization)
+
         with pytest.raises(KeboolaApiError) as excinfo:
-            service.get_data_app_password(alias="prod", app_id="42", manage_token="")
-        assert excinfo.value.error_code == ErrorCode.INVALID_TOKEN
+            service.get_data_app_password(alias="prod", app_id="42")
+
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert f"auth: {auth_kind}" in excinfo.value.message
+        ds_mock.get_app_password.assert_not_called()
+        ds_mock.close.assert_called_once()
+        storage_mock.close.assert_called_once()
+
+    def test_no_password_yet_is_not_found(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(
+            ds_mock, storage_mock, authorization=_build_simple_auth_block(), password=None
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.get_data_app_password(alias="prod", app_id="42")
+
+        assert excinfo.value.error_code == ErrorCode.NOT_FOUND
+        assert "no password yet" in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        ("branch_id", "config_branch", "ui_branch"),
+        [(None, None, "default"), ("7788", 7788, "7788"), (7788, 7788, "7788")],
+    )
+    def test_ui_url_and_config_read_follow_the_app_branch(
+        self, tmp_path: Path, branch_id: Any, config_branch: int | None, ui_branch: str
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(
+            ds_mock, storage_mock, authorization=_build_simple_auth_block(), branch_id=branch_id
+        )
+
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.ui_url == (
+            f"https://connection.keboola.com/admin/projects/5725/branch/{ui_branch}/data-apps/cfg-1"
+        )
+        storage_mock.get_config_detail.assert_called_once_with(
+            "keboola.data-apps", "cfg-1", branch_id=config_branch
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1587,11 +1683,9 @@ class TestDataAppEnvelopesNoBareIdKey:
 
     def test_password_envelope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
-        service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app_password.return_value = {"password": "deadbeefcafe"}
-        result = service.get_data_app_password(
-            alias="prod", app_id="42", manage_token=TEST_MANAGE_TOKEN
-        )
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
+        result = service.get_data_app_password(alias="prod", app_id="42").metadata()
         assert result["app_id"] == "42"
         assert "id" not in result
 
@@ -1904,3 +1998,188 @@ class TestTailAppLogsClient:
             text = client.tail_app_logs("42")
 
         assert text == "full buffer\n"
+
+
+# ---------------------------------------------------------------------------
+# data-app list pagination (client HTTP layer via httpx_mock) -- issue #798
+# ---------------------------------------------------------------------------
+
+
+class TestListAppsPaginationClient:
+    """``GET /apps`` is paginated and mixes workspaces with data apps.
+
+    Before #798 ``list_apps`` fetched only the server's default first page, so
+    a project whose first deployments were all workspaces (``keboola.sandboxes``)
+    reported "No data apps found." even with 139 data apps further down.
+    """
+
+    DATA_SCIENCE_BASE = "https://data-science.keboola.com"
+
+    @staticmethod
+    def _client():
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        return DataScienceClient(stack_url="https://connection.keboola.com", token="901-test-token")
+
+    @staticmethod
+    def _sandboxes(n: int, start: int = 0) -> list[dict[str, Any]]:
+        return [
+            {"id": str(start + i), "componentId": "keboola.sandboxes", "type": "snowflake"}
+            for i in range(n)
+        ]
+
+    def test_single_short_page_makes_one_request(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=[{"id": "1", "componentId": "keboola.data-apps"}],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert [a["id"] for a in apps] == ["1"]
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_pages_until_short_page_and_returns_later_data_apps(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        data_apps = [
+            {"id": "d1", "componentId": "keboola.data-apps", "configId": "c1"},
+            {"id": "d2", "componentId": "keboola.data-apps", "configId": "c2"},
+        ]
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[*self._sandboxes(3, start=size), *data_apps],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert len(apps) == size + 5
+        assert [a["id"] for a in apps if a["componentId"] == "keboola.data-apps"] == ["d1", "d2"]
+        assert [dict(r.url.params) for r in httpx_mock.get_requests()] == [
+            {"limit": str(size), "offset": "0"},
+            {"limit": str(size), "offset": str(size)},
+        ]
+
+    def test_exact_full_last_page_is_followed_by_empty_page(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[],
+        )
+        with self._client() as client:
+            apps = client.list_apps()
+
+        assert len(apps) == size
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_wrapped_data_shape_is_still_supported(self, httpx_mock) -> None:
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json={"data": [{"id": "1", "componentId": "keboola.data-apps"}]},
+        )
+        with self._client() as client:
+            assert [a["id"] for a in client.list_apps()] == ["1"]
+
+    def test_page_cap_stops_a_server_that_ignores_offset(self, httpx_mock, caplog) -> None:
+        httpx_mock.add_response(json=self._sandboxes(2), is_reusable=True)
+        with (
+            patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_PAGE_SIZE", 2),
+            patch("keboola_agent_cli.data_science_client.DATA_SCIENCE_APPS_MAX_PAGES", 3),
+            caplog.at_level(logging.WARNING, logger="keboola_agent_cli.data_science_client"),
+            self._client() as client,
+        ):
+            apps = client.list_apps()
+
+        assert len(apps) == 6
+        assert len(httpx_mock.get_requests()) == 3
+        assert [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "keboola_agent_cli.data_science_client"
+        ] == ["GET /apps: stopped after 3 pages of 2; the listing may be incomplete"]
+
+    def test_error_on_a_later_page_raises_with_no_partial_result(self, httpx_mock) -> None:
+        """A page that still fails after the client's retries fails the whole listing."""
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+        from keboola_agent_cli.constants import MAX_RETRIES
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            status_code=503,
+            json={"error": "Service Unavailable"},
+            is_reusable=True,
+        )
+        with (
+            patch("keboola_agent_cli.http_base.time.sleep"),
+            self._client() as client,
+            pytest.raises(KeboolaApiError) as excinfo,
+        ):
+            client.list_apps()
+
+        assert excinfo.value.status_code == 503
+        assert len(httpx_mock.get_requests()) == 1 + MAX_RETRIES
+
+    def test_sync_type_lookup_finds_a_data_app_on_page_two(self, httpx_mock) -> None:
+        """``load_data_app_types`` (sync pull) reads the type through the paged listing."""
+        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
+        from keboola_agent_cli.data_science_client import DataScienceClient
+        from keboola_agent_cli.services._sync_data_app import load_data_app_types
+
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            json=self._sandboxes(size),
+        )
+        httpx_mock.add_response(
+            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            json=[
+                {
+                    "id": "d1",
+                    "componentId": "keboola.data-apps",
+                    "configId": "c1",
+                    "type": "python-js",
+                }
+            ],
+        )
+        project = ProjectConfig(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+
+        types = load_data_app_types(DataScienceClient, project, [{"id": "keboola.data-apps"}])
+
+        assert types == {"c1": "python-js"}
+
+
+class TestDataAppListFiltersWorkspaces:
+    """``list_data_apps`` keeps only ``keboola.data-apps`` rows from the full listing."""
+
+    def test_sandboxes_dropped_data_apps_kept(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.list_apps.return_value = [
+            *[
+                {"id": str(i), "componentId": "keboola.sandboxes", "type": "snowflake"}
+                for i in range(300)
+            ],
+            {"id": "d1", "componentId": "keboola.data-apps", "configId": "c1", "type": "python-js"},
+        ]
+        storage_mock.list_component_configs.return_value = [{"id": "c1", "name": "App"}]
+
+        result = service.list_data_apps(aliases=["prod"])
+
+        assert result["errors"] == []
+        assert [a["app_id"] for a in result["apps"]] == ["d1"]

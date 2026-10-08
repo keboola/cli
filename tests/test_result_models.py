@@ -199,11 +199,46 @@ class TestCloneResult:
         cr = CloneResult.model_validate({"status": "cloned", "errors": [{"message": "boom"}]})
         assert cr.ok is False
 
+    def test_warnings_and_link_remaps(self) -> None:
+        # CLI-24: warnings do not make the clone fail; link_remaps counts per kind.
+        warning = {"change_type": "schedule_not_active", "message": "m", "active": False}
+        remaps = {"flow_tasks": 2, "orchestrator_tasks": 1, "schedule_targets": 1}
+        cr = CloneResult.model_validate(
+            {"status": "cloned", "warnings": [warning], "link_remaps": remaps}
+        )
+        assert cr.warnings == [warning]
+        assert cr.link_remaps == remaps
+        assert cr.ok is True
+
+    def test_warnings_and_link_remaps_default_empty(self) -> None:
+        cr = CloneResult.model_validate({"status": "no_changes"})
+        assert cr.warnings == [] and cr.link_remaps == {}
+
     def test_dry_run_without_push(self) -> None:
         cr = CloneResult.model_validate(
             {"status": "dry_run", "target_alias": "t", "bucket_rewrites": 1}
         )
         assert cr.status == "dry_run" and cr.push is None and cr.ok is True
+
+    def test_bucket_fields(self) -> None:
+        linked = {"bucket_id": "in.c-s", "source_bucket_id": "out.c-o", "source_project_id": 42}
+        cr = CloneResult.model_validate(
+            {
+                "status": "cloned",
+                "buckets_created": 2,
+                "buckets_skipped": 1,
+                "bucket_errors": [{"bucket_id": "in.c-bad", "error": "boom"}],
+                "linked_buckets": [linked],
+            }
+        )
+        assert (cr.buckets_created, cr.buckets_skipped) == (2, 1)
+        assert cr.bucket_errors == [{"bucket_id": "in.c-bad", "error": "boom"}]
+        assert cr.linked_buckets == [linked]
+
+    def test_bucket_fields_default_empty(self) -> None:
+        cr = CloneResult.model_validate({"status": "cloned"})
+        assert (cr.buckets_created, cr.buckets_skipped) == (0, 0)
+        assert cr.bucket_errors == [] and cr.linked_buckets == []
 
 
 class TestBaseConfig:

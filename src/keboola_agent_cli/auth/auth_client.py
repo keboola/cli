@@ -10,16 +10,18 @@ rather than on the client, and `revoke` is a public endpoint that takes the
 token to revoke in its request body.
 
 Inherits shared retry/backoff (429/5xx) and error-mapping infrastructure from
-:class:`BaseHttpClient`, with four deliberate exceptions that keep the mapping
+:class:`BaseHttpClient`, with five deliberate exceptions that keep the mapping
 but skip the retry loop: `poll_device_token` (a polling 400 is a protocol
 state, not a failure), `refresh` (a blind retry would re-present the refresh
 token, and it runs under a wall-clock ceiling the retry loop would outlast),
-and `login_password`/`verify_mfa_totp` (a blind retry against `/v1/auth/login`
+`login_password`/`verify_mfa_totp` (a blind retry against `/v1/auth/login`
 burns extra requests against the account's rate-limit bucket before the
 server's own `X-RateLimit-Reset` guidance is even read, and against
 `/v1/auth/mfa` would replay a TOTP code the server already marked consumed --
-burning one of the account's limited MFA attempts for nothing). The last
-three share `_request_bypassing_retry`, which maps transport failures
+burning one of the account's limited MFA attempts for nothing), and
+`provision_project` (not idempotent: every success creates an organization, a
+billable project and a credit grant, so a retried 5xx mints a second one). The
+last four share `_request_bypassing_retry`, which maps transport failures
 (`httpx.TimeoutException`/`httpx.TransportError`) the way `_do_request` would
 have, since bypassing the retry loop must not also mean losing that mapping.
 `refresh` makes one further narrow exception of its own for a rotation
@@ -39,6 +41,8 @@ from urllib.parse import urlencode
 import httpx
 
 from ..constants import (
+    AGENT_PROVISIONING_PATH,
+    AGENT_PROVISIONING_SYNC_TIMEOUT,
     AUTH_CLIENT_ID,
     AUTH_DEVICE_PATH,
     AUTH_DEVICE_TOKEN_PATH,
@@ -60,6 +64,7 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 from ..http_base import BaseHttpClient
 from .models import (
+    AgentProvisioningResponse,
     CliTokenResponse,
     DeviceAuthorization,
     DevicePollResult,
@@ -566,20 +571,33 @@ class AuthClient(BaseHttpClient):
         json: dict[str, Any],
         timeout: httpx.Timeout | float | None = None,
         action: str,
+        repeat_unsafe: str = "",
     ) -> httpx.Response:
         """Issue one request outside the shared retry loop, still mapping
         transport failures the way `_do_request` would have.
 
-        Shared by `login_password`, `verify_mfa_totp`, and `refresh`
-        (via `_post_refresh`) -- each bypasses the retry loop for its own
-        reason (see their docstrings and the module docstring), but
-        bypassing retry must not also mean losing the
+        Shared by `login_password`, `verify_mfa_totp`, `refresh` (via
+        `_post_refresh`) and `provision_project` -- each bypasses the retry
+        loop for its own reason (see their docstrings and the module
+        docstring), but bypassing retry must not also mean losing the
         `TimeoutException`/`TransportError` -> structured-error mapping
         `_do_request` gives every other call; without it, a network blip
         would escape as a raw traceback instead of a `--json` error
         envelope. `action` names what the caller was doing
         ("Signing in", "Refreshing your Keboola login", ...), reused in
-        both message templates below.
+        every message template below.
+
+        `repeat_unsafe`, when non-empty, says the call MUST NOT simply be
+        repeated and carries the remedy to print instead. It only changes
+        what happens on a timeout that was already delivered, and it exists
+        because "timed out" is two different events: a connect/pool timeout
+        never reached the server and is always safe to repeat, while a
+        read/write timeout means the request WAS sent and its outcome is
+        unknown. `BaseHttpClient._do_request` already draws exactly that
+        line (and `_non_idempotent_note` says so in prose); flattening it
+        here would tell the caller of a non-idempotent write to run it
+        again, which for `provision_project` means a second organization, a
+        second billable project and a second credit grant.
         """
         kwargs: dict[str, Any] = {"json": json}
         if timeout is not None:
@@ -587,6 +605,17 @@ class AuthClient(BaseHttpClient):
         try:
             return self._client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
+            delivered = not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
+            if repeat_unsafe and delivered:
+                raise KeboolaApiError(
+                    message=(
+                        f"{action} at {self._base_url} timed out after the request had "
+                        f"been sent, so it may have succeeded anyway. {repeat_unsafe}"
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.TIMEOUT,
+                    retryable=False,
+                ) from exc
             raise KeboolaApiError(
                 message=f"{action} at {self._base_url} timed out. Run the command again.",
                 status_code=0,
@@ -654,6 +683,123 @@ class AuthClient(BaseHttpClient):
                 ) from exc
             raise
         raise AssertionError("unreachable: _map_auth_error always raises")
+
+    # ------------------------------------------------------------------
+    # Agent provisioning
+    # ------------------------------------------------------------------
+
+    def provision_project(
+        self,
+        *,
+        project_name: str = "",
+        backend: str | None = None,
+        sync_backend_init: bool = False,
+    ) -> AgentProvisioningResponse:
+        """Provision a brand-new Keboola project (``POST /manage/programmatic-projects``).
+
+        Unauthenticated by design -- this is the one endpoint reachable from a
+        machine with no Keboola identity at all. Answers a project-pinned,
+        Manage-less programmatic session plus a single-use ``confirmUrl`` for
+        the human who will take ownership.
+
+        Bypasses `_do_request`/the shared retry loop -- the same deliberate
+        exception `login_password`, `verify_mfa_totp` and `refresh` already
+        make (see the module docstring), and here for the strongest reason of
+        the four: the call is **not idempotent**. Every success creates an
+        organization, a billable project and a free-credit grant, so a blind
+        retry of a 5xx (or of a read timeout on a response that was already in
+        flight) mints a second project nobody asked for, holding a second slot
+        against the stack's unconfirmed-project cap, with a confirm link the
+        caller never sees. A 503 here is contention on the stack-wide
+        provisioning lock and means nothing was created; it comes back as a
+        retryable error for the *user* to repeat, deliberately not for this
+        client to repeat on its own.
+
+        A timeout is classified, not lumped together: a connect/pool timeout
+        never reached the stack and is reported retryable, while a read
+        timeout means the POST was delivered and may well have succeeded --
+        that one is reported NON-retryable and points at `auth status`, whose
+        stored session (and claim link) is the evidence of whether a project
+        exists. Telling the caller to "run the command again" there is how a
+        second organization, project and credit grant get created over a lost
+        response.
+
+        ``sync_backend_init`` also buys a much longer read budget
+        (`AGENT_PROVISIONING_SYNC_TIMEOUT`): that flag exists to hold the
+        request open until the backend is ready, so the default 30 s would
+        make the timeout above the EXPECTED outcome rather than the rare one.
+        Note it can outlast an agent's foreground tool-shell timeout -- the
+        async default (no flag) is the one to use there.
+
+        ``backend`` of None keeps the stack maintainer's own default. The
+        ``clientId`` is sent for audit attribution: every org/project event of
+        this flow carries the stack's shared agent admin as actor, so without
+        it the audit log says only "the shared admin did it".
+        """
+        body: dict[str, Any] = {"clientId": AUTH_CLIENT_ID}
+        if project_name:
+            body["projectName"] = project_name
+        if backend:
+            body["backend"] = backend
+        if sync_backend_init:
+            body["syncBackendInit"] = True
+
+        response = self._request_bypassing_retry(
+            "POST",
+            AGENT_PROVISIONING_PATH,
+            json=body,
+            # `--sync-backend-init` keeps the response open until the backend
+            # is ready, well past the 30 s client default.
+            timeout=AGENT_PROVISIONING_SYNC_TIMEOUT if sync_backend_init else None,
+            action="Creating a Keboola project",
+            repeat_unsafe=(
+                "Do NOT just run it again -- that would create a second project. "
+                "Check with `kbagent auth status --stack "
+                f"{self._base_url}`: if a session is reported, the project was "
+                "created and the claim link is printed there."
+            ),
+        )
+        if response.status_code >= 400:
+            self._raise_provisioning_error(response)
+        return AgentProvisioningResponse.model_validate(response.json())
+
+    def _raise_provisioning_error(self, response: httpx.Response) -> NoReturn:
+        """Map a failed provisioning response, naming the right remedy on 404.
+
+        A 404 means the `agent-provisioning` stack feature
+        (STACK_FEATURES__AGENT_PROVISIONING) is off -- the endpoint is
+        fail-closed exactly like the rest of this client's surface, and the
+        command itself is always registered, so this response is the ONLY
+        place a caller learns the capability is missing here. The message
+        therefore has to carry the whole answer: what is missing, who can
+        turn it on, and what to do instead meanwhile.
+
+        It cannot go through `_map_auth_error`, whose 404 message is about
+        *browser login*: that one tells the caller to paste a token, which
+        is exactly what a caller of THIS command does not have.
+
+        The body is never parsed here. A stack without the route can answer
+        404 as HTML from a legacy dispatcher, and reading a server message
+        out of that would replace a useful sentence with markup.
+        """
+        if response.status_code == 404:
+            raise KeboolaApiError(
+                message=(
+                    f"Creating a Keboola project from the CLI is not available on "
+                    f"{self._base_url}. It needs the `agent-provisioning` stack feature "
+                    "(STACK_FEATURES__AGENT_PROVISIONING), which is off on this stack -- "
+                    "ask the stack operator to enable it, or use another stack. To use a "
+                    f"project that already exists: create one at {self._base_url} in a "
+                    f"browser, then connect it with `kbagent auth login --stack "
+                    f"{self._base_url}` or `kbagent project add --project <alias> --url "
+                    f"{self._base_url} --token <token>`."
+                ),
+                status_code=404,
+                error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
+                retryable=False,
+            )
+        super()._raise_api_error(response, self._base_url)
+        raise AssertionError("unreachable: BaseHttpClient._raise_api_error always raises")
 
     def introspect(self, access_token: str) -> IntrospectResponse:
         """Fetch session metadata + accessible projects for a live access token.

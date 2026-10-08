@@ -110,6 +110,50 @@ class CliTokenResponse(BaseModel):
         return moment + timedelta(seconds=seconds_in)
 
 
+class ProvisionedProject(BaseModel):
+    """The project half of an agent-provisioning response.
+
+    Distinct from `AuthProject` (the introspect shape): this one carries the
+    backend that was actually provisioned and no membership role -- the
+    synthetic agent admin is the only member until a human confirms.
+    """
+
+    id: int
+    name: str = ""
+    backend: str = ""
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
+class AgentProvisioningResponse(BaseModel):
+    """Response to ``POST /manage/programmatic-projects`` (agent provisioning).
+
+    The token half is the same AT/RT programmatic session every other flow in
+    this package produces, under a different field name for the access-token
+    lifetime (``accessTokenExpiresIn``, not ``expiresIn``) -- which is why this
+    is its own model rather than a `CliTokenResponse` with an extra field.
+
+    ``confirm_url`` is a single-use claim link (the claim token travels in its
+    query string) that a human opens to take ownership of the project. It is
+    the one credential-bearing value in this package that is *meant* to be
+    displayed: nobody can own the project without it, and the claim expires in
+    days. It is persisted on `StackSession.agent_confirm_url` so a lost
+    terminal does not strand a billable project.
+    """
+
+    project: ProvisionedProject
+    access_token: str = Field(alias="accessToken")
+    refresh_token: str = Field(alias="refreshToken")
+    token_type: str = Field(default="Bearer", alias="tokenType")
+    access_token_expires_in: int = Field(default=3600, alias="accessTokenExpiresIn")
+    session_id: str = Field(default="", alias="sessionId")
+    confirm_url: str = Field(default="", alias="confirmUrl")
+    claim_id: str = Field(default="", alias="claimId")
+    backend_init_dispatched_async: bool = Field(default=False, alias="backendInitDispatchedAsync")
+
+    model_config = _WIRE_MODEL_CONFIG
+
+
 class DeviceAuthorization(BaseModel):
     """Response to ``POST /v1/auth/device`` (RFC 8628 device_authorization_response)."""
 
@@ -231,6 +275,13 @@ class StackSession(BaseModel):
     refresh_expires_at: datetime | None = None
     created_at: datetime
     orphaned_session_ids: list[str] = Field(default_factory=list)
+    # Set only on a session minted by `kbagent project create` (agent
+    # provisioning). The single-use link a human must open to take ownership
+    # of the provisioned project -- persisted because it is unrecoverable
+    # once the creating terminal is gone, and the project it unlocks is
+    # billable and, unconfirmed, owned by nobody. Empty for every other
+    # session. `auth status` surfaces it while it is set.
+    agent_confirm_url: str = ""
 
     # Forward compat: a newer kbagent writing an extra field must not break
     # an older kbagent reading the same auth.json.

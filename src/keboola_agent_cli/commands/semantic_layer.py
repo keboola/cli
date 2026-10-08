@@ -24,8 +24,9 @@ from ._helpers import (
     get_service,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
-from ._semantic_layer_helpers import _handle_service_call
+from ._semantic_layer_helpers import ScopeChoice, _handle_service_call, resolve_scope_targets
 from ._semantic_layer_reference_data import reference_data_app
+from ._semantic_layer_scope import scope_app
 
 semantic_layer_app = typer.Typer(
     name="semantic-layer",
@@ -112,10 +113,34 @@ def model_create(
     sql_dialect: str = typer.Option(
         "Snowflake", "--sql-dialect", help="SQL dialect (default: Snowflake)"
     ),
+    scope: ScopeChoice | None = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Visibility: 'project' (default, owner only), 'organization' "
+            "(every project in the org), or 'targeted' (owner + explicit "
+            "--target-project grants)."
+        ),
+    ),
+    target_project: list[str] = typer.Option(
+        [],
+        "--target-project",
+        help=(
+            "Project alias or ID to grant visibility to (repeatable or comma-separated; "
+            "--scope targeted only)."
+        ),
+    ),
 ) -> None:
     """Create a new semantic-layer model."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.model.create",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+    )
     result = _handle_service_call(
         ctx,
         service.create_model,
@@ -123,6 +148,8 @@ def model_create(
         name=name,
         description=description,
         sql_dialect=sql_dialect,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(
         result,
@@ -143,6 +170,7 @@ semantic_layer_app.add_typer(add_app, name="add")
 semantic_layer_app.add_typer(edit_app, name="edit")
 semantic_layer_app.add_typer(remove_app, name="remove")
 semantic_layer_app.add_typer(reference_data_app, name="reference-data")
+semantic_layer_app.add_typer(scope_app, name="scope")
 
 
 @model_app.command("delete")
@@ -531,7 +559,7 @@ def semantic_layer_promote(
     """Promote a model from one project to another (NEW + overwrite CHANGED; never deletes).
 
     Default behaviour: NEW items are POSTed, CHANGED items are
-    DELETE+POSTed, IDENTICAL items are skipped. Items only present in
+    updated in place (scope kept), IDENTICAL items are skipped. Items only present in
     the target are never touched (additive-only).
     """
     formatter = get_formatter(ctx)
@@ -584,7 +612,7 @@ def semantic_layer_import(
         False, "--dry-run", help="Plan the import without calling any write API"
     ),
     overwrite: bool = typer.Option(
-        False, "--overwrite", help="DELETE+POST conflicting items (default: skip)"
+        False, "--overwrite", help="Update conflicting items in place (default: skip)"
     ),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip confirmation (alias for default SKIP behavior)"

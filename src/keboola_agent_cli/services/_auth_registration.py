@@ -24,23 +24,15 @@ from ..config_store import ConfigStore, validate_alias_format
 from ..errors import ConfigError
 from ..models import AppConfig, ProjectConfig, normalize_stack_url
 
-# Command surfaces that refuse a `kbc-session://` project, one entry per
-# `require_static_token` guard outside the Storage/Manage paths (v1 scope).
-# `auth login` / `auth register-projects` disclose this at registration time so
-# the scope is known before the first refusal instead of being discovered one
-# failed command at a time. Keep it in step with the guards; a natural future
-# home is `constants.py`.
+# CLI commands that refuse a kbc-session:// project. After CLI-13 the service
+# clients build a bearer for a session, so almost everything now works with
+# one; only these three keep a static-token guard. `auth login` /
+# `auth register-projects` disclose this list, and it ships as
+# `session_unsupported_features` in --json. Keep it in step with the guards in
+# check_sentinel_guards.py.
 SESSION_UNSUPPORTED_FEATURES: tuple[str, ...] = (
     "kbagent kai",
-    "kbagent semantic-layer (Metastore Service)",
-    "kbagent data-app (Data Science Service)",
-    "kbagent stream (Data Streams Service)",
-    "kbagent sharing, unless a master token is set in the environment",
-    (
-        "AI Service paths: kbagent docs query, config examples, config new, "
-        "component detail/search, flow new/update/validate"
-    ),
-    "Scheduler Service paths: kbagent flow schedule, flow schedule-remove",
+    "kbagent semantic-layer token --encrypt (Metastore Service)",
     "the importable SDK (keboola_agent_cli.Client)",
 )
 
