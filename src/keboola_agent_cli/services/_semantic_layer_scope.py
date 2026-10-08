@@ -52,11 +52,12 @@ def resolve_target_project_ids(
     for target in parse_target_projects(targets):
         project = config_store.get_project(target)
         if project is None:
-            if not target.isdigit():
+            # isascii(): `str.isdigit()` is also true for e.g. '²', which `int()` then rejects.
+            if not (target.isascii() and target.isdigit()) or int(target) == 0:
                 raise KeboolaApiError(
                     message=(
                         f"--target-project {target!r} is neither a registered project alias "
-                        "nor a numeric project ID. See `kbagent project list`."
+                        "nor a positive numeric project ID. See `kbagent project list`."
                     ),
                     error_code=ErrorCode.INVALID_ARGUMENT,
                 )

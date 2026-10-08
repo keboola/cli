@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**255 operations** across **220 paths** and **31 routers**.
+**267 operations** across **226 paths** and **33 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -422,6 +422,32 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 | `DELETE` | `/semantic-layer/scope/{context_id}/target-projects` | Remove target projects |
 | `PUT` | `/semantic-layer/scope/{context_id}/elevation-request` | Request scope elevation |
 | `DELETE` | `/semantic-layer/scope/{context_id}/elevation-request` | Withdraw scope elevation request |
+
+### `rls` (6 operations)
+
+Row-level security policies (metastore-backed `rls-policy` objects), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/rls/{project}` | List RLS policies |
+| `POST` | `/rls/{project}` | Create a RLS policy |
+| `GET` | `/rls/{project}/schema` | Fetch the live rls-policy JSON Schema |
+| `GET` | `/rls/{project}/{policy_id}` | Get one RLS policy |
+| `PATCH` | `/rls/{project}/{policy_id}` | Update a RLS policy |
+| `DELETE` | `/rls/{project}/{policy_id}` | Delete a RLS policy |
+
+### `cls` (6 operations)
+
+Column-level security policies (metastore-backed `cls-policy` objects: a per-principal `visible_columns` allowlist), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/cls/{project}` | List CLS policies |
+| `POST` | `/cls/{project}` | Create a CLS policy |
+| `GET` | `/cls/{project}/schema` | Fetch the live cls-policy JSON Schema |
+| `GET` | `/cls/{project}/{policy_id}` | Get one CLS policy |
+| `PATCH` | `/cls/{project}/{policy_id}` | Update a CLS policy |
+| `DELETE` | `/cls/{project}/{policy_id}` | Delete a CLS policy |
 
 ## AI & Tools
 

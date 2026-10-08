@@ -150,9 +150,11 @@ NOT_AN_ALIAS: dict[str, str] = {
     "--target-project-ids": "already project IDs (sharing share)",
     "--target-project": (
         "semantic-layer: alias OR numeric ID resolved by the service itself (a target need not "
-        "be registered); config clone's --target-project is in ALIAS_OPTIONS"
+        "be registered); config clone's --target-project is in ALIAS_OPTIONS; "
+        "rls/cls create|update: a numeric project ID the policy is granted to, not an alias"
     ),
     "--all-projects": "a boolean flag",
+    "--clear-target-projects": "a boolean flag (rls/cls update): revoke every grant, takes no project",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",
 }

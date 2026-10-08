@@ -1963,6 +1963,104 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   and /items/{{kind}} take `scope` + `target_projects`.
 
 
+### Row-Level Security (RLS)
+
+Author `rls-policy` metastore objects: one object per protected table, a
+declarative condition primitive per rule (never free-text SQL). Policy schema
+1.1.0: a rule selects identities by principal, principals or IdP `groups`;
+within a policy every rule matching one identity applies and the conditions
+combine with OR; several policies on one table combine with AND (an added
+policy only narrows); a reader with no identity is always refused; an
+optional policy `default` covers an identified reader no rule matches
+(absent = refused). Needs an MCP engine that reads 1.1.0. Same
+metastore/master-token requirements as Semantic Layer above.
+**Scope**: `targeted` by default (the owning project plus --target-project
+grants); `--scope organization` governs the table in EVERY project of the
+organization (destructive-class, organization-admin only) -- use it only
+when the user asks for org-wide. There is NO project scope. A project admin
+may write `targeted` policies of its own project without grants; grants and
+organization scope need the organization-admin role (403 otherwise).
+Enforced only where the project has the `row-level-security` feature.
+Writes refuse a dialect other than the project backend (the enforcement
+would refuse every read of that table). A stack whose metastore predates the
+`rls-policy`/`cls-policy` schemas answers `rls schema` with a classified
+NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
+Enforcement (the actual SQL rewrite) happens in `keboola-mcp-server`'s
+`query_data`, not here -- kbagent only authors policies.
+
+  kbagent rls list --project P
+    List RLS policies visible to -- and applied in -- a project (id, table,
+    dialect, rule_count, scope, owner_project_id, target_project_ids).
+
+  kbagent rls detail --project P --policy-id ID
+    Full rule set for one policy.
+
+  kbagent rls schema --project P
+    Live rls-policy JSON Schema fetched from the metastore. No offline
+    bundled snapshot (unlike `flow schema`) -- always live-only.
+
+  kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+    Create one policy for one table. --rules is a JSON array of
+    {{principal|principals|groups, condition}} objects -- condition is a
+    primitive tree (column/op/value, in/not_in, is_null/is_not_null, and/or
+    nesting, `{{"true": true}}` or `{{"false": true}}`), never a raw predicate
+    string; use is_null, never value null; `value: {{"$identity": "email"}}`
+    / `values: {{"$identity": "groups"}}` are resolved per reader. --default
+    (e.g. `{{"false": true}}` = no rows) covers identities no rule matches.
+    --dialect defaults to the project backend.
+    --target-project (alias or ID, repeatable or comma-separated) grants
+    other projects in the create request. --dry-run previews the compiled
+    condition (columns quoted like the enforcement) without writing.
+
+  kbagent rls update --project P --policy-id ID [--table-id ...] [--dialect ...] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+    Partial update (PATCH of the changed keys only); the merged policy is
+    validated first and the result is re-read after the write. A default
+    cannot be removed by an update -- recreate the policy.
+
+  kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
+    Delete a policy, un-protecting its table (destructive-class).
+
+  kbagent rls setup --project P [--dialect D] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
+    Guided, INTERACTIVE-TERMINAL-ONLY wizard: checkbox table picker (reuses
+    `storage tables`), then either the interactive column/op/value condition
+    builder or the same --rules escape hatch `create` takes, then a preview
+    + confirm, then one `rls create` call per selected table. Under --json or
+    without an interactive terminal it exits 2 (INVALID_ARGUMENT) pointing at
+    `rls create`.
+
+### Column-Level Security (CLS)
+
+Author `cls-policy` metastore objects: one object per protected table, a
+`visible_columns` allowlist per rule (unlisted columns are omitted from
+that identity's result; masking is not supported). Rules select by
+principal, principals or `groups`; within a policy an identity several rules
+match sees the union of their columns, several policies intersect; there is
+no `default`. Sibling of RLS above --
+same scope default, permissions, checks and partial update; no `setup`
+wizard. `query_data` in `keboola-mcp-server` composes RLS and CLS; a
+principal with no rule for a governed table is refused there.
+
+  kbagent cls list --project P
+    List CLS policies visible to a project.
+
+  kbagent cls detail --project P --policy-id ID
+    Full rule set for one policy.
+
+  kbagent cls schema --project P
+    Live cls-policy JSON Schema from the metastore (live-only).
+
+  kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+    Create one policy for one table. --rules is a JSON array of
+    {{principal|principals|groups, visible_columns: [col, ...]}} objects.
+    --dry-run prints each selector's allowed projection without writing.
+
+  kbagent cls update --project P --policy-id ID [--table-id ...] [--dialect ...] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+    Partial update, same as `rls update`.
+
+  kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
+    Delete a policy; its table's columns become unrestricted.
+
+
 ### Self-call HTTP (inside `kbagent serve` subprocesses)
 
   kbagent http get PATH [--timeout SECONDS]

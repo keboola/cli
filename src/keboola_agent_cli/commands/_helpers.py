@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ from ..constants import (
     EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
-from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
 
 
@@ -183,6 +184,35 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     if exc.error_code == "JOB_TIMEOUT_TERMINATED":
         return EXIT_JOB_TIMEOUT_TERMINATED
     return 1
+
+
+def exit_code_for(exc: ConfigError | KeboolaApiError) -> int:
+    """The CLI exit code for a service error: config 5, a bad option value 2, else by error code."""
+    if isinstance(exc, ConfigError):
+        return 5
+    if exc.error_code == ErrorCode.INVALID_ARGUMENT:
+        return 2
+    return map_error_to_exit_code(exc)
+
+
+def handle_service_call[T](
+    ctx: typer.Context, func: Callable[..., T], *args: Any, **kwargs: Any
+) -> T:
+    """Run a service call; a ``ConfigError`` / ``KeboolaApiError`` becomes a formatted error + exit."""
+    formatter = get_formatter(ctx)
+    try:
+        return func(*args, **kwargs)
+    except ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=exit_code_for(exc)) from None
+    except KeboolaApiError as exc:
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+        raise typer.Exit(code=exit_code_for(exc)) from None
 
 
 def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:

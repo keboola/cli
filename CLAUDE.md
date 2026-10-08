@@ -1142,6 +1142,58 @@ kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 #   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
 #   ATX headings).
 
+kbagent rls list --project P
+kbagent rls detail --project P --policy-id ID
+kbagent rls schema --project P
+kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
+kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
+# rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
+#   one object per protected table, named by it). SCOPE: `targeted` by default (the schema's own
+#   default: the owning project plus --target-project grants); `--scope organization` governs the
+#   table in EVERY project of the org (the enforcement applies every listed policy) and is
+#   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
+#   write `targeted` policies of its own project without grants; grants and organization scope
+#   need the organization-admin role (403 otherwise). Enforced only where the project has the
+#   `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
+#   identities by principal, principals or IdP `groups`; within a policy every rule matching one
+#   identity applies and the conditions combine with OR; several policies on one table combine
+#   with AND (an added policy only narrows); a reader with no identity is always refused;
+#   `--default` is the condition for an identified reader no rule matches (absent = refused;
+#   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
+#   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the
+#   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
+#   {principal|principals|groups, condition}; condition is a declarative primitive tree
+#   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
+#   or {"false": true}) -- never a free-text predicate; a null comparison is refused (use
+#   is_null); `value: {"$identity": "email"}` / `values: {"$identity": "groups"}` are resolved
+#   per reader by the enforcement. `update` reads the policy, validates the MERGED result, then PATCHes
+#   only the changed keys (grants first); the result is re-read. `delete` is destructive-class.
+#   `--dry-run` previews with columns quoted like the enforcement (keboola-mcp-server
+#   `query_data`), but it is not the enforcement. `rls setup` is interactive-terminal-only
+#   (under --json / no TTY: INVALID_ARGUMENT, exit 2) and has no REST route. REST: POST
+#   /rls/{project}, PATCH /rls/{project}/{policy_id}, DELETE ...?dry_run=; body field
+#   `target_projects` (alias or ID). A stack whose metastore predates the schemas answers
+#   NOT_FOUND. New error code: INVALID_RLS_POLICY. Version gate for this whole entry lives in
+#   gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines
+#   (check_version_gates.py parses them as ATX markdown headings).
+
+kbagent cls list --project P
+kbagent cls detail --project P --policy-id ID
+kbagent cls schema --project P
+kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent cls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
+# cls: column-level security policy authoring (`cls-policy` object type, one object per
+#   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
+#   partial update and permission classes. --rules is a JSON array of
+#   {principal|principals|groups, visible_columns: [col, ...]} objects -- an allowlist projection
+#   (masking is not supported); within a policy an identity several rules match sees the union
+#   of their columns, several policies intersect; no `--default`. `--dry-run` prints each selector's projection. No `setup`
+#   wizard; the REST routes under /cls/{project} mirror /rls.
+#   New error code: INVALID_CLS_POLICY. Version gate lives in gotchas.md.
+
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
 kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]

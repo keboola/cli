@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import ClassVar
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,6 +18,8 @@ from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.metastore_client import (
     SEMANTIC_TYPES,
     MetastoreClient,
+    ResolvedSchema,
+    fetch_resolved_schema,
 )
 
 STACK_URL_US = "https://connection.keboola.com"
@@ -269,6 +272,48 @@ class TestDeleteItem:
         assert excinfo.value.error_code == ErrorCode.NOT_FOUND
 
 
+class TestPatchItem:
+    """patch_item sends only the given fields -- the server merges them into the stored record."""
+
+    _URL = f"{METASTORE_URL_US}/api/v1/repository/rls-policy/p-1"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "body"),
+        [
+            ({"data": {"rules": []}}, {"data": {"rules": []}}),
+            ({"name": "t.x", "data": {"table": "t.x"}}, {"name": "t.x", "data": {"table": "t.x"}}),
+        ],
+    )
+    def test_sends_only_the_given_fields(self, httpx_mock, kwargs: dict, body: dict) -> None:
+        httpx_mock.add_response(
+            method="PATCH", url=self._URL, json={"data": {"id": "p-1"}}, status_code=200
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            stored = client.patch_item("rls-policy", "p-1", **kwargs)
+        finally:
+            client.close()
+        assert stored == {"id": "p-1"}
+        request = httpx_mock.get_requests()[0]
+        assert request.method == "PATCH"
+        assert json.loads(request.content) == body  # never scope, branch or unchanged keys
+
+    @pytest.mark.parametrize(
+        ("status", "code"), [(409, ErrorCode.ALREADY_EXISTS), (404, ErrorCode.NOT_FOUND)]
+    )
+    def test_errors_are_classified(self, httpx_mock, status: int, code: ErrorCode) -> None:
+        httpx_mock.add_response(
+            method="PATCH", url=self._URL, json={"error": "x"}, status_code=status
+        )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.patch_item("rls-policy", "p-1", name="t.x", data={"table": "t.x"})
+        finally:
+            client.close()
+        assert excinfo.value.error_code == code
+
+
 class TestPutItem:
     """put_item wraps the same envelope as post_item but targets PUT /{type}/{id}."""
 
@@ -339,6 +384,8 @@ class TestSemanticTypes:
             "semantic-constraint",
             "semantic-glossary",
             "semantic-reference-data",
+            "rls-policy",
+            "cls-policy",
         }
 
 
@@ -725,3 +772,36 @@ class TestListOrganizationItems:
             status_code=200,
         )
         assert metastore_client.list_organization_items("semantic-model") == []
+
+
+class TestFetchResolvedSchema:
+    """`fetch_resolved_schema`: the bare schema endpoint is only a version listing."""
+
+    @staticmethod
+    def _client(*responses: dict) -> MagicMock:
+        client = MagicMock()
+        client.get_schema.side_effect = list(responses)
+        return client
+
+    def test_fetches_the_default_version(self) -> None:
+        listing = {"versions": [{"version": "0.9.0"}, {"version": "1.0.0", "isDefault": True}]}
+        client = self._client(listing, {"title": "real"})
+
+        resolved = fetch_resolved_schema(client, "rls-policy")
+
+        assert (resolved.schema, resolved.version) == ({"title": "real"}, "1.0.0")
+        assert client.get_schema.call_args_list[1].kwargs == {"version": "1.0.0"}
+
+    def test_falls_back_to_the_first_version_without_a_default(self) -> None:
+        client = self._client({"versions": [{"version": "2.0.0"}, {"version": "1.0.0"}]}, {"t": 1})
+
+        assert fetch_resolved_schema(client, "cls-policy") == ResolvedSchema({"t": 1}, "2.0.0")
+
+    @pytest.mark.parametrize(
+        "body", [{"title": "direct"}, {"versions": []}, {"versions": [{"isDefault": True}]}]
+    )
+    def test_passes_through_when_nothing_to_resolve(self, body: dict) -> None:
+        client = self._client(body)
+
+        assert fetch_resolved_schema(client, "rls-policy") == ResolvedSchema(body, None)
+        client.get_schema.assert_called_once_with("rls-policy")
