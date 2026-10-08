@@ -197,8 +197,8 @@ def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
         formatter.warning(f"Project '{alias}': {message}")
 
 
-def exit_on_item_failures(count: int) -> None:
-    """Exit non-zero when a multi-item operation had per-item failures.
+def item_failure_exit_code(failed: int) -> int | None:
+    """Map the number of failed items of a multi-item operation to a CLI exit code.
 
     Commands that keep going after one item fails (a config in ``sync push``,
     a project in ``org setup``, a row in ``project invite --from-csv``) used to
@@ -206,15 +206,17 @@ def exit_on_item_failures(count: int) -> None:
     every item failed was indistinguishable from a clean one by exit code
     alone, and a script could not tell success from total failure (issue #745).
 
-    ``count`` is the number of failed items; 0 returns without raising. The
-    exit code follows the convention already used by the bulk storage
-    commands (``storage delete-table``, ``file-tag``, ``describe-migrate``):
-    any per-item failure is a general error, exit 1. Call this AFTER the
-    result has been emitted so JSON callers still receive the full payload,
-    including the per-item error detail.
+    Returns ``None`` when ``failed`` is 0, else 1: the convention already used
+    by the bulk storage commands (``storage delete-table``, ``file-tag``,
+    ``describe-migrate``). Like :func:`map_error_to_exit_code` it only maps;
+    the caller raises ``typer.Exit`` AFTER the result has been emitted, so
+    JSON callers still receive the full payload with the per-item errors. A
+    ``--dry-run`` that reports a failed item exits 1 like the real run.
     """
-    if count:
-        raise typer.Exit(code=1)
+    if not failed:
+        return None
+    telemetry.note_command_error(f"{failed} item(s) failed")
+    return 1
 
 
 def _is_help_request(ctx: typer.Context) -> bool:

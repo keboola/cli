@@ -474,6 +474,18 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   projects succeed. Branch on the code, never on the message. The fan-out
   readers work on a session now, so a per-project `AUTH_NOT_SUPPORTED_ON_STACK`
   comes only from one of the three static-only features.
+- **Exit 1 with a full `--json` payload = a partial failure (vNEXT+, #745)**:
+  a write that keeps going after one item fails (`sync push`, `sync clone`,
+  `sync push/pull/diff --all-projects`, `org setup`, `project refresh`,
+  `project invite --from-csv`, `workspace gc`, `semantic-layer
+  import/promote/build`, `flow schedule-remove`, ...) exits 1 when any item
+  failed. The items that succeeded ARE written: read `errors[]` /
+  `projects_failed` / `failed` / `summary.failed` and retry only the failed
+  items, never the whole command blind. A `--dry-run` of these exits 1 when it
+  reports a failed item, like the real run. Other read-only fan-outs
+  (`billing credits`, `job list`, ...) still exit 0.
+  On 0.97.0 and older these writes exit 0 even when items failed: check the
+  same keys.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`
   does not override). A refresh TIMEOUT is exit 4 (network) -- re-run, do not
   re-login.

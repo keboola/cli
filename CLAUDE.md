@@ -1007,18 +1007,22 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
-# Partial failures now change the exit code (#745): `sync push`, `sync clone`,
-#   `sync pull/push/diff --all-projects`, `org setup` and `project invite --from-csv`
-#   collect per-item failures and keep going -- but a run with at least one failure now
-#   exits 1 instead of 0, and the human headline states the failed count instead of
-#   printing a green `Success:`. `--json` is unchanged: the full payload (with the
-#   per-item `errors` / `projects_failed` / `failed`) is emitted BEFORE the non-zero
-#   exit, so parse it and then branch on the exit code. Read-only multi-project
-#   fan-outs (`billing credits`, `job list`, `schedule list`, `notification list`) are
-#   deliberately NOT included -- they document per-project degradation as intended and
-#   still exit 0. Version gate for this entry lives in gotchas.md -- the placeholder
-#   cannot be written on these `# ` comment lines (check_version_gates.py parses them
-#   as ATX markdown headings).
+# Partial failures change the exit code (#745): commands that collect per-item failures
+#   and keep going exit 1 (was 0) when at least one item failed:
+#   `sync push`, `sync push/pull/diff --all-projects`, `sync clone` (also `bucket_errors`),
+#   `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`,
+#   `semantic-layer import/promote/build/edit metric`, `storage describe-batch --json`,
+#   `flow schedule-remove` (new `errors[]`). The human headline starts with `Failed:` and
+#   states the failed count instead of a green `Success:`; the `--all-projects` variants
+#   state it in their summary line. `sync push --all-projects` counts a project
+#   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
+#   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
+#   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
+#   exits 1 when a project failed. Other read-only fan-outs (`billing credits`, `job list`,
+#   `schedule list`, ...) still exit 0. The helper is `item_failure_exit_code()` in
+#   commands/_helpers.py (returns the code, the caller raises). Version gate for this
+#   entry lives in gotchas.md -- the placeholder cannot be written on these `# ` comment
+#   lines (check_version_gates.py parses them as ATX markdown headings).
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent

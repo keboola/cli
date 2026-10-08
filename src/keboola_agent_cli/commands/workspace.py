@@ -25,6 +25,7 @@ from ._helpers import (
     emit_project_warnings,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
 )
 
@@ -648,6 +649,11 @@ def workspace_gc(
                 formatter.console.print(
                     f"  [red]error[/red] workspace {err.get('workspace_id', '?')}: {escape(err.get('error', ''))}"
                 )
+
+    # A workspace that could not be deleted, or a project that could not be
+    # listed, is collected in errors[]; the run is then not a success (#745).
+    if code := item_failure_exit_code(len(result.get("errors", []))):
+        raise typer.Exit(code=code)
 
 
 @workspace_app.command("from-transformation")

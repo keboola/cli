@@ -12,9 +12,9 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
-    exit_on_item_failures,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
 )
@@ -245,6 +245,9 @@ def org_setup(
         would_skip = len(preview.get("projects_skipped", []))
         if would_add == 0 and not (refresh and would_skip > 0):
             formatter.console.print("\nNo new projects to add.")
+            # The preview is the whole run here: its failed projects are real (#745).
+            if code := item_failure_exit_code(len(preview.get("projects_failed", []))):
+                raise typer.Exit(code=code)
             return
 
         if would_add > 0 and not typer.confirm(f"\nProceed to add {would_add} project(s)?"):
@@ -283,7 +286,8 @@ def org_setup(
 
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
-    exit_on_item_failures(len(result.get("projects_failed", [])))
+    if code := item_failure_exit_code(len(result.get("projects_failed", []))):
+        raise typer.Exit(code=code)
 
 
 def _handle_api_error(formatter, exc: KeboolaApiError) -> None:

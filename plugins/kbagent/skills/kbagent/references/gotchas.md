@@ -3541,7 +3541,8 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
   inspect `errors[]` (or at least `error_count`) rather than relying solely on
-  the exit code — and when consuming `--json` output, never trust a zero-exit
+  the exit code. *(since vNEXT)* `--json` also exits 1 when `error_count > 0`;
+  on 0.97.0 and older it exited 0 even then, so there never trust a zero-exit
   as "everything applied." That tolerance covers **API** failures only: a
   `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
@@ -5851,37 +5852,65 @@ examples. Surprises worth knowing before you touch this:
 
 ## A partial failure is no longer reported as success
 
-*(since vNEXT, closes #745)* Commands that survive a per-item failure used to print a fixed
-green `Success:` line and exit **0** regardless. The failures were listed
-underneath as warnings. A `sync clone` where **every** config failed reported
-`Success ... 0 created` and exit 0; a `sync push` where half the configs failed
-reported success too. Nothing in the exit code distinguished a clean run from a
-total failure, so no script could branch on it -- a person had to read the
-`created` count and count the warning lines.
+*(since vNEXT, closes #745)* A command that keeps going after one item fails
+used to print a green `Success:` line and exit **0**, with the failures only as
+warnings below it. A `sync clone` where every config failed reported
+`Success ... 0 created` and exit 0. A script could not tell a clean run from a
+total failure by the exit code.
 
-Now, whenever at least one item failed:
+Now, when at least one item failed:
 
 - the exit code is **1** (the convention `storage delete-table`,
   `storage file-tag` and `storage describe-migrate` already used);
-- the human headline states the failure instead of claiming success --
-  `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed` -- so the failed
-  count is in the main line, not only in the warnings below it;
-- `--json` output is **unchanged**: the full payload, including the per-item
-  `errors` array, is emitted first and the non-zero exit is raised after it.
-  Parse the payload, then check the exit code -- never treat exit 1 here as
-  "no output".
+- the human headline starts with `Failed:` and states the failed count, for
+  example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`;
+- `--json` output is unchanged and is emitted before the exit. Parse the
+  payload, then check the exit code. Exit 1 here does not mean that nothing
+  was written: the items that succeeded stay written, so read the payload
+  before you run the command again.
 
-Commands changed: `sync push`, `sync clone`, `sync pull/push/diff
---all-projects` (a project in the fan-out that errored), `org setup`
-(`projects_failed`), `project invite --from-csv` (`failed`).
+Commands whose exit code changes from 0 to 1 (the key that holds the failures):
 
-- **A clean run is untouched**: no failures still means the green success line
-  and exit 0. `no_changes` and `--dry-run` results are not failures.
-- **Read-only fan-outs are deliberately NOT included.** `billing credits`,
-  `job list`, `schedule list`, `notification list` and the other multi-project
-  reads document per-project degradation as intended behavior -- one
-  unreachable project must not fail the whole read. They still exit 0 and
-  report the per-project error in `errors`. Check that array, not the exit code.
-- **On 0.93.0 and older**: do not trust exit 0 from these commands. Parse
-  `--json` and assert `errors == []` (or `projects_failed` / `failed` == 0)
-  before reporting the operation as successful.
+- `sync push` (`errors[]`);
+- `sync push --all-projects` (`summary.failed`). `summary.failed` now also
+  counts a project whose push returned a non-empty `errors[]`; before, that
+  project counted in `summary.success` and its line read `OK`. Its line is now
+  marked `x` and states the failed count;
+- `sync pull --all-projects` (`summary.failed`);
+- `sync clone` (`errors[]` and `bucket_errors[]`);
+- `org setup` (`projects_failed`);
+- `project refresh` (`projects_failed`);
+- `project invite --from-csv` (`failed`);
+- `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
+  that could not be listed);
+- `semantic-layer import` / `semantic-layer promote` (`failed[]` of each type);
+- `semantic-layer build` (`fetch_errors[]`: a table left out of the model
+  because its schema could not be read; human mode now lists these tables);
+- `semantic-layer edit metric --new-name` (a `cascaded_constraints[]` entry
+  with `status: "failed"`);
+- `storage describe-batch --json` (`errors[]`; human mode already exited 1);
+- `flow schedule-remove` (`errors[]`, a new key: a schedule whose delete
+  failed while other schedules were deleted. Before, that failure was dropped
+  and the command printed `Success: Removed N schedule(s)`).
+
+`storage describe-migrate` keeps its exit code; its human headline now starts
+with `Failed:` too.
+
+A `--dry-run` of every command above exits 1 when it reports a failed item,
+like the real run. `sync diff --all-projects` also exits 1 when a project
+failed (`summary.failed > 0`); a read that fails is still a failure.
+
+Not failures (exit 0, as before):
+
+- a clean run and a `no_changes` result;
+- other read-only fan-outs, where one unreachable project must not fail the
+  whole read: `billing credits`, `job list`, `schedule list`, `notification list`, `config list`,
+  `storage tables` and the other multi-project reads (check `errors[]`);
+- one item with a documented partial outcome: `flow schedule`
+  (`activated: false`), `notification replace-recipient`
+  (`old_deleted: false`);
+- `semantic-layer build` `type_resolution_errors[]`: the table stays in the
+  model, and its columns without a type are classified as dimensions.
+
+On 0.97.0 and older, exit 0 from these commands does not prove success. Parse
+`--json` and check the keys above before you report the operation as done.

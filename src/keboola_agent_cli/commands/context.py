@@ -2443,14 +2443,23 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 When you receive a non-zero exit code, use --json to get structured error details.
 
 Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
-item fails -- sync push, sync clone, sync pull/push/diff --all-projects, org
-setup, project invite --from-csv, and the bulk storage commands -- exit 1 when
-at least one item failed, and their human headline states the failed count
-instead of printing a green "Success:". The --json payload is still emitted in
-full (with the per-item errors / projects_failed / failed), BEFORE the non-zero
-exit, so parse it and then branch on the exit code -- exit 1 here never means
-"no output". Read-only multi-project fan-outs (billing credits, job list,
-schedule list, notification list) are the deliberate exception: a per-project
+item fails exit 1 when at least one item failed: sync push, sync
+push/pull/diff --all-projects, sync clone, org setup, project refresh,
+project invite --from-csv, workspace gc, semantic-layer
+import/promote/build/edit metric, storage describe-batch, flow
+schedule-remove. Their human headline starts with "Failed:" and states the
+failed count; the --all-projects variants state it in the summary line
+instead. The bulk storage commands
+(delete-table, delete-bucket, file-delete, describe-migrate, ...) already
+exited 1. The --json payload is still emitted in full (errors / projects_failed
+/ failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
+branch on the exit code. Exit 1 here does not mean nothing was written: the
+items that succeeded stay written, so read the payload before you run the
+command again. A --dry-run of these commands exits 1 when it reports a failed
+item, like the real run. sync diff --all-projects also exits 1 when a project
+failed.
+Other read-only multi-project fan-outs (billing credits, job list, schedule
+list, notification list, ...) are the deliberate exception: a per-project
 failure there degrades that project only and still exits 0, so check their
 errors array rather than the exit code.
 

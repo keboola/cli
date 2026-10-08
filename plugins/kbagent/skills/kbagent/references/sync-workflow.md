@@ -67,6 +67,8 @@ kbagent sync push --all-projects             # apply
 
 Each project gets its own subdirectory (named by alias). Projects are processed in parallel.
 
+A project that fails does not stop the others. *(since vNEXT)* `sync pull --all-projects` and `sync push --all-projects` then exit 1, and push counts a project whose push returned per-config `errors[]` as failed (its line is marked `x`, not `OK`). `sync diff --all-projects` exits 1 too when a project failed (`summary.failed`). A `--dry-run` exits 1 when it reports a failed project, like the real run.
+
 ## Reconciling a drifted tree with production (since v0.72.0)
 
 When production was edited directly (by people or other tooling) and the local
