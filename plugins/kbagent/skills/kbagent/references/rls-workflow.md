@@ -35,12 +35,15 @@ deletes the policy objects the enforcement engine reads.
 the `row-level-security` project feature (it gates CLS too). Without it, queries
 are unfiltered -- not an error.
 
-**How rules combine (policy schema 1.1.0, the metastore default).** A rule
-selects identities by `principal`, `principals` or IdP `groups`. Every rule
-that matches the reader applies: RLS conditions combine with OR, CLS
-`visible_columns` are united. An RLS policy may set a `default` condition for
-readers no rule matches; without one, their reads are refused. 1.1.0 is a
-superset of 1.0.0 -- every older policy keeps its meaning.
+**How rules combine (policy schema 1.1.0, the metastore default; since vNEXT).** A
+rule selects identities by `principal`, `principals` or IdP `groups`. Within a
+policy, every rule that matches the reader applies: RLS conditions combine with
+OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition
+for an identified reader no rule matches; without one, the policy refuses the
+read. Several policies on one table combine with AND (CLS: intersection), so an
+added policy can only narrow access, never widen it. A reader with no identity
+is always refused. 1.1.0 is a superset of 1.0.0 -- every older policy keeps its
+meaning. Needs a `keboola-mcp-server` whose engine reads schema 1.1.0 (keboola/mcp-server#709): an older engine refuses a policy that uses `groups`, `$identity`, a `default` or `{"false": true}`, and refuses every query of the project when one principal has two rules.
 
 **Dialect.** A policy whose `dialect` differs from the reading workspace makes
 the enforcement refuse every read of that table. `--dialect` defaults to the
@@ -229,6 +232,8 @@ meant," not as proof of what will be enforced.
 
 ## Workflow 4b -- Groups, a default and identity placeholders (schema 1.1.0)
 
+*(since vNEXT)*
+
 One policy for many readers instead of one rule per person. Groups are the IdP
 `groups` claim strings exactly as delivered (Entra may deliver object ids);
 Keboola never manages membership.
@@ -360,12 +365,12 @@ kbagent --json rls schema --project prod
 
 ## Column-Level Security (CLS)
 
-`kbagent cls` authors `cls-policy` objects: one per protected table, each rule naming a
-principal and the `visible_columns` that principal may read (an allowlist -- unlisted
-columns are omitted from the result; masking is not supported). It mirrors `rls`
-(`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same scope rule and
-default, the same write permissions, dialect check, duplicate-principal check,
-`--dry-run`/`--yes` flags and partial `update`; there is no `cls setup` wizard.
+`kbagent cls` authors `cls-policy` objects: one per protected table, each rule a selector
+(`principal`, `principals` or IdP `groups`) and the `visible_columns` those readers may see
+(an allowlist -- unlisted columns are omitted from the result; masking is not supported).
+It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same
+scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
+flags and partial `update`; there is no `cls setup` wizard and no `default`.
 Enforcement and RLS+CLS composition happen in `keboola-mcp-server`'s `query_data`,
 gated by the same `row-level-security` feature.
 
@@ -387,4 +392,5 @@ kbagent cls delete --project prod --policy-id <id> --yes
 - `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `principal`/`principals`/
   `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
   no `default`, plus the live JSON Schema). Nothing was written.
-- An identity several CLS rules match sees the union of their `visible_columns`.
+- Within one CLS policy, an identity several rules match sees the union of their
+  `visible_columns`; several CLS policies on one table intersect (since vNEXT).

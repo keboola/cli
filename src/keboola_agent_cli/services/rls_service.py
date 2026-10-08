@@ -20,10 +20,11 @@ WITHOUT target projects; granting target projects and ``organization`` scope
 need the organization-admin role.
 
 Policy schema 1.1.0 (the metastore default): a rule selects identities by
-``principal``, ``principals`` or IdP ``groups``; every rule matching one
-identity applies and the conditions combine with OR (so one identity in
-several rules is fine); an RLS ``default`` condition covers identities no rule
-matches (absent = the read is refused). A dialect other than the project
+``principal``, ``principals`` or IdP ``groups``; within a policy every rule
+matching one identity applies and the conditions combine with OR (so one
+identity in several rules is fine); several policies on one table combine
+with AND, so an added policy can only narrow access; an RLS ``default``
+covers an identified reader no rule matches (absent = the read is refused). A dialect other than the project
 backend makes the enforcement refuse reads of that table, so it is refused
 here before any write.
 

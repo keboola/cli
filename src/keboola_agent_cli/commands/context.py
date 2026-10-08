@@ -1968,9 +1968,11 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per rule (never free-text SQL). Policy schema
 1.1.0: a rule selects identities by principal, principals or IdP `groups`;
-every rule matching one identity applies and the conditions combine with OR;
-an optional policy `default` covers identities no rule matches (absent =
-refused). Same
+within a policy every rule matching one identity applies and the conditions
+combine with OR; several policies on one table combine with AND (an added
+policy only narrows); a reader with no identity is always refused; an
+optional policy `default` covers an identified reader no rule matches
+(absent = refused). Needs an MCP engine that reads 1.1.0. Same
 metastore/master-token requirements as Semantic Layer above.
 **Scope**: `targeted` by default (the owning project plus --target-project
 grants); `--scope organization` governs the table in EVERY project of the
@@ -2031,8 +2033,9 @@ Enforcement (the actual SQL rewrite) happens in `keboola-mcp-server`'s
 Author `cls-policy` metastore objects: one object per protected table, a
 `visible_columns` allowlist per rule (unlisted columns are omitted from
 that identity's result; masking is not supported). Rules select by
-principal, principals or `groups`; an identity several rules match sees the
-union of their columns; there is no `default`. Sibling of RLS above --
+principal, principals or `groups`; within a policy an identity several rules
+match sees the union of their columns, several policies intersect; there is
+no `default`. Sibling of RLS above --
 same scope default, permissions, checks and partial update; no `setup`
 wizard. `query_data` in `keboola-mcp-server` composes RLS and CLS; a
 principal with no rule for a governed table is refused there.

@@ -1157,10 +1157,12 @@ kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file
 #   write `targeted` policies of its own project without grants; grants and organization scope
 #   need the organization-admin role (403 otherwise). Enforced only where the project has the
 #   `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
-#   identities by principal, principals or IdP `groups`; every rule matching one identity applies
-#   and the conditions combine with OR; `--default` is the condition for identities no rule
-#   matches (absent = refused; {"false": true} = no rows; to remove a default, recreate the
-#   policy). Writes refuse a --dialect other than the project backend (it defaults to the
+#   identities by principal, principals or IdP `groups`; within a policy every rule matching one
+#   identity applies and the conditions combine with OR; several policies on one table combine
+#   with AND (an added policy only narrows); a reader with no identity is always refused;
+#   `--default` is the condition for an identified reader no rule matches (absent = refused;
+#   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
+#   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the
 #   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
 #   {principal|principals|groups, condition}; condition is a declarative primitive tree
 #   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
@@ -1187,8 +1189,8 @@ kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
 #   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
 #   partial update and permission classes. --rules is a JSON array of
 #   {principal|principals|groups, visible_columns: [col, ...]} objects -- an allowlist projection
-#   (masking is not supported); an identity several rules match sees the union of their
-#   columns; no `--default`. `--dry-run` prints each selector's projection. No `setup`
+#   (masking is not supported); within a policy an identity several rules match sees the union
+#   of their columns, several policies intersect; no `--default`. `--dry-run` prints each selector's projection. No `setup`
 #   wizard; the REST routes under /cls/{project} mirror /rls.
 #   New error code: INVALID_CLS_POLICY. Version gate lives in gotchas.md.
 

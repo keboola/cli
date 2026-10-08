@@ -5873,9 +5873,11 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   (`ACCESS_DENIED`). A project admin reads only the policies its project owns. Policies are enforced only
   where the consuming project has the `row-level-security` feature.
 - **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
-  `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Every rule matching
-  one identity applies: RLS conditions combine with OR, CLS `visible_columns` are united -- so one
-  identity in several rules (or policies) is no longer an error. RLS `--default` is the condition for
+  `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
+  every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are
+  united -- so one identity in several rules is no longer an error. Several policies on one table combine
+  with AND (CLS: intersection), so an added policy can only narrow access; a reader with no identity is
+  always refused. Needs a `keboola-mcp-server` whose engine reads schema 1.1.0 (keboola/mcp-server#709): an older engine refuses a policy that uses `groups`, `$identity`, a `default` or `{"false": true}`, and refuses every query of the project when one principal has two rules. RLS `--default` is the condition for
   identities no rule matches (absent = refused; `{"false": true}` = no rows); an `update` cannot remove a
   default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
   resolved per reader by the enforcement. `dialect` is optional in the schema; kbagent still sends the
