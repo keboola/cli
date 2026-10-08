@@ -386,45 +386,100 @@ class TestCreatePolicy:
         assert result["preview"][0]["condition"] == "\"region\" = 'EU'"
 
 
-class TestDuplicatePrincipals:
-    """One principal with two rules on one table makes the enforcement refuse every query."""
+class TestSchema110:
+    """Policy schema 1.1.0: groups, OR-combined rules, `default`, the false sentinel, `$identity`."""
 
-    def test_within_one_policy_case_insensitively(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        rules = [
-            {"principal": "a@x.com", "condition": {"true": True}},
-            {"principals": ["b@x.com", "A@X.com"], "condition": {"true": True}},
-        ]
-
-        with pytest.raises(KeboolaApiError, match=r"'A@X.com' already has a rule in rules\[0\]"):
-            service.create_policy("prod", table="t.x", rules=rules, dry_run=True)
-
-        mock.post_item.assert_not_called()
-
-    def test_across_policies_on_the_same_table(self, tmp_path: Path) -> None:
-        service, mock = _make_service(_make_store(tmp_path))
-        # Snowflake table keys compare case-insensitively.
-        mock.list_items.return_value = [_policy_item(item_id="other", table="IN.C-CRM.T")]
-
-        with pytest.raises(KeboolaApiError, match="already has a rule in policy other"):
-            service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
-
-        mock.post_item.assert_not_called()
-
-    def test_policies_on_other_tables_and_the_policy_itself_do_not_count(
-        self, tmp_path: Path
-    ) -> None:
+    def test_one_identity_in_several_rules_is_accepted(self, tmp_path: Path) -> None:
+        """The 1.1.0 engine ORs the conditions of every rule an identity matches."""
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
-        mock.list_items.return_value = [
-            _policy_item(item_id="other", table="in.c-crm.other"),
-            _policy_item(item_id="p-1", table="in.c-crm.invoices"),
+        mock.post_item.return_value = _policy_item()
+        rules = [
+            {"principal": "a@x.com", "condition": {"column": "r", "op": "eq", "value": "EU"}},
+            {"principals": ["A@X.com"], "condition": {"column": "r", "op": "eq", "value": "US"}},
         ]
-        mock.get_item.return_value = _policy_item(item_id="p-1")
 
-        service.update_policy("prod", "p-1", rules=_RULES)
+        service.create_policy("prod", table="t.x", rules=rules)
 
-        mock.patch_item.assert_called_once()
+        mock.post_item.assert_called_once()
+        mock.list_items.assert_not_called()  # no cross-policy principal scan any more
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {"groups": ["sales-eu", "Sales EU"], "condition": {"true": True}},
+            {"groups": ["g"], "condition": {"false": True}},
+            {
+                "groups": ["g"],
+                "condition": {"column": "o", "op": "eq", "value": {"$identity": "email"}},
+            },
+            {
+                "groups": ["g"],
+                "condition": {"column": "t", "op": "in", "values": {"$identity": "groups"}},
+            },
+        ],
+    )
+    def test_valid_110_rules(self, rule: dict) -> None:
+        assert validate_rules_local([rule]) == []
+
+    @pytest.mark.parametrize(
+        ("rule", "fragment"),
+        [
+            ({"groups": [], "condition": {"true": True}}, "groups must be a non-empty list"),
+            ({"groups": ["a\x00"], "condition": {"true": True}}, "control characters"),
+            ({"principal": "a", "groups": ["g"], "condition": {"true": True}}, "exactly one of"),
+            ({"groups": ["g"], "condition": {"false": False}}, 'exactly {"false": true}'),
+            (
+                {
+                    "groups": ["g"],
+                    "condition": {"column": "c", "op": "eq", "value": {"$identity": "groups"}},
+                },
+                "string, number or boolean 'value'",
+            ),
+            (
+                {
+                    "groups": ["g"],
+                    "condition": {"column": "c", "op": "in", "values": {"$identity": "email"}},
+                },
+                "non-empty list 'values'",
+            ),
+        ],
+    )
+    def test_invalid_110_rules(self, rule: dict, fragment: str) -> None:
+        errors = validate_rules_local([rule])
+        assert errors and fragment in errors[0]
+
+    def test_default_is_validated_sent_and_previewed(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.post_item.return_value = _policy_item()
+
+        result = service.create_policy("prod", table="t.x", rules=_RULES, default={"false": True})
+
+        assert mock.post_item.call_args.kwargs["data"]["default"] == {"false": True}
+        assert result["default_preview"] == "FALSE"
+
+    def test_an_invalid_default_is_refused(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError, match=r"default\.'false' condition"):
+            service.create_policy("prod", table="t.x", rules=_RULES, default={"false": 1})
+
+        mock.post_item.assert_not_called()
+
+    def test_update_patches_the_default_and_keeps_a_missing_dialect(self, tmp_path: Path) -> None:
+        """A 1.1.0 policy may omit `dialect`: the merge falls back to the backend, not to ''."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        stored = _policy_item()
+        del stored["attributes"]["dialect"]
+        mock.get_item.return_value = stored
+
+        service.update_policy("prod", "p-1", default={"true": True})
+
+        mock.patch_item.assert_called_once_with(
+            "rls-policy", "p-1", name=None, data={"default": {"true": True}}, conflict_hint=ANY
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +717,17 @@ class TestCompileConditionPreview:
             ({"column": "d", "op": "is_not_null"}, "snowflake", '"d" IS NOT NULL'),
             ({"column": "amount", "op": "gt", "value": 100}, "snowflake", '"amount" > 100'),
             ({"column": "active", "op": "eq", "value": True}, "snowflake", '"active" = TRUE'),
+            ({"false": True}, "snowflake", "FALSE"),
+            (
+                {"column": "o", "op": "eq", "value": {"$identity": "email"}},
+                "snowflake",
+                '"o" = <identity.email>',
+            ),
+            (
+                {"column": "t", "op": "in", "values": {"$identity": "groups"}},
+                "bigquery",
+                "`t` IN (<identity.groups>)",
+            ),
             ({"column": "o", "op": "eq", "value": "O'Brien"}, "snowflake", "\"o\" = 'O''Brien'"),
             (
                 {
