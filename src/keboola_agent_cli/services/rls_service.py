@@ -19,10 +19,13 @@ admin role) may create/update/delete ``targeted`` policies of its own project
 WITHOUT target projects; granting target projects and ``organization`` scope
 need the organization-admin role.
 
-The enforcement (keboola-mcp-server ``query_data``) refuses EVERY query of a
-project when one policy it loads is invalid -- a dialect other than the
-project backend, or one principal with two rules on one table. Both are
-refused here before any write.
+Policy schema 1.1.0 (the metastore default): a rule selects identities by
+``principal``, ``principals`` or IdP ``groups``; every rule matching one
+identity applies and the conditions combine with OR (so one identity in
+several rules is fine); an RLS ``default`` condition covers identities no rule
+matches (absent = the read is refused). A dialect other than the project
+backend makes the enforcement refuse reads of that table, so it is refused
+here before any write.
 
 On a stack whose metastore predates the ``rls-policy`` schema, a real project
 answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
@@ -208,60 +211,30 @@ class RlsService(BaseService):
             self._config_store, alias, [str(t) for t in targets or []]
         )
 
-    def _taken_principals(
-        self, client: MetastoreClient, table: str, dialect: str, exclude_id: str | None
-    ) -> dict[str, str]:
-        """Principals other policies on the same table already have a rule for (case-folded).
-
-        Best effort: the metastore lists only the policies this token may read -- for a project admin,
-        those its project owns -- so a clash with a policy owned elsewhere is not visible here.
-        """
-        key = _rls_condition.table_key(table, dialect)
-        taken: dict[str, str] = {}
-        for item in client.list_items(self.item_type):
-            attrs = item.get("attributes") or {}
-            if item.get("id") == exclude_id or not isinstance(attrs.get("table"), str):
-                continue
-            if _rls_condition.table_key(attrs["table"], dialect) != key:
-                continue
-            for rule in attrs.get("rules") or []:
-                if isinstance(rule, dict):
-                    for name in _rls_condition.rule_principals(rule):
-                        taken.setdefault(str(name).casefold(), f"policy {item.get('id')}")
-        return taken
-
     def _validate_policy(
         self,
         client: MetastoreClient,
         *,
         policy: dict[str, Any],
         backend: str,
-        exclude_id: str | None = None,
     ) -> PolicyValidation:
         """Run every check this module can on the WHOLE policy, local checks first.
 
-        Local (schema-independent) checks always run: the dialect matches the project backend, the
-        rules are well-formed and no principal has two rules on the table (within the policy or across
-        the other visible policies). Structural (Draft7, against the live schema) checks run when the
+        Local (schema-independent) checks always run: the dialect matches the project backend, and
+        the rules (and an RLS ``default``) are well-formed. Structural (Draft7, against the live schema) checks run when the
         fetch succeeds -- when it doesn't, the caller gets a warning, not a block (see
         :class:`RlsSchemaFetch`). The whole policy is validated even for a partial update, because the
         metastore's PATCH validates only the keys it receives.
         """
-        table, dialect, rules = policy["table"], policy["dialect"], policy["rules"]
+        dialect = policy["dialect"]
         errors: list[str] = []
         if dialect != backend:
             errors.append(
                 f"dialect {dialect!r} does not match the project backend {backend!r} "
-                "(the enforcement refuses every query of a project with such a policy)"
+                "(the enforcement would refuse every read of this table)"
             )
-        errors.extend(self._local_rule_errors(rules))
-        if errors:
-            return PolicyValidation(errors, [])
-        errors.extend(
-            _rls_condition.duplicate_principals(
-                rules, self._taken_principals(client, table, dialect, exclude_id)
-            )
-        )
+        errors.extend(self._local_rule_errors(policy["rules"]))
+        errors.extend(self._default_errors(policy.get("default")))
         if errors:
             return PolicyValidation(errors, [])
 
@@ -274,15 +247,33 @@ class RlsService(BaseService):
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
         return _rls_condition.validate_rules_local(rules)
 
+    @staticmethod
+    def _default_errors(default: Any) -> list[str]:
+        """Checks on the policy-level ``default`` condition (hook: :class:`ClsService` has none)."""
+        if default is None:
+            return []
+        return [f"default.{err}" for err in _rls_condition.validate_condition_ops(default)]
+
     def _preview_rules(self, rules: list[dict[str, Any]], dialect: str) -> list[dict[str, Any]]:
         """Per-rule display preview shown by ``--dry-run`` (hook for :class:`ClsService`)."""
         return [
             {
-                "principal": rule.get("principal") or rule.get("principals"),
+                **_rls_condition.rule_selector(rule),
                 "condition": _rls_condition.compile_condition_preview(rule["condition"], dialect),
             }
             for rule in rules
         ]
+
+    def _preview(self, policy: dict[str, Any]) -> dict[str, Any]:
+        """The ``preview`` (and, for RLS, ``default_preview``) keys of a write/dry-run result."""
+        preview: dict[str, Any] = {
+            "preview": self._preview_rules(policy["rules"], policy["dialect"])
+        }
+        if policy.get("default") is not None:
+            preview["default_preview"] = _rls_condition.compile_condition_preview(
+                policy["default"], policy["dialect"]
+            )
+        return preview
 
     @staticmethod
     def _with_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
@@ -332,8 +323,11 @@ class RlsService(BaseService):
             return self._detail_row(client.get_item(self.item_type, policy_id))
 
     def _detail_row(self, item: dict[str, Any]) -> dict[str, Any]:
+        attrs = item.get("attributes") or {}
         row = self._row_from_item(item)
-        row["rules"] = (item.get("attributes") or {}).get("rules", [])
+        row["rules"] = attrs.get("rules", [])
+        if attrs.get("default") is not None:
+            row["default"] = attrs["default"]
         row["revision"] = (item.get("meta") or {}).get("revision")
         return row
 
@@ -350,11 +344,13 @@ class RlsService(BaseService):
         dialect: str | None = None,
         scope: str = "targeted",
         target_projects: Sequence[int | str] | None = None,
+        default: dict[str, Any] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Create one policy -- at ``targeted`` scope (default) or, explicitly, ``organization``.
 
-        ``dialect`` defaults to the project backend and must equal it. ``target_projects`` (aliases or
+        ``dialect`` defaults to the project backend and must equal it. ``default`` (RLS only) is the
+        condition for identities no rule matches; omitted, their reads are refused. ``target_projects`` (aliases or
         project IDs) only with ``targeted``; they go in the create request itself, which stores the
         grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
         returns the preview without calling the write endpoint.
@@ -366,13 +362,15 @@ class RlsService(BaseService):
         target_ids = self._resolve_targets(alias, target_projects)
         project = self._resolve_one_project(alias)
         backend = self._project_dialect(project)
-        policy = {"table": table, "dialect": dialect or backend, "rules": rules}
+        policy: dict[str, Any] = {"table": table, "dialect": dialect or backend, "rules": rules}
+        if default is not None:
+            policy["default"] = default
 
         with self._new_metastore_client(project) as client:
             check = self._validate_policy(client, policy=policy, backend=backend)
             if check.errors:
                 self._raise_invalid(check.errors)
-            preview = self._preview_rules(rules, policy["dialect"])
+            preview = self._preview(policy)
             if dry_run:
                 return self._with_warnings(
                     {
@@ -380,7 +378,7 @@ class RlsService(BaseService):
                         **policy,
                         "scope": scope,
                         "target_project_ids": target_ids,
-                        "preview": preview,
+                        **preview,
                         "dry_run": True,
                     },
                     check.warnings,
@@ -393,9 +391,7 @@ class RlsService(BaseService):
                 target_project_ids=target_ids or None,
                 conflict_hint=self._conflict_hint,
             )
-        row = self._row_from_item(created)
-        row["preview"] = preview
-        return self._with_warnings(row, check.warnings)
+        return self._with_warnings({**self._detail_row(created), **preview}, check.warnings)
 
     def update_policy(
         self,
@@ -406,6 +402,7 @@ class RlsService(BaseService):
         dialect: str | None = None,
         rules: list[dict[str, Any]] | None = None,
         target_projects: Sequence[int | str] | None = None,
+        default: dict[str, Any] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Update one policy: only the given fields change.
@@ -416,15 +413,23 @@ class RlsService(BaseService):
 
         ``target_projects``: ``None`` keeps the grants, a list replaces them, ``[]`` revokes them all.
         Grants change first (an organization-admin-only call): when that is refused, nothing is written.
-        The result is re-read after the write, so it shows the grants as they now are.
+        The result is re-read after the write, so it shows the grants as they now are. ``default``
+        replaces the RLS default condition; a PATCH cannot remove it (recreate the policy for that).
         """
         changes = {
             key: value
-            for key, value in (("table", table), ("dialect", dialect), ("rules", rules))
+            for key, value in (
+                ("table", table),
+                ("dialect", dialect),
+                ("rules", rules),
+                ("default", default),
+            )
             if value is not None
         }
         if not changes and target_projects is None:
-            self._raise_usage("nothing to update: pass a table, dialect, rules or target projects")
+            self._raise_usage(
+                "nothing to update: pass a table, dialect, rules, default or target projects"
+            )
         target_ids = (
             self._resolve_targets(alias, target_projects) if target_projects is not None else None
         )
@@ -445,18 +450,18 @@ class RlsService(BaseService):
                         )
                     ]
                 )
+            # A 1.1.0 policy may omit `dialect` (the enforcement then uses the workspace backend).
             policy = {
                 "table": attrs.get("table", ""),
-                "dialect": attrs.get("dialect", ""),
+                "dialect": attrs.get("dialect") or backend,
                 "rules": attrs.get("rules", []),
+                **({"default": attrs["default"]} if attrs.get("default") is not None else {}),
                 **changes,
             }
-            check = self._validate_policy(
-                client, policy=policy, backend=backend, exclude_id=policy_id
-            )
+            check = self._validate_policy(client, policy=policy, backend=backend)
             if check.errors:
                 self._raise_invalid(check.errors)
-            preview = self._preview_rules(policy["rules"], policy["dialect"])
+            preview = self._preview(policy)
             if dry_run:
                 return self._with_warnings(
                     {
@@ -469,7 +474,7 @@ class RlsService(BaseService):
                             if target_ids is not None
                             else meta.get("targetProjectIds") or []
                         ),
-                        "preview": preview,
+                        **preview,
                         "dry_run": True,
                     },
                     check.warnings,
@@ -485,8 +490,7 @@ class RlsService(BaseService):
                     conflict_hint=self._conflict_hint,
                 )
             row = self._detail_row(client.get_item(self.item_type, policy_id))
-        row["preview"] = preview
-        return self._with_warnings(row, check.warnings)
+        return self._with_warnings({**row, **preview}, check.warnings)
 
     def delete_policy(self, alias: str, policy_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         """Delete one policy by id; ``dry_run`` shows what would be deleted (one read, no write)."""

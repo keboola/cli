@@ -35,15 +35,16 @@ deletes the policy objects the enforcement engine reads.
 the `row-level-security` project feature (it gates CLS too). Without it, queries
 are unfiltered -- not an error.
 
-**One bad policy blocks every query.** When the enforcement loads an invalid
-policy it refuses **every** `query_data` call of the project, not just queries
-of that table. Two such cases pass the metastore's own validation, so kbagent
-refuses them before any write:
-- a `dialect` other than the project backend (`--dialect` defaults to the
-  backend; a different value is `INVALID_RLS_POLICY`);
-- one principal (case-insensitive) with two rules on one table, inside one
-  policy or across policies. The cross-policy check sees only the policies the
-  token can read -- for a project admin, those its project owns.
+**How rules combine (policy schema 1.1.0, the metastore default).** A rule
+selects identities by `principal`, `principals` or IdP `groups`. Every rule
+that matches the reader applies: RLS conditions combine with OR, CLS
+`visible_columns` are united. An RLS policy may set a `default` condition for
+readers no rule matches; without one, their reads are refused. 1.1.0 is a
+superset of 1.0.0 -- every older policy keeps its meaning.
+
+**Dialect.** A policy whose `dialect` differs from the reading workspace makes
+the enforcement refuse every read of that table. `--dialect` defaults to the
+project backend, and kbagent refuses any other value (`INVALID_RLS_POLICY`).
 
 An `organization` policy is loaded by every project in the organization,
 whatever their backend -- in an organization with both Snowflake and BigQuery
@@ -134,7 +135,7 @@ cat > rls_rules.json <<'EOF'
 EOF
 
 # 2. ALWAYS preview first -- --dry-run runs every validation (dialect vs
-#    backend, rule shape, duplicate principals, live schema check when
+#    backend, rule and default shape, live schema check when
 #    available) and compiles a condition preview, but writes nothing.
 kbagent --json rls create \
   --project prod \
@@ -144,7 +145,7 @@ kbagent --json rls create \
 # -> {"table": "in.c-crm.invoices", "dialect": "snowflake",
 #     "scope": "targeted", "target_project_ids": [], "preview": [
 #       {"principal": "eu-analyst@example.com", "condition": "\"region\" = 'EU'"},
-#       {"principal": ["us-analyst@example.com", "us-lead@example.com"],
+#       {"principals": ["us-analyst@example.com", "us-lead@example.com"],
 #        "condition": "\"region\" = 'US'"}
 #     ], "dry_run": true}
 
@@ -226,6 +227,39 @@ engine that decides what a query returns lives in `keboola-mcp-server`'s
 `rls.py` (sqlglot-based). Treat the preview as "does this look like what I
 meant," not as proof of what will be enforced.
 
+## Workflow 4b -- Groups, a default and identity placeholders (schema 1.1.0)
+
+One policy for many readers instead of one rule per person. Groups are the IdP
+`groups` claim strings exactly as delivered (Entra may deliver object ids);
+Keboola never manages membership.
+
+```bash
+cat > orders_rules.json <<'EOF'
+[
+  {"groups": ["sales-eu"],
+   "condition": {"column": "region", "op": "in", "values": ["EU"]}},
+  {"groups": ["sales-reps"],
+   "condition": {"column": "owner_email", "op": "eq", "value": {"$identity": "email"}}},
+  {"principals": ["auditor@example.com"],
+   "condition": {"true": true}}
+]
+EOF
+kbagent --json rls create --project prod --table-id in.c-sales.orders \
+  --rules @orders_rules.json --default '{"false": true}' --dry-run
+```
+
+A reader in `sales-eu` and `sales-reps` sees
+`"region" IN ('EU') OR "owner_email" = <their email>`; the auditor sees every
+row; anyone else sees no rows (the `default`), instead of an error.
+
+- `{"$identity": "email"}` (as `value`) and `{"$identity": "groups"}` (as
+  `values`) are resolved by the enforcement per reader, as bound literals.
+- `{"false": true}` matches no row -- useful as a `default` or a rule.
+- A default cannot be removed by `rls update` (the metastore's partial update
+  cannot delete a key); recreate the policy instead.
+- MCP OAuth users have an email but no IdP groups, so `groups` rules only
+  match readers whose identity carries a groups claim.
+
 ## Workflow 5 -- Share a policy with sibling projects (targeted grants)
 
 `--target-project` (on `create`/`setup`/`update`) takes a registered alias or a
@@ -297,8 +331,8 @@ kbagent --json rls schema --project prod
 - **`ACCESS_DENIED` (403)** on `--target-project`, `--clear-target-projects` or
   `--scope organization` -- the token's user is not an organization admin.
 - **`INVALID_RLS_POLICY`** -- the policy failed validation: a dialect other than
-  the project backend, a malformed rule, a null comparison, a principal with two
-  rules on the table, or the live JSON-Schema check. The message lists every
+  the project backend, a malformed rule or default, a null comparison, or the
+  live JSON-Schema check. The message lists every
   violation; nothing was written.
 - **`ALREADY_EXISTS`** -- the project already has a policy for this table
   (policies are named by table). `rls update` or `rls delete` it.
@@ -350,6 +384,7 @@ kbagent cls delete --project prod --policy-id <id> --yes
 ```
 
 - A table can carry both an `rls-policy` and a `cls-policy`; author them separately.
-- `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `principal`/`principals`
-  per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check, duplicate
-  principals, plus the live JSON Schema). Nothing was written.
+- `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `principal`/`principals`/
+  `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
+  no `default`, plus the live JSON Schema). Nothing was written.
+- An identity several CLS rules match sees the union of their `visible_columns`.

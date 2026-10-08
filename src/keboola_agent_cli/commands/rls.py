@@ -75,6 +75,10 @@ TARGET_HELP = (
     "--scope targeted only; granting needs the organization-admin role)"
 )
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
+DEFAULT_HELP = (
+    "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); "
+    "omitted, their reads are refused"
+)
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,9 @@ def gate_scope(
 
 
 def _principal_text(item: dict[str, Any]) -> str:
+    """A rule's (or preview entry's) selector: ``a@x.com``, ``a@x.com, b@x.com`` or ``groups: g1, g2``."""
+    if "groups" in item:
+        return "groups: " + ", ".join(item["groups"])
     principal = item.get("principal") or item.get("principals") or []
     return principal if isinstance(principal, str) else ", ".join(principal)
 
@@ -184,6 +191,8 @@ def _print_policy(formatter: Any, group: PolicyGroup, row: dict[str, Any]) -> No
     formatter.console.print(f"  Rules ({len(rules)}):")
     for rule in rules:
         formatter.console.print(f"    - {_principal_text(rule)}: {group.rule_text(rule)}")
+    if row.get("default") is not None:
+        formatter.console.print(f"  Default:          {row['default']}")
 
 
 def _print_preview(formatter: Any, group: PolicyGroup, result: dict[str, Any]) -> None:
@@ -193,6 +202,8 @@ def _print_preview(formatter: Any, group: PolicyGroup, result: dict[str, Any]) -
     )
     for entry in result.get("preview", []):
         formatter.console.print(f"  {_principal_text(entry)}: {group.preview_text(entry)}")
+    if result.get("default_preview") is not None:
+        formatter.console.print(f"  (anyone else): WHERE {result['default_preview']}")
 
 
 def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
@@ -211,6 +222,24 @@ def _parse_rules_arg(formatter: Any, raw: str, shape: str) -> list[dict[str, Any
     if not isinstance(parsed, list):
         formatter.error(
             message=f"--rules must be a JSON array of {shape} objects",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+    return parsed
+
+
+def _parse_default_arg(formatter: Any, raw: str | None) -> dict[str, Any] | None:
+    """Parse ``--default`` (a condition object), or ``None`` when the option was not given."""
+    if raw is None:
+        return None
+    try:
+        parsed = parse_json_arg(raw, label="--default")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+    if not isinstance(parsed, dict):
+        formatter.error(
+            message='--default must be a JSON condition object, e.g. {"false": true}',
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
@@ -429,10 +458,11 @@ def rls_create(
         ...,
         "--rules",
         help=(
-            "JSON|@file|- array of {principal|principals, condition} objects "
-            "(see `rls schema` / rls-workflow.md for the condition shape)"
+            "JSON|@file|- array of {principal|principals|groups, condition} objects; rules "
+            "matching one identity combine with OR (see rls-workflow.md for the condition shape)"
         ),
     ),
+    default: str | None = typer.Option(None, "--default", help=DEFAULT_HELP),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
     target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
@@ -447,6 +477,7 @@ def rls_create(
         RLS,
         alias=project,
         table=table_id,
+        default=_parse_default_arg(get_formatter(ctx), default),
         dialect=dialect,
         rules=rules,
         scope=scope,
@@ -467,6 +498,11 @@ def rls_update(
     ),
     rules: str | None = typer.Option(
         None, "--rules", help="New JSON|@file|- rules array (unset = unchanged)"
+    ),
+    default: str | None = typer.Option(
+        None,
+        "--default",
+        help="New default condition (unset = unchanged; to remove one, recreate the policy)",
     ),
     target_project: list[str] | None = typer.Option(
         None, "--target-project", help=f"{TARGET_HELP}; replaces the list (unset = unchanged)"
@@ -492,6 +528,7 @@ def rls_update(
         alias=project,
         policy_id=policy_id,
         table=table_id,
+        default=_parse_default_arg(get_formatter(ctx), default),
         dialect=dialect,
         rules=rules,
         target_project=target_project,
