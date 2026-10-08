@@ -512,7 +512,7 @@ class TestCopiedItemsTakeTheTargetModelsScope:
         result = service.import_snapshot_from_dict("prod", snapshot=snapshot)
         (failure,) = result["imported"]["glossary"]["failed"]
         assert "organization-admin token" in failure["reason"]
-        assert "project-scoped model" in failure["reason"]
+        assert "--scope project" in failure["reason"]
 
     def test_promote_creates_new_items_at_the_target_models_scope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -628,3 +628,53 @@ class TestGlossaryDefinitionRequired:
         service, mock = _service_with_model(tmp_path, None)
         service.add_glossary("prod", None, term="t", definition="d")
         assert mock.post_item.call_args.kwargs["data"]["definition"] == "d"
+
+
+class TestCopyScopeOverride:
+    """`import` / `promote --scope` override the inherited scope (the way out for a non-org-admin)."""
+
+    def test_import_scope_project_into_an_org_model(self, tmp_path: Path) -> None:
+        service, mock = _service_with_model(tmp_path, {"scope": "organization"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [mock.get_item.return_value] if t == "semantic-model" else []
+        )
+        mock.post_item.side_effect = KeboolaApiError(
+            message="Access denied", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t"})]}
+        result = service.import_snapshot_from_dict("prod", snapshot=snapshot, scope="project")
+        kwargs = mock.post_item.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_project_ids"]) == ("project", None)
+        mock.get_item.assert_not_called()  # an explicit scope needs no model lookup
+        (failure,) = result["imported"]["glossary"]["failed"]
+        assert failure["reason"] == "Access denied"  # explicit scope: no inherited-scope hint
+
+    def test_promote_targeted_scope_resolves_the_target_projects(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        src, tgt = MagicMock(), MagicMock()
+        for m in (src, tgt):
+            m.__enter__ = MagicMock(return_value=m)
+            m.__exit__ = MagicMock(return_value=False)
+        clients = iter([src, tgt])
+        service = SemanticLayerService(
+            config_store=store, metastore_client_factory=lambda url, token: next(clients)
+        )
+        src.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U_S", "src")]
+            if t == "semantic-model"
+            else [_child_item("semantic-glossary", "s1", {"term": "t"})]
+            if t == "semantic-glossary"
+            else []
+        )
+        tgt.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U_T", "tgt")] if t == "semantic-model" else []
+        )
+        tgt.post_item.return_value = {"id": "new"}
+        service.promote_model(
+            from_project="analytics",
+            to_project="prod",
+            scope="targeted",
+            target_projects=["analytics"],
+        )
+        kwargs = tgt.post_item.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_project_ids"]) == ("targeted", [1234])

@@ -15,6 +15,7 @@ orchestrator class stays under the CONTRIBUTING.md services LOC ceiling.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
@@ -94,6 +95,19 @@ def inherited_scope(
     """The scope a child item takes when ``--scope`` is omitted: its model's own."""
     scope, targets = item_scope(client.get_item("semantic-model", model_uuid))
     return scope, (targets or None) if scope == "targeted" else None
+
+
+@dataclass(frozen=True)
+class NewItemScope:
+    """The scope a copy command (`import`, `promote`) gives the items it creates.
+
+    ``inherited`` is True when the caller did not pass ``--scope`` and the scope is the target
+    model's own; :func:`post_child` then explains a 403 on an inherited ``organization`` scope.
+    """
+
+    scope: ObjectScope = "project"
+    target_project_ids: list[int] | None = None
+    inherited: bool = True
 
 
 def post_child(

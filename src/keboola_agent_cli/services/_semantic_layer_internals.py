@@ -40,12 +40,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._semantic_layer_fqn import append_fqn_mismatch_warnings
-from ._semantic_layer_scope import inherited_scope, post_child
+from ._semantic_layer_scope import NewItemScope, inherited_scope, post_child
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..metastore_client import ObjectScope, SemanticType
+    from ..metastore_client import SemanticType
     from .storage_service import StorageService
 
 # Re-exported from the main module to avoid a circular import; pulled in
@@ -402,17 +402,17 @@ def run_import_loop(
     type_filter: set[str] | None,
     dry_run: bool,
     overwrite: bool,
-    scope: ObjectScope = "project",
-    target_project_ids: list[int] | None = None,
+    new_item_scope: NewItemScope | None = None,
 ) -> dict[str, Any]:
     """Replay a snapshot into the target model.
 
     Returns the per-type stats dict matching the orchestrator's contract.
     Push order is :data:`PUSH_ORDER`. Errors are accumulated per item;
-    one failure does not abort the rest. A NEW item is created at ``scope`` /
-    ``target_project_ids`` (the target model's own, see :func:`inherited_scope`),
-    the same rule ``add <kind>`` follows; an overwritten item keeps its scope.
+    one failure does not abort the rest. A NEW item is created at ``new_item_scope``
+    (``--scope``, or the target model's own, see :func:`inherited_scope`), the same
+    rule ``add <kind>`` follows; an overwritten item keeps its scope.
     """
+    new_item_scope = new_item_scope or NewItemScope()
     imported: dict[str, Any] = {}
     for plural, type_slug in PUSH_ORDER:
         if type_filter is not None and plural not in type_filter:
@@ -464,10 +464,11 @@ def run_import_loop(
                     type_slug,
                     name=key,
                     data=attrs,
-                    scope=scope,
-                    target_project_ids=target_project_ids,
-                    inherited=True,
-                    remedy="Import into a project-scoped model, or use an org-admin token.",
+                    scope=new_item_scope.scope,
+                    target_project_ids=new_item_scope.target_project_ids,
+                    inherited=new_item_scope.inherited,
+                    remedy="Pass `--scope project` to import them project-only, or use an "
+                    "org-admin token.",
                 )
                 per_type["created"] += 1
             except KeboolaApiError as exc:
@@ -485,16 +486,16 @@ def run_promote_loop(
     target_model_uuid: str,
     type_filter: set[str] | None,
     dry_run: bool,
-    scope: ObjectScope = "project",
-    target_project_ids: list[int] | None = None,
+    new_item_scope: NewItemScope | None = None,
 ) -> dict[str, Any]:
     """Run the additive + overwrite promote loop.
 
-    NEW: POST to target, at ``scope`` / ``target_project_ids`` (the target model's
+    NEW: POST to target, at ``new_item_scope`` (``--scope``, or the target model's
     own). CHANGED: in-place PUT, scope unchanged. IDENTICAL: skip.
     Items only in target are never deleted (additive only).
     Returns ``{plural: {new, overwritten, identical, failed, changes}}``.
     """
+    new_item_scope = new_item_scope or NewItemScope()
     result: dict[str, Any] = {}
     for plural, type_slug in PUSH_ORDER:
         if type_filter is not None and plural not in type_filter:
@@ -549,10 +550,11 @@ def run_promote_loop(
                     type_slug,
                     name=key,
                     data=src_attrs,
-                    scope=scope,
-                    target_project_ids=target_project_ids,
-                    inherited=True,
-                    remedy="Promote into a project-scoped model, or use an org-admin token.",
+                    scope=new_item_scope.scope,
+                    target_project_ids=new_item_scope.target_project_ids,
+                    inherited=new_item_scope.inherited,
+                    remedy="Pass `--scope project` to promote them project-only, or use an "
+                    "org-admin token.",
                 )
                 stats["new"] += 1
             except KeboolaApiError as exc:

@@ -1088,8 +1088,8 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
 # scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
@@ -1101,7 +1101,8 @@ kbagent semantic-layer token --encrypt --project P --component-id C
 #   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). `import`,
 #   `promote` and `build --model` create their NEW items at the target model's scope the same way
 #   (same gate: FLAG_ESCALATIONS `semantic-layer.import|promote|build --scope organization`);
-#   items they overwrite keep their own scope. Item names are unique per object type across ALL
+#   `import` / `promote --scope` (+ --target-project) override it, e.g. `--scope project` for a
+#   non-org-admin under an org-level model; items they overwrite keep their own scope. Item names are unique per object type across ALL
 #   models of a project (ALREADY_EXISTS says "in this project"), so a model cannot be copied into
 #   a second model of the same project under the same item names. An item stored at schema version
 #   1.0.0 (created before 0.97.0) cannot be elevated: the error names the stored version and the

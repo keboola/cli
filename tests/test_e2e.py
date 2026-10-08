@@ -11971,6 +11971,26 @@ class TestE2ESemanticLayerLifecycle:
             assert meta.get("scope") == "targeted", meta
             assert meta.get("targetProjectIds") == [int(target_project)], meta
 
+            _step(1.1, "import --scope project overrides the model's scope")
+            private_term = f"{tag}_private"
+            snapshot.write_text(
+                json.dumps(
+                    {"glossary": [{"attributes": {"term": private_term, "definition": "e"}}]}
+                ),
+                encoding="utf-8",
+            )
+            self._run_ok(
+                "semantic-layer", "import", "--project", self.alias, "--model", shared_name,
+                "--file", str(snapshot), "--scope", "project", "--yes",
+            )  # fmt: skip
+            with _metastore() as mc:
+                private = next(
+                    item
+                    for item in mc.list_items("semantic-glossary", shared_id)
+                    if (item.get("attributes") or {}).get("term") == private_term
+                )
+            assert (private.get("meta") or {}).get("scope") == "project", private
+
             _step(2, "the same item name in a second model is ALREADY_EXISTS 'in this project'")
             self._run_ok(
                 "semantic-layer", "model", "create", "--project", self.alias, "--name", other_name,

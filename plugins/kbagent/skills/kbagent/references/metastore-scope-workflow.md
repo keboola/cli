@@ -18,7 +18,8 @@ projects), so an org-level model gets org-level children. Pass `--scope` to
 override (a project-admin token that is not an org admin must pass
 `--scope project` under an org-level model, or it gets a 403). *(since vNEXT)*
 `import`, `promote` and `build --model` create their new items at the target
-model's scope too; items they overwrite keep their own scope.
+model's scope too; items they overwrite keep their own scope. `import` and
+`promote` take `--scope` / `--target-project` to override it, like `add`.
 
 ## Share an existing project-only model
 

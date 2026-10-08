@@ -184,7 +184,7 @@ class EditGlossary(BaseModel):
     new_definition: str | None = None
 
 
-class ImportRequest(BaseModel):
+class ImportRequest(ScopeFields):
     project: str
     model: str | None = None
     snapshot: dict[str, Any]
@@ -193,7 +193,7 @@ class ImportRequest(BaseModel):
     overwrite: bool = False
 
 
-class PromoteRequest(BaseModel):
+class PromoteRequest(ScopeFields):
     from_project: str
     to_project: str
     from_model: str | None = None
@@ -620,6 +620,8 @@ def import_snapshot(
         types=body.types,
         dry_run=body.dry_run,
         overwrite=body.overwrite,
+        scope=body.scope,
+        target_projects=body.target_projects,
     )
 
 
@@ -635,6 +637,8 @@ def promote(
         to_model=body.to_model,
         types=body.types,
         dry_run=body.dry_run,
+        scope=body.scope,
+        target_projects=body.target_projects,
     )
 
 

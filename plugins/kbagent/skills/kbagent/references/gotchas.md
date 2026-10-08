@@ -5805,7 +5805,11 @@ examples. Surprises worth knowing before you touch this:
   Their NEW items take the target model's scope and target projects, with the
   same permission gate. Before, they always created `project` items: an
   import into a `targeted` or `organization` model gave items that no other
-  project could see. Items they overwrite keep their own scope.
+  project could see. Items they overwrite keep their own scope. `import` and
+  `promote` take `--scope` / `--target-project` to override the inherited
+  scope, like `add <kind>`: a project-admin token that is not an org admin
+  passes `--scope project` under an `organization` model, or every new item
+  fails with a 403 (listed under `failed`, exit 0).
 - **Item names are unique per project, not per model (since vNEXT, message).**
   The metastore keeps names unique per object type across ALL models of a
   project (and across the organization at `organization` scope). A second

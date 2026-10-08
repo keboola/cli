@@ -1950,7 +1950,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   organization scope is gated as destructive like a typed one, and a
   non-org-admin token gets a 403 on it (pass --scope project). `import`,
   `promote` and `build --model` create their NEW items at the target model's
-  scope too, with the same gate; overwritten items keep their scope.
+  scope too, with the same gate; `import` / `promote --scope` (and
+  --target-project) override it, as on `add`. Overwritten items keep their scope.
 
   Item names are unique per type across ALL models of a project: a second
   model in the same project cannot reuse an item name (ALREADY_EXISTS, "in

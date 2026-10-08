@@ -532,3 +532,78 @@ class TestCopyCommandsGateInheritedOrganizationScope:
         )
         assert result.exit_code == 0, result.output
         mock.child_scope.assert_not_called()
+
+
+class TestCopyCommandsScopeOption:
+    def _snapshot(self, tmp_path: Path) -> str:
+        snapshot = tmp_path / "snapshot.json"
+        snapshot.write_text("{}", encoding="utf-8")
+        return str(snapshot)
+
+    def test_explicit_project_scope_is_not_gated_and_needs_no_lookup(
+        self, store: ConfigStore, tmp_path: Path
+    ) -> None:
+        mock = MagicMock()
+        mock.child_scope.return_value = "organization"
+        mock.import_snapshot.return_value = {}
+        result = _invoke(
+            [
+                "--deny-destructive",
+                *_sl(
+                    "import", "--project", "prod", "--file", self._snapshot(tmp_path),
+                    "--scope", "project",
+                ),
+            ],
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 0, result.output
+        mock.child_scope.assert_not_called()
+        assert mock.import_snapshot.call_args.kwargs["scope"] == "project"
+
+    @pytest.mark.parametrize("command", ["import", "promote"])
+    def test_explicit_organization_scope_is_gated(
+        self, store: ConfigStore, tmp_path: Path, command: str
+    ) -> None:
+        args = (
+            ["import", "--project", "prod", "--file", self._snapshot(tmp_path)]
+            if command == "import"
+            else ["promote", "--from-project", "analytics", "--to-project", "prod", "--yes"]
+        )
+        mock = MagicMock()
+        result = _invoke(
+            ["--deny-destructive", *_sl(*args, "--scope", "organization")],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == EXIT_PERMISSION_DENIED, result.output
+
+    def test_target_project_without_targeted_scope_is_a_usage_error(
+        self, store: ConfigStore, tmp_path: Path
+    ) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            _sl(
+                "import", "--project", "prod", "--file", self._snapshot(tmp_path),
+                "--target-project", "analytics",
+            ),
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 2, result.output
+        mock.import_snapshot.assert_not_called()
+
+    def test_promote_passes_targeted_scope_and_targets(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.promote_model.return_value = {}
+        result = _invoke(
+            _sl(
+                "promote", "--from-project", "analytics", "--to-project", "prod", "--yes",
+                "--scope", "targeted", "--target-project", "analytics",
+            ),
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 0, result.output
+        kwargs = mock.promote_model.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_projects"]) == ("targeted", ["analytics"])
