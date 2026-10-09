@@ -414,6 +414,41 @@ class TestUploadTable:
         assert "Invalid CSV" in exc_info.value.message
         assert exc_info.value.details == {"job_id": 9, "file_id": 7}
 
+    def test_definitive_enqueue_failure_names_uploaded_file(
+        self, client: Client, mock_kc: MagicMock, tmp_path: Path
+    ) -> None:
+        """The client puts file_id in details only; the facade must say it (review NIT-2)."""
+        csv = tmp_path / "d.csv"
+        csv.write_text("a\n1\n")
+        mock_kc.upload_table.side_effect = KeboolaApiError(
+            "bad delimiter",
+            status_code=400,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            details={"file_id": 7},
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.upload_table("in.c-x.t", csv)
+        exc = exc_info.value
+        assert exc.message.startswith("bad delimiter")
+        assert exc.message.count("Storage file 7") == 1
+        assert "instead of uploading it again" in exc.message
+        assert "kbagent" not in exc.message
+        assert exc.error_code == ErrorCode.VALIDATION_ERROR and exc.details == {"file_id": 7}
+
+    @pytest.mark.parametrize(
+        "details",
+        [{"file_id": 7, "job_id": 9}, {"file_id": 7, "import_may_be_running": True}, {}],
+    )
+    def test_other_failures_pass_through_unchanged(
+        self, client: Client, mock_kc: MagicMock, tmp_path: Path, details: dict[str, Any]
+    ) -> None:
+        csv = tmp_path / "d.csv"
+        csv.write_text("a\n1\n")
+        mock_kc.upload_table.side_effect = KeboolaApiError("boom", details=details)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.upload_table("in.c-x.t", csv)
+        assert exc_info.value.message == "boom"
+
     def test_branch_scoped_upload(self, mock_kc: MagicMock, tmp_path: Path) -> None:
         c = _make_client(mock_kc, branch_id=33)
         csv = tmp_path / "d.csv"

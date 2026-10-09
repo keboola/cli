@@ -564,6 +564,24 @@ class TestMultipartRetries:
         m.upload_s3_multipart(str(_file(tmp_path, 10)), _target())
         assert fake_s3.ops("create") == 2
 
+    def test_create_gets_the_multipart_budget(
+        self, small_parts: int, fake_s3: FakeS3, tmp_path: Path, waits: list[float]
+    ) -> None:
+        # More consecutive failures than the general MAX_RETRIES allows.
+        fake_s3.create_queue = [httpx.Response(503)] * m.MAX_RETRIES
+        m.upload_s3_multipart(str(_file(tmp_path, 10)), _target())
+        assert fake_s3.ops("create") == m.MAX_RETRIES + 1
+
+    def test_complete_gets_the_multipart_budget(
+        self, small_parts: int, fake_s3: FakeS3, tmp_path: Path, waits: list[float]
+    ) -> None:
+        # Review NB-1: 4 consecutive 503s on Complete used to exhaust the
+        # 3-attempt general budget and throw the whole upload away.
+        fake_s3.complete_queue = [httpx.Response(503)] * 4
+        m.upload_s3_multipart(str(_file(tmp_path, 20)), _target())
+        assert fake_s3.ops("complete") == 5
+        assert fake_s3.ops("abort") == 0
+
 
 @pytest.mark.usefixtures("waits")
 class TestMultipartFailures:

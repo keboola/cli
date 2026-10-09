@@ -286,6 +286,7 @@ def _create_upload(http: httpx.Client, target: S3Target) -> str:
         url=f"{target.object_url}?uploads",
         extra_headers=target.upload_headers,
         expect_root="InitiateMultipartUploadResult",
+        attempts=S3_MULTIPART_PART_ATTEMPTS,
     )
     if not reply.ok or reply.root is None:
         raise _reply_error("S3 CreateMultipartUpload failed", reply)
@@ -435,6 +436,9 @@ def _complete_upload(
         url=f"{target.object_url}?uploadId={quote(upload_id, safe='')}",
         body=body,
         expect_root="CompleteMultipartUploadResult",
+        # Same budget as a part: failing at the final step throws away the
+        # whole upload just as surely as a dead part does.
+        attempts=S3_MULTIPART_PART_ATTEMPTS,
     )
     if reply.ok:
         return

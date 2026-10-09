@@ -972,8 +972,9 @@ class _StorageTablesMixin(_CoreClient):
 
         Raises:
             KeboolaApiError: Any failure after the cloud upload carries
-                ``details["file_id"]``; an enqueue failure also says so in the
-                message, so the file can be imported without re-uploading.
+                ``details["file_id"]`` so the file can be imported without
+                re-uploading. The message carries no recovery sentence: the
+                caller adds its own (see ``services._storage_jobs.with_import_hint``).
         """
         p = Path(file_path)
         size_bytes = p.stat().st_size
@@ -995,11 +996,12 @@ class _StorageTablesMixin(_CoreClient):
                 # Already names the file; "import it from there" would be
                 # the wrong advice while an import may be running.
                 raise
+            # The file id goes into details only, never a recovery sentence:
+            # each caller words its own (the service names the full
+            # option-preserving `load-file` command, the SDK facade the file
+            # id), so the user never reads two instructions for one failure.
             raise KeboolaApiError(
-                message=(
-                    f"{exc.message} (the file was uploaded as Storage file {file_id}; "
-                    "import it from there instead of uploading it again)"
-                ),
+                message=exc.message,
                 status_code=exc.status_code,
                 error_code=exc.error_code,
                 retryable=exc.retryable,

@@ -42,8 +42,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from .auth.sentinel import require_static_token
-from .client import KeboolaClient, _collect_inline_results
-from .client._core import _storage_job_error_message
+from .client import KeboolaClient, _collect_inline_results, storage_job_error_message
 from .constants import (
     DEFAULT_JOB_MODE,
     DEFAULT_JOB_RUN_TIMEOUT,
@@ -74,6 +73,35 @@ logger = logging.getLogger(__name__)
 # class scope is skipped in function name resolution -- so this alias is only
 # needed for annotations inside ``Files``.
 _list = list
+
+
+def _with_uploaded_file_hint(exc: KeboolaApiError) -> KeboolaApiError:
+    """Name the uploaded Storage file on a definitive post-upload import failure.
+
+    The client keeps ``file_id`` in ``details`` only and leaves the recovery
+    sentence to its caller; the CLI service names a full ``kbagent`` command,
+    which means nothing to an SDK user, so the facade says it in plain words.
+    A wait timeout (``job_id`` set: the import is still running) and an
+    ambiguous enqueue failure (``import_may_be_running``: the client message
+    already says to check first) are returned unchanged.
+    """
+    file_id = exc.details.get("file_id")
+    if (
+        file_id is None
+        or exc.details.get("job_id") is not None
+        or exc.details.get("import_may_be_running")
+    ):
+        return exc
+    return KeboolaApiError(
+        message=(
+            f"{exc.message} The file was uploaded as Storage file {file_id}; "
+            "import it from there instead of uploading it again."
+        ),
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        retryable=exc.retryable,
+        details=exc.details,
+    )
 
 
 @dataclass(frozen=True)
@@ -534,22 +562,25 @@ class Client:
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
         file_size_bytes = Path(file_path).stat().st_size
-        outcome = self._client.upload_table(
-            table_id=table_id,
-            file_path=str(file_path),
-            incremental=incremental,
-            delimiter=delimiter,
-            enclosure=enclosure,
-            branch_id=effective_branch,
-            wait=wait,
-            max_wait=timeout,
-        )
+        try:
+            outcome = self._client.upload_table(
+                table_id=table_id,
+                file_path=str(file_path),
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=effective_branch,
+                wait=wait,
+                max_wait=timeout,
+            )
+        except KeboolaApiError as exc:
+            raise _with_uploaded_file_hint(exc) from exc
         job = outcome.job
         if job.get("status") == "error":
             # Storage can answer the enqueue with an already-failed job; with
             # wait=False that must still raise, as the CLI does.
             raise KeboolaApiError(
-                message=_storage_job_error_message(job),
+                message=storage_job_error_message(job),
                 status_code=500,
                 error_code=ErrorCode.STORAGE_JOB_FAILED,
                 retryable=False,

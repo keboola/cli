@@ -149,7 +149,7 @@ def register(app: typer.Typer) -> None:
         timeout: float | None = typer.Option(
             None,
             "--timeout",
-            help=f"Seconds to wait with --wait (default: {IMPORT_JOB_MAX_WAIT:g})",
+            help=f"Seconds to wait; requires --wait (default: {IMPORT_JOB_MAX_WAIT:g})",
         ),
     ) -> None:
         """Show a Storage job -- status, table, rows imported, timing, error.

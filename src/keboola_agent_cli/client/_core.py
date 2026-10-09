@@ -27,7 +27,7 @@ from ..http_base import BaseHttpClient
 from ..stream_client import StreamClient
 
 
-def _storage_job_error_message(job: dict[str, Any]) -> str:
+def storage_job_error_message(job: dict[str, Any]) -> str:
     """Best-effort human message out of a failed Storage job's ``error`` field.
 
     Written tolerantly on purpose. An API ``error`` field is not reliably a
@@ -342,7 +342,7 @@ class _CoreClient(BaseHttpClient):
                 if not raise_on_error:
                     return job
                 raise KeboolaApiError(
-                    message=_storage_job_error_message(job),
+                    message=storage_job_error_message(job),
                     status_code=500,
                     error_code=ErrorCode.STORAGE_JOB_FAILED,
                     retryable=False,

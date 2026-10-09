@@ -307,9 +307,10 @@ S3_MULTIPART_PART_ALIGNMENT: int = 1024 * 1024
 # multiplying the memory ceiling above; never more parts than this are read
 # into memory at once.
 S3_MULTIPART_CONCURRENCY: int = 4
-# Attempts per part (total, like MAX_RETRIES). Higher than the general budget
-# because one part failing aborts the whole upload: with exponential backoff
-# (1+2+4+8+16 s) a part rides out a ~30 s network blip instead of throwing
+# Attempts per multipart step -- Create, every part, and Complete (total, like
+# MAX_RETRIES). Higher than the general budget because any one of those steps
+# failing aborts the whole upload: with exponential backoff
+# (1+2+4+8+16 s) a step rides out a ~30 s network blip instead of throwing
 # away hours of a 200 GB upload.
 S3_MULTIPART_PART_ATTEMPTS: int = 6
 

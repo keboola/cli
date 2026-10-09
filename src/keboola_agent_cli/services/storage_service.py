@@ -2274,9 +2274,12 @@ class StorageService(ColumnDescriptionsMixin):
             timeout: Wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
 
         Raises:
-            ValueError: ``timeout`` is not a positive finite number.
+            ValueError: ``timeout`` is not a positive finite number, or is
+                given without ``wait`` (it would be silently ignored).
             KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` when ``wait`` runs out.
         """
+        if timeout is not None and not wait:
+            raise ValueError("--timeout requires --wait.")
         validate_wait_timeout(timeout)
         project = self.resolve_projects([alias])[alias]
         client = self._client_factory(project.stack_url, project.token)

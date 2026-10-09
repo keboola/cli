@@ -162,7 +162,8 @@ class TestClientImport:
         ):
             client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
         assert exc_info.value.details["file_id"] == 100
-        assert "Storage file 100" in exc_info.value.message
+        # The recovery sentence is the caller's (service / SDK facade), not the client's.
+        assert exc_info.value.message == "Resource not found: Table in.c-b.users not found"
         assert "job_id" not in exc_info.value.details
 
 
@@ -265,7 +266,7 @@ class TestServiceImport:
         with pytest.raises(ValueError, match="--timeout"):
             service.load_file_to_table(alias="test", file_id=1, table_id="in.c-b.t", timeout=bad)
         with pytest.raises(ValueError, match="--timeout"):
-            service.storage_job_detail(alias="test", job_id=1, timeout=bad)
+            service.storage_job_detail(alias="test", job_id=1, wait=True, timeout=bad)
         client.import_table_async.assert_not_called()
         client.get_storage_job.assert_not_called()
 
@@ -462,6 +463,20 @@ class TestJobDetailCli:
         result = _invoke(_make_store(tmp_path), svc, ["--json", *self._ARGS, "--timeout", "0"])
         assert result.exit_code == 2
 
+    def test_timeout_without_wait_is_rejected(self, tmp_path: Path) -> None:
+        """--timeout alone used to be silently ignored (review NIT-3)."""
+        client = MagicMock()
+        store = _make_store(tmp_path)
+        result = _invoke(
+            store, _make_service(store, client), ["--json", *self._ARGS, "--timeout", "30"]
+        )
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.INVALID_ARGUMENT
+        assert "--timeout requires --wait" in error["message"]
+        client.get_storage_job.assert_not_called()
+        client.follow_storage_job.assert_not_called()
+
     def test_human_output(self, tmp_path: Path) -> None:
         svc = MagicMock()
         svc.storage_job_detail.return_value = _job_summary("success", imported_rows=12)
@@ -603,6 +618,14 @@ class TestServeRoutes:
     def test_job_detail_rejects_non_positive_timeout(self, tmp_path: Path) -> None:
         client = _serve_client(tmp_path, MagicMock())
         assert client.get("/storage/jobs/proj/55?timeout=0", headers=_AUTH).status_code == 422
+
+    def test_job_detail_timeout_without_wait_is_rejected(self, tmp_path: Path) -> None:
+        storage = MagicMock()
+        client = _serve_client(tmp_path, storage)
+        res = client.get("/storage/jobs/proj/55?timeout=30", headers=_AUTH)
+        assert res.status_code == 422, res.text
+        assert "timeout requires wait=true" in res.text
+        storage.storage_job_detail.assert_not_called()
 
     def test_job_detail_permission_denied(self, tmp_path: Path) -> None:
         from keboola_agent_cli.models import PermissionPolicy
@@ -783,7 +806,50 @@ class TestAmbiguousEnqueueFailure:
         )
         exc = self._upload(httpx_mock, tmp_path)
         assert "import_may_be_running" not in exc.details
-        assert "instead of uploading it again" in exc.message
+        assert exc.details["file_id"] == 100
+        # No recovery sentence at the client: each caller words its own, so
+        # the user never reads two instructions for one failure (NIT-2).
+        assert "Storage file 100" not in exc.message
+
+    def test_cli_message_has_exactly_one_recovery_instruction(
+        self, httpx_mock, tmp_path: Path
+    ) -> None:
+        """Real client + real service under the CLI: one hint, the full load-file one."""
+        csv_file = tmp_path / "d.csv"
+        csv_file.write_text("id\n1\n")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare", method="POST", json={"id": 100}
+        )
+        httpx_mock.add_response(
+            url=_IMPORT_URL, method="POST", json={"error": "bad delimiter"}, status_code=400
+        )
+        store = _make_store(tmp_path)
+        service = StorageService(
+            config_store=store,
+            client_factory=lambda url, token: KeboolaClient(stack_url=url, token=token),
+        )
+        with patch.object(KeboolaClient, "_upload_to_cloud"):
+            result = _invoke(
+                store,
+                service,
+                [
+                    "--json",
+                    "storage",
+                    "upload-table",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-b.users",
+                    "--file",
+                    str(csv_file),
+                    "--no-auto-create",
+                ],
+            )
+        assert result.exit_code != 0, result.output
+        message = json.loads(result.output)["error"]["message"]
+        assert message.count("Storage file 100") + message.count("--file-id 100") == 1
+        assert message.count("Import it with: kbagent storage load-file") == 1
+        assert "instead of uploading it again" not in message
 
     def test_load_file_5xx_keeps_file_id_and_flag(self, httpx_mock) -> None:
         httpx_mock.add_response(

@@ -792,8 +792,11 @@ def storage_job_detail(
     A job that ended in ``error`` is a 200 with ``status: "error"`` and an
     ``error`` object -- the job was read successfully; unlike the CLI there is
     no exit code to carry the failure. A ``wait`` that runs out answers with
-    ``STORAGE_JOB_TIMEOUT`` (the job keeps running).
+    ``STORAGE_JOB_TIMEOUT`` (the job keeps running). ``timeout`` without
+    ``wait=true`` is a 422 -- it would otherwise be silently ignored.
     """
+    if timeout is not None and not wait:
+        raise HTTPException(status_code=422, detail="timeout requires wait=true")
     return registry.storage.storage_job_detail(
         alias=project, job_id=job_id, wait=wait, timeout=timeout
     )

@@ -21,7 +21,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from ..client._core import _storage_job_error_message
+from ..client import storage_job_error_message
 from ..errors import ErrorCode, KeboolaApiError
 
 # The first two bytes of every gzip stream (RFC 1952). Sniffed instead of
@@ -79,7 +79,7 @@ def import_job_fields(job: dict[str, Any], file_id: Any) -> dict[str, Any]:
     status = job.get("status")
     if status == "error":
         raise KeboolaApiError(
-            message=_storage_job_error_message(job),
+            message=storage_job_error_message(job),
             status_code=500,
             error_code=ErrorCode.STORAGE_JOB_FAILED,
             retryable=False,
@@ -114,7 +114,7 @@ def _job_error(job: dict[str, Any]) -> dict[str, Any] | None:
     error = job.get("error")
     if isinstance(error, dict):
         return {"message": error.get("message"), "code": error.get("code")}
-    # Tolerate a bare string (see client._core._storage_job_error_message).
+    # Tolerate a bare string (see client._core.storage_job_error_message).
     return {"message": error if isinstance(error, str) else None, "code": None}
 
 

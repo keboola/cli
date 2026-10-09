@@ -3535,6 +3535,16 @@ class TestWaitForStorageJob:
             assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED, error_field
             assert "Storage job failed" in str(exc_info.value), error_field
 
+    def test_error_message_helper_is_public_package_api(self) -> None:
+        """The service layer and the SDK facade import it, so it is public (review NIT-1)."""
+        from keboola_agent_cli import client as client_pkg
+
+        assert "storage_job_error_message" in client_pkg.__all__
+        helper = client_pkg.storage_job_error_message
+        assert helper({"error": {"message": "bad header"}}) == "bad header"
+        assert helper({"error": "plain"}) == "plain"
+        assert helper({"error": 422}) == "Storage job failed"
+
     def test_polled_success_returns_the_polled_body(self, httpx_mock, monkeypatch) -> None:
         """A non-terminal initial body is polled until success; results come back.
 
