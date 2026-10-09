@@ -696,6 +696,23 @@ class SemanticLayerService(BaseService):
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             return _scope.inherited_scope(client, model_uuid)[0]
 
+    def _new_item_scope(
+        self,
+        client: MetastoreClient,
+        alias: str,
+        model_uuid: str,
+        *,
+        scope: ObjectScope | None,
+        target_projects: list[str] | None,
+    ) -> _scope.NewItemScope:
+        """Scope for the items `import` / `promote` create: ``scope`` if given, else the model's."""
+        if scope is None:
+            inherited, target_ids = _scope.inherited_scope(client, model_uuid)
+            return _scope.NewItemScope(inherited, target_ids, inherited=True)
+        return _scope.NewItemScope(
+            scope, self._target_ids(alias, scope, target_projects), inherited=False
+        )
+
     def _post_scoped(
         self,
         client: MetastoreClient,
@@ -713,25 +730,16 @@ class SemanticLayerService(BaseService):
             scope, target_ids = _scope.inherited_scope(client, data["modelUUID"])
         else:
             target_ids = self._target_ids(alias, scope, target_projects)
-        try:
-            return client.post_item(
-                item_type, name=name, data=data, scope=scope, target_project_ids=target_ids
-            )
-        except KeboolaApiError as exc:
-            if not (
-                inherited and scope == "organization" and exc.error_code == ErrorCode.ACCESS_DENIED
-            ):
-                raise
-            raise KeboolaApiError(
-                message=(
-                    f"{exc.message} The model is {scope!r}-scoped, so this child inherits that "
-                    "scope; creating at it needs an organization-admin token. Pass "
-                    "`--scope project` to create it project-only, or use an org-admin token."
-                ),
-                status_code=exc.status_code,
-                error_code=exc.error_code,
-                retryable=False,
-            ) from exc
+        return _scope.post_child(
+            client,
+            item_type,
+            name=name,
+            data=data,
+            scope=scope,
+            target_project_ids=target_ids,
+            inherited=inherited,
+            remedy="Pass `--scope project` to create it project-only, or use an org-admin token.",
+        )
 
     def create_model(
         self,
@@ -1018,17 +1026,24 @@ class SemanticLayerService(BaseService):
         model_name_or_uuid: str | None,
         *,
         term: str,
-        definition: str = "",
+        definition: str,
         scope: ObjectScope | None = None,
         target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a glossary term. Outer envelope ``name`` must equal ``term``."""
+        """Create a glossary term. Outer envelope ``name`` must equal ``term``.
+
+        ``definition`` is required: every ``semantic-glossary`` schema version lists it in
+        ``required``, so a term without one is a 422 "Validation failed" from the metastore.
+        """
+        if not definition.strip():
+            raise KeboolaApiError(
+                message="--definition is required: the metastore rejects a glossary term without one.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
-            data: dict[str, Any] = {"term": term, "modelUUID": model_uuid}
-            if definition:
-                data["definition"] = definition
+            data: dict[str, Any] = {"term": term, "definition": definition, "modelUUID": model_uuid}
             return self._post_scoped(
                 client,
                 alias,
@@ -1513,6 +1528,8 @@ class SemanticLayerService(BaseService):
         types: list[str] | None = None,
         dry_run: bool = False,
         overwrite: bool = False,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replay a snapshot produced by :meth:`export_model` into a project.
 
@@ -1526,6 +1543,8 @@ class SemanticLayerService(BaseService):
                 hitting any write API.
             overwrite: When True, update conflicting items by name in place (PUT).
                 Default (False) skips conflicts.
+            scope / target_projects: scope of the NEW items. ``None`` = the target
+                model's own (the ``add <kind>`` rule); overwritten items keep theirs.
 
         Returns:
             ``{imported: {<type>: {created, skipped, overwritten, failed}}}``.
@@ -1550,6 +1569,8 @@ class SemanticLayerService(BaseService):
             types=types,
             dry_run=dry_run,
             overwrite=overwrite,
+            scope=scope,
+            target_projects=target_projects,
         )
 
     def import_snapshot_from_dict(
@@ -1561,6 +1582,8 @@ class SemanticLayerService(BaseService):
         types: list[str] | None = None,
         dry_run: bool = False,
         overwrite: bool = False,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Replay an in-memory snapshot dict (sibling of :meth:`import_snapshot`).
 
@@ -1582,6 +1605,9 @@ class SemanticLayerService(BaseService):
         with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
             existing_by_type = self._fetch_children_parallel(client, model_uuid)
+            new_item_scope = self._new_item_scope(
+                client, alias, model_uuid, scope=scope, target_projects=target_projects
+            )
 
             imported = _run_import_loop(
                 client,
@@ -1591,6 +1617,7 @@ class SemanticLayerService(BaseService):
                 type_filter=type_filter,
                 dry_run=dry_run,
                 overwrite=overwrite,
+                new_item_scope=new_item_scope,
             )
             return {
                 "target_project": alias,
@@ -1614,6 +1641,8 @@ class SemanticLayerService(BaseService):
         to_model: str | None = None,
         types: list[str] | None = None,
         dry_run: bool = False,
+        scope: ObjectScope | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Promote a model's entities from one project to another.
 
@@ -1645,6 +1674,9 @@ class SemanticLayerService(BaseService):
 
             src_children = self._fetch_children_parallel(src_client, src_uuid)
             tgt_children = self._fetch_children_parallel(tgt_client, tgt_uuid)
+            new_item_scope = self._new_item_scope(
+                tgt_client, to_project, tgt_uuid, scope=scope, target_projects=target_projects
+            )
 
             per_type_stats = _run_promote_loop(
                 tgt_client,
@@ -1653,6 +1685,7 @@ class SemanticLayerService(BaseService):
                 target_model_uuid=tgt_uuid,
                 type_filter=type_filter,
                 dry_run=dry_run,
+                new_item_scope=new_item_scope,
             )
             return {
                 "from_project": from_project,

@@ -5801,6 +5801,31 @@ examples. Surprises worth knowing before you touch this:
   a typed `--scope organization` (`--deny-destructive` blocks it), and a
   project-admin token that is not an org admin gets a 403 on it, with a hint
   to pass `--scope project`.
+- **`import`, `promote` and `build --model` follow the same rule (since vNEXT).**
+  Their NEW items take the target model's scope and target projects, with the
+  same permission gate. Before, they always created `project` items: an
+  import into a `targeted` or `organization` model gave items that no other
+  project could see. Items they overwrite keep their own scope. `import` and
+  `promote` take `--scope` / `--target-project` to override the inherited
+  scope, like `add <kind>`: a project-admin token that is not an org admin
+  passes `--scope project` under an `organization` model, or every new item
+  fails with a 403 (listed under `failed`, exit 0).
+- **Item names are unique per project, not per model (since vNEXT, message).**
+  The metastore keeps names unique per object type across ALL models of a
+  project (and across the organization at `organization` scope). A second
+  model in the same project cannot reuse an item name: `ALREADY_EXISTS` now
+  says "in this project" (it used to say "in the target model"). To copy a
+  model within a project, delete the old one first, or rename the items.
+- **An item stored at schema version `1.0.0` cannot be elevated (since vNEXT,
+  message).** Items created before 0.97.0 pinned `1.0.0`. `scope
+  request-create` and `scope set --scope organization` on them fail with
+  "scope not supported"; the error now names the stored version and the fix:
+  `export`, `model delete`, `model create`, `import`. A `project` item also
+  cannot become `targeted` (grants exist only on items created `targeted`),
+  so the same steps apply to share it with chosen projects.
+- **`add glossary` needs `--definition` (since vNEXT).** Every
+  `semantic-glossary` schema requires `definition`. Without it the metastore
+  answered a bare 422 "Validation failed"; now it is a usage error (exit 2).
 - **`--target-project` takes an alias or a numeric project ID** (repeatable or
   comma-separated), so the target need not be registered in kbagent. An alias
   must be on the owner project's stack (a project ID only means the same

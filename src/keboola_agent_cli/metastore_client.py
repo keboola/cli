@@ -119,6 +119,31 @@ _ENVELOPE_BRANCH = "main"
 _DEFAULT_SCOPE: ObjectScope = "project"
 
 
+def _name_conflict(item_type: str, name: str, exc: KeboolaApiError) -> KeboolaApiError:
+    """The ALREADY_EXISTS error for a duplicate item name.
+
+    The metastore keeps item names unique per object type across ALL models of a project
+    (`Object with this name already exists in this project`), and across the organization for
+    organization-scope items (`... in organization scope`) -- not per model. So the clash can be
+    with an item of another model.
+    """
+    where = (
+        "at organization scope in this organization"
+        if "organization scope" in exc.message
+        else "in this project"
+    )
+    return KeboolaApiError(
+        message=(
+            f"{item_type} with name {name!r} already exists {where}. Names of one item type are "
+            "unique across all models, not per model: pick another name, or edit or remove the "
+            "existing item."
+        ),
+        status_code=exc.status_code,
+        error_code=ErrorCode.ALREADY_EXISTS,
+        retryable=False,
+    )
+
+
 class MetastoreClient(BaseHttpClient):
     """HTTP client for the Keboola Metastore (semantic layer repository).
 
@@ -335,15 +360,7 @@ class MetastoreClient(BaseHttpClient):
                 exc.status_code == 500 and "Failed to create meta object" in exc.message
             )
             if is_duplicate:
-                raise KeboolaApiError(
-                    message=(
-                        f"{item_type} with name {name!r} already exists in the "
-                        "target model. Use `edit` to update, or `remove` first."
-                    ),
-                    status_code=exc.status_code,
-                    error_code=ErrorCode.ALREADY_EXISTS,
-                    retryable=False,
-                ) from exc
+                raise _name_conflict(item_type, name, exc) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
@@ -381,12 +398,7 @@ class MetastoreClient(BaseHttpClient):
             )
         except KeboolaApiError as exc:
             if exc.status_code == 409:
-                raise KeboolaApiError(
-                    message=f"{item_type} with name {name!r} already exists. Pick another name.",
-                    status_code=409,
-                    error_code=ErrorCode.ALREADY_EXISTS,
-                    retryable=False,
-                ) from exc
+                raise _name_conflict(item_type, name, exc) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body

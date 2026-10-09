@@ -1077,7 +1077,7 @@ kbagent semantic-layer add dataset --project P [--model M] --name N --table-id T
 #   --overwrite. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
 kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
-kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]
+kbagent semantic-layer add glossary --project P [--model M] --term TERM --definition D
 kbagent semantic-layer edit metric --project P [--model M] --name N [--new-name N2] [--new-sql SQL] [--new-dataset TABLE_ID] [--new-description D] [--yes]
 kbagent semantic-layer edit dataset --project P [--model M] --name N [--new-name N2] [--new-description D] [--new-grain G]
 kbagent semantic-layer edit constraint --project P [--model M] --name N [--new-name N2] [--new-rule "EXPR"] [--new-constraint-type T] [--new-severity error|warning|info] [--new-metrics M1,M2]
@@ -1088,8 +1088,8 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
 # scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
@@ -1098,7 +1098,15 @@ kbagent semantic-layer token --encrypt --project P --component-id C
 #   create` and every `add <kind>` above. --scope omitted: `model create` makes a "project"
 #   item, `add <kind>` INHERITS its model's scope (an org-level model gets org-level children;
 #   a targeted model, its target projects); an inherited organization scope is permission-gated
-#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). --target-project takes a registered alias OR a
+#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). `import`,
+#   `promote` and `build --model` create their NEW items at the target model's scope the same way
+#   (same gate: FLAG_ESCALATIONS `semantic-layer.import|promote|build --scope organization`);
+#   `import` / `promote --scope` (+ --target-project) override it, e.g. `--scope project` for a
+#   non-org-admin under an org-level model; items they overwrite keep their own scope. Item names are unique per object type across ALL
+#   models of a project (ALREADY_EXISTS says "in this project"), so a model cannot be copied into
+#   a second model of the same project under the same item names. An item stored at schema version
+#   1.0.0 (created before 0.97.0) cannot be elevated: the error names the stored version and the
+#   fix (export, delete, create again, import). --target-project takes a registered alias OR a
 #   numeric project ID (repeatable or comma-separated; an alias must be on the owner's stack);
 #   without --scope targeted it exits 2. With --scope targeted and no --target-project: a real
 #   terminal launches an interactive picker over the other projects on the stack; --json fails

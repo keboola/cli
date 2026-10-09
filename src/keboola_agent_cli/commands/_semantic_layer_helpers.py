@@ -73,6 +73,27 @@ def _is_stdin_tty() -> bool:
     return hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
 
 
+def gate_inherited_organization_scope(
+    ctx: typer.Context, *, operation: str, alias: str, model: str | None
+) -> None:
+    """Permission-gate a write whose new items take an ``organization`` scope from their model.
+
+    `add <kind>` without --scope, `import`, `promote` and `build --model` create items at the
+    model's scope. An inherited organization scope widens visibility like a typed
+    ``--scope organization``, so it goes through the same check (``FLAG_ESCALATIONS``). The
+    model lookup runs only when a permission policy is active.
+    """
+    engine = ctx.obj.get("permission_engine")
+    if engine is None or not engine.active:
+        return
+    service = get_service(ctx, "semantic_layer_service")
+    inherited = _handle_service_call(
+        ctx, service.child_scope, alias=alias, model_name_or_uuid=model
+    )
+    if inherited == "organization":
+        check_cli_operation(ctx, f"{operation} --scope organization")
+
+
 def resolve_scope_targets(
     ctx: typer.Context,
     *,
@@ -98,17 +119,10 @@ def resolve_scope_targets(
     context it hard-fails instead of silently defaulting -- widening an
     object's visibility across projects is not a guess this CLI makes.
     """
-    engine = ctx.obj.get("permission_engine")
-    if scope is None and inherit_from_model is not None and engine is not None and engine.active:
-        # `add <kind>` without --scope takes its model's scope: an inherited
-        # organization scope widens visibility just like a typed one, so it goes
-        # through the same permission gate.
-        service = get_service(ctx, "semantic_layer_service")
-        inherited = _handle_service_call(
-            ctx, service.child_scope, alias=owner_alias, model_name_or_uuid=inherit_from_model[0]
+    if scope is None and inherit_from_model is not None:
+        gate_inherited_organization_scope(
+            ctx, operation=operation, alias=owner_alias, model=inherit_from_model[0]
         )
-        if inherited == "organization":
-            check_cli_operation(ctx, f"{operation} --scope organization")
     if scope == "organization":
         check_cli_operation(ctx, f"{operation} --scope organization")
     if scope != "targeted":

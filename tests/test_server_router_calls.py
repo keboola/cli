@@ -970,7 +970,9 @@ def test_create_model_and_add_item_pass_scope_through(tmp_path: Path) -> None:
     assert sl.create_model.call_args.kwargs["target_projects"] == ["analytics"]
     assert (
         client.post(
-            "/semantic-layer/items/glossary", json={"project": PROJECT, "term": "t"}, headers=AUTH
+            "/semantic-layer/items/glossary",
+            json={"project": PROJECT, "term": "t", "definition": "d"},
+            headers=AUTH,
         ).status_code
         == 200
     )

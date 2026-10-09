@@ -16,7 +16,30 @@ constraint, glossary term) carries a visibility **scope**:
 `add <kind>` without `--scope` **inherits its model's scope** (and target
 projects), so an org-level model gets org-level children. Pass `--scope` to
 override (a project-admin token that is not an org admin must pass
-`--scope project` under an org-level model, or it gets a 403).
+`--scope project` under an org-level model, or it gets a 403). *(since vNEXT)*
+`import`, `promote` and `build --model` create their new items at the target
+model's scope too; items they overwrite keep their own scope. `import` and
+`promote` take `--scope` / `--target-project` to override it, like `add`.
+
+## Share an existing project-only model
+
+A `project` item cannot become `targeted`: grants exist only on items created
+with `--scope targeted`. And an item created before 0.97.0 is stored at schema
+version `1.0.0`, which cannot be elevated to `organization` either. In both
+cases, create the model again:
+
+```bash
+kbagent semantic-layer export --project P --model M --output m.json
+kbagent semantic-layer model delete --project P --model M --yes
+kbagent semantic-layer model create --project P --name M --scope targeted --target-project OTHER
+kbagent semantic-layer import --project P --model M --file m.json
+```
+
+Delete the old model before the import: item names are unique per type across
+all models of a project, so the import into a second model of the same project
+fails with `ALREADY_EXISTS` ("in this project"). The import creates every item
+at the new model's scope. To share only part of the model, create the shared
+model with only those items, and keep the rest in a `project` model.
 
 For one-line command reference, see
 [commands-reference.md](commands-reference.md#scope--target-project-grants--elevation-scope-sub-app-psgo-140).
