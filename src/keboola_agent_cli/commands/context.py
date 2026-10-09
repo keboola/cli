@@ -769,12 +769,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     as STRING from the CSV header; read through gzip for .csv.gz). Use --no-auto-create to require the table to exist.
     Full load by default; --incremental to append rows. Branch-aware. Two phases: cloud upload, then an async
     Storage import job.
-    Cloud upload (since vNEXT): on AWS stacks a file above 64 MiB goes up as an S3 MULTIPART upload (64 MiB parts,
+    Cloud upload (since 0.98.0): on AWS stacks a file above 64 MiB goes up as an S3 MULTIPART upload (64 MiB parts,
     auto-scaled to fit 10,000 parts, 4 in parallel, per-part retry; peak memory ~4 x part size). The old 5 GiB
     single-PUT ceiling is gone. Azure/GCP stacks are unchanged. Human mode shows a progress bar on stderr.
     The S3 credentials last 12 h (a 200 GB file needs ~5 MB/s sustained); the source file must not change during
     the upload (error if size/mtime moves); a failed upload restarts from zero (no resume).
-    Import (since vNEXT): --wait (default) waits up to --timeout SECONDS (default 600) for the import job.
+    Import (since 0.98.0): --wait (default) waits up to --timeout SECONDS (default 600) for the import job.
     --no-wait still waits for the upload, then enqueues the import and returns at once with file_id, job_id,
     job_status (imported_rows is null while pending) -- poll with `storage job-detail --job-id ID --wait`.
     A wait timeout is STORAGE_JOB_TIMEOUT (exit 4, retryable=false): the import KEEPS RUNNING server-side; the
@@ -782,7 +782,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     re-run duplicates rows. If the import fails or its enqueue fails after the upload, re-import the already
     uploaded file with `storage load-file --file-id ID` instead of uploading again.
     For a 100+ GB file use --no-wait and poll (see the large-upload workflow in the kbagent skill).
-    --progress (since vNEXT): ALWAYS report progress on stderr, also with --json and without a terminal: a bar on
+    --progress (since 0.98.0): ALWAYS report progress on stderr, also with --json and without a terminal: a bar on
     a terminal, else one line every 10 s + a final line, e.g.
     `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`. stdout stays clean JSON.
     For long runs: `kbagent --json storage upload-table ... --progress 2>progress.log`, then read the log.
@@ -893,7 +893,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID] [--progress]
     Upload any file to Storage Files. --tag assigns tags (repeatable). --permanent prevents auto-deletion after 15 days.
     --name overrides the filename (default: local filename). Branch-aware. --progress as on upload-table.
-    Since vNEXT: same S3 multipart upload as upload-table on AWS stacks (above 64 MiB; no 5 GiB ceiling).
+    Since 0.98.0: same S3 multipart upload as upload-table on AWS stacks (above 64 MiB; no 5 GiB ceiling).
 
   kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE] [--progress]
     Download a Storage File. Either --file-id (by ID) or --tag (latest file matching all tags).
@@ -912,11 +912,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
     Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload,
     and the recovery path after a failed upload-table import (no re-upload). --incremental to append rows.
-    Since vNEXT: --wait/--no-wait + --timeout SECONDS (default 600) behave exactly as on upload-table
+    Since 0.98.0: --wait/--no-wait + --timeout SECONDS (default 600) behave exactly as on upload-table
     (--no-wait returns job_id; a wait timeout is STORAGE_JOB_TIMEOUT, exit 4, the import keeps running). Branch-aware.
 
   kbagent storage job-detail --project NAME --job-id ID [--wait] [--timeout SECONDS]
-    (since vNEXT) Show one Storage API job: status, operation_name, table_id, file_id, created/start/end times,
+    (since 0.98.0) Show one Storage API job: status, operation_name, table_id, file_id, created/start/end times,
     imported_rows, warnings, results, error. --wait polls until the job finishes (--timeout budget).
     Exit 0 for success/waiting/processing; exit 1 STORAGE_JOB_FAILED when the job ended in error (details are
     still returned); exit 4 on a --wait timeout. Job ids are project-scoped (no --branch; the active branch does

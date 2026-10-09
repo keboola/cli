@@ -26,6 +26,44 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.98.0": [
+        "New (#837): `storage upload-table` and `file-upload` now upload large files to AWS "
+        "stacks in parts, so files over 5 GB work and memory stays flat. Files above 64 MiB are "
+        "sent as an S3 multipart upload: 64 MiB parts, four in parallel, each part retried on "
+        "its own. Before, kbagent read the whole file into memory and S3 refused anything over "
+        "5 GB. In a test, a 10 GB file that 0.97.0 could not upload (it used 10 GB of memory and "
+        "then failed) uploaded in about four minutes with under 350 MB of memory. A `.csv.gz` "
+        "file is uploaded as it is. Azure and GCP stacks are unchanged.",
+        "New (#837): `storage upload-table` and `load-file` can queue the import without waiting "
+        "for it, and the new `storage job-detail` command follows the import. `--no-wait` "
+        "returns `job_id` and `file_id` as soon as the import is queued; `--timeout` sets how "
+        "long the default `--wait` waits. `storage job-detail --job-id ID [--wait]` shows the "
+        "status, the table and the imported rows. When the wait times out, the error says the "
+        "import keeps running, names the job, and is no longer marked retryable, so a long "
+        "upload is not repeated by mistake. `kbagent serve` (`GET /storage/jobs/{project}/"
+        "{job_id}`) and the SDK (`Client.storage_job()`) have the same functions.",
+        "New (#837): `--progress` shows percent, speed, elapsed time and the estimated time left "
+        "for `storage upload-table`, `file-upload`, `download-table`, `file-download` and "
+        "`unload-table --download`. It writes to stderr, also with `--json`: a progress bar in "
+        "a terminal, otherwise one line every 10 seconds.",
+        "Fix (#837): `storage download-table --keep-slices`, `file-download` and `unload-table` "
+        "now keep every slice file inside the output directory. A slice name from the export manifest that "
+        "could point outside it (`..`, a backslash, a drive letter) is replaced by "
+        "`part-NNNNN`.",
+        "Fix (#747): commands that process several items now exit 1 and print `Failed:` when "
+        "an item fails. Before, `sync push`, `sync clone`, `org setup`, `project refresh`, "
+        "`workspace gc`, several `semantic-layer` commands, `storage describe-batch --json`, "
+        "`flow schedule-remove` and others printed `Success:` and exited 0 even when items "
+        "failed. A `--dry-run` that reports a failed item exits 1 too. The `--json` output "
+        "keeps its keys, with a few additions such as `errors[]` in `flow schedule-remove`.",
+        "Fix (#836): `semantic-layer import`, `promote` and `build --model` now give new items "
+        "the scope of the target model. Before, they created every item at `project` scope, "
+        "also in a shared model, so the other projects could not see it. Items they overwrite "
+        "keep their own scope. Duplicate-name and elevation errors now say what is wrong and "
+        "how to fix it.",
+        "Change (#836): `semantic-layer add glossary` now requires `--definition`. Without it the "
+        "Metastore always rejected the item with a bare 422 error, so no working call breaks.",
+    ],
     "0.97.0": [
         "New (#715): semantic-layer items can now be shared with chosen projects or with the "
         "whole organization, not only kept in the owning project (AI-3790). `model create` and "

@@ -474,7 +474,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   projects succeed. Branch on the code, never on the message. The fan-out
   readers work on a session now, so a per-project `AUTH_NOT_SUPPORTED_ON_STACK`
   comes only from one of the three static-only features.
-- **Exit 1 with a full `--json` payload = a partial failure (vNEXT+, #745)**:
+- **Exit 1 with a full `--json` payload = a partial failure (0.98.0+, #745)**:
   a write that keeps going after one item fails (`sync push`, `sync clone`,
   `sync push/pull/diff --all-projects`, `org setup`, `project refresh`,
   `project invite --from-csv`, `workspace gc`, `semantic-layer
@@ -516,7 +516,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   are `cli:*` categories, exact operation names, or globs matching >=1
   operation (check with `kbagent permissions list`).
 
-**Big `storage upload-table` (since vNEXT)**
+**Big `storage upload-table` (since 0.98.0)**
 - Use `--no-wait`, keep `job_id` + `file_id`, poll `storage job-detail --wait`.
   `STORAGE_JOB_TIMEOUT` here = import still running: NEVER re-run the upload
   (duplicate rows); recover with `load-file --file-id`.
