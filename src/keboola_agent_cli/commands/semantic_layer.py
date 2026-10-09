@@ -17,11 +17,13 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    item_failure_exit_code,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import (
@@ -381,6 +383,13 @@ def _print_build_result(console: Console, data: dict) -> None:
             console.print(f"  [red]✗[/red] {e['type']} {e['item']} — {e['detail']}")
     if warns:
         console.print(f"\n[bold yellow]Validation: {len(warns)} warning(s)[/bold yellow]")
+    fetch_errs = data.get("fetch_errors") or []
+    if fetch_errs:
+        console.print(
+            f"\n[bold red]Failed: {len(fetch_errs)} table(s) left out of the model[/bold red]"
+        )
+        for e in fetch_errs:
+            console.print(f"  [red]✗[/red] {e['table_id']} — {e['error']}")
     type_errs = data.get("type_resolution_errors") or []
     if type_errs:
         console.print(
@@ -550,6 +559,9 @@ def semantic_layer_build(
         auto_resolve_types=auto_types_workspace,
     )
     formatter.output(result, _print_build_result)
+    # A table whose schema fetch failed is left out of the model (#745).
+    if code := item_failure_exit_code(len(result.get("fetch_errors") or [])):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("promote")
@@ -622,6 +634,10 @@ def semantic_layer_promote(
         target_projects=target_projects,
     )
     formatter.output(result, _print_promote_result)
+    # Per-item failures are collected per type, not raised (#745).
+    failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
+    if code := item_failure_exit_code(failed):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("import")
@@ -683,6 +699,10 @@ def semantic_layer_import(
         target_projects=target_projects,
     )
     formatter.output(result, _print_import_result)
+    # Per-item failures are collected per type, not raised (#745).
+    failed = sum(len(per.get("failed", [])) for per in (result.get("imported") or {}).values())
+    if code := item_failure_exit_code(failed):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("show")

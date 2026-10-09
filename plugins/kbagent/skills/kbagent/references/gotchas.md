@@ -2597,8 +2597,9 @@ config, the retry fires, and the retry destroys it for good.
   The `rows[]` array in the result is in completion order, not CSV order.
 - Per-row parsing of `failed_rows` should match by `email`, not by index.
 - A failed row never aborts the run -- the executor accumulates results and
-  the command exits 0 with `failed > 0` reflected in the JSON summary. Mirror
-  the `org setup` partial-success exit semantics.
+  reports `failed > 0` in the JSON summary. *(since vNEXT)* The command then
+  exits 1, like `org setup`; on 0.97.0 and older it exited 0 even then, so
+  check `failed` there. The full JSON payload is emitted before the exit.
 
 ## `default_bucket` is per-config and only an output prefix
 
@@ -3541,7 +3542,8 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
   inspect `errors[]` (or at least `error_count`) rather than relying solely on
-  the exit code — and when consuming `--json` output, never trust a zero-exit
+  the exit code. *(since vNEXT)* `--json` also exits 1 when `error_count > 0`;
+  on 0.97.0 and older it exited 0 even then, so there never trust a zero-exit
   as "everything applied." That tolerance covers **API** failures only: a
   `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
@@ -5809,7 +5811,8 @@ examples. Surprises worth knowing before you touch this:
   `promote` take `--scope` / `--target-project` to override the inherited
   scope, like `add <kind>`: a project-admin token that is not an org admin
   passes `--scope project` under an `organization` model, or every new item
-  fails with a 403 (listed under `failed`, exit 0).
+  fails with a 403 (listed under `failed`; since vNEXT the command exits 1,
+  on 0.97.0 and older it exited 0).
 - **Item names are unique per project, not per model (since vNEXT, message).**
   The metastore keeps names unique per object type across ALL models of a
   project (and across the organization at `organization` scope). A second
@@ -5873,3 +5876,82 @@ examples. Surprises worth knowing before you touch this:
   endpoint -- each item needs its own `request-create` + `set --scope
   organization` call. Never loop this over a whole project's objects without
   the user having named which ones should become org-wide.
+
+## A partial failure is no longer reported as success
+
+*(since vNEXT, closes #745)* A command that keeps going after one item fails
+used to print a green `Success:` line and exit **0**, with the failures only as
+warnings below it. A `sync clone` where every config failed reported
+`Success ... 0 created` and exit 0. A script could not tell a clean run from a
+total failure by the exit code.
+
+Now, when at least one item failed:
+
+- the exit code is **1** (the convention `storage delete-table`,
+  `storage file-tag` and `storage describe-migrate` already used);
+- commands that used to print a green `Success:` headline (`sync push`,
+  `sync clone`, `storage describe-batch`, `storage describe-migrate`,
+  `flow schedule-remove`) now print `Failed:` and the failed count instead, for
+  example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`. The
+  other commands keep their output: `org setup`, `project refresh`,
+  `project invite --from-csv`, `workspace gc` and the `semantic-layer`
+  commands list the failed items in a table or in summary lines, and the
+  `--all-projects` sync variants state the failed count in their summary line;
+- `--json` output keeps its keys and is emitted before the exit. New keys:
+  `org setup --refresh` lists failed token refreshes under
+  `projects_refresh_failed`, and `flow schedule-remove` returns `errors[]`. Parse the
+  payload, then check the exit code. Exit 1 here does not mean that nothing
+  was written: the items that succeeded stay written, so read the payload
+  before you run the command again.
+
+Commands whose exit code changes from 0 to 1 (the key that holds the failures):
+
+- `sync push` (`errors[]`);
+- `sync push --all-projects` (`summary.failed`). `summary.failed` now also
+  counts a project whose push returned a non-empty `errors[]`; before, that
+  project counted in `summary.success` and its line read `OK`. Its line is now
+  marked `x` and states the failed count;
+- `sync pull --all-projects` (`summary.failed`);
+- `sync clone` (`errors[]` and `bucket_errors[]`);
+- `org setup` (`projects_failed`, and with `--refresh` also
+  `projects_refresh_failed`: entries keyed by `alias`, fix them with
+  `project refresh`);
+- `project refresh` (`projects_failed`);
+- `project invite --from-csv` (`failed`);
+- `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
+  that could not be listed);
+- `semantic-layer import` / `semantic-layer promote` (`failed[]` of each type);
+- `semantic-layer build` (`fetch_errors[]`: a table left out of the model
+  because its schema could not be read; human mode now lists these tables);
+- `semantic-layer edit metric --new-name` (a `cascaded_constraints[]` entry
+  with `status: "failed"`);
+- `storage describe-batch --json` (`errors[]`; human mode already exited 1);
+- `flow schedule-remove` (`errors[]`, a new key: a schedule whose delete
+  failed while other schedules were deleted. Before, that failure was dropped
+  and the command printed `Success: Removed N schedule(s)`). The result always
+  has the `errors` key, empty when nothing failed. A partial failure fills it
+  and the command exits 1. When every schedule delete fails, the command
+  still raises the error (`SCHEDULE_DELETE_FAILED`) and prints no result
+  payload, as before.
+
+`storage describe-migrate` keeps its exit code; its human headline now starts
+with `Failed:` too.
+
+A `--dry-run` of every command above exits 1 when it reports a failed item,
+like the real run. `sync diff --all-projects` also exits 1 when a project
+failed (`summary.failed > 0`); a read that fails is still a failure.
+
+Not failures (exit 0, as before):
+
+- a clean run and a `no_changes` result;
+- other read-only fan-outs, where one unreachable project must not fail the
+  whole read: `billing credits`, `job list`, `schedule list`, `notification list`, `config list`,
+  `storage tables` and the other multi-project reads (check `errors[]`);
+- one item with a documented partial outcome: `flow schedule`
+  (`activated: false`), `notification replace-recipient`
+  (`old_deleted: false`);
+- `semantic-layer build` `type_resolution_errors[]`: the table stays in the
+  model, and its columns without a type are classified as dimensions.
+
+On 0.97.0 and older, exit 0 from these commands does not prove success. Parse
+`--json` and check the keys above before you report the operation as done.

@@ -2451,6 +2451,32 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 When you receive a non-zero exit code, use --json to get structured error details.
 
+Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
+item fails exit 1 when at least one item failed: sync push, sync
+push/pull/diff --all-projects, sync clone, org setup, project refresh,
+project invite --from-csv, workspace gc, semantic-layer
+import/promote/build/edit metric, storage describe-batch, flow
+schedule-remove. Only sync push, sync clone, storage describe-batch, storage
+describe-migrate and flow schedule-remove print a "Failed:" headline with the
+failed count instead of "Success:". The other commands list the failed items
+in a table or in summary lines, and the --all-projects variants state the
+count in the summary line. flow schedule-remove always returns the errors[]
+key, empty when nothing failed; a partial failure fills it and exits 1; when
+every schedule delete fails it still raises SCHEDULE_DELETE_FAILED.
+The bulk storage commands
+(delete-table, delete-bucket, file-delete, describe-migrate, ...) already
+exited 1. The --json payload is still emitted in full (errors / projects_failed
+/ projects_refresh_failed / failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
+branch on the exit code. Exit 1 here does not mean nothing was written: the
+items that succeeded stay written, so read the payload before you run the
+command again. A --dry-run of these commands exits 1 when it reports a failed
+item, like the real run. sync diff --all-projects also exits 1 when a project
+failed.
+Other read-only multi-project fan-outs (billing credits, job list, schedule
+list, notification list, ...) are the deliberate exception: a per-project
+failure there degrades that project only and still exits 0, so check their
+errors array rather than the exit code.
+
 ## Claude Code Plugin
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:

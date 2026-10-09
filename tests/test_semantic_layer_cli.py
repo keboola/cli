@@ -815,7 +815,8 @@ class TestEditMetric:
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 0, result.output
+        # A failed cascade entry is a failed item: exit 1 since #745.
+        assert result.exit_code == 1, result.output
         assert "PARTIAL STATE" in result.output
         assert "Recovery:" in result.output
 
@@ -854,7 +855,8 @@ class TestEditMetric:
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 0, result.output
+        # Exit 1 since #745; the full payload is still emitted before it.
+        assert result.exit_code == 1, result.output
         body = json.loads(result.output)
         assert body["status"] == "ok"
         assert body["data"]["partial_state"] is True

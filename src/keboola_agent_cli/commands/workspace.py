@@ -25,6 +25,7 @@ from ._helpers import (
     emit_project_warnings,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
 )
 
@@ -644,10 +645,20 @@ def workspace_gc(
                 formatter.console.print(
                     f"  [green]deleted[/green] workspace {ws['id']} in '{escape(ws['project_alias'])}'"
                 )
-            for err in result.get("errors", []):
-                formatter.console.print(
-                    f"  [red]error[/red] workspace {err.get('workspace_id', '?')}: {escape(err.get('error', ''))}"
-                )
+        # Listing failures carry `message`, delete failures carry `workspace_id` and `error`.
+        for err in result.get("errors", []):
+            target = (
+                f"workspace {err['workspace_id']} in '{escape(err['project_alias'])}'"
+                if "workspace_id" in err
+                else f"project '{escape(err.get('project_alias', '?'))}'"
+            )
+            text = escape(str(err.get("error") or err.get("message") or ""))
+            formatter.console.print(f"  [red]error[/red] {target}: {text}")
+
+    # A workspace that could not be deleted, or a project that could not be
+    # listed, is collected in errors[]; the run is then not a success (#745).
+    if code := item_failure_exit_code(len(result.get("errors", []))):
+        raise typer.Exit(code=code)
 
 
 @workspace_app.command("from-transformation")
