@@ -33,6 +33,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_UNSAFE_SLICE_NAME_CHARS = ("/", "\\", ":", "\x00")
+
+
+def _contained_slice_name(name: str, idx: int, out: Path, used: set[str]) -> str:
+    """A local file name for slice ``idx`` that cannot leave ``out``.
+
+    ``name`` comes from the manifest entry URL, i.e. from the server. A name
+    that is empty, ``.``/``..``, carries a path separator (``/``, or ``\\``
+    which Windows treats as one), a drive/stream colon or a NUL, or that
+    resolves anywhere but directly inside ``out`` falls back to
+    ``part-{idx:05d}``. A name already taken (another slice, or the
+    ``_manifest.json`` written beside them) gets the slice index as a prefix,
+    so no slice overwrites another. ``used`` is updated in place.
+    """
+    safe = (
+        name not in ("", ".", "..")
+        and not any(c in name for c in _UNSAFE_SLICE_NAME_CHARS)
+        and (out / name).resolve().parent == out.resolve()
+    )
+    candidate = name if safe else f"part-{idx:05d}"
+    if candidate in used:
+        candidate = f"{idx:05d}-{candidate}"
+        while candidate in used:
+            candidate = f"_{candidate}"
+    used.add(candidate)
+    return candidate
+
+
 def _report_bytes(on_progress: DownloadProgress, total: int | None, done: int) -> None:
     on_progress(done, total)
 
@@ -326,6 +354,7 @@ class _StorageFilesMixin(_CoreClient):
 
         slices: list[dict[str, Any]] = []
         total = 0
+        used_names = {"_manifest.json"}
 
         for idx, entry in enumerate(entries):
             entry_url = entry.get("url", "")
@@ -336,10 +365,8 @@ class _StorageFilesMixin(_CoreClient):
             is_gz = clean_url.endswith(".gz")
             if is_gz:
                 basename = basename.removesuffix(".gz")
-            if not basename:
-                basename = f"part-{idx:05d}"
 
-            slice_path = out / basename
+            slice_path = out / _contained_slice_name(basename, idx, out, used_names)
             written = downloader.stream_to_file(slice_url, slice_path, is_gz, tracker)
             if tracker is not None:
                 tracker.next_slice()

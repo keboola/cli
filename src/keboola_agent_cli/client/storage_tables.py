@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TableUploadOutcome:
-    """What :meth:`_StorageTablesMixin.upload_table` leaves behind.
+    """What :meth:`_StorageTablesMixin.upload_table_with_outcome` leaves behind.
 
     Attributes:
         file_id: The Storage file the CSV was uploaded as. It outlives a failed
@@ -945,8 +945,42 @@ class _StorageTablesMixin(_CoreClient):
         wait: bool = True,
         max_wait: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Upload a CSV file into an existing table; return the job ``results``.
+
+        Public SDK surface (``Client.raw.upload_table``): it keeps its original
+        contract -- the import job's ``results`` dict (``importedRowsCount``,
+        ``warnings``, ...). Callers that need the Storage file ID or the job
+        itself (e.g. with ``wait=False``, where ``results`` is still empty) use
+        :meth:`upload_table_with_outcome`. Arguments are identical.
+        """
+        outcome = self.upload_table_with_outcome(
+            table_id,
+            file_path,
+            incremental,
+            delimiter,
+            enclosure,
+            branch_id,
+            wait=wait,
+            max_wait=max_wait,
+            on_progress=on_progress,
+        )
+        return outcome.job.get("results") or {}
+
+    def upload_table_with_outcome(
+        self,
+        table_id: str,
+        file_path: str,
+        incremental: bool = False,
+        delimiter: str = ",",
+        enclosure: str = '"',
+        branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        max_wait: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> TableUploadOutcome:
-        """Upload a CSV file into an existing table.
+        """Upload a CSV file into an existing table; return file ID and job.
 
         File-first async flow:
         1. Register file with Storage API → get cloud upload credentials

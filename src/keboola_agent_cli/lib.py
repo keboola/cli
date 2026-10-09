@@ -563,7 +563,7 @@ class Client:
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
         file_size_bytes = Path(file_path).stat().st_size
         try:
-            outcome = self._client.upload_table(
+            outcome = self._client.upload_table_with_outcome(
                 table_id=table_id,
                 file_path=str(file_path),
                 incremental=incremental,

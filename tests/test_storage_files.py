@@ -1390,6 +1390,71 @@ class TestClientDownloadSlicedFileToDir:
 
         client.close()
 
+    def test_slice_names_are_contained_in_output_dir(self, tmp_path: Path, httpx_mock) -> None:
+        """A crafted manifest entry name must never write outside output_dir."""
+        import json as json_mod
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        names = [
+            "..",
+            "..\\..\\evil.csv",
+            "C:evil",
+            ".",
+            "a\x00b",
+            "part-1.csv",
+            "part-1.csv",
+            "_manifest.json",
+            "part-00000",
+        ]
+        manifest = {"entries": [{"url": f"s3://bucket/export/{n}"} for n in names]}
+        file_detail = {
+            "id": 44,
+            "name": "x.csv",
+            "isSliced": True,
+            "url": "https://storage.example.com/manifest3",
+            "provider": "aws",
+        }
+        httpx_mock.add_response(
+            url="https://storage.example.com/manifest3",
+            content=json_mod.dumps(manifest).encode(),
+        )
+        written: list[Path] = []
+
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
+            written.append(Path(dest))
+            Path(dest).write_bytes(b"x")
+            return 1
+
+        fake_downloader = MagicMock()
+        fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
+
+        out_dir = tmp_path / "work" / "out"
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN) as client,
+            patch("keboola_agent_cli.client._CloudDownloader.create", return_value=fake_downloader),
+        ):
+            result = client.download_sliced_file_to_dir(file_detail, str(out_dir))
+
+        assert [p.name for p in written] == [
+            "part-00000",
+            "part-00001",
+            "part-00002",
+            "part-00003",
+            "part-00004",
+            "part-1.csv",
+            "00006-part-1.csv",
+            "00007-_manifest.json",
+            "00008-part-00000",
+        ]
+        assert all(p.resolve().parent == out_dir.resolve() for p in written)
+        assert len({p.name for p in written}) == len(names)
+        # The manifest itself was not overwritten by a slice named like it.
+        assert json_mod.loads((out_dir / "_manifest.json").read_text()) == manifest
+        assert not (tmp_path / "work" / "evil.csv").exists()
+        assert result["slice_count"] == len(names)
+
     def test_gunzips_gz_slices_and_strips_suffix(self, tmp_path: Path, httpx_mock) -> None:
         """CSV slices are often .gz; we decompress and drop the suffix."""
         import gzip

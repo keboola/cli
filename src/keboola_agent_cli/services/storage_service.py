@@ -1076,7 +1076,7 @@ class StorageService(ColumnDescriptionsMixin):
                         auto_created_table = True
                         logger.info("Auto-created table %s (%d columns)", table_id, len(columns))
 
-            outcome = client.upload_table(
+            outcome = client.upload_table_with_outcome(
                 table_id=table_id,
                 file_path=file_path,
                 incremental=incremental,

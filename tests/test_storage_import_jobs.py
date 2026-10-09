@@ -138,12 +138,45 @@ class TestClientImport:
             KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
             patch.object(KeboolaClient, "_upload_to_cloud") as upload,
         ):
-            outcome = client.upload_table(
+            outcome = client.upload_table_with_outcome(
                 table_id="in.c-b.users", file_path=str(csv_file), wait=False, on_progress=progress
             )
         assert outcome == TableUploadOutcome(file_id=100, job={"id": 42, "status": "waiting"})
         assert upload.call_args.kwargs["on_progress"] is progress
         assert not any("/v2/storage/jobs/" in str(r.url) for r in httpx_mock.get_requests())
+
+    def test_raw_upload_table_keeps_results_dict_contract(self, httpx_mock, tmp_path: Path) -> None:
+        """`Client.raw.upload_table` is public SDK surface: it returns the job
+        `results` dict (pre-#834 contract); the outcome lives on a new method."""
+        csv_file = tmp_path / "d.csv"
+        csv_file.write_text("id\n1\n")
+        self._prepare(httpx_mock)
+        httpx_mock.add_response(
+            url=_IMPORT_URL,
+            method="POST",
+            json={"id": 42, "status": "success", "results": {"importedRowsCount": 1}},
+            status_code=202,
+        )
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            patch.object(KeboolaClient, "_upload_to_cloud"),
+        ):
+            results = client.upload_table("in.c-b.users", str(csv_file))
+        assert results == {"importedRowsCount": 1}
+        assert results.get("importedRowsCount") == 1
+
+    def test_upload_table_with_outcome_returns_outcome(self, httpx_mock, tmp_path: Path) -> None:
+        csv_file = tmp_path / "d.csv"
+        csv_file.write_text("id\n1\n")
+        self._prepare(httpx_mock)
+        job = {"id": 42, "status": "success", "results": {"importedRowsCount": 1}}
+        httpx_mock.add_response(url=_IMPORT_URL, method="POST", json=job, status_code=202)
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            patch.object(KeboolaClient, "_upload_to_cloud"),
+        ):
+            outcome = client.upload_table_with_outcome("in.c-b.users", str(csv_file))
+        assert outcome == TableUploadOutcome(file_id=100, job=job)
 
     def test_enqueue_failure_after_upload_keeps_file_id(self, httpx_mock, tmp_path: Path) -> None:
         csv_file = tmp_path / "d.csv"
@@ -205,7 +238,7 @@ class TestServiceImport:
         csv_file = tmp_path / "d.csv"
         csv_file.write_text("id\n1\n")
         client = MagicMock()
-        client.upload_table.return_value = TableUploadOutcome(
+        client.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=100, job={"id": 55, "status": "waiting"}
         )
         service = _make_service(_make_store(tmp_path), client)
@@ -219,14 +252,14 @@ class TestServiceImport:
         )
         assert (result["file_id"], result["job_id"], result["job_status"]) == (100, 55, "waiting")
         assert result["imported_rows"] is None and result["warnings"] == []
-        kwargs = client.upload_table.call_args.kwargs
+        kwargs = client.upload_table_with_outcome.call_args.kwargs
         assert kwargs["wait"] is False and kwargs["max_wait"] == 30
 
     def test_upload_timeout_names_job_detail_command(self, tmp_path: Path) -> None:
         csv_file = tmp_path / "d.csv"
         csv_file.write_text("id\n1\n")
         client = MagicMock()
-        client.upload_table.side_effect = _import_timeout()
+        client.upload_table_with_outcome.side_effect = _import_timeout()
         service = _make_service(_make_store(tmp_path), client)
         with pytest.raises(KeboolaApiError) as exc_info:
             service.upload_table(
@@ -242,7 +275,7 @@ class TestServiceImport:
         csv_file = tmp_path / "d.csv"
         csv_file.write_text("id\n1\n")
         client = MagicMock()
-        client.upload_table.side_effect = KeboolaApiError(
+        client.upload_table_with_outcome.side_effect = KeboolaApiError(
             "Table not found",
             status_code=404,
             error_code=ErrorCode.NOT_FOUND,
@@ -386,7 +419,7 @@ class TestReadCsvHeader:
         client = MagicMock()
         client.get_bucket_detail.return_value = {"id": "in.c-b"}
         client.list_tables.return_value = []
-        client.upload_table.return_value = TableUploadOutcome(
+        client.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=1, job={"id": 2, "status": "success", "results": {"importedRowsCount": 1}}
         )
         service = _make_service(_make_store(tmp_path), client)
@@ -702,7 +735,7 @@ def _upload_with_error(tmp_path: Path, error: KeboolaApiError, **kwargs: Any) ->
     csv_file = tmp_path / "d.csv"
     csv_file.write_text("id\n1\n")
     client = MagicMock()
-    client.upload_table.side_effect = error
+    client.upload_table_with_outcome.side_effect = error
     service = _make_service(_make_store(tmp_path), client)
     with pytest.raises(KeboolaApiError) as exc_info:
         service.upload_table(
@@ -909,7 +942,9 @@ class TestNoWaitTerminalJob:
         csv_file = tmp_path / "d.csv"
         csv_file.write_text("id\n1\n")
         client = MagicMock()
-        client.upload_table.return_value = TableUploadOutcome(file_id=100, job=self._FAILED)
+        client.upload_table_with_outcome.return_value = TableUploadOutcome(
+            file_id=100, job=self._FAILED
+        )
         service = _make_service(_make_store(tmp_path), client)
         with pytest.raises(KeboolaApiError) as exc_info:
             service.upload_table(

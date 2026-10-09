@@ -1,6 +1,7 @@
 """`--progress` on storage uploads/downloads: reporter, CLI wiring, download byte counts."""
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -11,8 +12,14 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.client._transfer import _CloudDownloader
-from keboola_agent_cli.commands._progress import ProgressLog, format_bytes, transfer_progress
+from keboola_agent_cli.commands._progress import (
+    ProgressLog,
+    format_bytes,
+    run_heartbeat,
+    transfer_progress,
+)
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.output import OutputFormatter
 
@@ -124,6 +131,138 @@ class TestProgressLog:
         ]
 
 
+class TestProgressHeartbeat:
+    """A slow part (one callback per 64 MiB) must not leave the log silent."""
+
+    def test_tick_emits_without_new_bytes_and_speed_decays(self) -> None:
+        log, lines, clock = _log(100 * MIB, interval=10, window=30)
+        clock.now += 10
+        log.update(10 * MIB, 100 * MIB)
+        assert len(lines) == 1
+        clock.now += 10
+        assert log.tick() is True
+        assert lines[-1] == (
+            "upload big.csv: 10.0% 10.00/100.00 MiB, 512.00 KiB/s, elapsed 0:00:20, ETA 0:03:00"
+        )
+        clock.now += 40  # nothing moved for longer than the rate window
+        log.tick()
+        assert lines[-1] == (
+            "upload big.csv: 10.0% 10.00/100.00 MiB, 0 B/s, elapsed 0:01:00, ETA ?"
+        )
+
+    def test_tick_respects_interval_and_waits_for_start(self) -> None:
+        log, lines, clock = _log(100 * MIB, interval=10)
+        clock.now += 50
+        log.tick()  # no transfer callback yet (e.g. a download's export job)
+        assert lines == []
+        log.update(0, 100 * MIB)
+        clock.now += 5
+        log.tick()  # less than one interval since the start
+        assert lines == []
+        clock.now += 5
+        log.tick()
+        assert len(lines) == 1 and "elapsed 0:00:10" in lines[0]
+
+    def test_run_heartbeat_ticks_until_stopped(self) -> None:
+        log, lines, clock = _log(100 * MIB, interval=10)
+        log.update(0, 100 * MIB)
+
+        class _Stop:
+            """Advances the fake clock per wait; stops after three waits."""
+
+            calls = 0
+
+            def wait(self, timeout: float | None = None) -> bool:
+                self.calls += 1
+                clock.now += timeout or 0
+                return self.calls > 3
+
+        run_heartbeat(log, _Stop(), 10)
+        assert [line.split("elapsed ")[1].split(",")[0] for line in lines] == [
+            "0:00:10",
+            "0:00:20",
+            "0:00:30",
+        ]
+
+    def test_run_heartbeat_returns_once_transfer_finished(self) -> None:
+        log, lines, clock = _log(10 * MIB, interval=10)
+        clock.now += 1
+        log.update(10 * MIB, 10 * MIB)
+
+        class _Never:
+            calls = 0
+
+            def wait(self, timeout: float | None = None) -> bool:
+                self.calls += 1
+                clock.now += timeout or 0
+                return False
+
+        stop = _Never()
+        run_heartbeat(log, stop, 10)
+        assert stop.calls == 1
+        assert len(lines) == 1 and lines[0].endswith("done")
+
+    @staticmethod
+    def _heartbeats() -> list[threading.Thread]:
+        return [t for t in threading.enumerate() if t.name == "kbagent-progress-heartbeat"]
+
+    def test_context_starts_and_joins_ticker(self) -> None:
+        formatter = OutputFormatter(json_mode=True)
+        with transfer_progress(formatter, label="a", total_bytes=10, enabled=True):
+            assert len(self._heartbeats()) == 1
+        assert self._heartbeats() == []
+        with (
+            pytest.raises(RuntimeError),
+            transfer_progress(formatter, label="a", total_bytes=10, enabled=True),
+        ):
+            raise RuntimeError("boom")
+        assert self._heartbeats() == []
+
+    def test_no_ticker_without_flag(self) -> None:
+        formatter = OutputFormatter(json_mode=True)
+        with transfer_progress(formatter, label="a", total_bytes=10, enabled=False):
+            assert self._heartbeats() == []
+
+
+class TestProgressPhaseEnd:
+    """The transfer ends when its bytes are in -- not when the import job does."""
+
+    def test_final_line_at_transfer_completion(self) -> None:
+        log, lines, clock = _log(100 * MIB, interval=999)
+        clock.now += 10
+        log.update(100 * MIB, 100 * MIB)
+        assert lines == [
+            "upload big.csv: 100.0% 100.00/100.00 MiB, avg 10.00 MiB/s, elapsed 0:00:10, done"
+        ]
+        clock.now += 3600  # the import job
+        log.tick()
+        log.finish()
+        log.finish(failed=True)
+        assert len(lines) == 1
+
+    def test_unknown_total_still_finishes_on_exit(self) -> None:
+        log, lines, clock = _log(None, interval=999)
+        clock.now += 10
+        log.update(100 * MIB, None)
+        assert lines == []
+        log.finish()
+        assert lines[-1].endswith("done")
+
+    def test_exception_after_completion_prints_no_failed_line(self, capsys) -> None:
+        formatter = OutputFormatter(json_mode=True)
+        with (
+            pytest.raises(RuntimeError),
+            transfer_progress(formatter, label="up", total_bytes=10, enabled=True) as cb,
+        ):
+            assert cb is not None
+            cb(10, 10)
+            raise RuntimeError("import timed out")
+        err = capsys.readouterr().err
+        assert "failed" not in err
+        assert err.strip().endswith("done")
+        assert err.count("\n") == 1
+
+
 class TestTransferProgressContext:
     def test_default_without_tty_reports_nothing(self, capsys) -> None:
         formatter = OutputFormatter(json_mode=False)
@@ -209,6 +348,53 @@ class TestProgressFlagCli:
         assert out.exit_code == 0, out.output
         assert json.loads(out.stdout)["data"]["file_size_bytes"] == 2
         assert "download in.c-b.t: 100.0% 2.00/2.00 MiB" in out.stderr
+
+    def _invoke_then_fail(self, tmp_path: Path, args: list[str], method: str):
+        def _transfer(**kwargs):
+            kwargs["on_progress"](0, 2 * MIB)
+            kwargs["on_progress"](2 * MIB, 2 * MIB)
+            raise KeboolaApiError(
+                "Storage job 42 did not finish",
+                error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+                details={"job_id": 42},
+            )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore", return_value=_store(tmp_path)),
+            patch("keboola_agent_cli.cli.StorageService") as svc_cls,
+        ):
+            getattr(svc_cls.return_value, method).side_effect = _transfer
+            return runner.invoke(app, args)
+
+    def test_upload_table_import_timeout_after_transfer_is_not_failed(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "big.csv"
+        csv_file.write_text("id\n1\n")
+        out = self._invoke_then_fail(
+            tmp_path,
+            _args("upload-table", "--table-id", "in.c-b.t", "--file", str(csv_file), "--progress"),
+            "upload_table",
+        )
+        assert out.exit_code != 0
+        assert "upload big.csv: 100.0% 2.00/2.00 MiB" in out.stderr
+        assert "done" in out.stderr
+        assert "failed" not in out.stderr
+
+    def test_download_table_error_after_transfer_is_not_failed(self, tmp_path: Path) -> None:
+        out = self._invoke_then_fail(
+            tmp_path,
+            _args(
+                "download-table",
+                "--table-id",
+                "in.c-b.t",
+                "--output",
+                str(tmp_path / "t.csv"),
+                "--progress",
+            ),
+            "download_table",
+        )
+        assert out.exit_code != 0
+        assert "download in.c-b.t: 100.0% 2.00/2.00 MiB" in out.stderr
+        assert "failed" not in out.stderr
 
     def test_json_without_flag_passes_no_callback(self, tmp_path: Path) -> None:
         with (

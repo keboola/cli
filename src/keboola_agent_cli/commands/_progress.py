@@ -7,7 +7,9 @@ shapes, always on stderr so stdout (the ``--json`` envelope) stays untouched:
 - stderr is a terminal: a Rich bar with percent, transferred/total, speed,
   elapsed time and ETA.
 - otherwise: one plain line every ``PROGRESS_LOG_INTERVAL_SECONDS`` plus a
-  final line, e.g.
+  final line. A heartbeat thread emits the line even when no byte callback
+  arrived (a 64 MiB multipart part can take minutes on a slow link), so the
+  log never goes silent; the speed then decays over the rate window. E.g.
   ``upload big10g.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27``
 
 Without the flag the behaviour predates it: a transient bar in human mode on
@@ -17,7 +19,13 @@ Callbacks receive ``(bytes_done, total_bytes)``; ``total_bytes`` may be None
 (a sliced download whose manifest carries no sizes), in which case percent and
 ETA are left out. A ``(0, total)`` call before any byte has moved restarts the
 clock: a download first waits for its export job, and that wait is neither
-transfer time nor a reason to underestimate the speed. The callbacks come from the transfer's coordinator thread;
+transfer time nor a reason to underestimate the speed.
+
+The transfer ends when its bytes are in, not when the command does: once a
+known total is reached the final ``done`` line is printed at once, so an
+upload's elapsed/average exclude the import-job wait that follows, and a
+failure in that later phase (e.g. an import timeout) prints no ``failed``
+line for a transfer that succeeded. The callbacks come from the transfer's coordinator thread;
 :class:`ProgressLog` locks anyway, so a future caller on several threads
 stays correct.
 """
@@ -30,7 +38,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import typer
 
@@ -78,7 +86,9 @@ class ProgressLog:
     """Plain-text progress lines for a non-terminal stderr.
 
     ``update`` is the transfer callback; it emits a line at most once per
-    ``interval`` seconds. ``finish`` emits the closing line. ``clock`` is
+    ``interval`` seconds and the closing line as soon as a known total is
+    reached. ``tick`` is the heartbeat (see :func:`run_heartbeat`). ``finish``
+    emits the closing line unless the transfer already finished. ``clock`` is
     injectable so tests drive time explicitly.
     """
 
@@ -102,6 +112,8 @@ class ProgressLog:
         self._start = clock()
         self._last_emit = self._start
         self._done = 0
+        self._started = False
+        self._finished = False
         # (time, bytes_done) samples covering the trailing rate window; the
         # oldest one is kept just outside it as the anchor.
         self._samples: deque[tuple[float, int]] = deque([(self._start, 0)])
@@ -109,7 +121,10 @@ class ProgressLog:
     def update(self, done: int, total: int | None) -> None:
         """Record ``done`` bytes; emit a line when the interval has passed."""
         with self._lock:
+            if self._finished:
+                return
             now = self._clock()
+            self._started = True
             if total is not None and total > 0:
                 self._total = total
             if done == 0 and self._done == 0:
@@ -117,17 +132,52 @@ class ProgressLog:
                 self._samples = deque([(now, 0)])
                 return
             self._done = done
-            self._samples.append((now, done))
-            while len(self._samples) > 1 and self._samples[1][0] <= now - self._window:
-                self._samples.popleft()
-            if now - self._last_emit >= self._interval:
+            self._record(now)
+            if self._total is not None and done >= self._total:
+                self._finished = True
+                self._write(self._line(now, final=True))
+            elif now - self._last_emit >= self._interval:
                 self._last_emit = now
                 self._write(self._line(now, final=False))
 
-    def finish(self, *, failed: bool = False) -> None:
-        """Emit the closing line (overall average speed, no ETA)."""
+    def tick(self) -> bool:
+        """Heartbeat: emit the current state if no line went out for an interval.
+
+        Records a sample at the current byte count, so the window speed decays
+        toward 0 while nothing moves. Silent before the first transfer callback
+        (a download's export-job wait). Returns False once the transfer has
+        finished, telling the heartbeat loop to stop.
+        """
         with self._lock:
+            if self._finished:
+                return False
+            if not self._started:
+                return True
+            now = self._clock()
+            if now - self._last_emit < self._interval:
+                return True
+            self._record(now)
+            self._last_emit = now
+            self._write(self._line(now, final=False))
+            return True
+
+    def finish(self, *, failed: bool = False) -> None:
+        """Emit the closing line (overall average speed, no ETA), once."""
+        with self._lock:
+            if self._finished:
+                return
+            self._finished = True
             self._write(self._line(self._clock(), final=True, failed=failed))
+
+    @property
+    def interval(self) -> float:
+        return self._interval
+
+    def _record(self, now: float) -> None:
+        """Add a (now, done) sample and drop those left of the rate window."""
+        self._samples.append((now, self._done))
+        while len(self._samples) > 1 and self._samples[1][0] <= now - self._window:
+            self._samples.popleft()
 
     def window_rate(self) -> float | None:
         """Bytes per second over the trailing window; None before a sample."""
@@ -168,6 +218,19 @@ class ProgressLog:
         return f"{self._label}: " + ", ".join(parts)
 
 
+class _Waitable(Protocol):
+    """What :func:`run_heartbeat` needs of its stop signal (a ``threading.Event``)."""
+
+    def wait(self, timeout: float | None = None) -> bool: ...
+
+
+def run_heartbeat(log: ProgressLog, stop: _Waitable, interval: float) -> None:
+    """Tick ``log`` every ``interval`` seconds until ``stop`` is set or it finishes."""
+    while not stop.wait(interval):
+        if not log.tick():
+            return
+
+
 @contextmanager
 def transfer_progress(
     formatter: OutputFormatter, *, label: str, total_bytes: int | None, enabled: bool
@@ -191,11 +254,23 @@ def transfer_progress(
         console.print(line, markup=False, highlight=False, soft_wrap=True)
 
     log = ProgressLog(label, total_bytes, _write)
+    stop = threading.Event()
+    ticker = threading.Thread(
+        target=run_heartbeat,
+        args=(log, stop, log.interval),
+        name="kbagent-progress-heartbeat",
+        daemon=True,
+    )
+    ticker.start()
     try:
         yield log.update
     except BaseException:
-        log.finish(failed=True)
+        stop.set()
+        ticker.join()
+        log.finish(failed=True)  # no-op when the transfer itself completed
         raise
+    stop.set()
+    ticker.join()
     log.finish()
 
 

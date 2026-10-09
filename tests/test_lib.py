@@ -366,7 +366,7 @@ class TestUploadTable:
     ) -> None:
         csv = tmp_path / "data.csv"
         csv.write_text("a,b\n1,2\n3,4\n")
-        mock_kc.upload_table.return_value = TableUploadOutcome(
+        mock_kc.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=7,
             job={"id": 9, "status": "success", "results": {"importedRowsCount": 2, "warnings": []}},
         )
@@ -378,7 +378,7 @@ class TestUploadTable:
         assert result.file_size_bytes == csv.stat().st_size
         # facade never auto-creates
         assert result.auto_created_bucket is False and result.auto_created_table is False
-        call = mock_kc.upload_table.call_args.kwargs
+        call = mock_kc.upload_table_with_outcome.call_args.kwargs
         assert call["table_id"] == "in.c-x.t" and call["incremental"] is True
         assert call["branch_id"] is None
         assert call["wait"] is True and call["max_wait"] is None
@@ -390,13 +390,13 @@ class TestUploadTable:
         """wait=False: the queued job's id/status come back, no rows are claimed."""
         csv = tmp_path / "data.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.return_value = TableUploadOutcome(
+        mock_kc.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=7, job={"id": 9, "status": "waiting"}
         )
         result = client.upload_table("in.c-x.t", csv, wait=False, timeout=30)
         assert result.job_status == "waiting" and result.job_id == 9
         assert result.imported_rows is None
-        call = mock_kc.upload_table.call_args.kwargs
+        call = mock_kc.upload_table_with_outcome.call_args.kwargs
         assert call["wait"] is False and call["max_wait"] == 30
 
     def test_no_wait_already_failed_job_raises(
@@ -405,7 +405,7 @@ class TestUploadTable:
         """wait=False must not report success for a job Storage already failed."""
         csv = tmp_path / "data.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.return_value = TableUploadOutcome(
+        mock_kc.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=7, job={"id": 9, "status": "error", "error": {"message": "Invalid CSV"}}
         )
         with pytest.raises(KeboolaApiError) as exc_info:
@@ -420,7 +420,7 @@ class TestUploadTable:
         """The client puts file_id in details only; the facade must say it (review NIT-2)."""
         csv = tmp_path / "d.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.side_effect = KeboolaApiError(
+        mock_kc.upload_table_with_outcome.side_effect = KeboolaApiError(
             "bad delimiter",
             status_code=400,
             error_code=ErrorCode.VALIDATION_ERROR,
@@ -444,7 +444,7 @@ class TestUploadTable:
     ) -> None:
         csv = tmp_path / "d.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.side_effect = KeboolaApiError("boom", details=details)
+        mock_kc.upload_table_with_outcome.side_effect = KeboolaApiError("boom", details=details)
         with pytest.raises(KeboolaApiError) as exc_info:
             client.upload_table("in.c-x.t", csv)
         assert exc_info.value.message == "boom"
@@ -453,11 +453,11 @@ class TestUploadTable:
         c = _make_client(mock_kc, branch_id=33)
         csv = tmp_path / "d.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.return_value = TableUploadOutcome(
+        mock_kc.upload_table_with_outcome.return_value = TableUploadOutcome(
             file_id=1, job={"id": 2, "status": "success", "results": {"importedRowsCount": 1}}
         )
         c.upload_table("in.c-x.t", csv)
-        assert mock_kc.upload_table.call_args.kwargs["branch_id"] == 33
+        assert mock_kc.upload_table_with_outcome.call_args.kwargs["branch_id"] == 33
 
 
 class TestStorageJob:
