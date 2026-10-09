@@ -2447,9 +2447,13 @@ item fails exit 1 when at least one item failed: sync push, sync
 push/pull/diff --all-projects, sync clone, org setup, project refresh,
 project invite --from-csv, workspace gc, semantic-layer
 import/promote/build/edit metric, storage describe-batch, flow
-schedule-remove. Their human headline starts with "Failed:" and states the
-failed count; the --all-projects variants state it in the summary line
-instead. The bulk storage commands
+schedule-remove. Only sync push, sync clone, storage describe-batch, storage
+describe-migrate and flow schedule-remove print a "Failed:" headline with the
+failed count instead of "Success:". The other commands list the failed items
+in a table or in summary lines, and the --all-projects variants state the
+count in the summary line. flow schedule-remove returns errors[] only for a
+partial failure; when every schedule delete fails it still raises the error.
+The bulk storage commands
 (delete-table, delete-bucket, file-delete, describe-migrate, ...) already
 exited 1. The --json payload is still emitted in full (errors / projects_failed
 / failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then

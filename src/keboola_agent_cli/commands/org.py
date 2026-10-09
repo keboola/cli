@@ -122,7 +122,10 @@ def _format_setup_result(console: Console, data: dict) -> None:
         table.add_column("Error", style="bold red")
 
         for p in failed:
-            table.add_row(str(p["project_id"]), p["project_name"], p["error"])
+            # Token refresh failures are keyed by alias; they carry no project_id.
+            table.add_row(
+                str(p.get("project_id", p.get("alias", ""))), p["project_name"], p["error"]
+            )
 
         console.print(table)
         console.print()
@@ -278,6 +281,11 @@ def org_setup(
                     dry_run=dry_run,
                 )
                 result["projects_refreshed"] = refresh_result.get("projects_refreshed", [])
+                # A failed refresh is a failed project: it must reach the exit code (#745).
+                result["projects_failed"] = [
+                    *result.get("projects_failed", []),
+                    *refresh_result.get("projects_failed", []),
+                ]
             except KeboolaApiError as exc:
                 _handle_api_error(formatter, exc)
                 return

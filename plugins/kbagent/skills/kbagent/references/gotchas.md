@@ -5862,8 +5862,14 @@ Now, when at least one item failed:
 
 - the exit code is **1** (the convention `storage delete-table`,
   `storage file-tag` and `storage describe-migrate` already used);
-- the human headline starts with `Failed:` and states the failed count, for
-  example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`;
+- commands that used to print a green `Success:` headline (`sync push`,
+  `sync clone`, `storage describe-batch`, `storage describe-migrate`,
+  `flow schedule-remove`) now print `Failed:` and the failed count instead, for
+  example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`. The
+  other commands keep their output: `org setup`, `project refresh`,
+  `project invite --from-csv`, `workspace gc` and the `semantic-layer`
+  commands list the failed items in a table or in summary lines, and the
+  `--all-projects` sync variants state the failed count in their summary line;
 - `--json` output is unchanged and is emitted before the exit. Parse the
   payload, then check the exit code. Exit 1 here does not mean that nothing
   was written: the items that succeeded stay written, so read the payload
@@ -5891,7 +5897,10 @@ Commands whose exit code changes from 0 to 1 (the key that holds the failures):
 - `storage describe-batch --json` (`errors[]`; human mode already exited 1);
 - `flow schedule-remove` (`errors[]`, a new key: a schedule whose delete
   failed while other schedules were deleted. Before, that failure was dropped
-  and the command printed `Success: Removed N schedule(s)`).
+  and the command printed `Success: Removed N schedule(s)`). Only a partial
+  failure returns `errors[]`. When every schedule delete fails, the command
+  still raises the error (`SCHEDULE_DELETE_FAILED`) and prints no `errors[]`
+  payload, as before.
 
 `storage describe-migrate` keeps its exit code; its human headline now starts
 with `Failed:` too.

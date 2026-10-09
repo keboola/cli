@@ -596,6 +596,39 @@ class TestOrgSetup:
         )
         assert result.exit_code == 0
 
+    def test_failed_refresh_of_registered_project_exits_1(self, tmp_path: Path) -> None:
+        # --refresh runs refresh_tokens for already-registered projects; its failures
+        # used to be dropped, so the run exited 0.
+        store = _store(tmp_path / "config")
+        mock_org = MagicMock()
+        mock_org.setup_organization.return_value = {
+            "projects_added": [],
+            "projects_skipped": [{"project_id": 1234, "project_name": "prod", "reason": "x"}],
+            "projects_failed": [],
+        }
+        mock_org.refresh_tokens.return_value = {
+            "projects_refreshed": [],
+            "projects_failed": [REFRESH_FAILED_ENTRY],
+        }
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.OrgService") as MockOrg,
+            patch(
+                "keboola_agent_cli.commands.org.resolve_manage_token",
+                return_value="manage-token",
+            ),
+        ):
+            MockStore.return_value = store
+            MockOrg.return_value = mock_org
+            base = ["--config-dir", str(tmp_path / "config")]
+            args = ["org", "setup", "--org-id", "42", "--url", "https://connection.keboola.com"]
+            as_json = runner.invoke(app, [*base, "--json", *args, "--refresh", "--yes"])
+            human = runner.invoke(app, [*base, *args, "--refresh", "--yes"])
+        assert as_json.exit_code == 1
+        assert json.loads(as_json.output)["data"]["projects_failed"] == [REFRESH_FAILED_ENTRY]
+        assert human.exit_code == 1
+        assert "Error checking token" in human.output
+
 
 class TestProjectInviteBulk:
     """``project invite --from-csv`` reported ``failed=N`` and exited 0."""
@@ -784,7 +817,7 @@ class TestWorkspaceGc:
             ["--yes"],
         )
         assert result.exit_code == 1
-        assert "workspace 7: denied" in result.output
+        assert "workspace 7 in 'prod': denied" in result.output
 
     def test_clean_gc_exits_0(self, tmp_path: Path) -> None:
         result = self._invoke(
@@ -806,6 +839,8 @@ class TestWorkspaceGc:
             ["--dry-run"],
         )
         assert result.exit_code == 1
+        # Human output names the project that could not be listed and why.
+        assert "project 'prod': down" in result.output
 
     def test_clean_dry_run_exits_0(self, tmp_path: Path) -> None:
         result = self._invoke(
