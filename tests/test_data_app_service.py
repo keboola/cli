@@ -11,6 +11,7 @@ test_data_science_client.py / test_e2e.py).
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
@@ -1524,6 +1525,21 @@ class TestDataAppPassword:
         storage_mock.get_config_detail.assert_called_once_with(
             "keboola.data-apps", "cfg-1", branch_id=config_branch
         )
+
+    def test_auth_is_read_from_a_configuration_echoed_as_json_string(self, tmp_path: Path) -> None:
+        """Some Storage payloads echo ``configuration`` as a JSON string; the auth
+        check must parse it, not crash on ``str.get`` or report ``missing``."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
+        storage_mock.get_config_detail.return_value = {
+            "id": "cfg-1",
+            "configuration": json.dumps({"authorization": _build_simple_auth_block()}),
+        }
+
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.password == "deadbeefcafe"
 
 
 # ---------------------------------------------------------------------------

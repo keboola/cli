@@ -39,6 +39,7 @@ from ._data_app_bodies import (
     RESERVED_RUNTIME_ENV_VARS,
     _auth_block_for,
     _build_runtime_block,
+    _coerce_config_dict,
     _derive_runtime_env_var_name,
     _redact_git_block,
     _redact_storage_config,
