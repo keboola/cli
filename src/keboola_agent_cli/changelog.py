@@ -42,9 +42,9 @@ CHANGELOG: dict[str, list[str]] = {
         "import keeps running, names the job, and is no longer marked retryable, so a long "
         "upload is not repeated by mistake. `kbagent serve` (`GET /storage/jobs/{project}/"
         "{job_id}`) and the SDK (`Client.storage_job()`) have the same functions.",
-        "New (#837): `--progress` shows percent, speed, elapsed time and the estimated time left "
-        "for `storage upload-table`, `file-upload`, `download-table`, `file-download` and "
-        "`unload-table --download`. It writes to stderr, also with `--json`: a progress bar in "
+        "New (#837): `--progress` shows percent, speed, elapsed time and time left for storage "
+        "uploads and downloads. It works on `storage upload-table`, `file-upload`, "
+        "`download-table`, `file-download` and `unload-table --download`, and writes to stderr, also with `--json`: a progress bar in "
         "a terminal, otherwise one line every 10 seconds.",
         "Fix (#837): `storage download-table --keep-slices`, `file-download` and `unload-table` "
         "now keep every slice file inside the output directory. A slice name from the export manifest that "
