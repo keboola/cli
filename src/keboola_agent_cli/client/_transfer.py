@@ -9,7 +9,7 @@ the public library facade.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -375,6 +375,72 @@ class _IterBytesReader:
         return out
 
 
+# ``(bytes_done, total_bytes)`` -- total is None when it is not known up front.
+DownloadProgress = Callable[[int, int | None], None]
+
+
+def _iter_counted(
+    response: httpx.Response, on_bytes: Callable[[int], None] | None
+) -> Iterator[bytes]:
+    """Yield the body in chunks, reporting the NETWORK bytes read so far.
+
+    ``num_bytes_downloaded`` counts the raw (possibly content-encoded) bytes,
+    so the count matches ``Content-Length`` and the stored ``sizeBytes``
+    rather than the decompressed size written to disk. The extra report after
+    the loop covers a trailing raw chunk that decoded to no output.
+    """
+    for chunk in response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE):
+        if on_bytes is not None:
+            on_bytes(response.num_bytes_downloaded)
+        yield chunk
+    if on_bytes is not None:
+        on_bytes(response.num_bytes_downloaded)
+
+
+def _write_response_body(
+    response: httpx.Response,
+    dest: Path,
+    decompress_gzip: bool,
+    on_bytes: Callable[[int], None] | None = None,
+) -> None:
+    """Stream ``response`` into ``dest`` in bounded memory, gunzipping if asked."""
+    import gzip
+    import shutil
+
+    source: Any = _IterBytesReader(_iter_counted(response, on_bytes))
+    if decompress_gzip:
+        source = gzip.GzipFile(fileobj=source, mode="rb")
+    with dest.open("wb") as fh:
+        shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+
+
+def _manifest_total_bytes(entries: list[dict[str, Any]]) -> int | None:
+    """Sum of the slices' ``meta.content_length``; None unless every entry has one."""
+    sizes = [(entry.get("meta") or {}).get("content_length") for entry in entries]
+    if not sizes or not all(isinstance(size, int) and size >= 0 for size in sizes):
+        return None
+    return sum(sizes)
+
+
+class _SliceProgress:
+    """Fold per-slice network byte counts into one running total across slices."""
+
+    def __init__(self, on_progress: DownloadProgress, total: int | None) -> None:
+        self._on_progress = on_progress
+        self._total = total
+        self._before = 0
+        self._current = 0
+        on_progress(0, total)
+
+    def __call__(self, slice_bytes: int) -> None:
+        self._current = slice_bytes
+        self._on_progress(self._before + slice_bytes, self._total)
+
+    def next_slice(self) -> None:
+        self._before += self._current
+        self._current = 0
+
+
 class _CloudDownloader:
     """Abstraction for downloading from cloud storage using Keboola file credentials.
 
@@ -523,7 +589,13 @@ class _CloudDownloader:
         auth_result = self._auth_fn(url)
         return {k: v for k, v in auth_result.items() if not k.startswith("_")}
 
-    def stream_to_file(self, url: str, dest: "Path | str", decompress_gzip: bool) -> int:
+    def stream_to_file(
+        self,
+        url: str,
+        dest: "Path | str",
+        decompress_gzip: bool,
+        on_bytes: Callable[[int], None] | None = None,
+    ) -> int:
         """Stream a cloud URL directly to a local file in bounded-memory chunks.
 
         Used for slice downloads where the payload can be hundreds of MB per
@@ -536,13 +608,11 @@ class _CloudDownloader:
             decompress_gzip: If True, wrap the response stream in gzip.GzipFile
                 so the decompressed bytes are what lands on disk. Streaming
                 gzip keeps both compressed and decompressed state bounded.
+            on_bytes: Called with the network bytes of THIS request read so far.
 
         Returns:
             Number of bytes written to ``dest`` (post-decompression if applicable).
         """
-        import gzip
-        import shutil
-
         _assert_safe_download_url(url)
         headers = self._request_headers(url)
         dest_path = Path(dest)
@@ -551,11 +621,7 @@ class _CloudDownloader:
             http.stream("GET", url, headers=headers) as response,
         ):
             response.raise_for_status()
-            source: Any = _IterBytesReader(response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE))
-            if decompress_gzip:
-                source = gzip.GzipFile(fileobj=source, mode="rb")
-            with dest_path.open("wb") as fh:
-                shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+            _write_response_body(response, dest_path, decompress_gzip, on_bytes)
 
         return dest_path.stat().st_size
 

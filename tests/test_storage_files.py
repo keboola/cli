@@ -1357,7 +1357,7 @@ class TestClientDownloadSlicedFileToDir:
         # than returning bytes, so the fake has to side-effect the destination.
         slice_payloads = iter([b"PAR1_slice_1", b"PAR1_slice_2"])
 
-        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
             payload = next(slice_payloads)
             Path(dest).write_bytes(payload)
             return len(payload)
@@ -1415,7 +1415,7 @@ class TestClientDownloadSlicedFileToDir:
 
         # The real stream_to_file streams+decompresses gzip; mirror that so
         # the test still verifies the .gz-suffix handling in the caller.
-        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
             data = payload if decompress_gzip else gz_payload
             Path(dest).write_bytes(data)
             return len(data)
@@ -1505,7 +1505,7 @@ class TestDownloadTableKeepSlices:
         slice_a = out_dir / "part-0.csv"
         slice_b = out_dir / "part-1.csv"
 
-        def _fake_download_to_dir(file_detail: dict, output_dir: str) -> dict:
+        def _fake_download_to_dir(file_detail: dict, output_dir: str, on_progress=None) -> dict:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             slice_a.write_bytes(b"1,2\n")
             slice_b.write_bytes(b"3,4\n")

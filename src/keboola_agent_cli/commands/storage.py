@@ -4,6 +4,7 @@ Provides direct Storage API access including sharing/linked bucket metadata
 (source project id and name) that the plain bucket listing does not surface.
 """
 
+from contextlib import nullcontext
 from pathlib import Path
 
 import typer
@@ -19,11 +20,11 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._progress import ProgressOption, transfer_progress
 from ._storage_jobs import (
     ImportTimeoutOption,
     ImportWaitOption,
     print_import_outcome,
-    upload_progress,
 )
 from ._storage_table_detail import (
     format_range_partitioning,
@@ -772,6 +773,7 @@ def storage_upload_table(
     ),
     wait: ImportWaitOption = True,
     timeout: ImportTimeoutOption = None,
+    progress: ProgressOption = False,
 ) -> None:
     """Upload a CSV (or gzipped CSV) file into a storage table.
 
@@ -798,7 +800,9 @@ def storage_upload_table(
         )
 
     try:
-        with upload_progress(formatter, p.stat().st_size) as on_progress:
+        with transfer_progress(
+            formatter, label=f"upload {p.name}", total_bytes=p.stat().st_size, enabled=progress
+        ) as on_progress:
             result = service.upload_table(
                 alias=project,
                 table_id=table_id,
@@ -917,6 +921,7 @@ def storage_download_table(
         "--changed-until",
         help="Only rows imported up to this time (unix ts or strtotime).",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Export a storage table to a local CSV file.
 
@@ -942,20 +947,24 @@ def storage_download_table(
         formatter.console.print(msg)
 
     try:
-        result = service.download_table(
-            alias=project,
-            table_id=table_id,
-            output_path=output,
-            columns=columns,
-            limit=limit,
-            branch_id=effective_branch,
-            keep_slices=keep_slices,
-            where_column=where_column,
-            where_operator=where_operator,
-            where_values=where_value,
-            changed_since=changed_since,
-            changed_until=changed_until,
-        )
+        with transfer_progress(
+            formatter, label=f"download {table_id}", total_bytes=None, enabled=progress
+        ) as on_progress:
+            result = service.download_table(
+                alias=project,
+                table_id=table_id,
+                output_path=output,
+                columns=columns,
+                limit=limit,
+                branch_id=effective_branch,
+                keep_slices=keep_slices,
+                where_column=where_column,
+                where_operator=where_operator,
+                where_values=where_value,
+                changed_since=changed_since,
+                changed_until=changed_until,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -1865,6 +1874,7 @@ def storage_file_upload(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Upload a local file to Storage Files.
 
@@ -1886,14 +1896,18 @@ def storage_file_upload(
         formatter.console.print(f"Uploading [bold]{p.name}[/bold] ({size_str})...")
 
     try:
-        result = service.upload_file(
-            alias=project,
-            file_path=file,
-            name=name,
-            tags=tag,
-            is_permanent=permanent,
-            branch_id=effective_branch,
-        )
+        with transfer_progress(
+            formatter, label=f"upload {p.name}", total_bytes=p.stat().st_size, enabled=progress
+        ) as on_progress:
+            result = service.upload_file(
+                alias=project,
+                file_path=file,
+                name=name,
+                tags=tag,
+                is_permanent=permanent,
+                branch_id=effective_branch,
+                on_progress=on_progress,
+            )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -1940,6 +1954,7 @@ def storage_file_download(
         "-o",
         help="Output file path (default: original filename)",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Download a Storage File to local disk.
 
@@ -1962,13 +1977,18 @@ def storage_file_download(
         else:
             formatter.console.print(f"Downloading latest file with tags: {', '.join(tag or [])}...")
 
+    label = f"download file {file_id}" if file_id else f"download file tagged {','.join(tag or [])}"
     try:
-        result = service.download_file(
-            alias=project,
-            file_id=file_id,
-            tags=tag,
-            output_path=output,
-        )
+        with transfer_progress(
+            formatter, label=label, total_bytes=None, enabled=progress
+        ) as on_progress:
+            result = service.download_file(
+                alias=project,
+                file_id=file_id,
+                tags=tag,
+                output_path=output,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -2273,6 +2293,7 @@ def storage_unload_table(
             "parquet (always sliced) and for non-sliced exports."
         ),
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Export a table to a Storage File.
 
@@ -2305,18 +2326,27 @@ def storage_unload_table(
         formatter.console.print(msg)
 
     try:
-        result = service.unload_table_to_file(
-            alias=project,
-            table_id=table_id,
-            columns=columns,
-            limit=limit,
-            tags=tag,
-            download=download,
-            output_path=output,
-            branch_id=effective_branch,
-            file_type=file_type,
-            keep_slices=keep_slices,
-        )
+        # Progress covers the local download; without --download nothing transfers.
+        with (
+            transfer_progress(
+                formatter, label=f"download {table_id}", total_bytes=None, enabled=progress
+            )
+            if download
+            else nullcontext()
+        ) as on_progress:
+            result = service.unload_table_to_file(
+                alias=project,
+                table_id=table_id,
+                columns=columns,
+                limit=limit,
+                tags=tag,
+                download=download,
+                output_path=output,
+                branch_id=effective_branch,
+                file_type=file_type,
+                keep_slices=keep_slices,
+                on_progress=on_progress,
+            )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

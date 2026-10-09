@@ -6,7 +6,6 @@
 - The ``--wait/--no-wait`` + ``--timeout`` options and the human-mode
   rendering ``upload-table`` and ``load-file`` share, so the two commands
   cannot drift apart.
-- The cloud-upload progress bar ``upload-table`` shows on stderr.
 
 Lives in a private module because ``commands/storage.py`` is past the
 commands-file size ceiling (CONTRIBUTING.md). Mounted flat onto
@@ -16,8 +15,6 @@ commands-file size ceiling (CONTRIBUTING.md). Mounted flat onto
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from typing import Annotated, Any
 
 import typer
@@ -52,43 +49,6 @@ ImportTimeoutOption = Annotated[
         ),
     ),
 ]
-
-
-@contextmanager
-def upload_progress(
-    formatter: OutputFormatter, total_bytes: int
-) -> Iterator[Callable[[int, int], None] | None]:
-    """Yield an ``on_progress`` callback drawing a byte progress bar on stderr.
-
-    Yields None (no bar) in ``--json`` mode or when stderr is not a terminal,
-    so machine output and logs never carry progress redraws.
-    """
-    if formatter.json_mode or not formatter.err_console.is_terminal:
-        yield None
-        return
-
-    from rich.progress import (
-        BarColumn,
-        DownloadColumn,
-        Progress,
-        TimeRemainingColumn,
-        TransferSpeedColumn,
-    )
-
-    with Progress(
-        BarColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        TimeRemainingColumn(),
-        console=formatter.err_console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("upload", total=total_bytes)
-
-        def _on_progress(sent: int, total: int) -> None:
-            progress.update(task, completed=sent, total=total)
-
-        yield _on_progress
 
 
 def print_import_outcome(formatter: OutputFormatter, project: str, result: dict[str, Any]) -> None:

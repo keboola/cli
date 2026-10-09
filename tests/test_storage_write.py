@@ -2056,7 +2056,7 @@ class TestDownloadTableService:
 
         out_file = tmp_path / "output.csv"
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"1","Alice","a@b.c"\n')
             return 1024
 
@@ -2102,7 +2102,7 @@ class TestDownloadTableService:
         }
         out_file = tmp_path / "events.csv"
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"1","Alice"\n')
             return 512
 
@@ -2151,7 +2151,7 @@ class TestDownloadTableService:
         }
         mock_client.list_tables.return_value = []
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"data"\n')
             return 256
 
@@ -2183,7 +2183,7 @@ class TestDownloadTableService:
         ]
         out_path = str(tmp_path / "out.csv")
 
-        def _fake_sliced_download(detail, path):
+        def _fake_sliced_download(detail, path, on_progress=None):
             Path(path).write_text('"1","2"\n')
             return 4096
 
@@ -2197,7 +2197,7 @@ class TestDownloadTableService:
         )
 
         assert result["columns"] == ["a", "b"]
-        mock_client.download_sliced_file.assert_called_once_with(file_detail, out_path)
+        mock_client.download_sliced_file.assert_called_once_with(file_detail, out_path, None)
         mock_client.close.assert_called_once()
 
     def test_no_file_id_raises_error(self, tmp_path: Path) -> None:
@@ -2248,7 +2248,7 @@ class TestDownloadTableService:
         }
         mock_client.list_tables.return_value = []
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"data"\n')
             return 128
 
@@ -2332,6 +2332,7 @@ class TestDownloadTableCLI:
             where_values=None,
             changed_since=None,
             changed_until=None,
+            on_progress=None,
         )
 
     def test_download_table_with_columns_and_limit(self, tmp_path: Path) -> None:
@@ -2384,6 +2385,7 @@ class TestDownloadTableCLI:
             where_values=None,
             changed_since=None,
             changed_until=None,
+            on_progress=None,
         )
 
     def test_download_table_api_error(self, tmp_path: Path) -> None:

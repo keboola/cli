@@ -325,6 +325,16 @@ FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
 # hosts when loaded whole-body via response.content).
 FILE_DOWNLOAD_CHUNK_SIZE: int = 1024 * 1024  # 1 MiB
 
+# --- Transfer progress (`--progress` on storage upload/download commands) ---
+# Without a terminal (CI logs, an AI agent capturing stderr) `--progress` prints
+# one plain line per interval instead of redrawing a bar.
+PROGRESS_LOG_INTERVAL_SECONDS: float = 10.0
+# Speed (and so the ETA) is measured over this trailing window, not since the
+# start: S3 multipart reports once per finished part, so an instantaneous rate
+# jumps between zero and a burst, while the all-time average lags a speed change
+# for hours on a 200 GB upload. The final line reports the overall average.
+PROGRESS_RATE_WINDOW_SECONDS: float = 30.0
+
 # --- Export Job ---
 EXPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table export jobs (large tables)
 

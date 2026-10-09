@@ -6023,3 +6023,37 @@ default 600).
 On older versions there is no `--no-wait`, no `storage job-detail`, and a timed
 out import was reported as retryable -- check `kbagent version` before relying
 on any of this. See `large-upload-workflow.md` for the full procedure.
+
+## `--progress` on storage uploads and downloads: progress on stderr, also with `--json` and in CI
+
+*(since vNEXT)* `storage upload-table`, `storage file-upload`,
+`storage download-table`, `storage file-download` and
+`storage unload-table --download` take `--progress`. A multi-hour transfer run
+by an agent or in CI used to be silent until it finished: the progress bar only
+appeared in human mode on a terminal.
+
+- With `--progress`, progress always goes to **stderr**, also with `--json`
+  and with no terminal. stdout is untouched, so
+  `kbagent --json storage upload-table ... --progress > result.json 2> progress.log`
+  keeps a parseable result.
+- On a terminal: a bar with percent, transferred/total, speed, elapsed and
+  ETA. Otherwise: one plain line every 10 s plus a final line, e.g.
+  `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`.
+  The final line carries the overall `avg` speed and ends in `done` or
+  `failed`.
+- Speed and ETA use the last 30 s, not the whole run. Uploads report once per
+  finished S3 part (64 MiB+), so expect the count to move in steps.
+- Downloads count the bytes read from the network (compressed size for a
+  gzipped export), and the clock starts when the download starts -- the
+  export job before it is not counted. A sliced export whose manifest lists no
+  slice sizes shows bytes and speed only, with no percent and no ETA.
+- Which terminal check applies: the bar needs stdout AND stderr on a terminal;
+  with stdout redirected you get the plain lines even in an interactive shell.
+- Without the flag nothing changed: a transient bar only in human mode on a
+  terminal, nothing with `--json` or without a terminal.
+- `kbagent serve` and the SDK have no progress surface; it is a terminal
+  feature only.
+
+On older versions `--progress` does not exist and the command fails with a
+usage error (exit 2) -- check `kbagent version` before passing it.
+
