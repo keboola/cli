@@ -18,6 +18,7 @@ import csv
 import gzip
 import math
 import shlex
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,12 +141,15 @@ def summarize_storage_job(alias: str, job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _branch_args(branch_id: int | None) -> list[str]:
-    """``--branch ID`` whenever the import targeted a branch.
+    """Always ``--branch ID``, with ``--branch 0`` for production.
 
     Spelled out even when it came from ``branch use``: the hint is read later,
     possibly after the active branch changed, and must target the same branch.
+    A production import must say so too -- omitting the flag would let a
+    since-activated dev branch capture the re-import (a full load there
+    replaces the wrong table's contents).
     """
-    return ["--branch", str(branch_id)] if branch_id else []
+    return ["--branch", str(branch_id or 0)]
 
 
 def _load_file_command(alias: str, file_id: Any, table_id: str, options: ImportOptions) -> str:
@@ -256,9 +260,9 @@ def read_csv_header(file_path: str, delimiter: str = ",", enclosure: str = '"') 
         else:
             with open(file_path, newline="", encoding="utf-8-sig") as fh:
                 header = next(csv.reader(fh, **dialect), [])
-    except (OSError, EOFError) as exc:
-        # gzip raises BadGzipFile (an OSError) on a bad header and EOFError on
-        # a truncated stream.
+    except (OSError, EOFError, zlib.error) as exc:
+        # gzip raises BadGzipFile (an OSError) on a bad header, EOFError on a
+        # truncated stream and zlib.error on corrupt DEFLATE data.
         what = "corrupt gzip file" if is_gzip else "read error"
         raise ValueError(f"Cannot read the CSV header: {what} ({exc}).") from exc
     except UnicodeDecodeError as exc:

@@ -366,6 +366,14 @@ class TestReadCsvHeader:
         with pytest.raises(ValueError):
             read_csv_header(str(f))
 
+    def test_corrupt_deflate_data_is_a_value_error(self, tmp_path: Path) -> None:
+        """Valid gzip header, garbage DEFLATE stream -> zlib.error, not a crash."""
+        f = tmp_path / "deflate.csv.gz"
+        good = gzip.compress(b"id,name\n1,x\n" * 100)
+        f.write_bytes(good[:10] + b"\xff" * 40 + good[50:])
+        with pytest.raises(ValueError, match="corrupt gzip"):
+            read_csv_header(str(f))
+
     def test_undecodable_header_is_a_value_error(self, tmp_path: Path) -> None:
         f = tmp_path / "latin.csv"
         f.write_bytes("n\xe1zev\n".encode("latin-1"))
@@ -729,7 +737,12 @@ class TestRecoveryHintKeepsImportOptions:
             "--incremental --delimiter ';' --enclosure '' --branch 123"
         ) in exc.message
 
-    def test_defaults_render_no_extra_flags(self, tmp_path: Path) -> None:
+    def test_defaults_render_only_production_branch(self, tmp_path: Path) -> None:
+        """Default options add nothing but an explicit ``--branch 0``.
+
+        Production is pinned so a dev branch activated later (``branch use``)
+        cannot capture the re-import.
+        """
         exc = _upload_with_error(
             tmp_path,
             KeboolaApiError(
@@ -741,6 +754,7 @@ class TestRecoveryHintKeepsImportOptions:
         )
         assert exc.message.endswith(
             "kbagent storage load-file --project test --file-id 100 --table-id in.c-b.users"
+            " --branch 0"
         )
 
     def test_shell_metacharacters_are_quoted(self, tmp_path: Path) -> None:
