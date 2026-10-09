@@ -25,7 +25,7 @@ from keboola_agent_cli import (
     UploadTableResult,
 )
 from keboola_agent_cli.client import TableUploadOutcome
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
 # Canonical fake token (projectId-tokenId-secret); never a realistic secret.
 FAKE_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -398,6 +398,21 @@ class TestUploadTable:
         assert result.imported_rows is None
         call = mock_kc.upload_table.call_args.kwargs
         assert call["wait"] is False and call["max_wait"] == 30
+
+    def test_no_wait_already_failed_job_raises(
+        self, client: Client, mock_kc: MagicMock, tmp_path: Path
+    ) -> None:
+        """wait=False must not report success for a job Storage already failed."""
+        csv = tmp_path / "data.csv"
+        csv.write_text("a\n1\n")
+        mock_kc.upload_table.return_value = TableUploadOutcome(
+            file_id=7, job={"id": 9, "status": "error", "error": {"message": "Invalid CSV"}}
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.upload_table("in.c-x.t", csv, wait=False)
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert "Invalid CSV" in exc_info.value.message
+        assert exc_info.value.details == {"job_id": 9, "file_id": 7}
 
     def test_branch_scoped_upload(self, mock_kc: MagicMock, tmp_path: Path) -> None:
         c = _make_client(mock_kc, branch_id=33)

@@ -25,6 +25,7 @@ truncated; raised messages carry only the whitelisted provider error code.
 """
 
 import datetime
+import gc
 import hashlib
 import logging
 import os
@@ -336,6 +337,13 @@ def _upload_parts(
                     in_flight.add(pool.submit(run_part, next_part))
                     next_part += 1
                 done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+                # httpx leaves a Response <-> stream reference cycle, and the
+                # Response holds the Request whose content is the part's bytes.
+                # Refcounting never frees a cycle, so a finished part stayed in
+                # memory until the cyclic GC happened to run -- a live 10 GB
+                # upload peaked at ~1.5 GB RSS. One collection per finished
+                # part (every 64 MiB sent) keeps the peak ~concurrency x part.
+                gc.collect()
                 for future in done:
                     try:
                         result = future.result()

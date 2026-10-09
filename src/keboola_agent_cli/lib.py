@@ -43,6 +43,7 @@ from typing import Any, Self
 
 from .auth.sentinel import require_static_token
 from .client import KeboolaClient, _collect_inline_results
+from .client._core import _storage_job_error_message
 from .constants import (
     DEFAULT_JOB_MODE,
     DEFAULT_JOB_RUN_TIMEOUT,
@@ -544,6 +545,16 @@ class Client:
             max_wait=timeout,
         )
         job = outcome.job
+        if job.get("status") == "error":
+            # Storage can answer the enqueue with an already-failed job; with
+            # wait=False that must still raise, as the CLI does.
+            raise KeboolaApiError(
+                message=_storage_job_error_message(job),
+                status_code=500,
+                error_code=ErrorCode.STORAGE_JOB_FAILED,
+                retryable=False,
+                details={"job_id": job.get("id"), "file_id": outcome.file_id},
+            )
         results = job.get("results") if job.get("status") == "success" else None
         results = results if isinstance(results, dict) else {}
         return UploadTableResult.model_validate(

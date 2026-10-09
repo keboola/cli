@@ -798,3 +798,54 @@ class TestUploadToCloudRouting:
     def test_verifier_without_file_id_is_false(self) -> None:
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             assert client._s3_upload_verifier(None)(10) is False
+
+
+class TestPartBuffersAreReleased:
+    """Peak memory must stay ~concurrency x part size, not grow with the file.
+
+    httpx keeps a Response <-> stream reference cycle, and the Response holds
+    the Request whose content is the part's bytes. Refcounting never frees a
+    cycle, so without an explicit collection every sent part stayed alive until
+    the cyclic GC happened to run: a live 10 GB upload peaked at ~1.5 GB RSS
+    with 64 MiB parts.
+    """
+
+    def test_peak_memory_bounded_by_concurrency(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import tracemalloc
+
+        part = 4 * 1024 * 1024
+        monkeypatch.setattr(m, "S3_MULTIPART_PART_SIZE", part)
+        monkeypatch.setattr(m, "S3_MULTIPART_PART_ALIGNMENT", 1)
+        monkeypatch.setattr(m, "S3_MULTIPART_MIN_PART_SIZE", 1)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if "uploads" in params:
+                return httpx.Response(
+                    200,
+                    text=f'<InitiateMultipartUploadResult xmlns="{NS}">'
+                    "<UploadId>u1</UploadId></InitiateMultipartUploadResult>",
+                )
+            if "partNumber" in params:
+                request.read()  # consume like a real server; keep nothing
+                return httpx.Response(200, headers={"ETag": '"e"'})
+            return httpx.Response(200, text=f'<CompleteMultipartUploadResult xmlns="{NS}"/>')
+
+        monkeypatch.setattr(
+            m, "_new_http_client", lambda: httpx.Client(transport=httpx.MockTransport(handler))
+        )
+        path = tmp_path / "big.bin"
+        with path.open("wb") as fh:
+            for _ in range(16):
+                fh.write(os.urandom(part))
+
+        tracemalloc.start()
+        try:
+            m.upload_s3_multipart(str(path), _target())
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # 4 in flight + slack; the whole file is 16 parts.
+        assert peak < (m.S3_MULTIPART_CONCURRENCY + 3) * part
