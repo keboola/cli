@@ -2460,12 +2460,13 @@ schedule-remove. Only sync push, sync clone, storage describe-batch, storage
 describe-migrate and flow schedule-remove print a "Failed:" headline with the
 failed count instead of "Success:". The other commands list the failed items
 in a table or in summary lines, and the --all-projects variants state the
-count in the summary line. flow schedule-remove returns errors[] only for a
-partial failure; when every schedule delete fails it still raises the error.
+count in the summary line. flow schedule-remove always returns the errors[]
+key, empty when nothing failed; a partial failure fills it and exits 1; when
+every schedule delete fails it still raises SCHEDULE_DELETE_FAILED.
 The bulk storage commands
 (delete-table, delete-bucket, file-delete, describe-migrate, ...) already
 exited 1. The --json payload is still emitted in full (errors / projects_failed
-/ failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
+/ projects_refresh_failed / failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
 branch on the exit code. Exit 1 here does not mean nothing was written: the
 items that succeeded stay written, so read the payload before you run the
 command again. A --dry-run of these commands exits 1 when it reports a failed

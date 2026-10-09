@@ -2597,8 +2597,9 @@ config, the retry fires, and the retry destroys it for good.
   The `rows[]` array in the result is in completion order, not CSV order.
 - Per-row parsing of `failed_rows` should match by `email`, not by index.
 - A failed row never aborts the run -- the executor accumulates results and
-  the command exits 0 with `failed > 0` reflected in the JSON summary. Mirror
-  the `org setup` partial-success exit semantics.
+  reports `failed > 0` in the JSON summary. *(since vNEXT)* The command then
+  exits 1, like `org setup`; on 0.97.0 and older it exited 0 even then, so
+  check `failed` there. The full JSON payload is emitted before the exit.
 
 ## `default_bucket` is per-config and only an output prefix
 
@@ -5810,7 +5811,8 @@ examples. Surprises worth knowing before you touch this:
   `promote` take `--scope` / `--target-project` to override the inherited
   scope, like `add <kind>`: a project-admin token that is not an org admin
   passes `--scope project` under an `organization` model, or every new item
-  fails with a 403 (listed under `failed`, exit 0).
+  fails with a 403 (listed under `failed`; since vNEXT the command exits 1,
+  on 0.97.0 and older it exited 0).
 - **Item names are unique per project, not per model (since vNEXT, message).**
   The metastore keeps names unique per object type across ALL models of a
   project (and across the organization at `organization` scope). A second
@@ -5895,7 +5897,9 @@ Now, when at least one item failed:
   `project invite --from-csv`, `workspace gc` and the `semantic-layer`
   commands list the failed items in a table or in summary lines, and the
   `--all-projects` sync variants state the failed count in their summary line;
-- `--json` output is unchanged and is emitted before the exit. Parse the
+- `--json` output keeps its keys and is emitted before the exit. New keys:
+  `org setup --refresh` lists failed token refreshes under
+  `projects_refresh_failed`, and `flow schedule-remove` returns `errors[]`. Parse the
   payload, then check the exit code. Exit 1 here does not mean that nothing
   was written: the items that succeeded stay written, so read the payload
   before you run the command again.
@@ -5909,7 +5913,9 @@ Commands whose exit code changes from 0 to 1 (the key that holds the failures):
   marked `x` and states the failed count;
 - `sync pull --all-projects` (`summary.failed`);
 - `sync clone` (`errors[]` and `bucket_errors[]`);
-- `org setup` (`projects_failed`);
+- `org setup` (`projects_failed`, and with `--refresh` also
+  `projects_refresh_failed`: entries keyed by `alias`, fix them with
+  `project refresh`);
 - `project refresh` (`projects_failed`);
 - `project invite --from-csv` (`failed`);
 - `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
@@ -5922,9 +5928,10 @@ Commands whose exit code changes from 0 to 1 (the key that holds the failures):
 - `storage describe-batch --json` (`errors[]`; human mode already exited 1);
 - `flow schedule-remove` (`errors[]`, a new key: a schedule whose delete
   failed while other schedules were deleted. Before, that failure was dropped
-  and the command printed `Success: Removed N schedule(s)`). Only a partial
-  failure returns `errors[]`. When every schedule delete fails, the command
-  still raises the error (`SCHEDULE_DELETE_FAILED`) and prints no `errors[]`
+  and the command printed `Success: Removed N schedule(s)`). The result always
+  has the `errors` key, empty when nothing failed. A partial failure fills it
+  and the command exits 1. When every schedule delete fails, the command
+  still raises the error (`SCHEDULE_DELETE_FAILED`) and prints no result
   payload, as before.
 
 `storage describe-migrate` keeps its exit code; its human headline now starts

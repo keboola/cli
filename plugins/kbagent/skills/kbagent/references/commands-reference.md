@@ -114,7 +114,7 @@ The `permissions` subcommands persist a write/destructive policy to config.json 
 - `permissions check OPERATION` -- check if a specific operation is allowed (e.g. `permissions check storage.delete-table`)
 
 ## Organization
-- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org. **Since vNEXT (#745)** a non-empty `projects_failed` exits **1** (was 0); `--dry-run` exits **1** on a failure too. (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
+- `org setup --org-id ID --url URL [--dry-run] [--yes]` -- bulk-onboard all projects from an org. **Since vNEXT (#745)** a non-empty `projects_failed` exits **1** (was 0); with `--refresh`, a failed token refresh of an already-registered project is listed under `projects_refresh_failed` (keyed by `alias`) and also exits **1**; `--dry-run` exits **1** on a failure too. (org admin; manage token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
 - `org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes]` -- onboard specific projects by ID (any project member; manage token / Personal Access Token via interactive prompt by default, or `--allow-env-manage-token` + `KBC_MANAGE_API_TOKEN` for CI on 0.29.0+)
 
 ## Billing (PAYG Credits) (since v0.84.2)

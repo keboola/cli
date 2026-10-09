@@ -480,7 +480,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `project invite --from-csv`, `workspace gc`, `semantic-layer
   import/promote/build`, `flow schedule-remove`, ...) exits 1 when any item
   failed. The items that succeeded ARE written: read `errors[]` /
-  `projects_failed` / `failed` / `summary.failed` and retry only the failed
+  `projects_failed` / `projects_refresh_failed` / `failed` / `summary.failed`
+  and retry only the failed
   items, never the whole command blind. A `--dry-run` of these exits 1 when it
   reports a failed item, like the real run. Other read-only fan-outs
   (`billing credits`, `job list`, ...) still exit 0.

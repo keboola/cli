@@ -48,6 +48,7 @@ def _format_setup_result(console: Console, data: dict) -> None:
     refreshed = data.get("projects_refreshed", [])
     skipped = data.get("projects_skipped", [])
     failed = data.get("projects_failed", [])
+    refresh_failed = data.get("projects_refresh_failed", [])
 
     token_expires_in = data.get("token_expires_in")
     mode_label = "[bold yellow]DRY RUN[/bold yellow] " if dry_run else ""
@@ -122,10 +123,20 @@ def _format_setup_result(console: Console, data: dict) -> None:
         table.add_column("Error", style="bold red")
 
         for p in failed:
-            # Token refresh failures are keyed by alias; they carry no project_id.
-            table.add_row(
-                str(p.get("project_id", p.get("alias", ""))), p["project_name"], p["error"]
-            )
+            table.add_row(str(p["project_id"]), p["project_name"], p["error"])
+
+        console.print(table)
+        console.print()
+
+    # Token refresh failures of already-registered projects: keyed by alias.
+    if refresh_failed:
+        table = Table(title="Token Refresh Failed")
+        table.add_column("Alias", style="bold cyan")
+        table.add_column("Project Name")
+        table.add_column("Error", style="bold red")
+
+        for p in refresh_failed:
+            table.add_row(p["alias"], p["project_name"], p["error"])
 
         console.print(table)
         console.print()
@@ -281,11 +292,9 @@ def org_setup(
                     dry_run=dry_run,
                 )
                 result["projects_refreshed"] = refresh_result.get("projects_refreshed", [])
-                # A failed refresh is a failed project: it must reach the exit code (#745).
-                result["projects_failed"] = [
-                    *result.get("projects_failed", []),
-                    *refresh_result.get("projects_failed", []),
-                ]
+                # A failed refresh must reach the exit code (#745). It has its own key:
+                # its entries are keyed by alias, and `org setup` cannot retry them.
+                result["projects_refresh_failed"] = refresh_result.get("projects_failed", [])
             except KeboolaApiError as exc:
                 _handle_api_error(formatter, exc)
                 return
@@ -294,7 +303,8 @@ def org_setup(
 
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
-    if code := item_failure_exit_code(len(result.get("projects_failed", []))):
+    failed = len(result.get("projects_failed", [])) + len(result.get("projects_refresh_failed", []))
+    if code := item_failure_exit_code(failed):
         raise typer.Exit(code=code)
 
 

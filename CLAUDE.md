@@ -1012,8 +1012,9 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   `sync push`, `sync push/pull/diff --all-projects`, `sync clone` (also `bucket_errors`),
 #   `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`,
 #   `semantic-layer import/promote/build/edit metric`, `storage describe-batch --json`,
-#   `flow schedule-remove` (new `errors[]`, only for a partial failure: when every
-#   schedule delete fails it still raises the error). Only `sync push`, `sync clone`,
+#   `flow schedule-remove` (new `errors[]` key, always present, empty when nothing
+#   failed; a partial failure fills it and exits 1; when every schedule delete
+#   fails it still raises `SCHEDULE_DELETE_FAILED`). Only `sync push`, `sync clone`,
 #   `storage describe-batch`, `storage describe-migrate` and `flow schedule-remove` print
 #   a `Failed:` headline instead of a green `Success:`; the others list the failed items
 #   in a table or in summary lines, and the `--all-projects` variants state the count in

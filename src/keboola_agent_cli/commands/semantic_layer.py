@@ -17,6 +17,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     check_cli_permission,
@@ -634,8 +635,7 @@ def semantic_layer_promote(
     )
     formatter.output(result, _print_promote_result)
     # Per-item failures are collected per type, not raised (#745).
-    plurals = ("datasets", "metrics", "relationships", "glossary", "constraints")
-    failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural in plurals)
+    failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
     if code := item_failure_exit_code(failed):
         raise typer.Exit(code=code)
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -625,8 +626,12 @@ class TestOrgSetup:
             as_json = runner.invoke(app, [*base, "--json", *args, "--refresh", "--yes"])
             human = runner.invoke(app, [*base, *args, "--refresh", "--yes"])
         assert as_json.exit_code == 1
-        assert json.loads(as_json.output)["data"]["projects_failed"] == [REFRESH_FAILED_ENTRY]
+        data = json.loads(as_json.output)["data"]
+        # Its own key: every projects_failed entry keeps a project_id.
+        assert data["projects_refresh_failed"] == [REFRESH_FAILED_ENTRY]
+        assert data["projects_failed"] == []
         assert human.exit_code == 1
+        assert "Token Refresh Failed" in human.output
         assert "Error checking token" in human.output
 
 
@@ -930,6 +935,23 @@ class TestSemanticLayerImportAndPromote:
         result = _invoke_with(tmp_path, "SemanticLayerService", mock, args)
         assert result.exit_code == 1
         assert "glossary.revenue: HTTP 409" in result.output
+
+    @pytest.mark.parametrize(
+        "kind", ["datasets", "metrics", "relationships", "glossary", "constraints"]
+    )
+    def test_promote_failed_item_of_each_kind_exits_1(self, tmp_path: Path, kind: str) -> None:
+        mock = MagicMock()
+        mock.promote_model.return_value = {kind: {"new": 0, "failed": [SL_FAILED_ITEM]}}
+        args = [
+            "semantic-layer",
+            "promote",
+            "--from-project",
+            "prod",
+            "--to-project",
+            "dev",
+            "--yes",
+        ]
+        assert _invoke_with(tmp_path, "SemanticLayerService", mock, args).exit_code == 1
 
     def test_promote_dry_run_with_failed_item_exits_1(self, tmp_path: Path) -> None:
         mock = MagicMock()
