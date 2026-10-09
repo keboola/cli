@@ -53,6 +53,41 @@ class TableUploadOutcome:
     job: dict[str, Any]
 
 
+def _enqueue_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could this failed import POST still have started an import job?
+
+    Mirrors how ``BaseHttpClient._request`` classifies a POST it did not
+    replay. A 5xx, or a failure with no HTTP response other than one proven
+    undelivered, means the request may have reached Storage and only the
+    answer was lost. Undelivered for certain: a connect error, and a connect /
+    pool timeout (raised ``retryable=True``; a read/write timeout is raised
+    ``retryable=False``). A 4xx is a definitive refusal -- nothing started.
+    """
+    if exc.status_code >= 500:
+        return True
+    if exc.status_code != 0:
+        return False
+    if exc.error_code == ErrorCode.CONNECTION_ERROR:
+        return False
+    return not (exc.error_code == ErrorCode.TIMEOUT and exc.retryable)
+
+
+def _import_may_be_running(file_id: int, exc: KeboolaApiError) -> KeboolaApiError:
+    """Re-raise an ambiguous enqueue failure flagged ``import_may_be_running``."""
+    return KeboolaApiError(
+        message=(
+            f"{exc.message} The import request may have reached Storage, so an import "
+            f"of Storage file {file_id} may already be running; check the table before "
+            "importing the file again."
+        ),
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        # Repeating the POST is exactly the double import this guards against.
+        retryable=False,
+        details={**exc.details, "file_id": file_id, "import_may_be_running": True},
+    )
+
+
 class _StorageTablesMixin(_CoreClient):
     """Storage buckets, tables, snapshots and bucket sharing/linking."""
 
@@ -824,7 +859,10 @@ class _StorageTablesMixin(_CoreClient):
             KeboolaApiError: ``STORAGE_JOB_FAILED`` when the import fails;
                 ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details
                 ``job_id`` + ``file_id``) when the wait budget runs out -- the
-                import keeps running server-side.
+                import keeps running server-side. An enqueue failure whose
+                outcome is unknown (5xx, read timeout, dropped connection)
+                carries ``details["import_may_be_running"] = True`` plus
+                ``file_id`` and is never retryable.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
@@ -834,7 +872,21 @@ class _StorageTablesMixin(_CoreClient):
             "delimiter": delimiter,
             "enclosure": enclosure,
         }
-        response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
+        try:
+            response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
+        except KeboolaApiError as exc:
+            if _enqueue_outcome_unknown(exc):
+                raise _import_may_be_running(file_id, exc) from exc
+            raise
+        except httpx.TransportError as exc:
+            # ``_request`` maps connect errors and timeouts; anything else
+            # (a dropped connection, a protocol error) hit a request that was
+            # already being sent.
+            lost = KeboolaApiError(
+                message=f"Connection to Storage failed during the import request ({exc}).",
+                error_code=ErrorCode.CONNECTION_ERROR,
+            )
+            raise _import_may_be_running(file_id, lost) from exc
         job = response.json()
         if not wait:
             return job
@@ -939,6 +991,10 @@ class _StorageTablesMixin(_CoreClient):
                 wait=False,
             )
         except KeboolaApiError as exc:
+            if exc.details.get("import_may_be_running"):
+                # Already names the file; "import it from there" would be
+                # the wrong advice while an import may be running.
+                raise
             raise KeboolaApiError(
                 message=(
                     f"{exc.message} (the file was uploaded as Storage file {file_id}; "

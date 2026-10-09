@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -54,7 +55,7 @@ def _make_service(store: ConfigStore, mock_client: MagicMock) -> StorageService:
     return StorageService(config_store=store, client_factory=lambda url, token: mock_client)
 
 
-def _invoke(store: ConfigStore, svc: MagicMock, args: list[str]) -> Any:
+def _invoke(store: ConfigStore, svc: MagicMock | StorageService, args: list[str]) -> Any:
     with (
         patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
         patch("keboola_agent_cli.cli.StorageService", return_value=svc),
@@ -658,3 +659,240 @@ class TestServeRoutes:
         assert res.status_code == 200, res.text
         kwargs = storage.load_file_to_table.call_args.kwargs
         assert kwargs["wait"] is False and kwargs["timeout"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: recovery hints and fail-fast no-wait errors
+# ---------------------------------------------------------------------------
+
+
+def _upload_with_error(tmp_path: Path, error: KeboolaApiError, **kwargs: Any) -> KeboolaApiError:
+    """Run service.upload_table against a client that raises ``error``."""
+    csv_file = tmp_path / "d.csv"
+    csv_file.write_text("id\n1\n")
+    client = MagicMock()
+    client.upload_table.side_effect = error
+    service = _make_service(_make_store(tmp_path), client)
+    with pytest.raises(KeboolaApiError) as exc_info:
+        service.upload_table(
+            alias="test",
+            table_id="in.c-b.users",
+            file_path=str(csv_file),
+            auto_create=False,
+            **kwargs,
+        )
+    return exc_info.value
+
+
+class TestRecoveryHintKeepsImportOptions:
+    """The load-file hint must re-run the SAME import, not a full production load."""
+
+    def test_incremental_branch_delimiter_enclosure_are_rendered(self, tmp_path: Path) -> None:
+        exc = _upload_with_error(
+            tmp_path,
+            KeboolaApiError(
+                "Bad request",
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                details={"file_id": 100},
+            ),
+            incremental=True,
+            delimiter=";",
+            enclosure="",
+            branch_id=123,
+        )
+        assert (
+            "kbagent storage load-file --project test --file-id 100 --table-id in.c-b.users "
+            "--incremental --delimiter ';' --enclosure '' --branch 123"
+        ) in exc.message
+
+    def test_defaults_render_no_extra_flags(self, tmp_path: Path) -> None:
+        exc = _upload_with_error(
+            tmp_path,
+            KeboolaApiError(
+                "Bad request",
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                details={"file_id": 100},
+            ),
+        )
+        assert exc.message.endswith(
+            "kbagent storage load-file --project test --file-id 100 --table-id in.c-b.users"
+        )
+
+    def test_shell_metacharacters_are_quoted(self, tmp_path: Path) -> None:
+        exc = _upload_with_error(
+            tmp_path,
+            KeboolaApiError(
+                "Bad request",
+                status_code=400,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                details={"file_id": 100},
+            ),
+            enclosure="'",
+        )
+        assert "--enclosure ''\"'\"''" in exc.message
+
+
+class TestAmbiguousEnqueueFailure:
+    """A lost enqueue response may hide a running import: never advise re-import first."""
+
+    def _upload(self, httpx_mock, tmp_path: Path) -> KeboolaApiError:
+        csv_file = tmp_path / "d.csv"
+        csv_file.write_text("id\n1\n")
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/files/prepare", method="POST", json={"id": 100}
+        )
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            patch.object(KeboolaClient, "_upload_to_cloud"),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
+        return exc_info.value
+
+    def test_5xx_marks_import_may_be_running(self, httpx_mock, tmp_path: Path) -> None:
+        httpx_mock.add_response(
+            url=_IMPORT_URL, method="POST", json={"error": "Internal"}, status_code=503
+        )
+        exc = self._upload(httpx_mock, tmp_path)
+        assert exc.details["import_may_be_running"] is True
+        assert exc.details["file_id"] == 100
+        assert "instead of uploading it again" not in exc.message
+        assert "may already be running" in exc.message
+        assert exc.retryable is False
+
+    def test_read_timeout_marks_import_may_be_running(self, httpx_mock, tmp_path: Path) -> None:
+        httpx_mock.add_exception(httpx.ReadTimeout("read timed out"), url=_IMPORT_URL)
+        exc = self._upload(httpx_mock, tmp_path)
+        assert exc.details["import_may_be_running"] is True
+        assert exc.details["file_id"] == 100
+
+    def test_raw_transport_error_marks_import_may_be_running(
+        self, httpx_mock, tmp_path: Path
+    ) -> None:
+        httpx_mock.add_exception(httpx.RemoteProtocolError("server disconnected"), url=_IMPORT_URL)
+        exc = self._upload(httpx_mock, tmp_path)
+        assert exc.error_code == ErrorCode.CONNECTION_ERROR
+        assert exc.details["import_may_be_running"] is True
+        assert exc.details["file_id"] == 100
+
+    def test_4xx_stays_definitive(self, httpx_mock, tmp_path: Path) -> None:
+        httpx_mock.add_response(
+            url=_IMPORT_URL, method="POST", json={"error": "bad delimiter"}, status_code=400
+        )
+        exc = self._upload(httpx_mock, tmp_path)
+        assert "import_may_be_running" not in exc.details
+        assert "instead of uploading it again" in exc.message
+
+    def test_load_file_5xx_keeps_file_id_and_flag(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=_IMPORT_URL, method="POST", json={"error": "Internal"}, status_code=502
+        )
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.import_table_async(table_id="in.c-b.users", file_id=9, wait=False)
+        assert exc_info.value.details == {"file_id": 9, "import_may_be_running": True}
+
+    def test_service_hint_says_check_first_not_load_file(self, tmp_path: Path) -> None:
+        exc = _upload_with_error(
+            tmp_path,
+            KeboolaApiError(
+                "API error 503",
+                status_code=503,
+                error_code=ErrorCode.API_ERROR,
+                details={"file_id": 100, "import_may_be_running": True},
+            ),
+            incremental=True,
+            branch_id=123,
+        )
+        assert "Import it with" not in exc.message
+        assert "may already be running" in exc.message
+        check = "kbagent storage table-detail --project test --table-id in.c-b.users --branch 123"
+        reimport = "kbagent storage load-file --project test --file-id 100"
+        assert check in exc.message
+        # The re-import command, if named at all, comes only after the check.
+        assert exc.message.index(check) < exc.message.find(reimport) or reimport not in exc.message
+        assert exc.details["import_may_be_running"] is True
+
+
+class TestNoWaitTerminalJob:
+    _FAILED: ClassVar[dict[str, Any]] = {
+        "id": 55,
+        "status": "error",
+        "error": {"message": "Invalid CSV header", "code": "storage.import"},
+    }
+
+    def test_upload_no_wait_terminal_error_raises(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "d.csv"
+        csv_file.write_text("id\n1\n")
+        client = MagicMock()
+        client.upload_table.return_value = TableUploadOutcome(file_id=100, job=self._FAILED)
+        service = _make_service(_make_store(tmp_path), client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.upload_table(
+                alias="test",
+                table_id="in.c-b.users",
+                file_path=str(csv_file),
+                auto_create=False,
+                wait=False,
+            )
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert exc.message == "Invalid CSV header"
+        assert exc.details == {"job_id": 55, "file_id": 100}
+
+    def test_load_file_no_wait_terminal_error_raises(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.import_table_async.return_value = self._FAILED
+        service = _make_service(_make_store(tmp_path), client)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.load_file_to_table(alias="test", file_id=7, table_id="in.c-b.t", wait=False)
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert exc.message == "Invalid CSV header"
+        assert exc.details == {"job_id": 55, "file_id": 7}
+
+    def test_load_file_no_wait_cli_exits_non_zero(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.import_table_async.return_value = self._FAILED
+        store = _make_store(tmp_path)
+        svc = _make_service(store, client)
+        result = _invoke(
+            store,
+            svc,
+            [
+                "--json",
+                "storage",
+                "load-file",
+                "--project",
+                "test",
+                "--file-id",
+                "7",
+                "--table-id",
+                "in.c-b.t",
+                "--no-wait",
+            ],
+        )
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "STORAGE_JOB_FAILED"
+
+    def test_load_file_no_wait_terminal_success_reports_rows(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.import_table_async.return_value = {
+            "id": 56,
+            "status": "success",
+            "results": {"importedRowsCount": 3, "warnings": ["w"]},
+        }
+        service = _make_service(_make_store(tmp_path), client)
+        result = service.load_file_to_table(
+            alias="test", file_id=7, table_id="in.c-b.t", wait=False
+        )
+        assert (result["job_status"], result["imported_rows"], result["warnings"]) == (
+            "success",
+            3,
+            ["w"],
+        )

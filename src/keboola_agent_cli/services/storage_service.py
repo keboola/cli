@@ -16,6 +16,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
 from ._storage_jobs import (
+    ImportOptions,
     import_job_fields,
     read_csv_header,
     summarize_storage_job,
@@ -1151,7 +1152,13 @@ class StorageService(ColumnDescriptionsMixin):
                 on_progress=on_progress,
             )
         except KeboolaApiError as exc:
-            raise with_import_hint(exc, alias, table_id) from exc
+            options = ImportOptions(
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+            )
+            raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
             client.close()
 
@@ -1161,7 +1168,7 @@ class StorageService(ColumnDescriptionsMixin):
             "incremental": incremental,
             "file_size_bytes": file_size_bytes,
             "file_id": outcome.file_id,
-            **import_job_fields(outcome.job),
+            **import_job_fields(outcome.job, outcome.file_id),
             "auto_created_bucket": auto_created_bucket,
             "auto_created_table": auto_created_table,
         }
@@ -2229,7 +2236,13 @@ class StorageService(ColumnDescriptionsMixin):
                 max_wait=timeout,
             )
         except KeboolaApiError as exc:
-            raise with_import_hint(exc, alias, table_id) from exc
+            options = ImportOptions(
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+            )
+            raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
             client.close()
 
@@ -2238,7 +2251,7 @@ class StorageService(ColumnDescriptionsMixin):
             "file_id": file_id,
             "table_id": table_id,
             "incremental": incremental,
-            **import_job_fields(job),
+            **import_job_fields(job, file_id),
         }
 
     def storage_job_detail(

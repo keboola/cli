@@ -17,14 +17,38 @@ from __future__ import annotations
 import csv
 import gzip
 import math
+import shlex
+from dataclasses import dataclass
 from typing import Any
 
+from ..client._core import _storage_job_error_message
 from ..errors import ErrorCode, KeboolaApiError
 
 # The first two bytes of every gzip stream (RFC 1952). Sniffed instead of
 # trusting the file extension: a `.csv` that is really gzip, or a `.gz` that
 # is really plain text, must both read correctly.
 _GZIP_MAGIC = b"\x1f\x8b"
+
+# The `--delimiter` / `--enclosure` defaults of upload-table and load-file.
+# A recovery command omits a flag that would only restate its default.
+DEFAULT_IMPORT_DELIMITER = ","
+DEFAULT_IMPORT_ENCLOSURE = '"'
+
+
+@dataclass(frozen=True)
+class ImportOptions:
+    """How an import was started -- what a recovery command must repeat.
+
+    A re-import that drops any of these is a DIFFERENT import: without
+    ``incremental`` it is a full load that replaces the table, without
+    ``branch_id`` it lands in production (or whatever branch is active when
+    the user runs it).
+    """
+
+    incremental: bool = False
+    delimiter: str = DEFAULT_IMPORT_DELIMITER
+    enclosure: str = DEFAULT_IMPORT_ENCLOSURE
+    branch_id: int | None = None
 
 
 def validate_wait_timeout(timeout: float | None) -> None:
@@ -39,13 +63,28 @@ def validate_wait_timeout(timeout: float | None) -> None:
         raise ValueError(f"--timeout must be a positive number of seconds, got {timeout}.")
 
 
-def import_job_fields(job: dict[str, Any]) -> dict[str, Any]:
+def import_job_fields(job: dict[str, Any], file_id: Any) -> dict[str, Any]:
     """The keys an import result adds for its job (upload-table, load-file).
 
     ``imported_rows`` stays None until the job succeeded -- a queued job has
     imported nothing yet, and reporting 0 would read as an empty import.
+
+    Raises:
+        KeboolaApiError: ``STORAGE_JOB_FAILED`` when ``job`` is already a
+            terminal failure. With ``--no-wait`` the enqueue response itself
+            can be one (Storage rejected the file fast); reporting it as a
+            queued success would exit 0 on a failed import. Same message and
+            details as the waited path, so callers see one failure shape.
     """
     status = job.get("status")
+    if status == "error":
+        raise KeboolaApiError(
+            message=_storage_job_error_message(job),
+            status_code=500,
+            error_code=ErrorCode.STORAGE_JOB_FAILED,
+            retryable=False,
+            details={"job_id": job.get("id"), "file_id": file_id},
+        )
     results = job.get("results") if status == "success" else None
     results = results if isinstance(results, dict) else {}
     return {
@@ -100,15 +139,59 @@ def summarize_storage_job(alias: str, job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def with_import_hint(exc: KeboolaApiError, alias: str, table_id: str) -> KeboolaApiError:
+def _branch_args(branch_id: int | None) -> list[str]:
+    """``--branch ID`` whenever the import targeted a branch.
+
+    Spelled out even when it came from ``branch use``: the hint is read later,
+    possibly after the active branch changed, and must target the same branch.
+    """
+    return ["--branch", str(branch_id)] if branch_id else []
+
+
+def _load_file_command(alias: str, file_id: Any, table_id: str, options: ImportOptions) -> str:
+    """The ``storage load-file`` command that repeats this exact import."""
+    args = [
+        "kbagent",
+        "storage",
+        "load-file",
+        "--project",
+        alias,
+        "--file-id",
+        str(file_id),
+        "--table-id",
+        table_id,
+    ]
+    if options.incremental:
+        args.append("--incremental")
+    if options.delimiter != DEFAULT_IMPORT_DELIMITER:
+        args += ["--delimiter", options.delimiter]
+    if options.enclosure != DEFAULT_IMPORT_ENCLOSURE:
+        args += ["--enclosure", options.enclosure]
+    args += _branch_args(options.branch_id)
+    return shlex.join(args)
+
+
+def _table_detail_command(alias: str, table_id: str, branch_id: int | None) -> str:
+    args = ["kbagent", "storage", "table-detail", "--project", alias, "--table-id", table_id]
+    return shlex.join(args + _branch_args(branch_id))
+
+
+def with_import_hint(
+    exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
+) -> KeboolaApiError:
     """Append the follow-up kbagent command to an import failure.
 
-    The client cannot name it (it knows no project alias). Two cases:
+    The client cannot name it (it knows no project alias). Three cases:
 
     - wait timeout (``STORAGE_JOB_TIMEOUT`` with a ``job_id``): the import is
       still running -- follow it with ``storage job-detail --wait``;
-    - enqueue failure after the upload (a ``file_id`` but no ``job_id``):
-      the file is in Storage -- import it with ``storage load-file``.
+    - AMBIGUOUS enqueue failure (``details["import_may_be_running"]``: the
+      POST may have reached Storage, its response was lost): check the table
+      first, re-import only if nothing ran -- a blind re-import can load the
+      file twice;
+    - DEFINITIVE enqueue failure after the upload (a ``file_id`` but no
+      ``job_id``): the file is in Storage -- import it with ``storage
+      load-file``, repeating every option of the original import.
 
     Anything else comes back as an equal copy, so a caller can always
     ``raise with_import_hint(exc, ...) from exc``.
@@ -117,14 +200,23 @@ def with_import_hint(exc: KeboolaApiError, alias: str, table_id: str) -> Keboola
     file_id = exc.details.get("file_id")
     if exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT and job_id is not None:
         hint = (
-            f" Follow it with: kbagent storage job-detail --project {alias} "
+            f" Follow it with: kbagent storage job-detail --project {shlex.quote(alias)} "
             f"--job-id {job_id} --wait"
         )
-    elif file_id is not None and job_id is None:
+    elif exc.details.get("import_may_be_running") and job_id is None:
         hint = (
-            f" Import it with: kbagent storage load-file --project {alias} "
-            f"--file-id {file_id} --table-id {table_id}"
+            " The import request may have reached Storage, so the import may already be "
+            "running -- do NOT re-import yet. Check the table first: "
+            f"{_table_detail_command(alias, table_id, options.branch_id)} "
+            "and the recent Storage jobs in the Keboola UI (no job ID was returned)."
         )
+        if file_id is not None:
+            hint += (
+                f" Only if neither shows an import of Storage file {file_id}, re-import it "
+                f"with: {_load_file_command(alias, file_id, table_id, options)}"
+            )
+    elif file_id is not None and job_id is None:
+        hint = f" Import it with: {_load_file_command(alias, file_id, table_id, options)}"
     else:
         hint = ""
     return KeboolaApiError(
