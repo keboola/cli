@@ -51,6 +51,7 @@ from ..constants import (
     S3_MULTIPART_MAX_PARTS,
     S3_MULTIPART_MIN_PART_SIZE,
     S3_MULTIPART_PART_ALIGNMENT,
+    S3_MULTIPART_PART_ATTEMPTS,
     S3_MULTIPART_PART_SIZE,
 )
 from ..errors import ErrorCode, KeboolaApiError
@@ -379,7 +380,15 @@ def _upload_part(
             f"{len(body)} of {length} bytes)."
         )
     url = f"{target.object_url}?partNumber={part_number}&uploadId={quote(upload_id, safe='')}"
-    reply = _send(http, target, method="PUT", url=url, body=body, stop=stop)
+    reply = _send(
+        http,
+        target,
+        method="PUT",
+        url=url,
+        body=body,
+        stop=stop,
+        attempts=S3_MULTIPART_PART_ATTEMPTS,
+    )
     if not reply.ok:
         raise _reply_error(f"S3 upload of part {part_number} failed", reply)
     etag = reply.response.headers.get("etag")
@@ -468,21 +477,22 @@ def _send(
     extra_headers: dict[str, str] | None = None,
     expect_root: str | None = None,
     stop: threading.Event | None = None,
+    attempts: int = MAX_RETRIES,
 ) -> _S3Reply:
     """Send a signed S3 request, retrying transient failures.
 
     Re-signs every attempt (fresh x-amz-date) over the same bytes. Transient:
     a status in RETRYABLE_STATUS_CODES, a retryable S3 error code in the body
     (also inside a 200), a 2xx whose body is not ``expect_root``, and any
-    httpx.TransportError. ``MAX_RETRIES`` is the total attempt budget, as in
-    ``BaseHttpClient``. Returns the last reply (successful or definitive);
+    httpx.TransportError. ``attempts`` is the total attempt budget (``MAX_RETRIES``
+    by default, as in ``BaseHttpClient``; parts pass a larger one). Returns the last reply (successful or definitive);
     raises UPLOAD_FAILED when every attempt died in transport, or when
     ``stop`` is set (another part already failed).
     """
     payload_hash = hashlib.sha256(body).hexdigest()
     last_reply: _S3Reply | None = None
     last_exc: httpx.TransportError | None = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(attempts):
         if stop is not None and stop.is_set():
             raise _upload_error("S3 upload cancelled after another part failed.")
         headers = _s3_signed_headers(
@@ -505,16 +515,15 @@ def _send(
             if last_reply.ok or not _is_transient(last_reply):
                 return last_reply
             delay = _retry_delay(response, delay)
-        if attempt < MAX_RETRIES - 1:
+        if attempt < attempts - 1:
             _wait(delay, stop)
     if last_reply is not None and last_exc is None:
         return last_reply
     if last_reply is not None:
         # Mixed failures: report the HTTP reply, but keep the true attempt count.
-        return _S3Reply(last_reply.response, MAX_RETRIES, last_reply.error_code, None)
+        return _S3Reply(last_reply.response, attempts, last_reply.error_code, None)
     raise _upload_error(
-        f"S3 {method} failed after {MAX_RETRIES} attempts: network error "
-        f"({type(last_exc).__name__})."
+        f"S3 {method} failed after {attempts} attempts: network error ({type(last_exc).__name__})."
     ) from last_exc
 
 

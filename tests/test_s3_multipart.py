@@ -548,10 +548,13 @@ class TestMultipartRetries:
     def test_part_retries_exhausted(
         self, small_parts: int, fake_s3: FakeS3, tmp_path: Path, waits: list[float]
     ) -> None:
-        fake_s3.part_queue[1] = [httpx.Response(500)] * 3
+        fake_s3.part_queue[1] = [httpx.Response(500)] * m.S3_MULTIPART_PART_ATTEMPTS
         with pytest.raises(KeboolaApiError, match="part 1 failed \\(HTTP 500\\)"):
             m.upload_s3_multipart(str(_file(tmp_path, 10)), _target())
-        assert fake_s3.part_attempts[1] == m.MAX_RETRIES
+        # Parts get a larger budget than the general MAX_RETRIES: one dead part
+        # aborts the whole upload.
+        assert m.S3_MULTIPART_PART_ATTEMPTS > m.MAX_RETRIES
+        assert fake_s3.part_attempts[1] == m.S3_MULTIPART_PART_ATTEMPTS
         assert fake_s3.ops("abort") == 1
 
     def test_create_retried_on_5xx(
