@@ -13,14 +13,26 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._data_app_git import register_git_commands
+from ._data_app_password import (
+    CopyOption,
+    PasswordFlags,
+    RevealOption,
+    check_password_flags,
+    deploy_blocker,
+    output_with_password,
+    password_after_deploy,
+    register_password_command,
+)
 from ._data_app_runtime import register_secrets_commands
 from ._helpers import (
     check_cli_permission,
@@ -28,8 +40,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_manage_token,
 )
+from ._url_copy import LINK_STYLE
 
 # Canonical Keboola help-doc references appended to each --help epilog so
 # operators have a one-click path to the rule a flag enforces.
@@ -108,6 +120,13 @@ def data_app_list(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
+        if project and len(project) == 1:
+            branch = resolve_branch(
+                ctx.obj["config_store"],
+                project[0],
+                branch,
+                ignore_active_branch=True,
+            )
         result = service.list_data_apps(aliases=project, branch_id=branch)
     except KeboolaApiError as exc:
         formatter.error(
@@ -148,6 +167,7 @@ def data_app_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     try:
+        branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
         result = service.get_data_app(alias=project, app_id=app_id, branch_id=branch)
     except KeboolaApiError as exc:
         formatter.error(
@@ -179,7 +199,12 @@ def data_app_detail(
             ),
             c.print(f"  [bold]Size:[/bold] {d.get('size', '')}"),
             c.print(f"  [bold]Auto-suspend:[/bold] {d.get('auto_suspend_after_seconds', '?')}s"),
-            c.print(f"  [bold]URL:[/bold] {d.get('url', '')}"),
+            c.print(
+                f"  [bold]Open the app:[/bold] "
+                f"[{LINK_STYLE}]{escape(d.get('url') or '')}[/{LINK_STYLE}]",
+                highlight=False,
+                soft_wrap=True,
+            ),
             c.print(f"  [bold]Last started:[/bold] {d.get('last_start_timestamp', '')}"),
             c.print(f"  [bold]Git:[/bold] {d.get('git', {})}"),
         ),
@@ -189,6 +214,46 @@ def data_app_detail(
 # ---------------------------------------------------------------------------
 # data-app create
 # ---------------------------------------------------------------------------
+
+
+def _print_create_result(console: Console, result: dict[str, Any]) -> None:
+    """Human output of `data-app create` (the --json output is the result dict)."""
+    if result.get("dry_run"):
+        console.print("[bold]DRY RUN -- no API calls were made.[/bold]")
+        console.print(result["requests"])
+    else:
+        console.print(f"[bold green]Success:[/bold green] {result.get('message', '')}")
+        console.print(f"  [bold]App ID:[/bold] {result['app_id']}")
+        console.print(f"  [bold]Config ID:[/bold] {result['config_id']}")
+        if result.get("use_managed_git_repo"):
+            repo_id = result.get("managed_git_repo_id") or "(provisioning)"
+            console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
+        if result.get("workspace"):
+            # Report what we WROTE, not what the platform will do with it.
+            # kbagent sets the key; whether the runtime honours it is the
+            # platform's call, so "requested" is the honest verb here.
+            console.print(
+                "  [bold]Storage access:[/bold] requested (runtime.workspace.enabled=true)"
+            )
+        else:
+            # --no-workspace is the footgun shape: say it out loud
+            # so a dead data path is never a silent surprise at runtime.
+            console.print(
+                "  [bold yellow]Storage access:[/bold yellow] DISABLED "
+                "(--no-workspace) -- WORKSPACE_ID / QUERY_SERVICE_URL will "
+                "not be injected; an app that reads Storage will serve no data"
+            )
+        if result.get("url"):
+            console.print(
+                f"  [bold]Open the app:[/bold] "
+                f"[{LINK_STYLE}]{escape(result['url'])}[/{LINK_STYLE}]",
+                highlight=False,
+                soft_wrap=True,
+            )
+        console.print(
+            f"  [bold]State:[/bold] {result.get('state', '?')} "
+            f"(desired={result.get('desired_state', '?')})"
+        )
 
 
 @data_app_app.command("create")
@@ -316,9 +381,23 @@ def data_app_create(
         "--dry-run",
         help="Print the three request bodies without making any API call.",
     ),
+    copy: CopyOption = False,
+    reveal: RevealOption = False,
 ) -> None:
-    """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy)."""
+    """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).
+
+    With --wait on a password-auth app, the password is delivered once the app
+    runs, as in `data-app password`: a c-to-copy prompt in a terminal,
+    --copy / --reveal elsewhere. The password itself is never printed
+    without --reveal.
+    """
     formatter = get_formatter(ctx)
+    flags = PasswordFlags(copy=copy, reveal=reveal)
+    blocker = deploy_blocker(
+        wait=wait, no_deploy=no_deploy, use_managed_git_repo=use_managed_git_repo
+    )
+    flags = check_password_flags(ctx, flags, deploy_blocker=blocker)
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
     # Mutual exclusion: --description vs --description-file
@@ -413,47 +492,19 @@ def data_app_create(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        if result.get("dry_run"):
-            formatter.console.print("[bold]DRY RUN -- no API calls were made.[/bold]")
-            formatter.console.print(result["requests"])
-        else:
-            formatter.console.print(
-                f"[bold green]Success:[/bold green] {result.get('message', '')}"
-            )
-            formatter.console.print(f"  [bold]App ID:[/bold] {result['app_id']}")
-            formatter.console.print(f"  [bold]Config ID:[/bold] {result['config_id']}")
-            if result.get("use_managed_git_repo"):
-                repo_id = result.get("managed_git_repo_id") or "(provisioning)"
-                formatter.console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
-            if result.get("workspace"):
-                # Report what we WROTE, not what the platform will do with it.
-                # kbagent sets the key; whether the runtime honours it is the
-                # platform's call, so "requested" is the honest verb here.
-                formatter.console.print(
-                    "  [bold]Storage access:[/bold] requested (runtime.workspace.enabled=true)"
-                )
-            else:
-                # --no-workspace is the footgun shape: say it out loud
-                # so a dead data path is never a silent surprise at runtime.
-                formatter.console.print(
-                    "  [bold yellow]Storage access:[/bold yellow] DISABLED "
-                    "(--no-workspace) -- WORKSPACE_ID / QUERY_SERVICE_URL will "
-                    "not be injected; an app that reads Storage will serve no data"
-                )
-            if result.get("url"):
-                formatter.console.print(f"  [bold]URL:[/bold] {result['url']}")
-            formatter.console.print(
-                f"  [bold]State:[/bold] {result.get('state', '?')} "
-                f"(desired={result.get('desired_state', '?')})"
-            )
+    lookup = password_after_deploy(
+        formatter, service, result, flags, alias=project, waited=not blocker
+    )
+    output_with_password(formatter, result, lookup, flags, human=_print_create_result)
 
 
 # ---------------------------------------------------------------------------
 # data-app deploy / start / stop
 # ---------------------------------------------------------------------------
+
+
+def _print_lifecycle_result(console: Console, result: dict[str, Any]) -> None:
+    console.print(f"[bold green]Success:[/bold green] {result.get('message', '')}")
 
 
 def _run_lifecycle(
@@ -465,7 +516,10 @@ def _run_lifecycle(
     wait: bool,
     timeout: float,
     extra: dict | None = None,
+    delivery: PasswordFlags | None = None,
 ) -> None:
+    """Run deploy / start / stop. ``delivery`` (deploy only) turns on the
+    password delivery after ``--wait`` (see ``_data_app_password``)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
     method = getattr(service, service_method)
@@ -485,10 +539,11 @@ def _run_lifecycle(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.output(
-        result,
-        lambda c, d: c.print(f"[bold green]Success:[/bold green] {d.get('message', '')}"),
+    flags = delivery or PasswordFlags()
+    lookup = password_after_deploy(
+        formatter, service, result, flags, alias=project, waited=wait and delivery is not None
     )
+    output_with_password(formatter, result, lookup, flags, human=_print_lifecycle_result)
 
 
 @data_app_app.command("deploy")
@@ -510,8 +565,18 @@ def data_app_deploy(
         "--branch",
         help="Storage branch for reading the latest version (defaults to production).",
     ),
+    copy: CopyOption = False,
+    reveal: RevealOption = False,
 ) -> None:
-    """Deploy the latest Storage config (the §9 redeploy contract)."""
+    """Deploy the latest Storage config (the §9 redeploy contract).
+
+    With --wait on a password-auth app, the password is delivered once the app
+    runs, as in `data-app password`: a c-to-copy prompt in a terminal (the
+    command then ends after Enter or 120 s), --copy / --reveal elsewhere.
+    """
+    flags = PasswordFlags(copy=copy, reveal=reveal)
+    flags = check_password_flags(ctx, flags, deploy_blocker=deploy_blocker(wait=wait))
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     _run_lifecycle(
         ctx,
         "deploy_data_app",
@@ -520,6 +585,7 @@ def data_app_deploy(
         wait=wait,
         timeout=timeout,
         extra={"config_version": config_version, "branch_id": branch},
+        delivery=flags,
     )
 
 
@@ -614,53 +680,6 @@ def data_app_delete(
     formatter.output(
         result,
         lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# data-app password (requires Manage token)
-# ---------------------------------------------------------------------------
-
-
-@data_app_app.command("password")
-def data_app_password(
-    ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
-    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-) -> None:
-    """Retrieve the simpleAuth password for a password-gated data app.
-
-    Requires the Manage API token in addition to the project's Storage
-    token. Default-deny since 0.28.0: read from an interactive hidden
-    prompt; pass top-level --allow-env-manage-token to read
-    KBC_MANAGE_API_TOKEN from env (CI/CD). Never persisted, never logged.
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "data_app_service")
-    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
-
-    try:
-        result = service.get_data_app_password(
-            alias=project, app_id=app_id, manage_token=manage_token
-        )
-    except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-
-    formatter.output(
-        result,
-        lambda c, d: (
-            c.print(f"[bold green]Success:[/bold green] {d['message']}"),
-            c.print(f"\n[bold yellow]Password:[/bold yellow] {d['password']}"),
-        ),
     )
 
 
@@ -993,9 +1012,11 @@ def data_app_validate_repo(
         raise typer.Exit(code=1)
 
 
-# Attach the data-app git-* and secrets-* commands. They live in
-# _data_app_git.py / _data_app_runtime.py to keep this module under the
-# file-size budget (CONTRIBUTING.md "File-size budgets"); they still register
-# as `kbagent data-app git-*` / `secrets-*` on this sub-app.
+# Attach the data-app git-*, secrets-* and password commands. They live in
+# _data_app_git.py / _data_app_runtime.py / _data_app_password.py to keep this
+# module under the file-size budget (CONTRIBUTING.md "File-size budgets"); they
+# still register as `kbagent data-app git-*` / `secrets-*` / `password` on this
+# sub-app.
 register_git_commands(data_app_app)
 register_secrets_commands(data_app_app)
+register_password_command(data_app_app)

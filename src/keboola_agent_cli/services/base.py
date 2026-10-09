@@ -13,7 +13,12 @@ from typing import Any
 
 from ..auth.sentinel import is_session_token, parse_session_project_id, require_static_token
 from ..client import KeboolaClient
-from ..config_store import ConfigError, ConfigStore, project_not_found_error
+from ..config_store import (
+    ConfigError,
+    ConfigStore,
+    project_not_found_error,
+    project_not_registered_error,
+)
 from ..constants import (
     ENV_KBAGENT_PROJECT,
     ENV_MAX_PARALLEL_WORKERS,
@@ -21,6 +26,7 @@ from ..constants import (
 )
 from ..errors import ErrorCode
 from ..models import ProjectConfig
+from ..project_ref import resolve_project_ref
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +59,13 @@ def resolve_project_credentials(
 
     Shared by the single-project services (``token`` / ``stream`` / ``snapshot``)
     whose ``_resolve_project`` helpers were previously byte-identical. Uses the
-    same short, actionable "not registered" message they already emitted (kept
-    verbatim rather than switching to the richer
-    :meth:`ConfigStore.project_not_found_error`, to preserve behavior).
+    same short, actionable "not registered" message they already emitted
+    (:func:`project_not_registered_error`) rather than the richer
+    :meth:`ConfigStore.project_not_found_error`, to preserve behavior.
     """
     project = config_store.get_project(alias)
     if project is None:
-        raise ConfigError(f"Project alias '{alias}' is not registered. Run `kbagent project list`.")
+        raise project_not_registered_error(alias)
     return ResolvedProjectCredentials(stack_url=project.stack_url, token=project.token)
 
 
@@ -311,8 +317,14 @@ class BaseService:
         project must go through this cascade -- never a "first registered
         project" shortcut, which ignores the ``project use`` pin (issue #684).
 
+        ``explicit`` and the env var may give a project ID instead of an
+        alias (CLI-22, :func:`~keboola_agent_cli.project_ref.resolve_project_ref`);
+        the returned value is always the alias. The CLI translates
+        ``--project`` before a command runs, so for ``explicit`` this only
+        matters to callers that pass their own value (telemetry, REST bodies).
+
         Args:
-            explicit: Explicit alias from a CLI flag, or None.
+            explicit: Explicit alias (or project ID) from a CLI flag, or None.
 
         Returns:
             Tuple of (alias, source).
@@ -324,21 +336,23 @@ class BaseService:
         config = self._config_store.load()
 
         if explicit:
-            if explicit not in config.projects:
+            alias = resolve_project_ref(config.projects, explicit)
+            if alias not in config.projects:
                 raise project_not_found_error(
                     explicit, self._config_store.config_path, self._config_store.source
                 )
-            return explicit, "explicit"
+            return alias, "explicit"
 
         env_value = os.environ.get(ENV_KBAGENT_PROJECT)
         if env_value:
-            if env_value not in config.projects:
+            alias = resolve_project_ref(config.projects, env_value)
+            if alias not in config.projects:
                 raise ConfigError(
                     f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
-                    "that is not registered. Use 'kbagent project add' or "
-                    "unset the env var."
+                    "that is not registered (no alias or project ID matches it). "
+                    "Use 'kbagent project add' or unset the env var."
                 )
-            return env_value, "env"
+            return alias, "env"
 
         pinned = config.default_project
         if pinned:

@@ -161,8 +161,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     EXISTING session, without re-running login. Fixes the usability trap
     where `login` prints an accessible-project table but nothing gets
     registered unless --register-projects was passed, and where the
-    suggested alias is slugified from the project NAME -- the numeric
-    project id (e.g. 9840) is never a valid alias on its own.
+    suggested alias is slugified from the project NAME, never the numeric
+    project id (e.g. 9840). Once registered, `--project 9840` resolves to
+    that alias too (since 0.96.1; see Tips 3).
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
     ConfigError naming it). Omitting both starts an interactive arrow-key +
@@ -342,7 +343,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
 
   kbagent project use ALIAS
-    Pin ALIAS as the default project. Persists to config.json.
+    Pin ALIAS as the default project. Persists to config.json. A registered
+    project ID pins that project's alias (since 0.96.1; see Tips 3).
     Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
     an explicit --project flag overrides both.
 
@@ -371,7 +373,8 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
     Bulk invite. CSV must have a header row with columns: email, project (alias or
-    numeric ID), role (optional if --default-role is given), reason (optional).
+    numeric ID -- an alias wins, see Tips 3; since 0.96.1) or project_id (ID only),
+    role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
     `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
 
@@ -1232,7 +1235,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create dev branch and auto-activate it. Async, CLI waits for completion.
 
   kbagent branch use --project ALIAS --branch ID
-    Set existing branch as active for subsequent commands.
+    Set existing branch as active for subsequent commands. Every command that
+    then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
+    'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
@@ -1334,14 +1339,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
   kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
-    List workspaces. Read command: ignores active dev branch (production endpoint) with an Info banner;
-    pass --branch to opt in. Each entry carries login_type, read_only, qs_compatible so callers can pick a
+    List workspaces. Without --branch uses each alias's active branch (`branch use`), else
+    production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
     confirmed-whitelist loginType (canonical data-app shape). --orphaned shows orphaned workspaces.
 
   kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
-    Read command: ignores active dev branch with an Info banner; pass --branch to opt in.
+    Without --branch uses the alias's active branch (`branch use`), else production.
 
   kbagent workspace delete --project ALIAS --workspace-id ID
     Delete workspace. They also expire automatically.
@@ -1393,8 +1398,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
     [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID]
     [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+    [--copy] [--reveal]
     Create + configure + deploy in one call. Default `--auth password` mints
-    a 20-char hex simpleAuth password (retrievable via `data-app password`).
+    a 20-char hex simpleAuth password during the deploy. With --wait the
+    password is delivered like `data-app password` once the app runs (see
+    there); --copy / --reveal need --wait and a deploy. --dry-run accepts
+    the same flags and adds `password_delivery` (prompt|clipboard|stdout).
     PAT input (private repo): env var (recommended) > file > pre-encrypted.
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
@@ -1421,7 +1430,14 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
-    [--wait] [--timeout SECONDS] [--branch ID]
+    [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+    With --wait on a password app (0.96.1+): the password is delivered like
+    `data-app password` (the c prompt in a terminal, which then waits for
+    Enter or 120 s; --copy / --reveal need --wait). Without a flag and
+    without the prompt (no terminal, --json) nothing is read: output as
+    before. With a flag, JSON adds only ui_url, password_delivered_to
+    (+ password with --reveal); a failed password read or a non-password
+    app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback).
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
@@ -1440,12 +1456,43 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     URL is permanently retired. Confirmation prompt unless --yes.
 
   kbagent data-app password --project NAME --app-id ID
-    Retrieve the simpleAuth password. Requires the Manage API token in
-    addition to the project's Storage token. Token is read from interactive
-    hidden prompt by default; pass top-level --allow-env-manage-token to
-    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.29.0). Never
-    persisted, never logged. Password is auto-generated at create time
-    and CANNOT be rotated -- delete and recreate the app to mint a new one.
+    [--copy] [--reveal] [--open]
+    Give the user the password of a password-protected app WITHOUT printing
+    it (0.96.1+; older versions printed it and needed a Manage API token).
+    Project token only (static or session), no Manage token. In a terminal
+    (human mode, stdin + stdout a TTY, not a background job) it prints the
+    links `Open the app:` (`app_url`) and `Configuration:` (`ui_url`), then
+    waits: `c` copies the password, Enter / Esc / q finishes, 120 s timeout.
+    Without a terminal or with --json there is no prompt: only --copy copies
+    it (the clipboard tool gets it on stdin). Nothing copied -> exit 0 with
+    `password_delivered_to: null`; `ui_url` is the Keboola UI page that shows
+    the password under Open App. --reveal prints it (human + JSON,
+    `password_delivered_to: "stdout"`); --reveal + --copy = INVALID_ARGUMENT.
+    --open also opens `app_url` in the browser (`app_opened`). JSON keys:
+    project_alias, app_id, auth, app_url, ui_url, password_delivered_to,
+    app_opened, message (+ password with --reveal). VALIDATION_ERROR when the
+    app's auth is not `password` (e.g. oidc, public); NOT_FOUND when the app
+    has no password yet. The Keboola UI can reset the password.
+    BREAKING: scripts that read `.data.password` must add --reveal (without
+    it the key is absent, exit 0); REST clients pass reveal=true;
+    KBC_MANAGE_API_TOKEN / --allow-env-manage-token are no longer used here.
+    AGENT RULES -- the password must not go into the chat:
+      1. Recommend that the user runs `kbagent data-app password --project P
+         --app-id ID` in their own terminal window (not through you, not
+         through Claude Code's `!` mode) and presses c. Recommend
+         `kbagent data-app deploy --project P --app-id ID --wait` there
+         only when a deploy is needed anyway (c after the deploy); a deploy
+         restarts the app, so never redeploy just to get the password.
+      2. Offer to run it yourself with --copy (plus --wait on create /
+         deploy); say that the password then replaces the clipboard content
+         but does not go into the chat. When `password_delivered_to` is
+         null, give the user `ui_url`.
+      3. Do not pass --reveal unless the user asks for it, and warn first
+         that the password then goes into the chat history.
+      4. Never read the clipboard (pbpaste, `xclip -o`, wl-paste,
+         Get-Clipboard), never get the password another way (`kbagent http`,
+         curl, `serve` with reveal=true), never ask the user to paste it into
+         the chat, never repeat it.
 
   kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
     Tail the container log buffer (Data Science /apps/{{id}}/logs/tail).
@@ -1536,15 +1583,30 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
         [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
     Mint a git credential for the app's MANAGED git repository. ssh_key
     requires a public key; http_token returns a ONE-TIME secret printed
-    once and never retrievable again (mirrors data-app password). Requires
+    once and never retrievable again. Requires
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
 
 ### Project Sync
 
-  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
+    --with-workspaces (since 0.96.1, CLI-25) sets "syncWorkspaces": true in the manifest
+    (with --adopt-existing: turns it on in an existing one). pull/diff/push/clone then also
+    sync shared SQL workspaces: keboola.sandboxes configs with no parameters.id and
+    runtime.shared true (Python/R and legacy SQL sandboxes carry parameters.id and stay
+    skipped). Config only: push never runs a job, opens a SQL editor session or loads
+    tables; a parameters.backendSize change adds a workspace_backend_size warning (an open
+    session keeps its size). A `push --force` DELETE removes the workspace's SQL editor
+    sessions of every user in the push branch, then the config (a plain push holds it back
+    under skipped_deletions); if listing/deleting sessions fails the config stays and the
+    error is reported. push --dry-run --force lists them (warnings[] workspace_sessions:
+    session_count, session_ids). sync clone warns per workspace whose
+    input tables the target lacks (workspace_input_tables_missing). Removing the key makes
+    the next pull drop the entries as "ignored", except a locally edited workspace, which
+    pull (also --force) keeps and reports as "skipped" (only --theirs deletes it). An
+    ignoredComponents entry wins.
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
@@ -1565,7 +1627,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
-    always excluded, unioned with the manifest's ignoredComponents list
+    always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),
+    unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
     component newly ignored has its manifest entry dropped and local dir removed on the next
     pull, reported with details[].action "ignored" -- distinct from "removed", which means
@@ -1604,6 +1667,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
+    Workspace delete (since 0.96.1, syncWorkspaces trees): a --force push that deletes a shared
+    SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
+    backend workspaces, which config restore does not bring back; check
+    `sync push --dry-run --force` (warnings[] workspace_sessions) first. --force is destructive-class (a policy denying
+    cli:destructive or --deny-destructive blocks it; plain push stays write-class).
     Fresh-CREATE behavior: if the manifest contains a placeholder entry at
     (component_id, path), the create path updates it in place (no manifest duplication)
     and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
@@ -1623,7 +1691,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Never-fetched guard: a manifest entry with an empty pull_hash and no
     local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
     diff/push exclude it and report it under never_fetched with a warning -- run sync pull
-    to materialize it. Local deletion of a properly-pulled config still deletes on push.
+    to materialize it. Local deletion of a properly-pulled config deletes on push --force
+    only (#792): a plain push deletes nothing and lists the deletion under skipped_deletions,
+    also in --dry-run. A config or row deleted on the remote since the last pull is
+    remote_deleted: push never re-creates it, sync pull removes the local copy.
     Adopted-by-id writeback: pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
@@ -1635,7 +1706,17 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
-    reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    reference->ULID; since 0.96.1 also shared-code links, legacy keboola.orchestrator
+    task configIds, task configRowIds and schedule targets (link_remaps counts each
+    kind; an unset link is an errors[] entry, a failed PUT is sent by the next push).
+    Idempotent (re-run -> no_changes); needs a fresh target.
+    Read warnings[] after a clone (also --dry-run, 0.96.1+): missing_task_target (a
+    flow/orchestrator task runs a config not in the tree), encrypted_values_copied
+    (KBC:: paths the target cannot decrypt; secret_keys: plaintext in _config.yml +
+    sync push, unencryptable_keys: encrypt values, oauth_keys: authorize again),
+    data_app_not_deployed (run data-app deploy), schedule_not_active (clone never
+    activates schedules; flow schedule does). Only the run that creates the configs
+    reports them -- a re-run returns warnings: [], so keep them from the first run.
     Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
     value -> CONFIG_ERROR naming the key + type.
     Clone recreates the reference's storage buckets in the target from
@@ -1670,18 +1751,34 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
-with `metastore.`. Auth: same `X-StorageApi-Token` as Storage, but it MUST be a
-MASTER (project admin) token -- the metastore rejects valid non-master tokens
-with an opaque 401 "Failed to create project scope", reclassified by kbagent to
-MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. READS work with
+any valid, non-disabled, non-expired token (PSGO-282); WRITES (add, edit,
+remove, import, promote, build, scope add|remove|set|request-*) need a
+project-admin token (master, or any admin-role user's). A non-admin write is
+the metastore's opaque 401 "Failed to create project scope", reclassified by
+kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 `kbagent --json project info --project P` -> is_master_token. Alias:
 `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
   kbagent semantic-layer model list --project P
     List all semantic-layer models in a project.
 
-  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
-    Create a new model (default sql-dialect: Snowflake).
+  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+    Create a new model (default sql-dialect: Snowflake). --scope omitted =
+    "project" (owner-only). "targeted" = owner + explicit --target-project
+    grants (alias or numeric project ID; repeatable or comma-separated; an
+    alias must be on the owner's stack; a project-admin token is needed).
+    "organization" = visible to every project in the org from creation -- the
+    schema's ACL requires the organization-admin ROLE to create directly at
+    this scope (a normal project token gets 403 ACCESS_DENIED); an ordinary
+    caller instead creates at project/targeted scope and uses
+    `scope request-create` + an org-admin's `scope set --scope organization`
+    (below). `--scope organization` is irreversible and is gated as
+    destructive. ASK THE USER which project(s) before ever passing --scope
+    organization|targeted -- never guess. --target-project without --scope
+    targeted exits 2. With --scope targeted and no --target-project: on a
+    real terminal this launches an interactive picker over the other projects
+    on the stack; in --json/non-interactive it fails fast (exit 2).
 
   kbagent semantic-layer model delete --project P --model M [--yes]
     Delete a model. Fails if the model still has child entities.
@@ -1748,14 +1845,16 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
     error|warning|info (the 4-band health convention lives in the NAME suffix
     `_critical/_warning/_healthy/_review`, not the API severity). `--rule` is
-    a STRING expression (e.g. "value >= 0"), NEVER an object.
+    a STRING expression (e.g. "value >= 0"), NEVER an object. --scope /
+    --target-project: same semantics as `model create --scope` above --
+    ASK THE USER before ever passing --scope organization|targeted.
 
   kbagent semantic-layer edit metric|dataset|constraint|relationship|glossary ...
-    DELETE+POST (no PATCH on metastore). Metric rename cascades through every
-    constraint referencing the old name (DELETE old + POST new with updated
+    In-place PUT (same id, scope and grants). Metric rename cascades through
+    every constraint referencing the old name (each PUT with updated
     metrics[]); CODE_METRIC warning shown
-    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). On POST failure,
-    rollback re-POSTs original_attrs and reports success/failure explicitly.
+    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). A failed PUT
+    changes nothing (the `rollback` field is always null).
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
@@ -1766,6 +1865,10 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --new-metrics ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
+    Edits update the item in place (PUT): it keeps its id, scope,
+    target-project grants (`scope get` below), pending elevation request and
+    revision history -- editing an organization/targeted item never
+    downgrades it. A failed edit changes nothing.
 
   kbagent semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes
@@ -1777,7 +1880,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
     Replay a snapshot. Default: skip on conflict. --overwrite opts into
-    DELETE+POST. Dependency-ordered push (datasets -> metrics -> relationships
+    an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
   kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types ...] [--dry-run] [--yes]
@@ -1801,6 +1904,72 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Encrypt the project's storage token for transformation `user_properties`.
     Builds {{"#metastore_token": <token>}} and delegates to EncryptService.
     --encrypt is currently required; other modes refused with USAGE_ERROR.
+
+  kbagent semantic-layer scope get --project P --type T --context-id ID
+    Show an item's current scope ("project"|"organization"|"targeted"),
+    target_project_ids, and any pending scope_elevation_requested_at.
+    --type is one of model|dataset|metric|relationship|constraint|glossary.
+
+  kbagent semantic-layer scope add --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+  kbagent semantic-layer scope remove --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+    Attach / detach target projects of a --scope targeted item (alias or
+    numeric ID; repeatable or comma-separated). A client-side merge (read the
+    grants, apply the delta, PUT) -- NOT atomic against a concurrent grant
+    change. Refused (exit 2) from a project that does not own the item: the
+    server hides the grants from a non-owner, so a merge would overwrite them
+    -- use `scope set --target-project` there. The item must have been created
+    with scope="targeted" (400 otherwise).
+
+  kbagent semantic-layer scope set --project P --type T --context-id ID (--scope organization | --target-project ALIAS|ID ... | --clear) [--dry-run] [--yes]
+    Write the scope. Exactly ONE of: --target-project (REPLACES the whole
+    list), --clear (revokes every grant; owner-only again), or --scope
+    organization (elevate; the only value --scope accepts). A mixed
+    request exits 2. Elevating REQUIRES the organization-admin ROLE (403
+    otherwise), is ONE-WAY (no downgrade), and is gated as destructive;
+    it prompts unless --yes/--json, and --dry-run shows the change without
+    applying it. NEVER elevate without the user explicitly naming the item
+    -- it makes the item (and its full revision history) visible to every
+    project in the organization, irreversibly.
+
+  kbagent semantic-layer scope request-create --project P --type T --context-id ID
+    Owner-only. Flags a project-scoped item as awaiting an organization
+    admin's step-up decision (`scope set --scope organization`). Idempotent --
+    calling again just refreshes the timestamp.
+
+  kbagent semantic-layer scope request-delete --project P --type T --context-id ID
+    Owner-only. Clears a pending elevation request. Idempotent no-op if
+    none is pending.
+
+  kbagent semantic-layer scope request-list --project P --type T [--limit N] [--offset N]
+    One page (default --limit 50) of items of --type awaiting an elevation
+    decision, across the whole organization; returns {{items, limit, offset,
+    has_more}}. The org-admin's discovery queue.
+
+  Child items (`add metric|dataset|...`) with --scope omitted INHERIT their
+  model's scope and target projects; pass --scope to override. An inherited
+  organization scope is gated as destructive like a typed one, and a
+  non-org-admin token gets a 403 on it (pass --scope project). `import`,
+  `promote` and `build --model` create their NEW items at the target model's
+  scope too, with the same gate; `import` / `promote --scope` (and
+  --target-project) override it, as on `add`. Overwritten items keep their scope.
+
+  Item names are unique per type across ALL models of a project: a second
+  model in the same project cannot reuse an item name (ALREADY_EXISTS, "in
+  this project"). An item stored at schema version 1.0.0 (created before
+  0.97.0) cannot be elevated; recreate it: export, delete the model, create
+  it again, import.
+
+  Elevating an EXISTING project's semantic-layer objects in bulk: there is no
+  bulk-elevate endpoint -- each object needs its own `scope request-create` +
+  an org-admin's `scope set --scope organization`, one call per item. Do this
+  deliberately, one object at a time, only when the user has named which
+  objects should become org-wide; never loop this over every object in a
+  project speculatively.
+
+  Over `kbagent serve`: GET/PUT /semantic-layer/scope/{{context_id}},
+  POST/DELETE .../target-projects, PUT/DELETE .../elevation-request,
+  GET /semantic-layer/scope/elevation-requests; POST /semantic-layer/models
+  and /items/{{kind}} take `scope` + `target_projects`.
 
 
 ### Self-call HTTP (inside `kbagent serve` subprocesses)
@@ -2121,7 +2290,8 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5
-    versions, one-line summary each; --full (-v) expands every note.
+    versions, the first sentence of every BREAKING note, plus of the first other
+    notes until at least two show; --full (-v) expands every note.
 
   kbagent permissions list [--category read|write|destructive|admin]
     List all operations with risk categories and current allowed/denied status.
@@ -2161,9 +2331,35 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      Success: {{"status": "ok", "data": ...}}
      Error:   {{"status": "error", "error": {{"code": "...", "message": "...", "retryable": true/false}}}}
    Check "retryable" -- if true, retry the operation.
+   A command that picked a branch also carries "targets" (success AND error):
+   [{{"role": "target"|"source", "project_alias", "branch_id", "branch_name",
+     "branch_source": "explicit"|"active_branch"|"git_mapping"|"manifest"|"merge_request"
+       |"production",
+     "active_branch": {{"branch_id", "branch_name"}}|null}}]. Read it before you
+   trust a write target: "active_branch" means `branch use` chose the branch.
+   "source" = the branch read or merged FROM (config clone origin, a merge
+   request's branch); merge-request merge and an armed auto-merge also list
+   production as "target".
+   No "targets" key = the command chose no branch (it does NOT mean production).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
+   --project takes an alias or a registered project's numeric ID (since 0.96.1).
+   An alias wins over an ID. An ID registered under several aliases fails with
+   CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
+   exactly one is a session (browser-login) alias, which then wins. The same
+   applies to KBAGENT_PROJECT, `project use`, `config clone --target-project`,
+   `sync clone --target`, `semantic-layer promote --from-project/--to-project`,
+   `semantic-layer diff --project-a/--project-b`, `auth * --stack`, the
+   `project` column of `project invite --from-csv`, and the `kbagent serve`
+   {{project}} / {{alias}} path and ?project= / ?alias= / ?stack= query
+   parameters. serve translates path and query parameters only: a project in
+   a request body still needs the alias. Output names the resolved alias
+   (`targets`, `project_alias`). When a digits-only alias is also another
+   project's ID, the alias is used and a warning names that project on stderr
+   (in --json mode too). `project add` / `project create` take --project as a
+   NEW alias, never an ID; `lineage show --project` filters an offline graph
+   and is not translated either.
 
 4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 
@@ -2183,14 +2379,14 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
                               a standalone `export` does not survive between tool calls.
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
+     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh).
                               Default-DENY since 0.29.0: pass --allow-env-manage-token
                               to opt in, otherwise this var is ignored and a TTY prompt
                               is required. Closes AI-exfiltration via subprocess env.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
-     KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
+     KBAGENT_PROJECT          Override the pinned default project for this shell/session (alias or project ID; beats pin, loses to --project)
      KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
                               reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL.
                               Headless / token-only mode: no `project add`, no config.json on disk. Use
@@ -2254,6 +2450,32 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   6  Permission denied (operation blocked by policy)
 
 When you receive a non-zero exit code, use --json to get structured error details.
+
+Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
+item fails exit 1 when at least one item failed: sync push, sync
+push/pull/diff --all-projects, sync clone, org setup, project refresh,
+project invite --from-csv, workspace gc, semantic-layer
+import/promote/build/edit metric, storage describe-batch, flow
+schedule-remove. Only sync push, sync clone, storage describe-batch, storage
+describe-migrate and flow schedule-remove print a "Failed:" headline with the
+failed count instead of "Success:". The other commands list the failed items
+in a table or in summary lines, and the --all-projects variants state the
+count in the summary line. flow schedule-remove always returns the errors[]
+key, empty when nothing failed; a partial failure fills it and exits 1; when
+every schedule delete fails it still raises SCHEDULE_DELETE_FAILED.
+The bulk storage commands
+(delete-table, delete-bucket, file-delete, describe-migrate, ...) already
+exited 1. The --json payload is still emitted in full (errors / projects_failed
+/ projects_refresh_failed / failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
+branch on the exit code. Exit 1 here does not mean nothing was written: the
+items that succeeded stay written, so read the payload before you run the
+command again. A --dry-run of these commands exits 1 when it reports a failed
+item, like the real run. sync diff --all-projects also exits 1 when a project
+failed.
+Other read-only multi-project fan-outs (billing credits, job list, schedule
+list, notification list, ...) are the deliberate exception: a per-project
+failure there degrades that project only and still exits 0, so check their
+errors array rather than the exit code.
 
 ## Claude Code Plugin
 

@@ -173,7 +173,9 @@ def push_all(
     """Push all registered projects that have a local manifest.
 
     Projects without an existing manifest are skipped. Returns a dict with
-    per-project push results, a summary, and a skipped list.
+    per-project push results, a summary, and a skipped list. ``summary.failed``
+    counts a project whose push raised AND a project whose push returned a
+    non-empty ``errors[]``; the full push result is kept for the latter.
     """
     projects = service.resolve_projects(None)
     results: dict[str, Any] = {}
@@ -201,7 +203,12 @@ def push_all(
                 allow_plaintext_fallback=allow_plaintext_fallback,
             )
             results[alias] = result
-            success_count += 1
+            # A push that returned per-config errors[] did not succeed: count it
+            # as failed so summary.failed (and the exit code) include it (#745).
+            if result.get("errors"):
+                failed_count += 1
+            else:
+                success_count += 1
         except Exception as exc:
             results[alias] = {"error": str(exc)}
             failed_count += 1

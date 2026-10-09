@@ -12,12 +12,16 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
+from keboola_agent_cli.auth import environment
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands import _url_copy
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._data_app_password import DataAppPassword
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
 from keboola_agent_cli.services.project_service import ProjectService
@@ -416,6 +420,86 @@ class TestDataAppCreateValidation:
 
 
 # ---------------------------------------------------------------------------
+# data-app detail / create -- the link to the running app
+# ---------------------------------------------------------------------------
+
+APP_URL = "https://x.hub.example.com"
+BOLD_CYAN = "\x1b[1;36m"  # the style of the `auth login --device-code` link
+RESET = "\x1b[0m"
+
+
+class TestDataAppLinkOutput:
+    def _detail(self, tmp_path: Path) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.get_data_app.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "name": "App",
+            "url": APP_URL,
+        }
+        return _invoke(
+            ["data-app", "detail", "--project", "prod", "--app-id", "42"],
+            store=store,
+            data_app_mock=mock,
+        )
+
+    def _create(self, tmp_path: Path) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.create_data_app.return_value = {
+            "app_id": "42",
+            "config_id": "ulid",
+            "workspace": True,
+            "url": APP_URL,
+            "state": "created",
+            "desired_state": "stopped",
+            "message": "created",
+        }
+        return _invoke(
+            [
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--git-repo",
+                "https://github.com/o/r",
+                "--git-public",
+                "--auth",
+                "public",
+                "--no-deploy",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+
+    @pytest.mark.parametrize("command", ["_detail", "_create"])
+    def test_app_link_is_labelled_by_what_it_opens(self, tmp_path: Path, command: str) -> None:
+        result = getattr(self, command)(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert f"Open the app: {APP_URL}" in result.output
+        assert "  URL:" not in result.output
+
+    @pytest.mark.parametrize("command", ["_detail", "_create"])
+    def test_app_link_is_bold_cyan_like_the_device_login_link(
+        self, tmp_path: Path, force_colour, command: str
+    ) -> None:
+        result = getattr(self, command)(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert f"{BOLD_CYAN}{APP_URL}{RESET}" in result.output
+
+
+# ---------------------------------------------------------------------------
 # data-app deploy
 # ---------------------------------------------------------------------------
 
@@ -519,52 +603,63 @@ class TestDataAppDelete:
 
 
 # ---------------------------------------------------------------------------
-# data-app password (manage token)
+# data-app password -- option handling with the service mocked. Delivery (the
+# terminal prompt, --copy), the leak checks and the request headers run end
+# to end in tests/test_data_app_password.py.
 # ---------------------------------------------------------------------------
 
 
-class TestDataAppPassword:
-    def test_password_success(self, tmp_path: Path, monkeypatch) -> None:
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
-        mock = MagicMock()
-        mock.get_data_app_password.return_value = {
-            "project_alias": "prod",
-            "app_id": "42",
-            "password": "deadbeefcafe",
-            "message": "Retrieved.",
-        }
-        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-token")
-        result = _invoke(
-            [
-                "--allow-env-manage-token",
-                "--json",
-                "data-app",
-                "password",
-                "--project",
-                "prod",
-                "--app-id",
-                "42",
-            ],
-            store=store,
-            data_app_mock=mock,
-        )
-        assert result.exit_code == 0
-        body = json.loads(result.output)
-        assert body["data"]["password"] == "deadbeefcafe"
-        # The Manage token should have been forwarded but never logged.
-        assert "manage-token" not in result.output
-        mock.get_data_app_password.assert_called_once_with(
-            alias="prod", app_id="42", manage_token="manage-token"
-        )
+def _password_lookup() -> DataAppPassword:
+    return DataAppPassword(
+        project_alias="prod",
+        app_id="42",
+        auth="password",
+        app_url="https://app-42.hub.keboola.com",
+        ui_url="https://connection.keboola.com/admin/projects/1234/branch/default/data-apps/c1",
+        password="deadbeefcafe",
+    )
 
-    def test_password_missing_manage_token_no_tty(self, tmp_path: Path, monkeypatch) -> None:
+
+class TestDataAppPassword:
+    @pytest.fixture(autouse=True)
+    def _no_clipboard_no_browser(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """No real clipboard or browser; records the URLs --open asks for."""
+        monkeypatch.setattr(_url_copy, "detect_clipboard", lambda: None)
+        monkeypatch.setattr(_url_copy, "stdio_is_interactive", lambda: False)
+        opened: list[str] = []
+
+        def _open(url: str, *, wait_seconds: float = 0.0) -> bool:
+            assert wait_seconds > 0
+            opened.append(url)
+            return True
+
+        monkeypatch.setattr(environment, "open_browser", _open)
+        return opened
+
+    def _store(self, tmp_path: Path) -> ConfigStore:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        return _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+    def test_needs_no_manage_token(self, tmp_path: Path, monkeypatch) -> None:
+        """A Manage token in env without --allow-env-manage-token no longer blocks it."""
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", "manage-token")
         mock = MagicMock()
-        monkeypatch.delenv("KBC_MANAGE_API_TOKEN", raising=False)
+        mock.get_data_app_password.return_value = _password_lookup()
+        result = _invoke(
+            ["--json", "data-app", "password", "--project", "prod", "--app-id", "42"],
+            store=self._store(tmp_path),
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        mock.get_data_app_password.assert_called_once_with(alias="prod", app_id="42")
+        data = json.loads(result.output)["data"]
+        assert data["password_delivered_to"] is None
+        assert "password" not in data
+        assert "deadbeefcafe" not in result.output
+
+    def test_reveal_and_copy_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        mock = MagicMock()
         result = _invoke(
             [
                 "--json",
@@ -574,12 +669,64 @@ class TestDataAppPassword:
                 "prod",
                 "--app-id",
                 "42",
+                "--reveal",
+                "--copy",
             ],
-            store=store,
+            store=self._store(tmp_path),
             data_app_mock=mock,
         )
-        # CliRunner stdin is non-TTY, so resolve_manage_token returns exit 2.
         assert result.exit_code == 2
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+        mock.get_data_app_password.assert_not_called()
+
+    def test_reveal_prints_the_password(self, tmp_path: Path) -> None:
+        mock = MagicMock()
+        mock.get_data_app_password.return_value = _password_lookup()
+        result = _invoke(
+            ["data-app", "password", "--project", "prod", "--app-id", "42", "--reveal"],
+            store=self._store(tmp_path),
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Password: deadbeefcafe" in result.output
+
+    def test_open_opens_the_app_url(self, tmp_path: Path, _no_clipboard_no_browser) -> None:
+        mock = MagicMock()
+        mock.get_data_app_password.return_value = _password_lookup()
+        result = _invoke(
+            ["--json", "data-app", "password", "--project", "prod", "--app-id", "42", "--open"],
+            store=self._store(tmp_path),
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert _no_clipboard_no_browser == ["https://app-42.hub.keboola.com"]
+        assert json.loads(result.output)["data"]["app_opened"] is True
+
+    def test_open_without_a_browser_reports_false(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(environment, "open_browser", lambda url, *, wait_seconds=0.0: False)
+        mock = MagicMock()
+        mock.get_data_app_password.return_value = _password_lookup()
+        result = _invoke(
+            ["--json", "data-app", "password", "--project", "prod", "--app-id", "42", "--open"],
+            store=self._store(tmp_path),
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["app_opened"] is False
+
+    def test_validation_error_maps_to_exit_1(self, tmp_path: Path) -> None:
+        mock = MagicMock()
+        mock.get_data_app_password.side_effect = KeboolaApiError(
+            error_code=ErrorCode.VALIDATION_ERROR,
+            message="Data app 42 does not use password authentication (auth: oidc).",
+        )
+        result = _invoke(
+            ["--json", "data-app", "password", "--project", "prod", "--app-id", "42"],
+            store=self._store(tmp_path),
+            data_app_mock=mock,
+        )
+        assert result.exit_code == 1
+        assert json.loads(result.output)["error"]["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------

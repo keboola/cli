@@ -6,8 +6,10 @@ CREATEs everything fresh in the target project. Cloning into a **fresh** target
 project needs no id surgery: the reference's config ids do not exist in the
 target remote, so the diff classifies every config as ``added`` and the push
 assigns new ULIDs -- and because ``created_id_map`` is keyed by the reference id
-(the manifest entry's id before writeback), the Phase-C variable links and the
-Phase-D flow task ``configId``s remap reference->ULID automatically.
+(the manifest entry's id before writeback), push remaps the links between the
+configs reference->ULID automatically: Phase C the transformation variables and
+shared-code links, Phase D the flow and orchestrator task ``configId``s (and
+``configRowIds``) and the schedule targets.
 
 These functions are deliberately side-effecting but **pure of API calls**: they
 only touch the on-disk tree + the in-memory manifest, so they are unit-testable
@@ -104,6 +106,22 @@ def repoint_default_branch_configs(
     for cfg in manifest.configurations:
         if cfg.branch_id == source_default_branch_id:
             cfg.branch_id = new_branch_id
+
+
+def drop_source_pull_marks(manifest: Any) -> None:
+    """Drop the ``pull_hash`` the copied entries carry from the SOURCE project.
+
+    ``pull_hash`` marks an entry as fetched from the remote it now points at.
+    After the re-point it would claim that for the target, where none of these
+    configs exists, and the diff would report each one as deleted on the
+    target instead of new (``remote_deleted``, issue #792 H). The rows carry
+    their own. Push stamps a fresh ``pull_hash`` when it creates each one.
+    """
+    for cfg in manifest.configurations:
+        cfg.metadata.pop("pull_hash", None)
+        for row in cfg.rows:
+            if row.metadata:
+                row.metadata.pop("pull_hash", None)
 
 
 def _default_branch_dir(manifest: Any) -> str:

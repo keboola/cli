@@ -11,6 +11,127 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Every command that picks a branch names it: `Target:` line and `targets` key
+
+*(since 0.96.1, #766)*
+
+- **`kbagent branch use` sets an active branch per project, and commands
+  apply it when `--branch` is omitted.** Before, some commands printed an
+  `Info:` line in human mode only, and others applied the active branch with
+  no notice (for example `workspace create`). A write could land on a
+  development branch and the caller did not know.
+- **Human mode prints one line on stderr** before the first API call to the
+  project and before any confirmation prompt:
+  - `Target: project 'prod', branch 456 'feature-x' (from 'kbagent branch use')`
+  - `Target: project 'prod', branch 789 (from the command line)`
+  - `Target: project 'prod', production (active branch 456 'feature-x' not
+    used; pass --branch 456 to use it)` -- storage reads, Data Streams,
+    data apps, branch metadata and git-branching `sync` do not use the
+    active branch.
+  - `Target: project 'prod', branch 388 (from .keboola/branch-mapping.json)`
+    or `(from .keboola/manifest.json)` -- `sync` without an active branch.
+  - `Source:` names the branch that a command reads from or merges from:
+    the source project of `config clone`, the branch of a merge request
+    (`merge-request *`, `branch merge`), the branch notification commands
+    read config names from, and the source table branch of `storage
+    create-table --source-branch-id` / `storage clone-table` (production).
+    `merge-request merge` and an armed `merge-request auto-merge` also print
+    `Target: project 'prod', production`.
+  - A command that uses two branches prints a line for each:
+    - `workspace create --ui` creates the config in the active branch but
+      runs its job on production.
+    - `workspace from-transformation` reads the transformation from
+      production.
+    - `sync clone` creates the buckets in production.
+- **`--json` adds `targets` to the success AND the error envelope**, before
+  `data` / `error`, which do not change. Each entry is
+  `{role, project_alias, branch_id, branch_name, branch_source, active_branch}`:
+  - `branch_source`: `explicit` (`--branch` or `--target-branch`),
+    `active_branch` (`branch use`), `git_mapping`
+    (`.keboola/branch-mapping.json`), `manifest` (the first branch of
+    `.keboola/manifest.json`), `merge_request` (the branch of the merge
+    request given by `--merge-request-id`) or `production`.
+  - `production` can carry a numeric `branch_id` when the command read the
+    default branch ID from the API (workspaces, config metadata).
+  - `active_branch` is the project's `branch use` choice
+    (`{branch_id, branch_name}` or null), also when the command did not use it.
+  - `role` is `source` for the `Source:` cases above, else `target`.
+- **No `targets` key means the command chose no branch**: it has no
+  `--branch` and never uses the active branch (`project list`, `token list`,
+  storage listings without `--project`), it failed on an unknown alias, or it
+  refused to run because it needs a branch and got none. It does not mean
+  production.
+- **`--branch 0` means production.** The API clients always sent 0 to the
+  production endpoint. Before 0.96.1 the config, flow, schedule and
+  notification commands used the active branch for `--branch 0` instead.
+- **`--dry-run` reports the same target as the real run.** `flow delete
+  --dry-run` and `flow schedule-remove --dry-run` now put the resolved branch
+  in `would_delete.branch_id` (before: the raw `--branch` value, so null under
+  an active branch).
+- **`workspace list` / `workspace detail` use the active branch.** The
+  `Info: Using production branch for read` line they printed was wrong: the
+  workspace service has used the active branch since v0.42.0. They now print
+  `Target:` with the branch they use.
+- **`branch use` and `branch create` save the branch name** next to the ID
+  (`active_branch_name` in `config.json`). It shows in `Target:` and in
+  `branch_name`. A branch renamed later keeps the saved name until the next
+  `branch use`. An active branch set by an older version has no name.
+- `kbagent serve` responses do not carry `targets` (REST reporting: #791).
+
+## `--project` takes a project ID as well as an alias
+
+*(since 0.96.1)* (CLI-22)
+
+- **A registered project's numeric ID works wherever `--project` takes an
+  alias.** `kbagent config list --project 9840` runs against the alias whose
+  stored `project_id` is 9840. The same applies to `KBAGENT_PROJECT`,
+  `kbagent project use 9840` (it pins the alias), and to the `kbagent serve`
+  `{project}` / `{alias}` path parameters and `?project=` / `?alias=` /
+  `?stack=` (on `/auth/*`) query parameters.
+- **The other CLI options that name a registered alias take an ID too:**
+  `config clone --target-project`, `sync clone --target`, `semantic-layer
+  promote --from-project/--to-project`, `semantic-layer diff
+  --project-a/--project-b`, and `--stack` of `auth login` / `login-password`
+  / `status` / `logout` / `register-projects` (a stack URL is used as before).
+- **`kbagent serve` translates path and query parameters only.** A project in
+  a request body (for example `target_project` of the config clone route, or
+  the semantic-layer `from_project` / `to_project` / `project_a` /
+  `project_b`) still needs the alias.
+- **An alias wins.** When the alias `1234` belongs to project 5555,
+  `--project 1234` means that alias, not project 1234. The CLI then prints a
+  warning on stderr, in `--json` mode too (stdout stays one JSON document):
+  `'1234' is an alias of project 5555; project ID 1234 is registered as
+  'prod'. Pass 'prod' to use that project.`
+- **An ID registered more than once is an error, never a guess:**
+  `CONFIG_ERROR`, exit 5 (HTTP 400 over serve), and the message lists each
+  matching alias with its stack. A project ID is unique only per stack, and
+  one project can be registered under two aliases (two tokens). One
+  exception: when every match is on the same stack and exactly one of them is
+  a session (`auth login`) alias, that alias is used.
+- **Output names the alias, not the ID.** `targets[].project_alias` and the
+  `project_alias` fields in results carry the resolved alias. Human mode also
+  prints `Project ID 9840 resolved to alias 'prod'` on stderr, before the
+  `Target:` line.
+- **An ID that matches nothing is still "not found"**; the message names the
+  missing alias and adds that `--project` and the other project options also
+  take a registered project's ID. A project registered without a stored
+  `project_id` (an old entry) is never matched by ID -- re-add it with
+  `project add` to store the ID.
+- **`project current` with an ambiguous `KBAGENT_PROJECT`** keeps the value as
+  typed, reports `env_points_to_configured_project: false` (commands using it
+  fail) and puts the ambiguity message in the new `env_error` field.
+- **Not translated where `--project` is no registry lookup.** `project add
+  --project` and `project create --project` take the value as the new alias;
+  `lineage show --project` filters the aliases inside an offline graph file.
+- **`project invite --from-csv` changed:** a `project` column value now
+  follows the same rules -- an alias wins over a project ID, and an ID
+  registered more than once fails that row with the list of aliases. Before,
+  an all-digit value was always taken as an ID, and the first project with
+  that ID was used. A `project_id` column value is still only an ID. One
+  difference from `--project`: when a digits-only alias is also the project ID
+  of a different registered project, the row fails and names both, because an
+  invite grants membership and a bulk run must not guess the project.
+
 ## A semantic-layer dataset `fqn` is the table's real warehouse location, not `"KEBOOLA"`
 
 *(since 0.95.0, #761)*
@@ -59,18 +180,31 @@ Versioning convention:
   verbatim instead of asserting the token is invalid. **Rotating the
   token does not fix an `AUTH_REJECTED`**; verify the token against another
   endpoint on the same stack, then escalate with the exceptionId.
-- **The reported trigger case has its own, more specific mapping: every
-  `semantic-layer` / `sl` command needs a MASTER token.** The Metastore's
-  401 `{"exception": "Failed to create project scope"}` is its master-token
-  gate: unlike the Storage API, the metastore accepts only a master (project
-  admin) Storage token, and this opaque 401 is how it answers a valid
-  non-master token -- which blocked every `semantic-layer` command while
-  `project status` reported the token healthy (issue #711; the underlying
-  `MasterTokenRequiredError` is swallowed server-side). kbagent reclassifies
-  exactly that 401 to `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in
-  the message. Fix: check `kbagent project info` -> `is_master_token`, and
-  register a master token (`kbagent project edit --token ...`). Do NOT
-  escalate this one to support -- it is by design.
+- **The reported trigger case has its own, more specific mapping: a
+  `semantic-layer` / `sl` WRITE needs a project-admin token.** The
+  Metastore's 401 `{"exception": "Failed to create project scope"}` is its
+  admin-token gate: writes (add/edit/remove/import/promote/build/scope
+  add|remove|set|request-*) require the token's Storage Admin role to be
+  `admin` -- a master token qualifies, so does any other project-admin
+  user's token -- and this opaque 401 was how it answered a valid non-admin
+  token, on every call, while `project status` reported the token healthy
+  (issue #711; the underlying `MasterTokenRequiredError` was swallowed
+  server-side). kbagent reclassifies exactly that 401 to
+  `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in the message. Fix:
+  check `kbagent project info` -> `is_master_token`, and register a
+  project-admin token (`kbagent project edit --token ...`). Do NOT escalate
+  this one to support -- it is by design.
+  - **(updated 0.97.0 -- PSGO-282, go-monorepo#596):** the "every call"
+    part above is now history. The Metastore no longer requires a master
+    token for a plain read (`show`, `model list`, `search-context`,
+    `get-context`, `validate`, `diff`, `scope get`, `scope request-list`) --
+    any valid, non-disabled, non-expired Storage token works. Only writes
+    still hit this gate. `MISSING_MASTER_TOKEN` on a read now means either
+    an outdated kbagent replaying the old client-side reclassification, or
+    a metastore deployment that predates the fix -- not a real requirement.
+    See [Metastore no longer requires a master token for reads
+    (PSGO-282)](#metastore-no-longer-requires-a-master-token-for-reads-psgo-282)
+    below for the full writeup.
 - **Exit code is unchanged: 3, same as `INVALID_TOKEN`.** All three are
   authentication-class failures; only the diagnosis differs. A script
   branching on `$?` sees nothing new -- one branching on
@@ -207,7 +341,9 @@ Versioning convention:
   `--alias ID=ALIAS`, or request a second alias for an already-registered
   project. An existing entry is never overwritten either way.
 - **Registered aliases derive from the project NAME, never the numeric
-  project id -- `--project 9840` will never resolve.** `login`'s
+  project id.** Before 0.96.1 `--project 9840` never resolved; since then it
+  resolves once the project is registered (see "`--project` takes a project
+  ID as well as an alias"). `login`'s
   accessible-projects table shows a numeric `id`, but the alias
   `--register-projects` (or `auth register-projects`, or the login picker)
   writes is a slug of the project *name* (e.g. `jirka-bq-sox`), suffixed
@@ -701,6 +837,31 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
+
+*(since 0.96.1, #792)*
+
+`sync pull` decided "locally modified" from `_config.yml` alone. An edit that
+lived only in a companion file -- `transform.sql`, `transform.py`, `code.py`,
+`pyproject.toml`, `_description.md` -- was invisible to it, so when the remote
+had also changed, the edit was **silently overwritten**: plain pull wrote the
+remote version, and `pull --force` wrote it too instead of raising
+`SYNC_CONFLICT`. `sync diff` / `sync push` always counted those files.
+
+Now pull checks every file recorded in the manifest's `pull_extra_hashes`
+(the same set diff/push merge back into the config):
+
+- Plain pull: the config is `skipped` with reason `locally modified`, the edit
+  stays, and it is still pending for `sync push`.
+- `pull --force`: remote changed too -> exit 1, `SYNC_CONFLICT`, nothing written;
+  remote unchanged -> preserved.
+- `pull --theirs`: remote wins, as before.
+
+Behavior change: deleting only a companion file now counts as a local edit, so
+plain pull no longer re-creates it when the remote changed (diff/push already
+treated it as a change). To drop local edits, use `sync pull --theirs` or delete
+the whole config directory and pull.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*
@@ -858,6 +1019,23 @@ erroring with `Config file not found`. Source (where files are read) and target
 (where the API writes) are decoupled; API calls still target the branch id. When a
 per-branch subtree *does* exist, behaviour is unchanged.
 
+## Repeating a promote `sync push --branch <dev>` no longer duplicates configs
+
+*(since 0.96.1)*
+
+When the dev branch lacks a production config (typically one created in
+production after the branch was cut), the promote push above CREATEs a dev copy
+under a new id. Before 0.96.1 the next `sync diff --branch <dev>` still reported
+that config as `added`, and every further `sync push --branch <dev>` created
+**another** dev copy -- N pushes, N copies of the same config on the branch.
+Now the dev entry the first push recorded is what the `main/` directory is
+compared against on that branch: a repeated push with no local change creates
+nothing, and a later local edit UPDATEs that one dev copy (production is never
+touched). Configs the dev branch already has under the production id (the
+normal case: a branch starts as a copy of production) were never affected.
+Cleanup on an older kbagent: list the branch's configs and delete the extra
+copies with `kbagent config delete --branch <dev>`.
+
 ## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting
 
 The `--branch` override wins over every other branch source: `manifest.branches[0]`,
@@ -935,19 +1113,38 @@ without losing data.
 
 A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since 0.94.0).
 
-`sync pull` now reads the type from the DS `/apps` list and records it in the config's `_keboola` block as `data_app_type`. The config hash already ignores that key, so it adds no `sync diff` noise. `sync push` and `sync clone` route a `keboola.data-apps` CREATE through the Data Science `create_app` when the local config carries a `data_app_type`. That call sends the type and writes the new app's `parameters.id`. A config with no recorded type (hand-authored, or pulled before 0.94.0) is created as `python-js`, the default, through the same `create_app` call *(since vNEXT)*. Before that it went through the plain `create_config` path and the platform picked `streamlit`. The push records the type in the local `_keboola` block and adds a `data_app_type_default` warning to the result. To keep a Streamlit app a Streamlit app, re-pull the source first or set `_keboola.data_app_type: streamlit`.
+`sync pull` now reads the type from the DS `/apps` list and records it in the config's `_keboola` block as `data_app_type`. The config hash already ignores that key, so it adds no `sync diff` noise. `sync push` and `sync clone` route a `keboola.data-apps` CREATE through the Data Science `create_app` when the local config carries a `data_app_type`. That call sends the type and writes the new app's `parameters.id`. A config with no recorded type (hand-authored, or pulled before 0.94.0) is created as `python-js`, the default, through the same `create_app` call *(since 0.96.1)*. Before that it went through the plain `create_config` path and the platform picked `streamlit`. The push records the type in the local `_keboola` block and adds a `data_app_type_default` warning to the result. To keep a Streamlit app a Streamlit app, re-pull the source first or set `_keboola.data_app_type: streamlit`.
 
 The DS `/apps` list also returns sandbox and workspace records. Each carries a parent component's id and a backend `type` such as `snowflake`. So kbagent builds the type map from `componentId == keboola.data-apps` records only.
 
 ## `sync clone` recreates the reference's storage buckets
 
-`sync clone` copies component configs, not storage. The pulled `storage/` tree is a read-only snapshot, so a cloned config's input/output mappings point at buckets a fresh target project does not have. Clone *(since vNEXT)* closes that gap for the buckets **by default**: it reads the `storage/buckets.json` pull export, maps each bucket id through `--bucket-map` (so a created bucket matches what the config refs were rewritten to), and creates the ones the target is missing. Pass `--no-create-buckets` to skip it -- a clone is a complete clone by default, so this is opt-out, never opt-in.
+`sync clone` copies component configs, not storage. The pulled `storage/` tree is a read-only snapshot, so a cloned config's input/output mappings point at buckets a fresh target project does not have. Clone *(since 0.96.1)* closes that gap for the buckets **by default**: it reads the `storage/buckets.json` pull export, maps each bucket id through `--bucket-map` (so a created bucket matches what the config refs were rewritten to), and creates the ones the target is missing. Pass `--no-create-buckets` to skip it -- a clone is a complete clone by default, so this is opt-out, never opt-in.
 
 Idempotent by design -- an existing bucket is skipped, and a per-bucket API failure is collected in the result's `bucket_errors` rather than aborting the clone. It runs even on an idempotent re-run (existing `--target-dir`), so a re-clone fills in any bucket the target is still missing. Bucket creation happens before the config push, and buckets are created at production level (no branch scoping). Each bucket is created on the backend the export recorded. If the target cannot list its buckets, clone records one `bucket_errors` entry, creates no bucket, and still pushes the configs.
 
 A linked (shared) bucket is **linked** in the target to the same source as in the reference, under the same id (or its `--bucket-map` id), with the stage taken from that id. It is not created as an empty bucket: nothing in the project writes into a linked bucket, so an empty one would stay empty. The source project's sharing settings decide whether the target may link it. A refused link lands in `bucket_errors` and the clone continues. Each link is listed in `linked_buckets` (`bucket_id`, `source_bucket_id`, `source_project_id`) and printed with its source project, so a link to an unexpected source is visible. A pull by an older version does not record the link, so clone cannot tell its linked buckets apart. Creating them empty would be permanent, because every later re-clone skips an existing bucket. So clone creates no bucket from such an export and records one `bucket_errors` entry. Re-pull the reference, or pass `--no-create-buckets`.
 
 Only the buckets are created, never their tables or their data -- the pull export carries table metadata (columns / primary key) but no table data, only truncated samples. Move the actual data by bucket sharing, `storage upload-table`, or by running the flows that populate the output tables. The old Go CLI `kbc` did not materialize storage into the tree at all, so this is strictly more than parity.
+
+## `sync clone` re-points shared code, orchestrator tasks and schedules, and lists what the target still needs
+
+*(since 0.96.1)*
+
+Before 0.96.1, `sync push` set only two kinds of links to the config IDs it created in the same push: `keboola.flow` job-task `configId`s and transformation `variables_id` / `variables_values_id`. All other links kept the reference IDs, and `sync clone` still reported `status: cloned` with `errors: []`: a transformation's `shared_code_id`, `shared_code_row_ids` and `{{<row id>}}` script placeholders, a legacy `keboola.orchestrator` task's `configId`, a task's `configRowIds`, and a `keboola.scheduler` config's `target.configurationId`.
+
+Now push sets these to the new IDs too, for a clone and for a plain `sync push` of a fresh tree. It rewrites the placeholders in the remote scripts and in the local `transform.sql` / `transform.py`. A row ID is looked up under its own new parent config, so two shared-code configs with the same row ID do not swap rows. Push never registers a schedule with the Scheduler service, so a cloned project starts no jobs by itself.
+
+A link push cannot set is an `errors[]` entry, never a silent skip: `change_type` `shared_code_link`, `flow_task_link` or `schedule_target_link` (next to the existing `variable_link`). A row ID with no new row (for example its create failed) has error code `LINK_UNRESOLVED` and keeps the old ID. When the PUT of a link fails, the local files already hold the new IDs and the manifest hash is left stale, so the next `sync push` (or `sync clone` re-run) sees a modified config and sends them. The push and clone results carry `link_remaps` with one count per kind (`flow_tasks`, `orchestrator_tasks`, `schedule_targets`, `shared_code`, `config_row_ids`). `flow_task_remaps` still counts flow tasks only.
+
+`sync clone` (also with `--dry-run`) adds these entries to `warnings[]` and prints them in human mode. Each entry has `change_type`, `component_id`, `config_id`, `path` and `message`:
+
+- `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config. The target has no such config. Extra fields: `task_id`, `task_name`, `target_component_id`, `target_config_id`.
+- `encrypted_values_copied`: one entry per config. The paths are in the `_config.yml` shape (`authorization` is under `_configuration_extra`, a row's paths start with the row path), never the values. `secret_keys` are under a `#` key: put the plaintext into the clone's `_config.yml` and run `sync push`, which encrypts it for the target (`config clone --target-project` handles this for a single config with `--secret PATH=VALUE`). `unencryptable_keys` are under a plain key, which push does not encrypt: encrypt the value with `kbagent encrypt values` and set the result. `oauth_keys` are OAuth credentials: authorize the config again in the target. Clone reads these values before it pushes, so a plaintext `#` value in the reference is not reported.
+- `data_app_not_deployed`: sync creates a data app but does not deploy it. `app_id` is the new app; run `kbagent data-app deploy --project T --app-id ID` (with `--branch` when the clone used it).
+- `schedule_not_active`: `active: false`. `kbagent flow schedule --project T --flow-id F --cron '...'` updates that schedule and registers it; the hint adds `--disabled` for a disabled schedule and `--branch` when the clone used it. `flow schedule` updates only the first schedule of a flow, so when several cloned schedules run one flow the message says to activate them in the Keboola UI instead.
+
+The clone `warnings[]` also carries the push warnings, which before were only in `push.warnings`. Only the run that creates the configs reports the warnings: a re-run that creates nothing returns `warnings: []`, so keep them from the first run. After a `--dry-run` the tree still has the reference IDs, so those messages give no command with an ID.
 
 ## `semantic-layer search-context` + `get-context` cover the upstream `search_semantic_context` / `get_semantic_context` parity
 
@@ -984,7 +1181,7 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — distinct from the DELETE+POST that `edit metric|…` uses.
+  exists — as `edit metric|…` does since 0.97.0 (before, those used DELETE+POST).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
   the `set`/`get` lookup is project-wide.** Because the dimension name is the
@@ -1070,6 +1267,20 @@ confirmed-good whitelist". For an unknown loginType, `workspace list`
 renders it as `?` (yellow) in the QS column so callers know the policy
 is uncertain rather than confirmed-bad.
 
+## `workspace from-transformation` reads the transformation from the active branch
+
+*(since 0.96.1, #807)* `workspace from-transformation` reads the transformation config from the
+same branch the workspace is created and loaded in: the active branch (`branch use`), or the
+default branch on production. Before, the workspace was created in the active branch but the
+config was always read from **production**, so with a dev branch active:
+
+- a transformation that exists only in the branch failed with a 404 (`NOT_FOUND`), and
+- a transformation changed in the branch loaded **production's** input mapping, silently --
+  the workspace held the wrong tables for the SQL you were debugging.
+
+On an older version, debug a branch-changed transformation by creating a plain workspace
+(`workspace create`) and loading the branch's input tables yourself (`workspace load`).
+
 ## `workspace query`: fast inline results vs `--full` CSV export
 
 By default `workspace query` now reads the result set inline via the Query
@@ -1130,17 +1341,16 @@ kbagent --json workspace list --project prod --qs-compatible
 # returns only workspaces with login_type ∈ whitelist AND read_only=true
 ```
 
-**Branch behaviour (read-command parity with `storage buckets`):**
+**Branch behaviour:**
 
-`workspace list` / `workspace detail` now follow the same pattern as
-`storage buckets` / `storage tables` / `config list`: when an alias is
-pinned to a dev branch via `branch use`, the production endpoint is used
-with an `Info: Using production branch for read (active dev branch X
-ignored; pass --branch X to override)` banner. Before v0.42.0 these
-commands silently scoped to the pinned branch, returning a different
-workspace set than the same alias one shell ago. Pass `--branch ID` to
-opt back into the dev-branch endpoint. `--branch` requires exactly one
-`--project`.
+`workspace list` / `workspace detail` use the alias's active branch
+(`branch use`) when `--branch` is omitted, like `config list`. Up to 0.96.1
+they printed `Info: Using production branch for read (active dev branch X
+ignored; pass --branch X to override)`, but the workspace service used the
+active branch: the line was wrong, the listing was not. Since 0.96.1 they
+print `Target:` with the branch they use (see the #766 entry at the top).
+`storage buckets` / `storage tables` are the reads that use production
+under an active branch. `--branch` requires exactly one `--project`.
 
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 
@@ -1397,11 +1607,12 @@ events and emits a final `done` SSE frame mirroring the same record.
 
 ## Metric rename auto-cascades through `CODE_METRIC`
 
-- `kbagent semantic-layer edit metric --new-name NEW` does DELETE+POST
-  on the metric and ALSO DELETE+POST on every constraint whose
-  `metrics[]` referenced the old name (POST new with `metrics[]`
-  updated to the new name). The metastore has no PATCH endpoint, so
-  every "edit" is a delete-then-create.
+- `kbagent semantic-layer edit metric --new-name NEW` updates the metric
+  and ALSO every constraint whose `metrics[]` referenced the old name
+  (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
+  in-place `PUT` -- same id, scope, grants and revision history, and a failed
+  update changes nothing; before, every "edit" was a delete-then-create with
+  a rollback re-POST.
 - The `CODE_METRIC` derived value (used in downstream SQL joins on
   `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
   ```python
@@ -1423,8 +1634,8 @@ events and emits a final `done` SSE frame mirroring the same record.
   is left in a partial state -- surface that to the operator and
   recommend running `semantic-layer validate` immediately.
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
-  the cascade has per-item rollback only (each constraint DELETE+POST
-  rolls back individually), NOT whole-operation atomicity. If the
+  the cascade is per-item only (each constraint is updated on its own;
+  *since 0.97.0* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
@@ -1432,8 +1643,8 @@ events and emits a final `done` SSE frame mirroring the same record.
   buried inside `cascaded_constraints[i].status == 'failed'`).
   Human-mode CLI prints a bright red `PARTIAL STATE` banner above
   the per-entry list. Atomic two-phase commit was intentionally NOT
-  implemented: the metastore has no PATCH endpoint, so every
-  cascade 'stage' is itself a DELETE+POST that can fail; true
+  implemented: every
+  cascade 'stage' is itself a write that can fail; true
   atomicity would require side-staging every cascade item, which is
   disproportionate for a rename. Recovery recipe: `kbagent
   semantic-layer validate` to surface the dangling refs, then
@@ -2054,12 +2265,94 @@ config, the retry fires, and the retry destroys it for good.
   with the shape above. The previous URL stays retired in either case
   (the proxy URL is bound to the deployment record, not the config).
 - **`--auth password` behaviour unchanged.** Mints a 20-char hex
-  simpleAuth password retrievable via `kbagent data-app password`
-  (Manage token required) or visible in the UI's Authentication tab.
+  simpleAuth password. The user copies it with `kbagent data-app password`
+  (see the `data-app password` entry below) or reads it in the Keboola UI.
 - **Other auth providers (OIDC / GitHub OAuth / GitLab OAuth /
   JumpCloud / Auth0)** are NOT yet supported by the CLI's `--auth`
   flag. Use the Keboola UI to configure them after `data-app create`.
   Tracked as a follow-up issue.
+
+## `data-app password` keeps the password out of the chat: `c` in a terminal, `--copy` elsewhere
+
+*(since 0.96.1)*
+
+- **The password is not printed without `--reveal`.** Before 0.96.1 the
+  command printed it (`Password: ...`, and a `password` key in `--json`), so
+  it went into the context of any AI agent that ran it. On an older kbagent,
+  do not run the command from an agent: send the user to the Keboola UI.
+- **Migration (breaking).** A script that reads `.data.password` must add
+  `--reveal`: without it the key is absent and the exit code is still 0. A
+  REST client must pass `reveal=true`. `KBC_MANAGE_API_TOKEN` and
+  `--allow-env-manage-token` are no longer used by this command.
+- **In a terminal** (human mode, stdin and stdout a TTY, and not a
+  background job) it prints the message and the links `Open the app:`
+  (`app_url`) and `Configuration:` (`ui_url`) (updated 0.96.2, #825: 0.96.1
+  labels them `App URL:` and `UI URL:`), then waits: `c` copies the
+  password once, Enter / Esc / `q` finishes, and after 120 s it ends with a
+  line that says the password was not copied. An arrow key does not end the
+  prompt. With no clipboard tool there is no prompt; the message points to
+  `ui_url`.
+- **Without a terminal** (agent, CI, a background job) **or with `--json`**
+  there is no prompt. Only `--copy` copies the password. The clipboard tool
+  gets it on stdin, never in argv; a tool that hangs times out, and a tool
+  that fails (e.g. `xclip` without an X display) falls through to the next. `--copy` in a terminal
+  copies at once, without the prompt. On WSL without the Windows PATH,
+  kbagent runs `/mnt/c/Windows/System32/clip.exe` by its full path.
+- **Nothing copied is not an error**: exit 0, `password_delivered_to: null`,
+  and `ui_url` is the Keboola UI page that shows the password under Open App.
+  Other values: `"clipboard"`, `"stdout"` (`--reveal`). `--reveal` together
+  with `--copy` is `INVALID_ARGUMENT` (exit 2).
+- **Project token only.** No Manage API token, no prompt for it, and
+  `--allow-env-manage-token` does not apply: the password endpoint checks
+  only that the token belongs to the app's project. A browser-login session
+  works too.
+- **Auth check first.** kbagent reads the app's config and asks for the
+  password only when `authorization.app_proxy.auth_providers[0].type` is
+  `password` -- the check the Keboola UI makes. Otherwise `VALIDATION_ERROR`
+  names the auth (`oidc`, `public`, `missing`, ...). A `null` password (none
+  set yet) is `NOT_FOUND`.
+- **The Keboola UI can reset the password** (the API has
+  `POST /apps/{id}/reset-password`). Earlier kbagent docs said it could not
+  be rotated. kbagent has no reset command.
+- **`data-app create --wait` and `data-app deploy --wait` deliver it too.**
+  The platform creates the password during the first deploy of a password-auth
+  app, so it exists only after a deploy. Once `--wait` sees the app running,
+  both commands deliver the password the same way as `data-app password`: the
+  `c` prompt in a terminal (so `deploy --wait` in a terminal ends only after
+  Enter or 120 s), `--copy`, or `--reveal`. With no flag and no prompt (no
+  terminal, a background job, or `--json`) they do not read the password at
+  all: no extra call, output as before. With a flag, `--json` adds only
+  `ui_url`, `password_delivered_to` and (with `--reveal`) `password`;
+  existing keys do not change. `--copy` / `--reveal` without `--wait`, or on
+  `create --no-deploy` / `--use-managed-git-repo`, is `INVALID_ARGUMENT`
+  (exit 2) before any API call. Reading the password is the operation
+  `data-app.password`, also here: when the permission policy denies it,
+  `--copy` / `--reveal` exit 6 (`PERMISSION_DENIED`) before any API call, and
+  the terminal prompt is skipped. The deploy result stays the result: a
+  non-password app with `--copy` / `--reveal`, or any failure to read the
+  password after the deploy, adds a `warnings[]` entry and exits 0 (a
+  password that is not ready yet: run `data-app password` in a moment).
+  `create --dry-run` accepts and refuses exactly the same flags; a valid run
+  adds `password_delivery` (`prompt`, `clipboard` or `stdout`) to the plan,
+  plus the warning the real run would give (no clipboard tool, or no
+  password for a `--auth public` app), with no API call, prompt or copy. The
+  `kbagent serve` create / deploy routes do not deliver the password; use
+  `GET /data-apps/{project}/{app_id}/password`.
+- **`kbagent serve`**: `GET /data-apps/{project}/{app_id}/password` needs no
+  `X-Manage-Token`. It leaves the password out (`password_delivered_to:
+  null`) unless `?reveal=true` (`password_delivered_to: "response"`).
+- **Agent rules.** Recommend that the user runs `kbagent data-app password
+  --project P --app-id ID` in their own terminal window (not through the
+  agent, not through Claude Code's `!` mode) and presses `c`. Recommend
+  `kbagent data-app deploy --project P --app-id ID --wait` there only when a
+  deploy is needed anyway -- a deploy restarts the app, so never redeploy
+  just to get the password. Or offer to run the command with `--copy` (with
+  `--wait` on create / deploy), and say that the password then replaces the
+  clipboard content but does not go into the chat. No `--reveal` unless the
+  user asks, and warn first that the password then goes into the chat history. Never
+  read the clipboard (`pbpaste`, `xclip -o`, `wl-paste`, `Get-Clipboard`),
+  never get the password another way (`kbagent http`, curl, `serve` with
+  `reveal=true`), never ask the user to paste it into the chat.
 
 ## `data-app secrets-*` -- per-project KMS, idempotent remove, never decryptable
 
@@ -2090,6 +2383,17 @@ config, the retry fires, and the retry destroys it for good.
   do NOT appear in the Apps UI. The command now keeps only
   `componentId == keboola.data-apps` (items missing `componentId` are kept
   defensively); the JSON envelope carries `component_id` per app.
+- **`data-app list` pages through the whole `GET /apps` collection
+  *(since 0.96.1, #798)*.** The endpoint is paginated (default page = 100
+  items) and the workspace/data-app mix is filtered CLIENT-side. Before
+  0.96.1 kbagent read only that first page, so a project with many
+  workspaces could report "No data apps found." (or a partial list) while
+  holding dozens of data apps further down the collection -- one reporter's
+  first data app was item #258 of 1,114. The same short read also made
+  `sync pull` miss the runtime type of those apps. kbagent now pages with
+  `limit`/`offset` until a short page. On an older version, an empty or
+  short `data-app list` is NOT evidence that the project has no data apps:
+  cross-check with `config list --component-id keboola.data-apps`.
 - **`secrets-remove` is idempotent.** Removing a key that isn't set is
   exit 0 with `removed: 0`, `not_found: [<derived env-var name>]`. The
   Storage version is not bumped on a no-op. Do NOT script around this
@@ -2182,7 +2486,8 @@ config, the retry fires, and the retry destroys it for good.
 
 - `KBC_MANAGE_API_TOKEN` is no longer auto-resolved on the three
   surfaces that consume it (`kbagent org setup`,
-  `kbagent project refresh`, `kbagent data-app password`). Default
+  `kbagent project refresh`, `kbagent data-app password` -- the last one
+  needs no Manage token since 0.96.1). Default
   behaviour on 0.29.0+ is **default-deny**: the env var is ignored, a
   TTY hidden-input prompt is shown instead. With no TTY (CI / cron /
   systemd / `< /dev/null`) the resolver exits **2** with the message
@@ -2292,8 +2597,9 @@ config, the retry fires, and the retry destroys it for good.
   The `rows[]` array in the result is in completion order, not CSV order.
 - Per-row parsing of `failed_rows` should match by `email`, not by index.
 - A failed row never aborts the run -- the executor accumulates results and
-  the command exits 0 with `failed > 0` reflected in the JSON summary. Mirror
-  the `org setup` partial-success exit semantics.
+  reports `failed > 0` in the JSON summary. *(since vNEXT)* The command then
+  exits 1, like `org setup`; on 0.97.0 and older it exited 0 even then, so
+  check `failed` there. The full JSON payload is emitted before the exit.
 
 ## `default_bucket` is per-config and only an output prefix
 
@@ -3236,7 +3542,8 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
   inspect `errors[]` (or at least `error_count`) rather than relying solely on
-  the exit code — and when consuming `--json` output, never trust a zero-exit
+  the exit code. *(since vNEXT)* `--json` also exits 1 when `error_count > 0`;
+  on 0.97.0 and older it exited 0 even then, so there never trust a zero-exit
   as "everything applied." That tolerance covers **API** failures only: a
   `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
@@ -3833,8 +4140,8 @@ Other behaviors of this family:
   (`CanManageAppRepoCredentials`), unlike `git-repo` which needs only the
   ordinary project storage token.
 - For `--type http_token`, the create response carries a **one-time secret**
-  that is printed once and can never be retrieved again (mirrors
-  `data-app password`); the `git-credentials` list never returns it. `--type
+  that is printed once and can never be retrieved again; the
+  `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
 ## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
@@ -4064,6 +4371,20 @@ did not have that branch, so the clone failed with
 `Branch id "..." does not exists`. On an older install that shows this error,
 upgrade or pass `--branch` with the target's production branch id.
 
+### Data apps after `sync clone --branch` land in the dev branch, not production
+
+`sync clone --branch <dev-id>` writes the dev branch id as the manifest's first
+branch, and every later `sync push` falls back to it. Push used to treat that
+first manifest branch as production when it created a `keboola.data-apps`
+config, so it sent `branchId: null` to the Data Science API. The data app was
+created in PRODUCTION while every other config went to the dev branch.
+*(since 0.96.1, #808)* push compares the push branch against the project's real
+default branch from the API (one extra call, made only when the push creates a
+data app). If that lookup fails, push sends the numeric branch id and adds a
+`data_app_branch_lookup_failed` warning, so it never assumes production. On an
+older install, check where any data app created after a `sync clone --branch`
+ended up (`data-app list --branch <dev-id>` vs production).
+
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
 `kbagent search --regex` opts into the Storage API `mode=regex` global-search
@@ -4102,8 +4423,9 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   whose directory/`_config.yml` was deleted locally is re-fetched on the next
   pull even when the remote is unchanged (manifest<->disk invariant). The old
   behavior silently reported "Already up to date". NOTE the interplay with the
-  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config;
-  delete-dir-then-PULL now restores it instead of doing nothing.
+  GitOps delete flow: delete-dir-then-PUSH still deletes the remote config
+  (since 0.96.1 only with `push --force`, #792); delete-dir-then-PULL now
+  restores it instead of doing nothing.
 - **Config-level `isDisabled` round-trips.** Pull writes a sparse
   `is_disabled: true` line into `_config.yml` (absent key = enabled -- old trees
   do not mass-diff), `sync diff` surfaces enabled/disabled drift (a config
@@ -4116,7 +4438,8 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   remote config. diff/push report it under `never_fetched` (JSON key + human
   warning); the next `sync pull` materializes it. A properly-pulled config
   (non-empty `pull_hash`) that you delete locally is still planned as a remote
-  DELETE on push -- the guard only protects entries that were never on disk.
+  DELETE on push (applied since 0.96.1 only with `--force`, #792) -- the guard
+  only protects entries that were never on disk.
 - **Adopted-by-id push writes the manifest.** Pushing an untracked local file
   whose `_keboola.config_id` resolves on the target branch (the #482
   adopt-update path) now also creates the manifest entry (fresh
@@ -4202,6 +4525,13 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   `sudo dnf upgrade keboola-cli2` · hand-unpacked archive -> re-download from
   the GitHub release page. Note the **package** is `keboola-cli2` while the
   **binary** is `kbagent`; the PyPI distribution is a third name, `keboola-cli`.
+- **The macOS binary is not notarized** *(since 0.96.1)*. It has only the
+  ad-hoc signature that PyInstaller adds, with no Apple Developer ID signature
+  and no Apple notarization. A `darwin_arm64` zip that a browser downloads gets
+  the macOS quarantine flag, and macOS refuses to open the binary. Recommend
+  `brew install keboola-cli2` or `uv tool install keboola-cli` instead. A user
+  who must use the zip can allow the binary in System Settings > Privacy &
+  Security, or run `xattr -d com.apple.quarantine kbagent`.
 
 ## `--json` is written as UTF-8, independent of the console codepage
 
@@ -4316,7 +4646,7 @@ applied. `kbagent update` printed `(scheduled)` and every later launch printed
 
 ## Windows self-update on a OneDrive / cloud-synced profile can delete kbagent
 
-*(since vNEXT, #786)*
+*(since 0.96.1, #786)*
 
 If a Windows user reports that `kbagent` vanished after a background update,
 check `%LOCALAPPDATA%\keboola-agent-cli\keboola-agent-cli\pending_update.log`
@@ -4830,7 +5160,7 @@ maximum as `job detail`'s.
 
 ## `logTail` was empty for nested jobs
 
-Fixed (since vNEXT). A job inside a flow, or a child row job of a row-based component, has a
+Fixed (since 0.96.1). A job inside a flow, or a child row job of a row-based component, has a
 dotted Queue `runId` (`<parent>.<child>.<job id>`). The Storage Events API
 returns zero events for that dotted value, so `job detail --log-tail-lines`
 and the `serve` job log stream came back with `logTail: []` for such jobs
@@ -5341,3 +5671,305 @@ It carries the command name, the outcome, and the duration -- never argument val
   Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
 - **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
   builds a UI URL and resets the active branch.
+
+## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
+
+*(since 0.96.1)* Two data-loss paths in pull's stale-entry sweep (the step that
+drops manifest entries whose config is gone from the remote) are closed:
+
+- **Remote delete + re-create under the same name.** Before, the new config was
+  written into the old config's directory and the sweep then deleted that same
+  directory; the next `sync push` DELETEd the live new config. Now the new
+  config lands in a suffixed directory (`<name>-<config id prefix>`), the old
+  one is removed, and the manifest matches disk. The next pull renames the
+  directory back to the plain name.
+- **Remote delete + local edit.** Before, plain pull and `pull --force` deleted
+  the edited directory silently. Now plain pull **keeps** it (manifest entry
+  kept, pull action `skipped`, reason `locally modified, deleted on remote`);
+  `pull --force` aborts with `SYNC_CONFLICT` and the conflict carries
+  `reason: "deleted on remote"`. Only `pull --theirs` still deletes it (remote
+  wins). "Edited" covers `_config.yml`, companion files (`transform.sql`,
+  `code.py`, `_description.md`, ...) and row files. A kept directory is still
+  tracked, but `sync push` does not re-create it (it is `remote_deleted`, see
+  the next entry) -- delete the directory if the remote delete was intended.
+
+## `sync push` deletes only with `--force` and never re-creates a config deleted on the remote (#792)
+
+*(since 0.96.1)* Two changes to what `sync push` sends:
+
+- **Deletions need `--force`.** Before, push deleted a remote config or row as
+  soon as its local files were gone, with or without `--force`, although the
+  `--force` help said it allows the deletion. Now a plain push deletes nothing.
+  It lists each held-back deletion under `skipped_deletions`, with
+  `skipped_deletions_reason`, also in `--dry-run`. The `--dry-run`
+  `summary.deleted` counts only the deletions push would apply. `push --force`
+  deletes as before. A script that deletes by removing a directory must add
+  `--force`.
+- **No silent re-create.** Before, a config or row deleted on the remote by
+  someone else was created again under a new id by the next push, with no
+  notice. Now `sync diff` reports it as `remote_deleted` (human: `- REMOTE
+  DELETED`, `summary.remote_deleted`), push skips it and reports `skipped` with
+  `skipped_reason`, and `sync pull` removes the local copy (or keeps a locally
+  edited one, see the previous entry). Configs never fetched from the target
+  are still created: a `sync clone` copy, a promote push from `main/`, a
+  hand-written placeholder entry.
+- `skipped` / `skipped_reason` now appear in every push result (`pushed`,
+  `dry_run`), not only in `no_changes`.
+- **To keep a config someone deleted on the remote**, restore it with
+  `kbagent config restore` (a config deleted once is in the trash, and the
+  restored config keeps its id, so the next diff matches it again). This also covers a dev
+  copy that a promote push created and someone then deleted in the branch.
+- **Pipelines.** The `kbagent-promotion-pipeline` workflows now pass `--force`
+  in the validate dry-run and in the push, so a config deleted in the source is
+  deleted in the destination. A pipeline generated earlier needs `--force` in
+  both steps. The `kbagent-cicd-migration` push passes `--force` only when its
+  `allow_delete` input is set.
+- **`sync clone` re-runs.** A target directory written by an older kbagent
+  whose first clone run failed part-way can report the configs it never
+  created as `remote_deleted`. Delete that target directory and run the clone
+  again.
+
+## `sync` can sync shared SQL workspaces, opt-in per tree (CLI-25)
+
+*(since 0.96.1)* `keboola.sandboxes` is no longer skipped when the manifest sets
+`"syncWorkspaces": true` (`sync init --with-workspaces`, or
+`sync init --adopt-existing --with-workspaces` for an existing tree). Without
+the key nothing changes. Full rules: `sync-workflow.md` > "Shared SQL
+workspaces".
+
+- **Only shared SQL workspaces.** A `keboola.sandboxes` config with no
+  `parameters.id` and `runtime.shared: true`. Python/R workspaces and legacy
+  SQL sandboxes carry `parameters.id` and stay skipped. `keboola.mcp-server-tool`
+  stays ignored. An `ignoredComponents` entry for `keboola.sandboxes` wins.
+- **Config only.** Push writes the Storage configuration, never a job, a SQL
+  editor session or a table load. A `parameters.backendSize` change gets a
+  `workspace_backend_size` warning: an open session keeps its old size.
+- **A delete is not only a config delete.** `push --force` deletes the
+  workspace's SQL editor sessions (every user's, in the push branch) before the
+  config, and that drops their backend workspaces, which `config restore` does
+  not bring back. Check `push --dry-run --force` first: its `workspace_sessions`
+  warnings list the session ids. If the sessions cannot be listed or deleted,
+  the config stays. A plain push deletes neither: the workspace is listed under
+  `skipped_deletions`, like any other deletion, and `skipped_deletions_reason`
+  says that `--force` also deletes the sessions.
+- **`sync clone`** adds a `workspace_input_tables_missing` warning per cloned
+  workspace whose input tables do not exist in the target (clone creates
+  buckets, never tables).
+- **`sync push --force` is destructive-class** (operation `sync.push --force`
+  in `permissions list`): a policy denying `cli:destructive`, or
+  `--deny-destructive`, blocks it, while a plain `sync push` stays write-class.
+  An allow-list that names only `sync.push` now blocks `sync push --force`
+  too (also in trees without `syncWorkspaces`): add
+  `--allow "sync.push --force"` or a glob such as `sync.*`. The same applies to
+  a default-allow policy that denies `cli:write` and allows `sync.push`.
+- **Removing the key** makes the next `sync pull` drop the workspace entries
+  with action `ignored`, except a workspace edited locally and not pushed: pull
+  (also `--force`) keeps it and reports it as `skipped`; only `--theirs`
+  deletes it. A `kbc` manifest save removes the key too (`kbc` writes back only
+  the keys it knows).
+
+## Metastore no longer requires a master token for reads (PSGO-282)
+
+*(since 0.97.0)* Every `semantic-layer` read (`show`, `model list`,
+`search-context`, `get-context`, `validate`, `diff`, `scope get`, `scope
+request-list`) works with any valid, non-disabled, non-expired Storage token --
+programmatic (`kbc_at_*`/`kbc_pat_*`) included. Before this, the metastore
+rejected every non-master token with an opaque 401 `"Failed to create
+project scope"` on every single endpoint, including plain reads (#711); a
+valid non-master token used to get reclassified client-side to
+`MISSING_MASTER_TOKEN` (0.92.0+, #717) because there was no other way to
+succeed. That reclassification still fires, but now only on a genuine
+authorization failure:
+
+- **Writes still need a project-admin token.** `add`/`edit`/`remove`/
+  `import`/`promote`/`build`/`scope add|remove|set`/`scope request-create`
+  all require the token's Storage `Admin.Role` to be `admin` -- a master
+  token qualifies, and so does any other project-admin user's token. A
+  non-admin token gets 403 (or `MISSING_MASTER_TOKEN` if the install is still
+  on the old reclassification path) on the write, never on a preceding read.
+- **Do not pre-flight `isMasterToken` before a read.** That workaround
+  predates the fix and now rejects tokens the server happily accepts --
+  drop it if you see it in older automation.
+- **401 body is honest now.** The metastore relays the Storage API's real
+  error message instead of the generic "Failed to create project scope",
+  so an actually-invalid/expired token surfaces as such rather than looking
+  like a master-token gate.
+
+## Metastore `scope` / `--target-project` / `scope set --scope organization` (PSGO-140)
+
+*(since 0.97.0)* `model create` / `add <kind>` gained `--scope
+project|organization|targeted` + `--target-project ALIAS|ID ...`, and a new
+`semantic-layer scope <get|add|remove|set|request-create|request-delete|request-list>`
+sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See
+[metastore-scope-workflow.md](metastore-scope-workflow.md) for worked
+examples. Surprises worth knowing before you touch this:
+
+- **kbagent never sends `schemaVersion` on create.** The metastore stores
+  the version it resolved for the item, and checks a later elevation (`PATCH
+  {"scope":"organization"}`, the elevation request) against that STORED
+  version. Every `semantic-*` schema supports only `scope=project` at `1.0.0`
+  (later schema versions add `organization`/`targeted`), so pinning `1.0.0` on a plain
+  create would make the item impossible to elevate later. With the key
+  omitted, the server uses the stack's default schema (`1.1.0` or later where
+  the PSGO-140 migrations ran). `PUT` (edit) never changes the stored version.
+- **`--scope` omitted means "inherit" for child items.** `add
+  metric|dataset|relationship|constraint|glossary` take their model's scope
+  (and, for `targeted`, its target projects) when `--scope` is not given;
+  `model create` defaults to `project`. Pass `--scope` to override. Without
+  this an org-level model would show up in consumer projects with no
+  datasets or metrics. An INHERITED `organization` scope is gated exactly like
+  a typed `--scope organization` (`--deny-destructive` blocks it), and a
+  project-admin token that is not an org admin gets a 403 on it, with a hint
+  to pass `--scope project`.
+- **`import`, `promote` and `build --model` follow the same rule (since vNEXT).**
+  Their NEW items take the target model's scope and target projects, with the
+  same permission gate. Before, they always created `project` items: an
+  import into a `targeted` or `organization` model gave items that no other
+  project could see. Items they overwrite keep their own scope. `import` and
+  `promote` take `--scope` / `--target-project` to override the inherited
+  scope, like `add <kind>`: a project-admin token that is not an org admin
+  passes `--scope project` under an `organization` model, or every new item
+  fails with a 403 (listed under `failed`; since vNEXT the command exits 1,
+  on 0.97.0 and older it exited 0).
+- **Item names are unique per project, not per model (since vNEXT, message).**
+  The metastore keeps names unique per object type across ALL models of a
+  project (and across the organization at `organization` scope). A second
+  model in the same project cannot reuse an item name: `ALREADY_EXISTS` now
+  says "in this project" (it used to say "in the target model"). To copy a
+  model within a project, delete the old one first, or rename the items.
+- **An item stored at schema version `1.0.0` cannot be elevated (since vNEXT,
+  message).** Items created before 0.97.0 pinned `1.0.0`. `scope
+  request-create` and `scope set --scope organization` on them fail with
+  "scope not supported"; the error now names the stored version and the fix:
+  `export`, `model delete`, `model create`, `import`. A `project` item also
+  cannot become `targeted` (grants exist only on items created `targeted`),
+  so the same steps apply to share it with chosen projects.
+- **`add glossary` needs `--definition` (since vNEXT).** Every
+  `semantic-glossary` schema requires `definition`. Without it the metastore
+  answered a bare 422 "Validation failed"; now it is a usage error (exit 2).
+- **`--target-project` takes an alias or a numeric project ID** (repeatable or
+  comma-separated), so the target need not be registered in kbagent. An alias
+  must be on the owner project's stack (a project ID only means the same
+  project on its own stack; a bare ID cannot be checked and is trusted).
+  `--target-project` without `--scope targeted`, an unknown alias, or a bad
+  `--scope`/`--type` value exits 2 -- never a traceback or a silent ignore.
+- **`scope set --target-project` is a REPLACE on the wire; `scope add|remove`
+  are a client-side merge.** The underlying `PUT .../target-projects` replaces
+  the *whole* list (an empty array clears every grant); add/remove read the
+  current grants, apply the delta and PUT the result -- **not atomic** against
+  a concurrent grant change (last write wins). The server returns
+  `meta.targetProjectIds` only to the OWNING project, so add/remove from any
+  other project (an org admin elsewhere) is refused with exit 2 instead of
+  silently replacing every grant -- use `scope set --target-project` there.
+- **Creating directly at `--scope organization` needs the organization-admin
+  ROLE**, the same role `scope set --scope organization` needs -- a normal
+  project token gets `ACCESS_DENIED` (403) on both. `--scope targeted` needs a
+  project-admin token (the same gate as every write).
+- **Elevation is one-way, so `--scope organization` is destructive-class.**
+  There is no downgrade endpoint: the only way "back" is deleting and
+  re-creating the item as project-scoped (losing its revision history). The
+  permission engine escalates `--scope organization` on `scope set`, `model
+  create` and every `add <kind>` (`FLAG_ESCALATIONS`), so `--deny-destructive`
+  blocks them, `scope set --scope organization --dry-run` included (same
+  as `sync push --force`).
+- **Elevating items created by an older kbagent can fail.** Those were created
+  pinned to `schemaVersion 1.0.0`, which supports only `project`, and the
+  server checks elevation against the STORED version, so `scope set --scope
+  organization` / `scope request-create` fail with a scope-not-supported error
+  until the metastore's schema sweep moves the item to the default version.
+  *Read from the server source, not yet verified on a live stack.*
+- **A 403 vs a 404 on a scope call encodes something deliberate.** The
+  metastore returns 404 (not 403) when the caller cannot see the object at
+  all -- not its owner, not a granted project, not viewing an
+  organization-scoped object -- so a 403 never leaks "an object owned by
+  some other project exists." Do not collapse the two when surfacing errors.
+- **`edit`, `import --overwrite` and `promote` update in place (PUT).** The
+  item keeps its id, scope, grants and pending elevation request. They used to
+  DELETE+POST, which reset an organization/targeted item to `project` scope
+  (`import --overwrite`, `promote`) or could lose the item when the re-create
+  was refused (`edit`). A failed PUT changes nothing. Note that `promote`'s
+  diff compares `attributes` only, so a scope difference between source and
+  target is neither shown nor copied.
+- **No bulk-elevate.** There is no "promote every object in this project"
+  endpoint -- each item needs its own `request-create` + `set --scope
+  organization` call. Never loop this over a whole project's objects without
+  the user having named which ones should become org-wide.
+
+## A partial failure is no longer reported as success
+
+*(since vNEXT, closes #745)* A command that keeps going after one item fails
+used to print a green `Success:` line and exit **0**, with the failures only as
+warnings below it. A `sync clone` where every config failed reported
+`Success ... 0 created` and exit 0. A script could not tell a clean run from a
+total failure by the exit code.
+
+Now, when at least one item failed:
+
+- the exit code is **1** (the convention `storage delete-table`,
+  `storage file-tag` and `storage describe-migrate` already used);
+- commands that used to print a green `Success:` headline (`sync push`,
+  `sync clone`, `storage describe-batch`, `storage describe-migrate`,
+  `flow schedule-remove`) now print `Failed:` and the failed count instead, for
+  example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`. The
+  other commands keep their output: `org setup`, `project refresh`,
+  `project invite --from-csv`, `workspace gc` and the `semantic-layer`
+  commands list the failed items in a table or in summary lines, and the
+  `--all-projects` sync variants state the failed count in their summary line;
+- `--json` output keeps its keys and is emitted before the exit. New keys:
+  `org setup --refresh` lists failed token refreshes under
+  `projects_refresh_failed`, and `flow schedule-remove` returns `errors[]`. Parse the
+  payload, then check the exit code. Exit 1 here does not mean that nothing
+  was written: the items that succeeded stay written, so read the payload
+  before you run the command again.
+
+Commands whose exit code changes from 0 to 1 (the key that holds the failures):
+
+- `sync push` (`errors[]`);
+- `sync push --all-projects` (`summary.failed`). `summary.failed` now also
+  counts a project whose push returned a non-empty `errors[]`; before, that
+  project counted in `summary.success` and its line read `OK`. Its line is now
+  marked `x` and states the failed count;
+- `sync pull --all-projects` (`summary.failed`);
+- `sync clone` (`errors[]` and `bucket_errors[]`);
+- `org setup` (`projects_failed`, and with `--refresh` also
+  `projects_refresh_failed`: entries keyed by `alias`, fix them with
+  `project refresh`);
+- `project refresh` (`projects_failed`);
+- `project invite --from-csv` (`failed`);
+- `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
+  that could not be listed);
+- `semantic-layer import` / `semantic-layer promote` (`failed[]` of each type);
+- `semantic-layer build` (`fetch_errors[]`: a table left out of the model
+  because its schema could not be read; human mode now lists these tables);
+- `semantic-layer edit metric --new-name` (a `cascaded_constraints[]` entry
+  with `status: "failed"`);
+- `storage describe-batch --json` (`errors[]`; human mode already exited 1);
+- `flow schedule-remove` (`errors[]`, a new key: a schedule whose delete
+  failed while other schedules were deleted. Before, that failure was dropped
+  and the command printed `Success: Removed N schedule(s)`). The result always
+  has the `errors` key, empty when nothing failed. A partial failure fills it
+  and the command exits 1. When every schedule delete fails, the command
+  still raises the error (`SCHEDULE_DELETE_FAILED`) and prints no result
+  payload, as before.
+
+`storage describe-migrate` keeps its exit code; its human headline now starts
+with `Failed:` too.
+
+A `--dry-run` of every command above exits 1 when it reports a failed item,
+like the real run. `sync diff --all-projects` also exits 1 when a project
+failed (`summary.failed > 0`); a read that fails is still a failure.
+
+Not failures (exit 0, as before):
+
+- a clean run and a `no_changes` result;
+- other read-only fan-outs, where one unreachable project must not fail the
+  whole read: `billing credits`, `job list`, `schedule list`, `notification list`, `config list`,
+  `storage tables` and the other multi-project reads (check `errors[]`);
+- one item with a documented partial outcome: `flow schedule`
+  (`activated: false`), `notification replace-recipient`
+  (`old_deleted: false`);
+- `semantic-layer build` `type_resolution_errors[]`: the table stays in the
+  model, and its columns without a type are classified as dimensions.
+
+On 0.97.0 and older, exit 0 from these commands does not prove success. Parse
+`--json` and check the keys above before you report the operation as done.

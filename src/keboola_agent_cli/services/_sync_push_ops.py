@@ -1,6 +1,7 @@
 """Per-change push CRUD operations (create/update/delete config + rows).
 
-Extracted from sync_service.py. ``push()`` calls :func:`push_create`,
+Extracted from sync_service.py. ``push()`` first splits the diff with
+:func:`plan_push`, then calls :func:`push_create`,
 :func:`push_update`, and :func:`push_row_change`; the row dispatcher fans out to
 the create/update/delete row helpers. Each reads a local ``_config.yml``,
 encrypts ``#``-prefixed secrets (fail-closed), POSTs/PUTs/DELETEs, then writes
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,7 @@ from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import encrypt_secrets_in_config
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
+from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
 from .data_app_service import DATA_APP_COMPONENT_ID, DEFAULT_TYPE
 
@@ -31,6 +34,76 @@ if TYPE_CHECKING:
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
+
+# The local-side change types push applies. ``remote_modified``, ``conflict``
+# and ``remote_deleted`` need a ``sync pull`` first.
+PUSHABLE_CHANGE_TYPES = frozenset({"added", "modified", "deleted"})
+SKIPPED_REASON = "Remote changes detected. Run 'sync pull' first."
+SKIPPED_DELETIONS_REASON = (
+    "Push deletes remote configs and rows only with --force. "
+    "Run 'kbagent sync push --force' to delete these."
+)
+# Added to the reason when a held-back deletion is a SQL workspace (CLI-25).
+SKIPPED_WORKSPACE_DELETIONS_NOTE = (
+    " For a SQL workspace (keboola.sandboxes), --force also deletes the SQL editor sessions "
+    "of all users with their Snowflake/BigQuery workspaces, which cannot be restored. "
+    "Run 'kbagent sync push --dry-run --force' first to list them."
+)
+
+
+@dataclass
+class PushPlan:
+    """The changes one ``sync push`` applies, and the ones it holds back.
+
+    Attributes:
+        changes: Changes push applies.
+        skipped: Remote-side changes; they need ``sync pull`` first.
+        skipped_deletions: ``deleted`` changes held back because ``--force``
+            was not given (issue #792 G).
+    """
+
+    changes: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+    skipped_deletions: list[dict[str, Any]]
+
+    @property
+    def deletions(self) -> int:
+        """Number of ``deleted`` changes push applies."""
+        return sum(1 for change in self.changes if change["change_type"] == "deleted")
+
+    def report(self) -> dict[str, Any]:
+        """Result keys that list what push does not apply."""
+        report: dict[str, Any] = {}
+        if self.skipped:
+            report["skipped"] = len(self.skipped)
+            report["skipped_reason"] = SKIPPED_REASON
+        if self.skipped_deletions:
+            report["skipped_deletions"] = self.skipped_deletions
+            report["skipped_deletions_reason"] = SKIPPED_DELETIONS_REASON
+            if any(
+                change["component_id"] == SANDBOXES_COMPONENT_ID and not change.get("is_row")
+                for change in self.skipped_deletions
+            ):
+                report["skipped_deletions_reason"] += SKIPPED_WORKSPACE_DELETIONS_NOTE
+        return report
+
+
+def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
+    """Split a diff changeset into what push applies and what it holds back.
+
+    Without *force* push deletes nothing on the remote, configs and rows
+    alike, as the ``--force`` help says (issue #792 G). The held-back
+    deletions are listed in the result, also for ``--dry-run``.
+    """
+    plan = PushPlan(changes=[], skipped=[], skipped_deletions=[])
+    for change in all_changes:
+        if change["change_type"] not in PUSHABLE_CHANGE_TYPES:
+            plan.skipped.append(change)
+        elif change["change_type"] == "deleted" and not force:
+            plan.skipped_deletions.append(change)
+        else:
+            plan.changes.append(change)
+    return plan
 
 
 def guard_script_shape(
@@ -524,7 +597,8 @@ def push_update(
     Returns the API response so the caller can stamp the manifest baseline
     from the remote's own view of the config (issue #686). ``warnings``
     accumulates the ``script[]`` normalization records of
-    :func:`guard_script_shape` for the push envelope.
+    :func:`guard_script_shape` for the push envelope, and for a workspace a
+    ``parameters.backendSize`` change (CLI-25).
     """
     branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     config_dir = project_root / branch_path / config_path_str
@@ -555,6 +629,15 @@ def push_update(
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
     )
+
+    if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
+        warn_on_backend_size_change(
+            client,
+            config_id=config_id,
+            configuration=configuration,
+            branch_id=branch_id,
+            warnings=warnings,
+        )
 
     result = client.update_config(
         component_id=component_id,

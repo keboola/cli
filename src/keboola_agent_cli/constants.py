@@ -613,11 +613,13 @@ MINUTES_PER_CREDIT: int = 60
 PAYG_FEATURE: str = "pay-as-you-go"
 
 # --- Changelog rendering ---
-# `kbagent changelog` shows a one-line summary per version by default (--full
-# expands). A summary is the note's first sentence, capped at this many chars
+# `kbagent changelog` shows headlines by default (--full expands): every
+# BREAKING note of a version, plus its first other notes until at least
+# CHANGELOG_SUMMARY_NOTES show. A headline is the note's first sentence, capped at this many chars
 # (cut on a word boundary) so a verbose release note collapses to a scannable
 # headline instead of a wall of text.
 CHANGELOG_HEADLINE_MAX_CHARS: int = 160
+CHANGELOG_SUMMARY_NOTES: int = 2
 
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
@@ -710,6 +712,14 @@ QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
 QUERY_RESULTS_DEFAULT_LIMIT: int = 500  # default --limit for `workspace query` fast path
 QUERY_RESULTS_PAGE_SIZE: int = 500  # rows per /results page (API requires 100..100000)
 
+# --- Data Science API (data apps) ---
+# GET /apps is paginated (default page = 100 items) and mixes workspace
+# deployments with data apps, so list_apps() pages with limit/offset until a
+# short page (#798). MAX_PAGES only guards against a server that ignores
+# ``offset`` (500 * 200 = 100k deployments, far beyond any real project).
+DATA_SCIENCE_APPS_PAGE_SIZE: int = 500  # items per GET /apps page
+DATA_SCIENCE_APPS_MAX_PAGES: int = 200  # safety cap on pages fetched by list_apps()
+
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
 
@@ -760,7 +770,7 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
 # A project may extend this set per working tree via the manifest's
-# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
+# ``ignoredComponents`` field -- see ``_sync_workspace.effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile

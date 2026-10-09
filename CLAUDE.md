@@ -68,6 +68,10 @@ src/keboola_agent_cli/
   constants.py          # Shared constants + dynamic APP_NAME resolution (retry params, timeouts, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   models.py             # Pydantic models shared across layers
+  effective_branch.py   # resolve_branch(): the ONLY code that applies the `branch use` active branch;
+                        #   records project + branch for the `Target:` line / `targets` key (#766)
+  project_ref.py        # resolve_project_ref(): a project ID given where an alias is expected -> the
+                        #   alias (CLI-22); applied by commands/_project_ref.py and serve's dependency
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
@@ -80,7 +84,7 @@ src/keboola_agent_cli/
   http_base.py          # BaseHttpClient - shared retry/backoff + common HTTP infra
   client/               # Storage API + Queue API package (X-StorageApi-Token);
                         #   split by endpoint family (storage_tables/storage_files/configs/
-                        #   queue/tokens/branches/stream/query/workspaces/misc + _core/_transfer),
+                        #   queue/tokens/branches/stream/query/workspaces/editor/misc + _core/_transfer),
                         #   composed into one KeboolaClient via mixins (#520)
   manage_client.py      # Manage API                   (X-KBC-ManageApiToken)
   ai_client.py          # AI Service API               (component schemas, Kai)
@@ -293,6 +297,28 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `auth register-projects` disclose and every doc surface defers to. Run
     `python scripts/check_sentinel_guards.py --list` to see the inventory.
 
+19. **Only `effective_branch.resolve_branch()` applies the active branch.**
+    Commands and services get the branch ID from it and never read
+    `ProjectConfig.active_branch_id` themselves: the function records the
+    project and branch, and `OutputFormatter` reports them (a `Target:` line
+    on stderr, `targets` in the `--json` envelope, also for `--dry-run`).
+    `tests/test_effective_branch.py` fails on a new direct read. A read that
+    only shows or manages the active branch must be on its list, with a reason.
+
+20. **Services receive project aliases, never project IDs.** `--project`
+    (and `project use`, `KBAGENT_PROJECT`, serve's `{project}` / `?project=`)
+    also takes a project ID; the root command group
+    (`commands/_project_ref.py`) translates it to the alias before the command
+    runs. A new command gets this without extra code. A new command whose
+    `--project` is not a registry lookup (a NEW alias like `project add`, an
+    offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS`
+    there, and an option with another name that takes an existing alias (like
+    `config clone --target-project`) to `ALIAS_OPTIONS`.
+    `tests/test_project_ref.py` fails on a new option whose flag contains
+    `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
+    test's `NOT_AN_ALIAS` list; an option with any other name (like
+    `sync clone --target`) needs that decision by hand.
+
 ## Claude Code Plugin
 
 The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
@@ -357,6 +383,13 @@ plugins/kbagent/
 #   settings.json -> env). Neither set = header omitted, as before. Version gate for this entry
 #   lives in gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines,
 #   because check_version_gates.py parses them as ATX markdown headings (where a `vNEXT` is fatal).
+# --project (CLI-22) takes a registered alias OR a project ID. An alias wins; an ID registered under
+#   several aliases is CONFIG_ERROR (exit 5) listing them, unless all are on one stack and exactly one is a
+#   session alias. Same for KBAGENT_PROJECT, `project use`, `config clone --target-project`,
+#   `sync clone --target`, the `semantic-layer promote/diff` project options, `auth * --stack`, and
+#   serve's {project} / ?project= / ?stack= (path and query only, not request bodies). Not for
+#   `project add` / `project create` (new alias) or `lineage show` (offline filter). Version gate in
+#   gotchas.md.
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
 kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
@@ -408,7 +441,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   AUTH_BROWSER_UNAVAILABLE, AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND.
 # `auth register-projects` (0.80.0+): fixes the usability gap where nothing was registered unless
 #   --register-projects was passed at login, and where the alias offered was a slug of the project
-#   NAME (never the numeric id, so `--project 9840` never resolves). Lists every project the session
+#   NAME (never the numeric id; the id itself resolves as `--project` once registered, CLI-22). Lists every project the session
 #   can access with a collision-free suggested alias, then lets the caller pick which to register.
 #   --all selects every candidate; --project-id ID (repeatable) selects specific ones (unknown id ->
 #   ConfigError); omitting both runs an interactive arrow-key + spacebar checkbox picker (every
@@ -760,6 +793,8 @@ kbagent permissions check OPERATION
 kbagent branch list [--project NAME]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
 kbagent branch use --project ALIAS --branch ID
+# branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
+#   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production). Version gate in gotchas.md (#766).
 kbagent branch reset --project ALIAS
 kbagent branch delete --project ALIAS --branch ID
 kbagent branch merge --project ALIAS [--branch ID]
@@ -868,7 +903,7 @@ kbagent workspace from-transformation --project ALIAS --component-id ID --config
 
 kbagent data-app list [--project NAME ...] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
-kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
@@ -893,11 +928,27 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   (since vNEXT/CLI-15) -- omitting configVersion alone does NOT provision the app's workspace;
 #   grant provisioning is gated on that block's presence, not on configVersion. Use `data-app runs`
 #   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
-kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID]
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
-kbagent data-app password --project NAME --app-id ID
+kbagent data-app password --project NAME --app-id ID [--copy] [--reveal] [--open]
+# data-app password: never prints the password unless --reveal, so it does not go into an AI
+#   agent's context. Project token only (static or session) -- the Manage token and its prompt are
+#   gone. In a terminal (human mode) it waits for `c` to copy (Enter/Esc/q finishes, 120 s timeout);
+#   without a terminal or with --json only --copy copies. Nothing copied -> exit 0,
+#   password_delivered_to null, ui_url = the Keboola UI page that shows it. --reveal + --copy =
+#   INVALID_ARGUMENT. Refuses a non-password app (VALIDATION_ERROR) and a null password (NOT_FOUND).
+#   serve: GET /data-apps/{p}/{app}/password takes no X-Manage-Token; ?reveal=true adds `password`.
+#   create --wait / deploy --wait deliver the password the same way once the app runs (shared
+#   CopyOption / RevealOption + deliver_password in commands/_data_app_password.py); there
+#   --copy / --reveal need --wait and a deploy (else INVALID_ARGUMENT, exit 2, no API call;
+#   --dry-run applies the same rules and adds a `password_delivery` plan). Without a flag and
+#   without the terminal prompt nothing is read (output as before). With a flag, JSON adds only
+#   ui_url / password_delivered_to / password (--reveal); any failed read after the deploy is a
+#   warnings[] entry, exit 0. The serve create / deploy routes are unchanged. BREAKING: scripts
+#   reading `.data.password` from `data-app password` must add --reveal.
+#   Version gate + agent rules: gotchas.md / AGENT_CONTEXT.
 kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
 kbagent data-app runs --project NAME --app-id ID [--limit N]
 kbagent data-app secrets-set --project ALIAS --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secrets-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
@@ -944,7 +995,8 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 #   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
-kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
+# `sync init --with-workspaces` (CLI-25) sets the manifest key `syncWorkspaces`: pull/diff/push/clone then also sync shared SQL workspaces (keboola.sandboxes with no parameters.id and runtime.shared true; Python/R and legacy SQL sandboxes stay skipped), config only (services/_sync_workspace.py). A `push --force` delete removes the workspace's SQL editor sessions (Editor service, client/editor.py) before the config, `push --dry-run --force` lists them, and a plain push holds the delete back under skipped_deletions; clone warns about workspace input tables missing in the target. With --adopt-existing it turns the key on in an existing manifest. Version gate for this entry lives in gotchas.md.
 kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
 # `sync pull` auto-inits: if the target directory has no `.keboola/manifest.json`, pull runs `init` first, so a separate `sync init` is NOT needed for a first checkout. `sync pull --project X -d ./dir` on an empty dir writes the manifest and fetches the configs in one step.
 # `sync pull --force` is conflict-aware (since 0.53.0): locally-modified config whose remote is UNCHANGED is preserved (delta stays pushable, never silently re-stamped); a true merge conflict (local AND remote both changed since last pull) aborts (exit 1, SYNC_CONFLICT, --json lists details.conflicts); local-untouched + remote-changed takes remote.
@@ -952,6 +1004,31 @@ kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-r
 kbagent sync status [--directory DIR]
 kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
 kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
+# sync push --force (#792): push deletes remote configs and rows ONLY with --force; a plain push lists them
+#   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
+#   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
+#   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
+# Partial failures change the exit code (#745): commands that collect per-item failures
+#   and keep going exit 1 (was 0) when at least one item failed:
+#   `sync push`, `sync push/pull/diff --all-projects`, `sync clone` (also `bucket_errors`),
+#   `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`,
+#   `semantic-layer import/promote/build/edit metric`, `storage describe-batch --json`,
+#   `flow schedule-remove` (new `errors[]` key, always present, empty when nothing
+#   failed; a partial failure fills it and exits 1; when every schedule delete
+#   fails it still raises `SCHEDULE_DELETE_FAILED`). Only `sync push`, `sync clone`,
+#   `storage describe-batch`, `storage describe-migrate` and `flow schedule-remove` print
+#   a `Failed:` headline instead of a green `Success:`; the others list the failed items
+#   in a table or in summary lines, and the `--all-projects` variants state the count in
+#   their summary line. `sync push --all-projects` counts a project
+#   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
+#   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
+#   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
+#   exits 1 when a project failed. Other read-only fan-outs (`billing credits`, `job list`,
+#   `schedule list`, ...) still exit 0. The helper is `item_failure_exit_code()` in
+#   commands/_helpers.py (returns the code, the caller raises). Version gate for this
+#   entry lives in gotchas.md -- the placeholder cannot be written on these `# ` comment
+#   lines (check_version_gates.py parses them as ATX markdown headings).
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
@@ -967,7 +1044,7 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 # sync diff/push (0.89.0+, #649): local side read from exactly ONE tree (target branch subtree, else main/); entries tracked on another branch's tree are excluded from the changeset and reported under orphaned[] + summary.orphaned (reasons + reconcile hints); fix with sync pull. Adopt-by-id is branch-aware.
 # Ignored components (since 0.91.0, #689): keboola.mcp-server-tool joins keboola.sandboxes on ALWAYS_IGNORED_COMPONENTS (the MCP server's auto-created empty mcp-workspace-<hex> configs); the manifest field ignoredComponents (.keboola/manifest.json) is now LIVE and unions with the hardcoded set, honored by pull/diff/push. pull drops manifest entries + local dirs for a newly-ignored component, reported with action "ignored" (distinct from "removed" = deleted on remote); diff filters the local side too, so a stale dir for an ignored component can never classify as DELETED -- closes the delete-dir-then-push trap that used to destroy production keboola.mcp-server-tool configs.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
-# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow task configIds and transformation variable links are remapped reference->ULID by push Phase C/D. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. Pass it only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
+# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow and keboola.orchestrator task configIds (and configRowIds), schedule targets, and transformation variable and shared-code links are remapped reference->ULID by push Phase C/D (`link_remaps` counts each kind; a link it cannot set is an `errors[]` entry, and a failed PUT is sent again by the next push). Schedules are never activated and data apps never deployed: `warnings[]` (also on --dry-run, human mode prints them) lists those, copied `KBC::` values the target cannot decrypt, and tasks that run a config not in the tree. Only the run that creates the configs reports them; a re-run returns `warnings: []`. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. Pass it only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
 kbagent sync branch-unlink [--directory DIR]
 kbagent sync branch-status [--directory DIR]
@@ -999,7 +1076,7 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
 kbagent semantic-layer model list --project P
-kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
@@ -1022,7 +1099,7 @@ kbagent semantic-layer add dataset --project P [--model M] --name N --table-id T
 #   --overwrite. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
 kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
-kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]
+kbagent semantic-layer add glossary --project P [--model M] --term TERM --definition D
 kbagent semantic-layer edit metric --project P [--model M] --name N [--new-name N2] [--new-sql SQL] [--new-dataset TABLE_ID] [--new-description D] [--yes]
 kbagent semantic-layer edit dataset --project P [--model M] --name N [--new-name N2] [--new-description D] [--new-grain G]
 kbagent semantic-layer edit constraint --project P [--model M] --name N [--new-name N2] [--new-rule "EXPR"] [--new-constraint-type T] [--new-severity error|warning|info] [--new-metrics M1,M2]
@@ -1033,23 +1110,67 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
+# scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
+#   (owner only), "organization" (every project in the org), or "targeted" (owner +
+#   explicit --target-project grants). --scope/--target-project are also accepted by `model
+#   create` and every `add <kind>` above. --scope omitted: `model create` makes a "project"
+#   item, `add <kind>` INHERITS its model's scope (an org-level model gets org-level children;
+#   a targeted model, its target projects); an inherited organization scope is permission-gated
+#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). `import`,
+#   `promote` and `build --model` create their NEW items at the target model's scope the same way
+#   (same gate: FLAG_ESCALATIONS `semantic-layer.import|promote|build --scope organization`);
+#   `import` / `promote --scope` (+ --target-project) override it, e.g. `--scope project` for a
+#   non-org-admin under an org-level model; items they overwrite keep their own scope. Item names are unique per object type across ALL
+#   models of a project (ALREADY_EXISTS says "in this project"), so a model cannot be copied into
+#   a second model of the same project under the same item names. An item stored at schema version
+#   1.0.0 (created before 0.97.0) cannot be elevated: the error names the stored version and the
+#   fix (export, delete, create again, import). --target-project takes a registered alias OR a
+#   numeric project ID (repeatable or comma-separated; an alias must be on the owner's stack);
+#   without --scope targeted it exits 2. With --scope targeted and no --target-project: a real
+#   terminal launches an interactive picker over the other projects on the stack; --json fails
+#   fast (exit 2). A bad alias/ID/--scope/--type is a usage error (exit 2), never a traceback.
+#   Creating directly at --scope organization requires the organization-admin ROLE (403
+#   otherwise) -- an ordinary token instead uses `scope request-create` + an org-admin's
+#   `scope set --scope organization`. Elevation is ONE-WAY (no downgrade endpoint), which is why
+#   every `--scope organization` (here and on `model create` / `add <kind>`) is destructive-class
+#   (FLAG_ESCALATIONS). `edit`, `import --overwrite` and `promote` update in place (PUT): an item
+#   keeps its id, scope, grants and pending elevation request. `scope add|remove` merge into the
+#   grants client-side (not atomic; refused from a project that does not own the item, because
+#   the server hides the grants from a non-owner -- use `scope set --target-project` there).
+#   Verbs follow the CLI spec (#791): get / add / remove / set / request-create / request-delete /
+#   request-list; `scope set` takes exactly ONE of --scope organization, --target-project (replace
+#   the whole list) or --clear.
+kbagent semantic-layer scope get --project P --type model|dataset|metric|relationship|constraint|glossary --context-id ID
+kbagent semantic-layer scope add --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope remove --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope set --project P --type T --context-id ID (--scope organization | --target-project ALIAS|ID [...] | --clear) [--dry-run] [--yes]
+kbagent semantic-layer scope request-create --project P --type T --context-id ID
+kbagent semantic-layer scope request-delete --project P --type T --context-id ID
+kbagent semantic-layer scope request-list --project P --type T [--limit N] [--offset N]
+# scope over `kbagent serve`: GET/PUT /semantic-layer/scope/{context_id}, POST/DELETE
+#   .../target-projects, PUT/DELETE .../elevation-request, GET /semantic-layer/scope/elevation-requests;
+#   POST /semantic-layer/models and /items/{kind} take `scope` + `target_projects`.
 kbagent semantic-layer reference-data list --project P [--model M]
 kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
-# semantic-layer REQUIRES A MASTER (project admin) Storage token (#711): the Metastore's
-#   auth gate -- unlike the Storage API -- rejects every valid non-master token with an opaque
-#   401 "Failed to create project scope" (the underlying MasterTokenRequiredError is swallowed
-#   server-side). kbagent reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) with
-#   the remedy; other unexplained 401s anywhere map to AUTH_REJECTED instead of the false
-#   "Invalid or expired token" (INVALID_TOKEN stays for 401s that DO blame the credential).
-#   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
-#   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
+# semantic-layer READS work with any valid, non-disabled, non-expired Storage token
+#   (0.97.0, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES
+#   (add/edit/remove/import/promote/build/scope add|remove|set) still need a project-admin token
+#   (master token or any admin-role user token) -- a non-admin token 403s on the write. Before
+#   PSGO-282 the Metastore's auth gate rejected EVERY valid non-master token, including reads,
+#   with an opaque 401 "Failed to create project scope" (#711, MasterTokenRequiredError swallowed
+#   server-side); kbagent still reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) as
+#   a safety net for a deployment that predates the fix. Other unexplained 401s anywhere map to
+#   AUTH_REJECTED instead of the false "Invalid or expired token" (INVALID_TOKEN stays for 401s
+#   that DO blame the credential). Version gate for this entry lives in gotchas.md -- `(since
+#   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
+#   ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
@@ -1234,7 +1355,7 @@ kbagent update [--beta]
 # completes discovery first, then does the terminal exact-version reinstall and immediately
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
-# Default shows a one-line summary (first sentence) per version; --full / -v expands every note.
+# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
 # `--config-dir` on serve (since 0.91.0, #679): `serve` is the only subcommand with a --config-dir of
 #   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,

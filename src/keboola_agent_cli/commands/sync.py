@@ -11,7 +11,16 @@ import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
-from ._helpers import check_cli_permission, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_operation,
+    check_cli_permission,
+    get_formatter,
+    get_service,
+    item_failure_exit_code,
+    map_error_to_exit_code,
+)
+from ._sync_clone_render import print_clone_result
+from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
 
@@ -101,6 +110,9 @@ def sync_init(
         "instead of failing. Validates the manifest's project_id against the alias "
         "and normalises the file. Idempotent.",
     ),
+    with_workspaces: bool = typer.Option(
+        False, "--with-workspaces", help="Also sync shared SQL workspaces (keboola.sandboxes)."
+    ),
 ) -> None:
     """Initialize a sync working directory for a Keboola project.
 
@@ -110,6 +122,10 @@ def sync_init(
 
     Use --adopt-existing to register a directory that was already initialised
     by the official kbc CLI without overwriting the manifest.
+
+    Use --with-workspaces to set syncWorkspaces in the manifest: pull, diff,
+    push and clone then also handle shared SQL workspaces. With --adopt-existing
+    it turns the key on in an existing manifest.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sync_service")
@@ -121,6 +137,7 @@ def sync_init(
             project_root=project_root,
             git_branching=git_branching,
             adopt_existing=adopt_existing,
+            sync_workspaces=with_workspaces,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -307,7 +324,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
         return
 
     local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-    remote_changes = [c for c in changes if c["change_type"] == "remote_modified"]
+    remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
     conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
 
     if local_changes:
@@ -318,11 +335,12 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  {prefix} {ct.upper()} {label}")
         formatter.console.print(
             f"  {summary['added']} to create, {summary['modified']} to update, "
-            f"{summary['deleted']} to delete"
+            f"{summary['deleted']} to delete (push --force)"
         )
     if remote_changes:
         for change in remote_changes:
-            formatter.console.print(f"  ~ REMOTE MODIFIED {_change_label(change)}")
+            label = REMOTE_CHANGE_LABELS[change["change_type"]]
+            formatter.console.print(f"  {label} {_change_label(change)}")
     if conflict_changes:
         for change in conflict_changes:
             formatter.console.print(f"  ! CONFLICT {_change_label(change)}")
@@ -354,6 +372,7 @@ def _format_push_result(formatter: Any, result: dict) -> None:
     status = result.get("status", "")
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         return
@@ -364,14 +383,23 @@ def _format_push_result(formatter: Any, result: dict) -> None:
             f"update {summary.get('modified', 0)}, "
             f"delete {summary.get('deleted', 0)}"
         )
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         return
+    errors = result.get("errors", [])
+    failed = f", [red]{len(errors)} failed[/red]" if errors else ""
     formatter.console.print(
         f"  {result.get('created', 0)} created, "
         f"{result.get('updated', 0)} updated, "
-        f"{result.get('deleted', 0)} deleted"
+        f"{result.get('deleted', 0)} deleted{failed}"
     )
+    for err in errors:
+        formatter.warning(
+            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
+            f"{err['message']}"
+        )
+    print_push_skips(formatter, result)
     _format_never_fetched(formatter, result.get("never_fetched", []))
     _format_orphaned(formatter, result.get("orphaned", []))
     # Show name drift warnings
@@ -426,7 +454,7 @@ def _diff_one_liner(result: dict) -> str:
     mod = s.get("modified", 0)
     add = s.get("added", 0)
     dlt = s.get("deleted", 0)
-    rmod = s.get("remote_modified", 0)
+    rmod = s.get("remote_modified", 0) + s.get("remote_deleted", 0)
     conf = s.get("conflict", 0)
     ro = s.get("remote_only", 0)
     if not any([mod, add, dlt, rmod, conf, ro]):
@@ -437,7 +465,7 @@ def _diff_one_liner(result: dict) -> str:
     if mod:
         parts.append(f"[yellow]{mod} to push[/yellow]")
     if dlt:
-        parts.append(f"[red]{dlt} to delete[/red]")
+        parts.append(f"[red]{dlt} to delete (--force)[/red]")
     if rmod:
         parts.append(f"[cyan]{rmod} to pull[/cyan]")
     if conf:
@@ -450,15 +478,17 @@ def _diff_one_liner(result: dict) -> str:
 def _push_one_liner(result: dict) -> str:
     """One-line summary of a single push result."""
     status = result.get("status", "")
+    held = push_skips_one_liner(result)
     if status == "no_changes":
-        return "[green]nothing to push[/green]"
+        return f"[green]nothing to push[/green]{held}"
     if status == "dry_run":
         s = result.get("summary", {})
-        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}"
+        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}{held}"
     c = result.get("created", 0)
     u = result.get("updated", 0)
     d = result.get("deleted", 0)
-    return f"+{c} created, ~{u} updated, -{d} deleted"
+    failed = f", [red]{len(result['errors'])} failed[/red]" if result.get("errors") else ""
+    return f"+{c} created, ~{u} updated, -{d} deleted{failed}{held}"
 
 
 def _format_all_results(
@@ -480,13 +510,15 @@ def _format_all_results(
 
     for alias in sorted(projects):
         proj_result = projects[alias]
+        # A push with per-config errors[] is a failed project, not "OK" (#745).
+        mark = "[red]x[/red]" if proj_result.get("errors") else "[green]OK[/green]"
         if "error" in proj_result:
             formatter.console.print(f"  [red]x[/red] {alias}: [red]{proj_result['error']}[/red]")
         elif verbose and per_project_formatter:
             formatter.console.print(f"\n[bold]{alias}:[/bold]")
             per_project_formatter(formatter, proj_result)
         elif one_liner:
-            formatter.console.print(f"  [green]OK[/green] {alias}: {one_liner(proj_result)}")
+            formatter.console.print(f"  {mark} {alias}: {one_liner(proj_result)}")
         else:
             formatter.console.print(f"  [green]OK[/green] {alias}")
 
@@ -635,6 +667,8 @@ def sync_pull(
             formatter.output(data)
         else:
             _format_all_results(formatter, data, _format_pull_result, _pull_one_liner)
+        if code := item_failure_exit_code(data["summary"]["failed"]):
+            raise typer.Exit(code=code)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -840,6 +874,8 @@ def sync_diff(
             formatter.output(data)
         else:
             _format_all_results(formatter, data, _format_diff_result, _diff_one_liner)
+        if code := item_failure_exit_code(data["summary"]["failed"]):
+            raise typer.Exit(code=code)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -897,7 +933,7 @@ def sync_diff(
         }
 
         local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-        remote_changes = [c for c in changes if c["change_type"] == "remote_modified"]
+        remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
         conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
 
         # Local changes (what push would do)
@@ -913,7 +949,7 @@ def sync_diff(
                     formatter.console.print(f"    {detail}")
             formatter.console.print(
                 f"\n{summary['added']} to create, {summary['modified']} to update, "
-                f"{summary['deleted']} to delete"
+                f"{summary['deleted']} to delete (push --force)"
             )
 
         # Remote changes (need pull)
@@ -923,7 +959,8 @@ def sync_diff(
             formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
             for change in remote_changes:
                 label = _change_label(change)
-                formatter.console.print(f"  [cyan]~ REMOTE MODIFIED {label}[/cyan]")
+                kind = REMOTE_CHANGE_LABELS[change["change_type"]]
+                formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
                 for detail in change.get("details", []):
                     formatter.console.print(f"    {detail}")
 
@@ -982,7 +1019,11 @@ def sync_push(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Allow deletion of remote configs that were removed locally",
+        help=(
+            "Delete remote configs and rows whose local files were removed (for a SQL "
+            "workspace also its SQL editor sessions). Without it push skips those deletions "
+            "and lists them."
+        ),
     ),
     allow_plaintext: bool = typer.Option(
         False,
@@ -1012,9 +1053,14 @@ def sync_push(
 
     Use --project for a single project or --all-projects for all configured
     projects in parallel.
+
+    --force needs the destructive permission class: a forced delete of a SQL
+    workspace also deletes its SQL editor sessions and their workspaces.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sync_service")
+    if force:
+        check_cli_operation(ctx, "sync.push --force")
 
     if all_projects and project:
         formatter.error(
@@ -1052,6 +1098,8 @@ def sync_push(
             formatter.output(data)
         else:
             _format_all_results(formatter, data, _format_push_result, _push_one_liner)
+        if code := item_failure_exit_code(data["summary"]["failed"]):
+            raise typer.Exit(code=code)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -1079,49 +1127,64 @@ def sync_push(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        status = result.get("status", "")
+        _render_push_result(formatter, result)
 
-        if status == "no_changes":
-            formatter.console.print("[green]No changes to push.[/green]")
-            skipped_reason = result.get("skipped_reason")
-            if skipped_reason:
-                formatter.console.print(f"  [yellow]{skipped_reason}[/yellow]")
-            _format_never_fetched(formatter, result.get("never_fetched", []))
-            _format_orphaned(formatter, result.get("orphaned", []))
-            return
+    # A per-config failure is collected, not raised -- without this the command
+    # reported a green "Pushed" and exit 0 even when every config failed (#745).
+    if code := item_failure_exit_code(len(result.get("errors", []))):
+        raise typer.Exit(code=code)
 
-        if status == "dry_run":
-            formatter.console.print("[yellow]Dry run -- no changes applied:[/yellow]")
-            for change in result.get("changes", []):
-                label = _change_label(change)
-                formatter.console.print(f"  {change['change_type'].upper()} {label}")
-            summary = result["summary"]
-            formatter.console.print(
-                f"\nWould create {summary['added']}, update {summary['modified']}, "
-                f"delete {summary['deleted']}"
-            )
-            _format_never_fetched(formatter, result.get("never_fetched", []))
-            _format_orphaned(formatter, result.get("orphaned", []))
-            return
 
-        formatter.success(
-            f"Pushed: {result['created']} created, "
-            f"{result['updated']} updated, "
-            f"{result['deleted']} deleted"
-        )
+def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
+    """Human-mode rendering for a single-project ``sync push``."""
+    status = result.get("status", "")
+
+    if status == "no_changes":
+        formatter.console.print("[green]No changes to push.[/green]")
+        print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
-        for change in result.get("pushed_details", []):
+        return
+
+    if status == "dry_run":
+        formatter.console.print("[yellow]Dry run -- no changes applied:[/yellow]")
+        for change in result.get("changes", []):
             label = _change_label(change)
-            action = change["change_type"].upper()
-            formatter.console.print(f"  {action} {label}")
-        for err in result.get("errors", []):
-            formatter.warning(
-                f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
-                f"{err['message']}"
-            )
-        for warn in result.get("warnings", []):
-            formatter.warning(f"  {warn['message']}")
+            formatter.console.print(f"  {change['change_type'].upper()} {label}")
+        summary = result["summary"]
+        formatter.console.print(
+            f"\nWould create {summary['added']}, update {summary['modified']}, "
+            f"delete {summary['deleted']}"
+        )
+        print_push_skips(formatter, result)
+        _format_never_fetched(formatter, result.get("never_fetched", []))
+        _format_orphaned(formatter, result.get("orphaned", []))
+        return
+
+    errors = result.get("errors", [])
+    headline = (
+        f"Pushed: {result['created']} created, "
+        f"{result['updated']} updated, "
+        f"{result['deleted']} deleted"
+    )
+    if errors:
+        # Never a green "Success" line when configs failed: the failed count
+        # belongs in the headline, not only in the warnings below it (#745).
+        formatter.console.print(f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed")
+    else:
+        formatter.success(headline)
+    print_push_skips(formatter, result)
+    _format_never_fetched(formatter, result.get("never_fetched", []))
+    _format_orphaned(formatter, result.get("orphaned", []))
+    for change in result.get("pushed_details", []):
+        label = _change_label(change)
+        action = change["change_type"].upper()
+        formatter.console.print(f"  {action} {label}")
+    for err in errors:
+        formatter.warning(
+            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
+            f"{err['message']}"
+        )
 
 
 @sync_app.command("clone")
@@ -1178,8 +1241,12 @@ def sync_clone(
 
     Copies the reference tree, applies declarative overrides (bucket_map,
     variable_values, instance_rename), and pushes so every config is CREATEd
-    fresh -- keboola.flow task configIds and transformation variable links are
-    remapped reference->ULID automatically. Idempotent: re-running with an
+    fresh -- flow and orchestrator task configIds, schedule targets, and
+    transformation variable and shared-code links are remapped reference->ULID
+    automatically. Schedules are not activated and data apps are not deployed.
+    The warnings list these, encrypted values the target cannot decrypt, and
+    tasks that run a config not in the tree. Only the run that creates the
+    configs reports the warnings, so keep them. Idempotent: re-running with an
     existing --target-dir just pushes and reports no_changes.
     """
     formatter = get_formatter(ctx)
@@ -1219,60 +1286,14 @@ def sync_clone(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        _format_clone_result(formatter, result)
+        print_clone_result(formatter, result)
 
-
-def _print_clone_buckets(formatter: Any, result: dict[str, Any]) -> None:
-    """Print the ``--create-buckets`` outcome (a no-op when it was not used)."""
-    links = result.get("linked_buckets", [])
-    if result.get("buckets_created") or result.get("buckets_skipped") or links:
-        formatter.console.print(
-            f"  Buckets: {result.get('buckets_created', 0)} created, {len(links)} linked, "
-            f"{result.get('buckets_skipped', 0)} already present"
-        )
-    for link in links:
-        formatter.console.print(
-            f"  Linked {link.get('bucket_id')} -> project {link.get('source_project_id')} "
-            f"bucket {link.get('source_bucket_id')}"
-        )
-    for berr in result.get("bucket_errors", []):
-        formatter.warning(f"  Bucket error: {berr.get('bucket_id')}: {berr.get('error')}")
-
-
-def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
-    """Human-mode rendering for ``sync clone``."""
-    status = result.get("status", "")
-    overrides = (
-        f"buckets={result.get('bucket_rewrites', 0)}, "
-        f"variables={result.get('variable_overrides', 0)}, "
-        f"renamed={result.get('renamed_instances', 0)}"
-    )
-    if status == "dry_run":
-        summary = result.get("summary", {})
-        formatter.console.print("[yellow]Dry run -- nothing pushed.[/yellow]")
-        formatter.console.print(f"  Overrides applied: {overrides}")
-        formatter.console.print(
-            f"  Would create {summary.get('added', 0)} config(s) in "
-            f"[cyan]{result.get('target_alias')}[/cyan]."
-        )
-        return
-    if status == "no_changes":
-        formatter.console.print(
-            f"[green]Already cloned[/green] -- no changes to push into "
-            f"[cyan]{result.get('target_alias')}[/cyan]."
-        )
-        _print_clone_buckets(formatter, result)
-        return
-    formatter.success(
-        f"Cloned into {result.get('target_alias')}: {result.get('created', 0)} created "
-        f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})"
-    )
-    _print_clone_buckets(formatter, result)
-    for err in result.get("errors", []):
-        formatter.warning(
-            f"  Error: {err.get('change_type')} "
-            f"{err.get('component_id')}/{err.get('config_id')}: {err.get('message')}"
-        )
+    # A clone where every config failed used to print "Success ... 0 created"
+    # and exit 0 -- the failures were warnings under a green line (#745). A
+    # bucket the clone could not create or link is a failed item too.
+    failed = len(result.get("errors", [])) + len(result.get("bucket_errors", []))
+    if code := item_failure_exit_code(failed):
+        raise typer.Exit(code=code)
 
 
 @sync_app.command("branch-link")

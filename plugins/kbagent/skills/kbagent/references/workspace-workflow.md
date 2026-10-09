@@ -18,6 +18,9 @@ kbagent --json workspace from-transformation \
 # SAVE THE PASSWORD -- it cannot be retrieved later!
 ```
 
+The transformation is read from the active branch (`branch use`), the same branch the
+workspace is created in *(since 0.96.1, #807)*; before that it was always read from production.
+
 ```bash
 # Step 2: Run the original SQL to reproduce the error
 # Default (0.59.0+): results come back inline as JSON columns+rows (fast),
@@ -306,6 +309,8 @@ Behavior:
 - **`workspace gc`** deletes each orphaned workspace one by one. Per-workspace
   failures accumulate into `errors[]` without stopping the batch -- one
   locked sandbox does not prevent the rest from being cleaned up.
+  *(since vNEXT)* A run with a non-empty `errors[]` (a failed delete, or a
+  project that could not be listed) exits 1, also under `--dry-run`.
 - **`--dry-run`** surfaces the would-be-deleted list via `data.would_delete[]`
   in JSON mode and a Rich table in human mode.
 - Multi-project: `workspace list --orphaned` / `workspace gc` accept

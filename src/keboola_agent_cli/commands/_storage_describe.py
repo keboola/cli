@@ -18,12 +18,12 @@ import typer
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 _DESCRIBE = "Descriptions"
@@ -74,7 +74,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         from ._metadata_input import resolve_text_input
 
@@ -146,7 +146,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         from ._metadata_input import resolve_text_input
 
@@ -224,7 +224,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         parsed: dict[str, str] = {}
         for entry in column:
@@ -327,7 +327,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         # In human mode, show a live progress indicator so that large batches
         # (100+ items) do not look frozen. JSON mode must remain silent on stderr
@@ -406,9 +406,13 @@ def register(app: typer.Typer) -> None:
         else:
             applied = result["applied_count"]
             errors = result["error_count"]
-            formatter.console.print(
-                f"[bold green]Batch complete:[/bold green] {applied} applied, {errors} error(s)"
+            # Never a green headline when items failed (#745).
+            label = (
+                "[bold red]Failed:[/bold red]"
+                if errors
+                else "[bold green]Batch complete:[/bold green]"
             )
+            formatter.console.print(f"{label} {applied} applied, {errors} error(s)")
             for item in result["applied"]:
                 obj_type = item["type"]
                 obj_id = item["id"]
@@ -421,8 +425,9 @@ def register(app: typer.Typer) -> None:
                 formatter.console.print(
                     f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}"
                 )
-            if errors:
-                raise typer.Exit(code=1) from None
+        # Also under --json: the exit used to be raised in human mode only (#745).
+        if result.get("errors"):
+            raise typer.Exit(code=1) from None
 
     @app.command("describe-migrate", rich_help_panel=_DESCRIBE)
     def storage_describe_migrate(
@@ -480,7 +485,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         if table_id and bucket_id:
             formatter.error(
@@ -533,9 +538,16 @@ def register(app: typer.Typer) -> None:
             formatter.output(result)
         else:
             verb = "Would migrate" if result["dry_run"] else "Migrated"
+            # Never a green headline when tables failed (#745).
+            failed = len(result["errors"])
+            label = (
+                f"[bold red]Failed:[/bold red] {verb}"
+                if failed
+                else f"[bold green]{verb}:[/bold green]"
+            )
             formatter.console.print(
-                f"[bold green]{verb}:[/bold green] {len(result['migrated'])} table(s) of "
-                f"{result['tables_scanned']} scanned"
+                f"{label} {len(result['migrated'])} table(s) of "
+                f"{result['tables_scanned']} scanned" + (f", {failed} failed" if failed else "")
             )
             for item in result["migrated"]:
                 cols = ", ".join(sorted(item["columns"]))

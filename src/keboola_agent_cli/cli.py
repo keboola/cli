@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from . import telemetry
+from .commands._project_ref import ProjectRefGroup
 from .commands.agent import agent_app
 from .commands.auth import auth_app
 from .commands.billing import billing_app
@@ -48,6 +49,7 @@ from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
+from .effective_branch import record_targets
 from .errors import ErrorCode, PermissionDeniedError
 from .output import OutputFormatter, force_utf8_when_redirected
 
@@ -100,6 +102,8 @@ app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
     invoke_without_command=True,
+    # Translates a project ID given as --project to its alias (CLI-22).
+    cls=ProjectRefGroup,
 )
 
 # -- Setup & Info --
@@ -300,6 +304,11 @@ def main(
         no_color=effective_no_color,
         verbose=verbose,
     )
+    # Record the project and branch of this command for the output (#766). Not
+    # for the REPL shell (each line records on its own) nor for `serve`, whose
+    # request threads would all add to one record for the server's lifetime.
+    if ctx.invoked_subcommand not in (None, "repl", "serve"):
+        ctx.with_resource(record_targets(formatter.report_target))
 
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)

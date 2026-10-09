@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
+from keboola_agent_cli.services._data_app_password import DataAppPassword
 from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
 AUTH = {"Authorization": "Bearer test-token"}
@@ -464,54 +465,55 @@ def test_storage_file_download_passes_output_path_kwarg(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # data_apps.py  GET /{p}/{app}/password
-# Service: data_app.get_data_app_password(manage_token=...)
-# Also: omitting X-Manage-Token header returns 401.
+# Service: data_app.get_data_app_password(alias=, app_id=) -- project token only,
+# no X-Manage-Token. The password is in the response only with ?reveal=true.
 # ---------------------------------------------------------------------------
 
+_APP_PASSWORD_SENTINEL = "pw-sentinel-5f1e9a"
 
-def test_data_app_password_passes_manage_token_kwarg(tmp_path: Path) -> None:
-    """Router must pass ``manage_token=`` to DataAppService.get_data_app_password."""
+
+def _password_app(tmp_path: Path) -> tuple[Any, MagicMock]:
     data_app_svc = MagicMock()
-    data_app_svc.get_data_app_password.return_value = {"password": "s3cr3t"}
+    data_app_svc.get_data_app_password.return_value = DataAppPassword(
+        project_alias=PROJECT,
+        app_id=APP_ID,
+        auth="password",
+        app_url="https://app-1234.hub.keboola.com",
+        ui_url="https://connection.keboola.com/admin/projects/1/branch/default/data-apps/c1",
+        password=_APP_PASSWORD_SENTINEL,
+    )
     registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Override get_manage_token to provide a token
-    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+    return _make_app_with_registry(tmp_path, registry), data_app_svc
+
+
+def test_data_app_password_needs_no_manage_token_and_omits_the_password(tmp_path: Path) -> None:
+    """No X-Manage-Token header; by default the response has no password."""
+    app, data_app_svc = _password_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.get(f"/data-apps/{PROJECT}/{APP_ID}/password", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    data_app_svc.get_data_app_password.assert_called_once_with(alias=PROJECT, app_id=APP_ID)
+    assert _APP_PASSWORD_SENTINEL not in res.text
+    payload = res.json()
+    assert payload["password_delivered_to"] is None
+    assert "password" not in payload
+    assert payload["ui_url"].endswith("/data-apps/c1")
+
+
+def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
+    app, _svc = _password_app(tmp_path)
 
     with TestClient(app) as client:
         res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,
+            f"/data-apps/{PROJECT}/{APP_ID}/password", params={"reveal": "true"}, headers=AUTH
         )
 
     assert res.status_code == 200, res.text
-    kwargs = data_app_svc.get_data_app_password.call_args.kwargs
-    assert kwargs.get("manage_token") == "mgmt-tok", (
-        f"Expected manage_token='mgmt-tok', got kwargs={kwargs}"
-    )
-
-
-def test_data_app_password_missing_manage_token_returns_401(tmp_path: Path) -> None:
-    """GET /{p}/{app}/password without X-Manage-Token must return 401."""
-    data_app_svc = MagicMock()
-    registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Explicitly provide None (no token) -- this mirrors the real behaviour when
-    # the header is absent; no dependency override so the real get_manage_token runs.
-
-    with TestClient(app) as client:
-        res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,  # Bearer auth present but NO X-Manage-Token
-        )
-
-    assert res.status_code == 401, f"Expected 401, got {res.status_code}: {res.text}"
-    body = res.json()
-    # The app wraps HTTPException via a global handler into
-    # {"status": "error", "error": {"code": ..., "message": ...}}.
-    msg = body.get("detail") or body.get("error", {}).get("message", "")
-    assert "X-Manage-Token" in msg, f"Expected message mentioning X-Manage-Token, got: {body}"
-    data_app_svc.get_data_app_password.assert_not_called()
+    payload = res.json()
+    assert payload["password"] == _APP_PASSWORD_SENTINEL
+    assert payload["password_delivered_to"] == "response"
 
 
 # ---------------------------------------------------------------------------
@@ -829,6 +831,154 @@ def test_reference_data_delete_route(tmp_path: Path) -> None:
     )
     assert resp.status_code == 200, resp.text
     sl.delete_reference_data.assert_called_once_with(alias=PROJECT, record_id="r1")
+
+
+# ---------------------------------------------------------------------------
+# semantic_layer.py  scope routes + scope fields on create -> SemanticLayerService
+# ---------------------------------------------------------------------------
+
+SCOPE_ITEM = {"project": PROJECT, "type": "dataset"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs", "service_call", "expected"),
+    [
+        (
+            "get",
+            "/semantic-layer/scope/d1",
+            {"params": SCOPE_ITEM},
+            "scope_get",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "post",
+            "/semantic-layer/scope/d1/target-projects",
+            {"json": {**SCOPE_ITEM, "target_projects": ["a", "5"]}},
+            "scope_update_targets",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1", "add": ["a", "5"]},
+        ),
+        (
+            "delete",
+            "/semantic-layer/scope/d1/target-projects",
+            {"params": {**SCOPE_ITEM, "target_project": ["a", "5"]}},
+            "scope_update_targets",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1", "remove": ["a", "5"]},
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1",
+            {"json": {**SCOPE_ITEM, "scope": "organization"}},
+            "scope_set",
+            {
+                "alias": PROJECT,
+                "kind": "dataset",
+                "context_id": "d1",
+                "scope": "organization",
+                "target_projects": None,
+                "clear": False,
+                "dry_run": False,
+            },
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1",
+            {"json": {**SCOPE_ITEM, "clear": True}},
+            "scope_set",
+            {
+                "alias": PROJECT,
+                "kind": "dataset",
+                "context_id": "d1",
+                "scope": None,
+                "target_projects": None,
+                "clear": True,
+                "dry_run": False,
+            },
+        ),
+        (
+            "put",
+            "/semantic-layer/scope/d1/elevation-request",
+            {"params": SCOPE_ITEM},
+            "scope_request_create",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "delete",
+            "/semantic-layer/scope/d1/elevation-request",
+            {"params": SCOPE_ITEM},
+            "scope_request_delete",
+            {"alias": PROJECT, "kind": "dataset", "context_id": "d1"},
+        ),
+        (
+            "get",
+            "/semantic-layer/scope/elevation-requests",
+            {"params": {**SCOPE_ITEM, "limit": 5, "offset": 10}},
+            "scope_request_list",
+            {"alias": PROJECT, "kind": "dataset", "limit": 5, "offset": 10},
+        ),
+    ],
+    ids=lambda v: v if isinstance(v, str) and v.startswith("scope_") else None,
+)
+def test_scope_routes(tmp_path: Path, method, path, kwargs, service_call, expected) -> None:
+    sl = MagicMock()
+    getattr(sl, service_call).return_value = {"scope": "project"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = getattr(TestClient(app), method)(path, headers=AUTH, **kwargs)
+    assert resp.status_code == 200, resp.text
+    getattr(sl, service_call).assert_called_once_with(**expected)
+
+
+def test_scope_set_body_rejects_an_unsupported_scope(tmp_path: Path) -> None:
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=MagicMock()))
+    resp = TestClient(app).put(
+        "/semantic-layer/scope/d1", json={**SCOPE_ITEM, "scope": "project"}, headers=AUTH
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"target_projects": ["a"]},
+        {"scope": "project", "target_projects": ["a"]},
+        {"scope": "targeted"},
+    ],
+)
+def test_create_model_scope_fields_are_validated(tmp_path: Path, fields) -> None:
+    """target_projects needs scope=targeted and vice versa -- same rule as the CLI."""
+    sl = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl))
+    resp = TestClient(app).post(
+        "/semantic-layer/models", json={"project": PROJECT, "name": "m", **fields}, headers=AUTH
+    )
+    assert resp.status_code == 422
+    sl.create_model.assert_not_called()
+
+
+def test_create_model_and_add_item_pass_scope_through(tmp_path: Path) -> None:
+    sl = MagicMock()
+    sl.create_model.return_value = {"model": {}}
+    sl.add_glossary.return_value = {"id": "g"}
+    client = TestClient(_make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl)))
+    scope = {"scope": "targeted", "target_projects": ["analytics"]}
+    assert (
+        client.post(
+            "/semantic-layer/models", json={"project": PROJECT, "name": "m", **scope}, headers=AUTH
+        ).status_code
+        == 200
+    )
+    assert sl.create_model.call_args.kwargs["scope"] == "targeted"
+    assert sl.create_model.call_args.kwargs["target_projects"] == ["analytics"]
+    assert (
+        client.post(
+            "/semantic-layer/items/glossary",
+            json={"project": PROJECT, "term": "t", "definition": "d"},
+            headers=AUTH,
+        ).status_code
+        == 200
+    )
+    kwargs = sl.add_glossary.call_args.kwargs
+    assert kwargs["scope"] is None  # omitted -> the service inherits the model's scope
+    assert kwargs["target_projects"] is None
 
 
 # ---------------------------------------------------------------------------

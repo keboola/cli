@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.transformation_service import TransformationService
 from ._helpers import (
@@ -24,7 +25,6 @@ from ._helpers import (
     get_formatter,
     map_error_to_exit_code,
     parse_json_arg,
-    resolve_branch,
     resolve_project_alias,
 )
 
@@ -168,7 +168,7 @@ def transformation_create(
         sql = sql_file.read_text(encoding="utf-8")
 
     alias = resolve_project_alias(ctx, formatter, project)
-    _, branch_id = resolve_branch(config_store, formatter, alias, branch)
+    branch_id = resolve_branch(config_store, alias, branch)
 
     try:
         result = service.create(
@@ -239,7 +239,7 @@ def transformation_show(
     config_store: ConfigStore = ctx.obj["config_store"]
 
     alias = resolve_project_alias(ctx, formatter, project)
-    _, branch_id = resolve_branch(config_store, formatter, alias, branch)
+    branch_id = resolve_branch(config_store, alias, branch)
 
     try:
         result = service.show(
@@ -360,7 +360,7 @@ def transformation_edit(
         raise typer.Exit(code=2) from None
 
     alias = resolve_project_alias(ctx, formatter, project)
-    _, branch_id = resolve_branch(config_store, formatter, alias, branch)
+    branch_id = resolve_branch(config_store, alias, branch)
 
     try:
         result = service.edit(

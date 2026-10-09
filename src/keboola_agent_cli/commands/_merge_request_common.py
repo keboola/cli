@@ -21,11 +21,11 @@ from typing import Any, NoReturn
 import typer
 from rich.markup import escape
 
+from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
     resolve_project_alias,
 )
 from ._merge_request_render import next_step_hints
@@ -195,8 +195,13 @@ def _resolve_target(
     alias = resolve_project_alias(ctx, formatter, project)
     service = get_service(ctx, "merge_request_service")
 
+    config_store = get_service(ctx, "config_store")
     if merge_request_id is not None:
         row = service.get_merge_request_row(alias, merge_request_id) if need_row else None
+        if row is not None:
+            record_branch(
+                config_store, alias, _branch_from_row(row), "merge_request", role="source"
+            )
         return _Target(
             alias=alias,
             merge_request_id=merge_request_id,
@@ -205,8 +210,7 @@ def _resolve_target(
             resolved_from_branch=False,
         )
 
-    config_store = get_service(ctx, "config_store")
-    _, branch_id = resolve_branch(config_store, formatter, alias, branch)
+    branch_id = resolve_branch(config_store, alias, branch, required=True, role="source")
     if branch_id is None:
         formatter.error(
             message=(

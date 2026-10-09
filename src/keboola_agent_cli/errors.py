@@ -1,8 +1,9 @@
 """Error types and helpers for Keboola Agent CLI."""
 
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
+@unique
 class ErrorCode(StrEnum):
     """Stable machine-readable error codes emitted by kbagent.
 
@@ -106,6 +107,7 @@ class ErrorCode(StrEnum):
     # Sync
     PARENT_CONFIG_NOT_TRACKED = "PARENT_CONFIG_NOT_TRACKED"
     VARIABLE_LINK_UNRESOLVED = "VARIABLE_LINK_UNRESOLVED"
+    LINK_UNRESOLVED = "LINK_UNRESOLVED"
     SYNC_CONFLICT = "SYNC_CONFLICT"
     SYNC_LEGACY_BOUNDARY = "SYNC_LEGACY_BOUNDARY"
 

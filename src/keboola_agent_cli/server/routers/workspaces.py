@@ -86,9 +86,8 @@ def list_workspaces(
     branch: int | None = Query(
         None,
         description=(
-            "Dev branch ID. Requires exactly one project. Without branch, the "
-            "production endpoint is used regardless of any pinned active branch "
-            "(read-command convention, mirrors `storage buckets`)."
+            "Dev branch ID. Requires exactly one project. Without branch, each "
+            "project's active branch (`kbagent branch use`) is used, else production."
         ),
     ),
     qs_compatible: bool = Query(
@@ -135,8 +134,8 @@ def detail(
     branch: int | None = Query(
         None,
         description=(
-            "Dev branch ID. Without branch, the production endpoint is used "
-            "regardless of any pinned active branch (read-command convention)."
+            "Dev branch ID. Without branch, the project's active branch "
+            "(`kbagent branch use`) is used, else production."
         ),
     ),
     registry: ServiceRegistry = Depends(get_registry),

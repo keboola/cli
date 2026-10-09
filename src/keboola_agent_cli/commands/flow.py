@@ -18,6 +18,7 @@ from rich.markup import escape
 from rich.syntax import Syntax
 from rich.table import Table
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.flow_service import (
     FLOW_COMPONENT_ID,
@@ -30,8 +31,8 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,6 @@ def flow_list(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
-    config_store = ctx.obj["config_store"]
 
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
@@ -182,14 +182,10 @@ def flow_list(
         )
         raise typer.Exit(code=2)
 
-    effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
-
     try:
         result = service.list_flows(
             aliases=project,
-            branch_id=effective_branch,
+            branch_id=branch,
             with_schedules=with_schedules,
         )
     except ConfigError as exc:
@@ -271,7 +267,7 @@ def flow_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
     config_store = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.get_flow_detail(
@@ -802,6 +798,8 @@ def flow_delete(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    config_store = ctx.obj["config_store"]
+    branch = resolve_branch(config_store, project, branch)
 
     if dry_run:
         result = {
@@ -957,6 +955,8 @@ def flow_schedule_remove(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
+    config_store = ctx.obj["config_store"]
+    branch = resolve_branch(config_store, project, branch)
 
     if dry_run:
         try:
@@ -1035,12 +1035,24 @@ def flow_schedule_remove(
         formatter.output(result)
     else:
         count = result.get("deleted_count", 0)
-        if count == 0:
+        errors = result.get("errors", [])
+        headline = f"Removed {count} schedule(s) from flow {escape(flow_id)}"
+        if errors:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed"
+            )
+        elif count == 0:
             formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
         else:
-            formatter.success(f"Removed {count} schedule(s) from flow {escape(flow_id)}")
+            formatter.success(headline)
+        for err in errors:
+            formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
         for warning in result.get("warnings", []):
             formatter.warning(warning)
+
+    # A schedule whose config could not be deleted is collected, not raised (#745).
+    if code := item_failure_exit_code(len(result.get("errors", []))):
+        raise typer.Exit(code=code)
 
 
 # Mounted from a private module: `commands/flow.py` is exactly at the
