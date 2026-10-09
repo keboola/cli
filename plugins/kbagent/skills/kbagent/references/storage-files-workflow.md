@@ -93,6 +93,13 @@ kbagent --json storage load-file \
 This is faster than `upload-table` because the file is already in the cloud --
 no local upload step needed. The table must already exist.
 
+`load-file` is also the recovery path after a failed `upload-table` import: the
+file is already uploaded, so re-import it by `--file-id` instead of uploading
+again. *(since vNEXT)* Both `upload-table` and `load-file` take `--no-wait`
+(return the import `job_id` at once) and `--timeout SECONDS`; follow the job with
+`storage job-detail --job-id ID --wait`. For a 100+ GB CSV / `.csv.gz`, see
+[large-upload-workflow](large-upload-workflow.md).
+
 ## Export a table to a Storage File
 
 Create a file in Keboola from table data. Useful for making data available

@@ -147,6 +147,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/storage/files"): "storage files",
     ("GET", "/storage/files/{project}/{file_id}"): "storage file-detail",
     ("GET", "/storage/files/{project}/{file_id}/download"): "storage file-download",
+    ("GET", "/storage/jobs/{project}/{job_id}"): "storage job-detail",
     ("GET", "/storage/snapshot-detail/{project}/{snapshot_id}"): "storage snapshot-detail",
     ("GET", "/storage/snapshots/{project}/{table_id}"): "storage snapshots",
     ("GET", "/storage/table-detail/{project}/{table_id}"): "storage table-detail",
