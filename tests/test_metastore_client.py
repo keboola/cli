@@ -205,9 +205,25 @@ class TestDuplicateNameNormalization:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
         assert excinfo.value.status_code == 409
-        assert "already exists" in excinfo.value.message
+        assert "already exists in this project" in excinfo.value.message
+        assert "unique across all models" in excinfo.value.message
+        assert "target model" not in excinfo.value.message
         assert "foo" in excinfo.value.message
         assert excinfo.value.retryable is False
+
+    def test_duplicate_name_at_organization_scope_names_the_organization(
+        self, httpx_mock, metastore_client
+    ) -> None:
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-metric",
+            status_code=409,
+            json={"error": "Object with this name already exists in organization scope"},
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            metastore_client.post_item(
+                "semantic-metric", name="foo", data={"name": "foo"}, scope="organization"
+            )
+        assert "at organization scope in this organization" in excinfo.value.message
 
     def test_duplicate_name_500_becomes_already_exists(self, httpx_mock, metastore_client) -> None:
         """Legacy / pre-fix metastore still returns 500 -- retain the workaround.
@@ -571,6 +587,7 @@ class TestPostItemScopeValidation:
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.put_item("semantic-metric", "abc", "taken", {})
         assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
+        assert "already exists in this project" in excinfo.value.message
 
     def test_rejects_target_project_ids_without_targeted_scope(self, metastore_client) -> None:
         with pytest.raises(KeboolaApiError) as excinfo:

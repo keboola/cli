@@ -15,6 +15,7 @@ orchestrator class stays under the CONTRIBUTING.md services LOC ceiling.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
@@ -96,6 +97,56 @@ def inherited_scope(
     return scope, (targets or None) if scope == "targeted" else None
 
 
+@dataclass(frozen=True)
+class NewItemScope:
+    """The scope a copy command (`import`, `promote`) gives the items it creates.
+
+    ``inherited`` is True when the caller did not pass ``--scope`` and the scope is the target
+    model's own; :func:`post_child` then explains a 403 on an inherited ``organization`` scope.
+    """
+
+    scope: ObjectScope = "project"
+    target_project_ids: list[int] | None = None
+    inherited: bool = True
+
+
+def post_child(
+    client: MetastoreClient,
+    item_type: SemanticType,
+    *,
+    name: str,
+    data: dict[str, Any],
+    scope: ObjectScope,
+    target_project_ids: list[int] | None,
+    inherited: bool,
+    remedy: str,
+) -> dict[str, Any]:
+    """POST a child item at ``scope``; explain a 403 on an inherited ``organization`` scope.
+
+    The metastore ACL lets only an organization admin create at ``organization`` scope. When the
+    caller did not choose that scope (``inherited``), the bare 403 does not say why, so the error
+    names the model's scope and ``remedy`` (the caller-specific way out).
+    """
+    try:
+        return client.post_item(
+            item_type, name=name, data=data, scope=scope, target_project_ids=target_project_ids
+        )
+    except KeboolaApiError as exc:
+        if not (
+            inherited and scope == "organization" and exc.error_code == ErrorCode.ACCESS_DENIED
+        ):
+            raise
+        raise KeboolaApiError(
+            message=(
+                f"{exc.message} The model is {scope!r}-scoped, so this child inherits that "
+                f"scope; creating at it needs an organization-admin token. {remedy}"
+            ),
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            retryable=False,
+        ) from exc
+
+
 def item_status(item: dict[str, Any]) -> dict[str, Any]:
     """Extract the scope/grant/elevation-request fields from a raw item for display."""
     meta = item.get("meta") or {}
@@ -168,6 +219,33 @@ def set_target_projects(
     return item_status(client.get_item(item_type, item_id))
 
 
+# The metastore's 400 when the item's STORED schema version does not support the scope (go-monorepo
+# `ErrScopeNotSupported`): elevation and an elevation request are checked against that stored
+# version, and items created before kbagent 0.97.0 pinned `schemaVersion` 1.0.0 (project scope only).
+_SCOPE_NOT_SUPPORTED = "not supported for object type"
+
+
+def _raise_if_old_schema(
+    client: MetastoreClient, item_type: SemanticType, item_id: str, exc: KeboolaApiError
+) -> None:
+    """Re-raise the bare "scope not supported" 400 as an error that names the cause and the way out."""
+    if exc.status_code != 400 or _SCOPE_NOT_SUPPORTED not in exc.message:
+        return
+    version = (client.get_item(item_type, item_id).get("meta") or {}).get("schemaVersion")
+    raise KeboolaApiError(
+        message=(
+            f"{item_type} {item_id!r} cannot be made organization-wide: it is stored at schema "
+            f"version {version}, which supports only project scope. Create it again to store it at "
+            "the current schema version: `semantic-layer export` the model, delete it, create it "
+            "again and `import` the export. Item names are unique per project, so delete the old "
+            "model before the import."
+        ),
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        retryable=False,
+    ) from exc
+
+
 def request_elevation(
     client: MetastoreClient, item_type: SemanticType, item_id: str
 ) -> dict[str, Any]:
@@ -179,7 +257,11 @@ def request_elevation(
     ``target_project_ids: null`` for an item whose grants are actually
     intact. Same re-read pattern as :func:`set_target_projects`.
     """
-    client.request_scope_elevation(item_type, item_id)
+    try:
+        client.request_scope_elevation(item_type, item_id)
+    except KeboolaApiError as exc:
+        _raise_if_old_schema(client, item_type, item_id, exc)
+        raise
     return item_status(client.get_item(item_type, item_id))
 
 
@@ -198,7 +280,11 @@ def elevate_to_organization(
     if dry_run:
         status = item_status(client.get_item(item_type, item_id))
         return {**status, "dry_run": True, "would_set_scope": "organization"}
-    client.elevate_to_organization(item_type, item_id)
+    try:
+        client.elevate_to_organization(item_type, item_id)
+    except KeboolaApiError as exc:
+        _raise_if_old_schema(client, item_type, item_id, exc)
+        raise
     return item_status(client.get_item(item_type, item_id))
 
 

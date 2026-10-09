@@ -1948,7 +1948,16 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   Child items (`add metric|dataset|...`) with --scope omitted INHERIT their
   model's scope and target projects; pass --scope to override. An inherited
   organization scope is gated as destructive like a typed one, and a
-  non-org-admin token gets a 403 on it (pass --scope project).
+  non-org-admin token gets a 403 on it (pass --scope project). `import`,
+  `promote` and `build --model` create their NEW items at the target model's
+  scope too, with the same gate; `import` / `promote --scope` (and
+  --target-project) override it, as on `add`. Overwritten items keep their scope.
+
+  Item names are unique per type across ALL models of a project: a second
+  model in the same project cannot reuse an item name (ALREADY_EXISTS, "in
+  this project"). An item stored at schema version 1.0.0 (created before
+  0.97.0) cannot be elevated; recreate it: export, delete the model, create
+  it again, import.
 
   Elevating an EXISTING project's semantic-layer objects in bulk: there is no
   bulk-elevate endpoint -- each object needs its own `scope request-create` +

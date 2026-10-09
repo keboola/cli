@@ -25,9 +25,24 @@ from ._helpers import (
     item_failure_exit_code,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
-from ._semantic_layer_helpers import ScopeChoice, _handle_service_call, resolve_scope_targets
+from ._semantic_layer_helpers import (
+    ScopeChoice,
+    _handle_service_call,
+    gate_inherited_organization_scope,
+    resolve_scope_targets,
+)
 from ._semantic_layer_reference_data import reference_data_app
 from ._semantic_layer_scope import scope_app
+
+# `import` / `promote`: the scope of the NEW items they create (overwritten items keep theirs).
+_COPY_SCOPE_HELP = (
+    "Visibility of the NEW items: 'project', 'organization' or 'targeted'. "
+    "Omitted: the target model's own scope, as with `add <kind>`."
+)
+_COPY_TARGET_PROJECT_HELP = (
+    "Project alias or ID that can see the new items (repeatable or comma-separated; "
+    "--scope targeted only)."
+)
 
 semantic_layer_app = typer.Typer(
     name="semantic-layer",
@@ -524,6 +539,10 @@ def semantic_layer_build(
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
+    if model is not None:
+        gate_inherited_organization_scope(
+            ctx, operation="semantic-layer.build", alias=project, model=model
+        )
 
     result = _handle_service_call(
         ctx,
@@ -566,6 +585,10 @@ def semantic_layer_promote(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the cross-project confirmation prompt"
     ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
+    target_project: list[str] = typer.Option(
+        [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
+    ),
 ) -> None:
     """Promote a model from one project to another (NEW + overwrite CHANGED; never deletes).
 
@@ -588,6 +611,14 @@ def semantic_layer_promote(
     ):
         formatter.console.print("Aborted.")
         raise typer.Exit(code=0)
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.promote",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=to_project,
+        inherit_from_model=(to_model,),
+    )
 
     result = _handle_service_call(
         ctx,
@@ -598,6 +629,8 @@ def semantic_layer_promote(
         to_model=to_model,
         types=type_list,
         dry_run=dry_run,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_promote_result)
     # Per-item failures are collected per type, not raised (#745).
@@ -633,6 +666,10 @@ def semantic_layer_import(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip confirmation (alias for default SKIP behavior)"
     ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
+    target_project: list[str] = typer.Option(
+        [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
+    ),
 ) -> None:
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
     formatter = get_formatter(ctx)
@@ -641,6 +678,14 @@ def semantic_layer_import(
     # still opt into destructive overwrite via --overwrite.
     _ = yes  # explicit (no behavioural effect when --overwrite is False)
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.import",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.import_snapshot,
@@ -650,6 +695,8 @@ def semantic_layer_import(
         types=type_list,
         dry_run=dry_run,
         overwrite=overwrite,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_import_result)
     # Per-item failures are collected per type, not raised (#745).

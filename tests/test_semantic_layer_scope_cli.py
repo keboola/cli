@@ -202,7 +202,7 @@ class TestCreateScopeFlags:
     ) -> None:
         for command in (
             ["model", "create", "--name", "n"],
-            ["add", "glossary", "--term", "t"],
+            ["add", "glossary", "--term", "t", "--definition", "d"],
             ["add", "dataset", "--name", "n", "--table-id", "a.b.c"],
         ):
             mock = MagicMock()
@@ -226,7 +226,10 @@ class TestCreateScopeFlags:
         mock.child_scope.return_value = model_scope
         mock.add_glossary.return_value = {"id": "g", "attributes": {"term": "t"}}
         result = _invoke(
-            ["--deny-destructive", *_sl("add", "glossary", "--project", "prod", "--term", "t")],
+            [
+                "--deny-destructive",
+                *_sl("add", "glossary", "--project", "prod", "--term", "t", "--definition", "d"),
+            ],
             store=store,
             sl_mock=mock,
         )
@@ -237,7 +240,9 @@ class TestCreateScopeFlags:
         mock = MagicMock()
         mock.add_glossary.return_value = {"id": "g", "attributes": {"term": "t"}}
         result = _invoke(
-            _sl("add", "glossary", "--project", "prod", "--term", "t"), store=store, sl_mock=mock
+            _sl("add", "glossary", "--project", "prod", "--term", "t", "--definition", "d"),
+            store=store,
+            sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
         mock.child_scope.assert_not_called()
@@ -438,3 +443,167 @@ class TestScopePermissions:
         )
         assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
         assert mock.scope_set.called is (not blocked)
+
+
+_COPY_COMMANDS = {
+    "import": ("import", ["--project", "prod", "--file", "{snapshot}"], "import_snapshot"),
+    "promote": (
+        "promote",
+        ["--from-project", "analytics", "--to-project", "prod", "--yes"],
+        "promote_model",
+    ),
+    "build": (
+        "build",
+        ["--project", "prod", "--model", "m", "--tables", "a.b.c"],
+        "build_model",
+    ),
+}
+
+
+class TestCopyCommandsGateInheritedOrganizationScope:
+    """`import`, `promote` and `build --model` create items at the target model's scope, so an
+    organization-scope target model must not bypass --deny-destructive."""
+
+    @pytest.mark.parametrize("command", ["import", "promote", "build"])
+    @pytest.mark.parametrize(
+        ("model_scope", "blocked"),
+        [("organization", True), ("targeted", False), ("project", False)],
+    )
+    def test_inherited_scope_is_gated(
+        self, store: ConfigStore, tmp_path: Path, command: str, model_scope: str, blocked: bool
+    ) -> None:
+        name, args, service_method = _COPY_COMMANDS[command]
+        snapshot = tmp_path / "snapshot.json"
+        snapshot.write_text("{}", encoding="utf-8")
+        mock = MagicMock()
+        mock.child_scope.return_value = model_scope
+        getattr(mock, service_method).return_value = {}
+        result = _invoke(
+            ["--deny-destructive", *_sl(name, *[a.format(snapshot=snapshot) for a in args])],
+            store=store,
+            sl_mock=mock,
+        )
+        assert (result.exit_code == EXIT_PERMISSION_DENIED) is blocked, result.output
+        assert getattr(mock, service_method).called is (not blocked)
+
+    def test_promote_checks_the_target_model(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.child_scope.return_value = "project"
+        mock.promote_model.return_value = {}
+        _invoke(
+            [
+                "--deny-destructive",
+                *_sl(
+                    "promote",
+                    "--from-project",
+                    "analytics",
+                    "--to-project",
+                    "prod",
+                    "--to-model",
+                    "tgt",
+                    "--yes",
+                ),
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        mock.child_scope.assert_called_once_with(alias="prod", model_name_or_uuid="tgt")
+
+    def test_build_of_a_new_model_needs_no_lookup(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.build_model.return_value = {}
+        result = _invoke(
+            ["--deny-destructive", *_sl("build", "--project", "prod", "--tables", "a.b.c")],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        mock.child_scope.assert_not_called()
+
+    def test_no_model_lookup_without_a_permission_policy(
+        self, store: ConfigStore, tmp_path: Path
+    ) -> None:
+        snapshot = tmp_path / "snapshot.json"
+        snapshot.write_text("{}", encoding="utf-8")
+        mock = MagicMock()
+        mock.import_snapshot.return_value = {}
+        result = _invoke(
+            _sl("import", "--project", "prod", "--file", str(snapshot)), store=store, sl_mock=mock
+        )
+        assert result.exit_code == 0, result.output
+        mock.child_scope.assert_not_called()
+
+
+class TestCopyCommandsScopeOption:
+    def _snapshot(self, tmp_path: Path) -> str:
+        snapshot = tmp_path / "snapshot.json"
+        snapshot.write_text("{}", encoding="utf-8")
+        return str(snapshot)
+
+    def test_explicit_project_scope_is_not_gated_and_needs_no_lookup(
+        self, store: ConfigStore, tmp_path: Path
+    ) -> None:
+        mock = MagicMock()
+        mock.child_scope.return_value = "organization"
+        mock.import_snapshot.return_value = {}
+        result = _invoke(
+            [
+                "--deny-destructive",
+                *_sl(
+                    "import", "--project", "prod", "--file", self._snapshot(tmp_path),
+                    "--scope", "project",
+                ),
+            ],
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 0, result.output
+        mock.child_scope.assert_not_called()
+        assert mock.import_snapshot.call_args.kwargs["scope"] == "project"
+
+    @pytest.mark.parametrize("command", ["import", "promote"])
+    def test_explicit_organization_scope_is_gated(
+        self, store: ConfigStore, tmp_path: Path, command: str
+    ) -> None:
+        args = (
+            ["import", "--project", "prod", "--file", self._snapshot(tmp_path)]
+            if command == "import"
+            else ["promote", "--from-project", "analytics", "--to-project", "prod", "--yes"]
+        )
+        mock = MagicMock()
+        result = _invoke(
+            ["--deny-destructive", *_sl(*args, "--scope", "organization")],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == EXIT_PERMISSION_DENIED, result.output
+
+    def test_target_project_without_targeted_scope_is_a_usage_error(
+        self, store: ConfigStore, tmp_path: Path
+    ) -> None:
+        mock = MagicMock()
+        result = _invoke(
+            _sl(
+                "import", "--project", "prod", "--file", self._snapshot(tmp_path),
+                "--target-project", "analytics",
+            ),
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 2, result.output
+        mock.import_snapshot.assert_not_called()
+
+    def test_promote_passes_targeted_scope_and_targets(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.promote_model.return_value = {}
+        result = _invoke(
+            _sl(
+                "promote", "--from-project", "analytics", "--to-project", "prod", "--yes",
+                "--scope", "targeted", "--target-project", "analytics",
+            ),
+            store=store,
+            sl_mock=mock,
+        )  # fmt: skip
+        assert result.exit_code == 0, result.output
+        kwargs = mock.promote_model.call_args.kwargs
+        assert (kwargs["scope"], kwargs["target_projects"]) == ("targeted", ["analytics"])

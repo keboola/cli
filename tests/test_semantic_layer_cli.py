@@ -704,11 +704,24 @@ class TestAddGlossary:
                 "prod",
                 "--term",
                 "GMV",
+                "--definition",
+                "Gross merchandise value",
             ],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0
+
+    def test_definition_is_required(self, store: ConfigStore) -> None:
+        """Every semantic-glossary schema requires `definition`; without it the metastore 422s."""
+        mock = MagicMock()
+        result = _invoke(
+            ["--json", "semantic-layer", "add", "glossary", "--project", "prod", "--term", "GMV"],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 2
+        mock.add_glossary.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
