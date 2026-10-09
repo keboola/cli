@@ -259,6 +259,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.tables": "read",
     "storage.table-detail": "read",
     "storage.download-table": "read",
+    "storage.job-detail": "read",
     # Storage write
     "storage.create-bucket": "write",
     "storage.create-table": "write",

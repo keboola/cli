@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**255 operations** across **220 paths** and **31 routers**.
+**256 operations** across **221 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -166,7 +166,7 @@ Encrypt secret values for a specific project + component using the Keboola encry
 
 ## Data
 
-### `storage` (32 operations)
+### `storage` (33 operations)
 
 Buckets, tables, columns, files. Create, upload, download, describe, swap, delete. Mirrors `kbagent storage *`.
 
@@ -204,6 +204,7 @@ Buckets, tables, columns, files. Create, upload, download, describe, swap, delet
 | `DELETE` | `/storage/files/{project}` | Delete files |
 | `POST` | `/storage/files/{project}/{file_id}/tag` | Add or remove file tags |
 | `POST` | `/storage/files/{project}/load-to-table` | Load a file into a table |
+| `GET` | `/storage/jobs/{project}/{job_id}` | Storage job detail |
 
 ### `stream` (4 operations)
 

@@ -490,6 +490,13 @@ class TestFullE2E:
         self._test_load_file(table_id)
 
         _step(
+            15.05,
+            "storage upload-table --no-wait + job-detail --wait",
+            "queue an import without waiting, then follow the job (issue #834)",
+        )
+        self._test_upload_no_wait_and_job_detail(bucket_id)
+
+        _step(
             "15.1",
             "storage create-table --source-table-id + swap-tables",
             "BigQuery repartition workflow (backend-aware)",
@@ -1450,6 +1457,52 @@ class TestFullE2E:
             assert len(raw) > 8, f"slice {path.name} is suspiciously small"
             assert raw[:4] == b"PAR1", f"slice {path.name} is missing PAR1 header"
             assert raw[-4:] == b"PAR1", f"slice {path.name} is missing PAR1 footer"
+
+    def _test_upload_no_wait_and_job_detail(self, bucket_id: str) -> None:
+        """upload-table --no-wait returns a job id; job-detail --wait follows it.
+
+        Uses its own auto-created table, so the row counts the main table's
+        later steps assert stay untouched.
+        """
+        table_id = f"{bucket_id}.nowait_import"
+        nowait_dir = self.data_dir / "nowait"
+        nowait_dir.mkdir(exist_ok=True)
+        csv_path = _create_test_csv(nowait_dir, rows=4)
+        queued = self._run_ok(
+            "storage",
+            "upload-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--file",
+            str(csv_path),
+            "--no-wait",
+        )["data"]
+        assert queued["file_id"], queued
+        assert queued["job_id"], queued
+        assert queued["job_status"] in ("waiting", "processing", "success"), queued
+
+        job = self._run_ok(
+            "storage",
+            "job-detail",
+            "--project",
+            self.alias,
+            "--job-id",
+            str(queued["job_id"]),
+            "--wait",
+            "--timeout",
+            "300",
+        )["data"]
+        assert job["status"] == "success", job
+        assert job["job_id"] == queued["job_id"]
+        assert job["table_id"] == table_id
+        assert job["file_id"] == queued["file_id"]
+        assert job["imported_rows"] == 4, job
+
+        self._run_ok(
+            "storage", "delete-table", "--project", self.alias, "--table-id", table_id, "--yes"
+        )
 
     def _test_load_file(self, table_id: str) -> None:
         """Upload a CSV as a file, then load it into a table via load-file."""

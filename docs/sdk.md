@@ -172,6 +172,18 @@ res = kbc.upload_table("in.c-crm.customers", "customers.csv", incremental=True)
 print(res.imported_rows, res.warnings)
 ```
 
+The import is an async Storage job. `wait=False` returns as soon as it is queued (the upload of the file itself is always awaited) with `job_id` / `job_status` set and `imported_rows=None`; `timeout=` sets the wait budget (default 600 s). The result always carries `file_id` -- the Storage file the CSV was uploaded as. A wait that runs out raises `KeboolaApiError` `STORAGE_JOB_TIMEOUT` with `retryable=False` and `details={"job_id", "file_id"}`: the import keeps running server-side, so follow it instead of uploading again (an incremental re-upload duplicates rows). Any failure after the upload carries `details["file_id"]`.
+
+```python
+res = kbc.upload_table("in.c-big.events", "events.csv.gz", incremental=True, wait=False)
+job = kbc.storage_job(res.job_id, wait=True, timeout=3600)
+print(job.status, job.imported_rows, job.error)
+```
+
+### `storage_job(job_id, *, wait=False, timeout=None) -> StorageJobResult`
+
+Reads one Storage job (`GET /v2/storage/jobs/{id}`; one call without `wait`). Job IDs are project-wide, so no branch applies. With `wait=True` it polls until the job is terminal (default budget 600 s, `STORAGE_JOB_TIMEOUT` when it runs out -- calling again is safe). A job that ended in `error` is **returned**, not raised: check `job.failed` and `job.error`.
+
 ### Device-enrollment primitives (`0.66.0+`)
 
 Seven methods for the "provision an OTLP ingest endpoint, then mint a narrowly-scoped Storage token a device can hold" flow. They live on the facade and delegate straight to `KeboolaClient`; the token/stream ones return the typed models in [§5](#5-typed-result-models).
@@ -239,7 +251,7 @@ Escape hatch for endpoints the facade omits. See [§7](#7-clientraw-the-escape-h
 
 ## 5. Typed result models
 
-`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`, and `TokenListEntryResult` from `0.86.0+`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
+`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`, `TokenListEntryResult` from `0.86.0+`, and `StorageJobResult` from `0.98.0+`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
 
 Two design rules every model follows (`_ApiResultModel` base):
 
@@ -259,6 +271,8 @@ The two device-enrollment models (`0.66.0+`) commit these named fields:
 
 - **`ScopedTokenResult`** — `id`, `token` (the one-time secret, see the gotcha in §4), `description`, `expires` (`str | None`), `can_read_all_file_uploads` (alias `canReadAllFileUploads`).
 - **`StreamSourceResult`** — `id`, `source_id`, `name`, `type`, `description`, `branch_id` (default `"default"`), `otlp_url` (ingest URL, secret in the path — unmasked), `otlp_secret`, `base_endpoint`, `sink_bucket_id` (`str | None`; the `in.c-otlp-<id>` bucket to grant a device token write on).
+
+`UploadTableResult` also commits (`0.98.0+`) `file_id`, `job_id` (`int | None`) and `job_status` (`str | None`). `StorageJobResult` (`0.98.0+`) commits `job_id` (alias `id`), `status`, `operation_name` (alias `operationName`), `table_id` (alias `tableId`), `file_id`, `created_time` / `start_time` / `end_time` (aliases `createdTime` / `startTime` / `endTime`), `imported_rows`, `warnings`, `results`, `error`, plus the properties `finished` and `failed`.
 
 `TokenListEntryResult` (`0.86.0+`) commits `id`, `description`, `created` (`str | None`), `expires` (`str | None`), `is_expired` (alias `isExpired`), `is_master_token` (alias `isMasterToken`), and (`0.88.0+`) `last_used` (alias `lastUsed`), `last_used_event` (alias `lastUsedEvent`) and `last_used_status` (alias `lastUsedStatus`) — all three `str | None`, `None` unless `list_tokens(with_last_used=True)` was used. It has **no secret field by design** — see `list_tokens` above.
 
@@ -364,6 +378,7 @@ The importable surface is a **committed contract**, so changing it is a delibera
 | `query` returns only the **last** result set | multi-statement SQL | split, or put the SELECT last |
 | `run_job` ignores **linked variable values** | the facade is not config-aware | pass `variable_values_id` explicitly |
 | `upload_table` **won't create** the table | no service/config context | create it first, or use the CLI |
+| `upload_table` timeout does **not** stop the import | the Storage job runs server-side | follow `details["job_id"]` with `storage_job(..., wait=True)`; never re-upload incrementally |
 | `idempotency_key` raises without a store | stateless facade has no config-dir | pass `idempotency_store=` |
 | `read_bytes` loads the **whole file** into RAM | convenience over streaming | stream via `Client.raw` for huge tables |
 | `branch_id=None` means **production** | default scope | pass a `branch_id` to target a dev branch |

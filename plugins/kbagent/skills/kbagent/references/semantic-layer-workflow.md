@@ -255,7 +255,7 @@ updated independently (an in-place PUT, no rollback needed).
 If the metric rename succeeds but M of N dependent constraints fail
 to repoint, the envelope sets `partial_state: true` at the top level
 and a `recovery_hint` string. Human-mode CLI prints a bright red
-`PARTIAL STATE` banner, and *(since vNEXT)* the command exits 1. Use the
+`PARTIAL STATE` banner, and *(since 0.98.0)* the command exits 1. Use the
 recovery recipe:
 
 ```bash

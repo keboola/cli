@@ -16,6 +16,7 @@ import time  # noqa: F401  -- re-exported: tests patch keboola_agent_cli.client.
 
 from ..constants import QUERY_RESULTS_PAGE_SIZE
 from ._client import KeboolaClient
+from ._core import storage_job_error_message
 from ._transfer import (
     InlineQueryResult,
     _assert_safe_download_url,
@@ -27,11 +28,13 @@ from ._transfer import (
     _iter_poll_intervals,
     _unwrap_bigquery_error,
 )
+from .storage_tables import TableUploadOutcome
 
 __all__ = [
     "QUERY_RESULTS_PAGE_SIZE",
     "InlineQueryResult",
     "KeboolaClient",
+    "TableUploadOutcome",
     "_CloudDownloader",
     "_assert_safe_download_url",
     "_build_abs_upload_url",
@@ -40,4 +43,5 @@ __all__ = [
     "_extract_query_job_error",
     "_iter_poll_intervals",
     "_unwrap_bigquery_error",
+    "storage_job_error_message",
 ]

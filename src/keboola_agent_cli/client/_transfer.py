@@ -9,7 +9,7 @@ the public library facade.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +28,8 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 
 if TYPE_CHECKING:
+    import datetime
+
     from ._client import KeboolaClient
 
 
@@ -373,6 +375,72 @@ class _IterBytesReader:
         return out
 
 
+# ``(bytes_done, total_bytes)`` -- total is None when it is not known up front.
+DownloadProgress = Callable[[int, int | None], None]
+
+
+def _iter_counted(
+    response: httpx.Response, on_bytes: Callable[[int], None] | None
+) -> Iterator[bytes]:
+    """Yield the body in chunks, reporting the NETWORK bytes read so far.
+
+    ``num_bytes_downloaded`` counts the raw (possibly content-encoded) bytes,
+    so the count matches ``Content-Length`` and the stored ``sizeBytes``
+    rather than the decompressed size written to disk. The extra report after
+    the loop covers a trailing raw chunk that decoded to no output.
+    """
+    for chunk in response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE):
+        if on_bytes is not None:
+            on_bytes(response.num_bytes_downloaded)
+        yield chunk
+    if on_bytes is not None:
+        on_bytes(response.num_bytes_downloaded)
+
+
+def _write_response_body(
+    response: httpx.Response,
+    dest: Path,
+    decompress_gzip: bool,
+    on_bytes: Callable[[int], None] | None = None,
+) -> None:
+    """Stream ``response`` into ``dest`` in bounded memory, gunzipping if asked."""
+    import gzip
+    import shutil
+
+    source: Any = _IterBytesReader(_iter_counted(response, on_bytes))
+    if decompress_gzip:
+        source = gzip.GzipFile(fileobj=source, mode="rb")
+    with dest.open("wb") as fh:
+        shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+
+
+def _manifest_total_bytes(entries: list[dict[str, Any]]) -> int | None:
+    """Sum of the slices' ``meta.content_length``; None unless every entry has one."""
+    sizes = [(entry.get("meta") or {}).get("content_length") for entry in entries]
+    if not sizes or not all(isinstance(size, int) and size >= 0 for size in sizes):
+        return None
+    return sum(sizes)
+
+
+class _SliceProgress:
+    """Fold per-slice network byte counts into one running total across slices."""
+
+    def __init__(self, on_progress: DownloadProgress, total: int | None) -> None:
+        self._on_progress = on_progress
+        self._total = total
+        self._before = 0
+        self._current = 0
+        on_progress(0, total)
+
+    def __call__(self, slice_bytes: int) -> None:
+        self._current = slice_bytes
+        self._on_progress(self._before + slice_bytes, self._total)
+
+    def next_slice(self) -> None:
+        self._before += self._current
+        self._current = 0
+
+
 class _CloudDownloader:
     """Abstraction for downloading from cloud storage using Keboola file credentials.
 
@@ -521,7 +589,13 @@ class _CloudDownloader:
         auth_result = self._auth_fn(url)
         return {k: v for k, v in auth_result.items() if not k.startswith("_")}
 
-    def stream_to_file(self, url: str, dest: "Path | str", decompress_gzip: bool) -> int:
+    def stream_to_file(
+        self,
+        url: str,
+        dest: "Path | str",
+        decompress_gzip: bool,
+        on_bytes: Callable[[int], None] | None = None,
+    ) -> int:
         """Stream a cloud URL directly to a local file in bounded-memory chunks.
 
         Used for slice downloads where the payload can be hundreds of MB per
@@ -534,13 +608,11 @@ class _CloudDownloader:
             decompress_gzip: If True, wrap the response stream in gzip.GzipFile
                 so the decompressed bytes are what lands on disk. Streaming
                 gzip keeps both compressed and decompressed state bounded.
+            on_bytes: Called with the network bytes of THIS request read so far.
 
         Returns:
             Number of bytes written to ``dest`` (post-decompression if applicable).
         """
-        import gzip
-        import shutil
-
         _assert_safe_download_url(url)
         headers = self._request_headers(url)
         dest_path = Path(dest)
@@ -549,13 +621,41 @@ class _CloudDownloader:
             http.stream("GET", url, headers=headers) as response,
         ):
             response.raise_for_status()
-            source: Any = _IterBytesReader(response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE))
-            if decompress_gzip:
-                source = gzip.GzipFile(fileobj=source, mode="rb")
-            with dest_path.open("wb") as fh:
-                shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+            _write_response_body(response, dest_path, decompress_gzip, on_bytes)
 
         return dest_path.stat().st_size
+
+
+# Headers the signer itself owns. A caller-supplied extra header with one of
+# these names would desynchronize the signature from what is sent, so it is
+# rejected instead of silently overriding.
+_S3_SIGNER_OWNED_HEADERS = frozenset(
+    {"authorization", "host", "x-amz-date", "x-amz-content-sha256", "x-amz-security-token"}
+)
+
+
+def _s3_uri_encode(value: str) -> str:
+    """URI-encode one SigV4 component: RFC 3986 unreserved chars stay, ``~`` too."""
+    return quote(value, safe="-_.~")
+
+
+def _s3_canonical_query(query: str) -> str:
+    """Build the SigV4 canonical query string from a raw URL query.
+
+    Each ``name[=value]`` pair is decoded once and re-encoded once (so an
+    already-encoded value is not double-encoded and ``+`` stays a literal
+    plus, never a space), a valueless name canonicalizes as ``name=`` (S3's
+    ``?uploads``), and pairs are sorted by encoded name, then encoded value.
+    """
+    from urllib.parse import unquote
+
+    pairs: list[tuple[str, str]] = []
+    for item in query.split("&"):
+        if not item:
+            continue
+        name, _, value = item.partition("=")
+        pairs.append((_s3_uri_encode(unquote(name)), _s3_uri_encode(unquote(value))))
+    return "&".join(f"{name}={value}" for name, value in sorted(pairs))
 
 
 def _s3_signed_headers(
@@ -564,18 +664,40 @@ def _s3_signed_headers(
     region: str,
     method: str = "GET",
     payload: bytes = b"",
+    *,
+    extra_headers: dict[str, str] | None = None,
+    payload_hash: str | None = None,
+    sign_payload_hash: bool = False,
+    now: "datetime.datetime | None" = None,
 ) -> dict[str, str]:
     """Generate AWS SigV4 signed headers for an S3 request.
 
     Implements minimal AWS Signature Version 4 signing using only stdlib
     (hmac, hashlib, urllib.parse). No boto3/botocore dependency required.
 
+    The GET download callers use the positional form and get exactly the
+    signature they always got (``host;x-amz-date[;x-amz-security-token]``).
+    The upload paths (single PUT, multipart) pass the keyword options.
+
     Args:
-        url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key).
+        url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key). The
+            path must already be URI-encoded the way the request will send it
+            (``quote(key, safe="/~")``) -- the signer decodes and re-encodes it
+            once, so signing and the wire request see the identical target.
         creds: Dict with AccessKeyId, SecretAccessKey, SessionToken.
         region: AWS region (e.g. "us-east-1").
-        method: HTTP method (GET or PUT).
+        method: HTTP method (GET, PUT, POST, DELETE, HEAD).
         payload: Request body bytes (empty for GET).
+        extra_headers: Additional headers to sign AND send (e.g. ``x-amz-acl``).
+            Names are lowercased, values trimmed; they are returned in the
+            result dict. A name the signer owns (``authorization``,
+            ``x-amz-date``, ...) raises ``ValueError``.
+        payload_hash: Precomputed hex SHA-256 of the body (skips hashing
+            ``payload``); used when the body is hashed elsewhere.
+        sign_payload_hash: Also sign ``x-amz-content-sha256`` -- the AWS
+            documented form. Off by default to keep the download signature
+            byte-identical; every x-amz-* header an upload sends is signed.
+        now: Signing time override (tests / known-answer vectors).
 
     Returns:
         Dict of headers to include in the request.
@@ -591,10 +713,15 @@ def _s3_signed_headers(
 
     parsed = urlparse(url)
     host = parsed.hostname or ""
+    # httpx omits a default port from the Host header; sign what it sends.
+    default_port = {"https": 443, "http": 80}.get(parsed.scheme)
+    if parsed.port and parsed.port != default_port:
+        host = f"{host}:{parsed.port}"
     path = parsed.path or "/"
     query = parsed.query or ""
 
-    now = datetime.datetime.now(datetime.UTC)
+    if now is None:
+        now = datetime.datetime.now(datetime.UTC)
     date_stamp = now.strftime("%Y%m%d")
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
 
@@ -603,20 +730,26 @@ def _s3_signed_headers(
 
     # Canonical request
     canonical_uri = quote(unquote(path), safe="/~")
-    if query:
-        params_list = sorted(query.split("&"))
-        canonical_querystring = "&".join(params_list)
-    else:
-        canonical_querystring = ""
+    canonical_querystring = _s3_canonical_query(query)
 
-    headers_to_sign: dict[str, str] = {"host": host, "x-amz-date": amz_date}
+    if payload_hash is None:
+        payload_hash = hashlib.sha256(payload).hexdigest()
+
+    extra: dict[str, str] = {}
+    for name, value in (extra_headers or {}).items():
+        lowered = name.strip().lower()
+        if lowered in _S3_SIGNER_OWNED_HEADERS:
+            raise ValueError(f"extra_headers may not set signer-owned header {lowered!r}")
+        extra[lowered] = " ".join(str(value).split())
+
+    headers_to_sign: dict[str, str] = {"host": host, "x-amz-date": amz_date, **extra}
     if session_token:
         headers_to_sign["x-amz-security-token"] = session_token
+    if sign_payload_hash:
+        headers_to_sign["x-amz-content-sha256"] = payload_hash
 
     signed_headers = ";".join(sorted(headers_to_sign.keys()))
     canonical_headers = "".join(f"{k}:{v}\n" for k, v in sorted(headers_to_sign.items()))
-
-    payload_hash = hashlib.sha256(payload).hexdigest()
 
     canonical_request = f"{method}\n{canonical_uri}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
@@ -650,6 +783,7 @@ def _s3_signed_headers(
         "Authorization": authorization,
         "x-amz-date": amz_date,
         "x-amz-content-sha256": payload_hash,
+        **extra,
     }
     if session_token:
         result["x-amz-security-token"] = session_token
