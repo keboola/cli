@@ -400,6 +400,8 @@ class TestLoadFileToTableService:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.import_table_async.return_value = {
+            "id": 4242,
+            "status": "success",
             "results": {"importedRowsCount": 100, "warnings": []},
         }
         service = _make_service(store, mock_client)
@@ -409,6 +411,8 @@ class TestLoadFileToTableService:
         assert result["imported_rows"] == 100
         assert result["file_id"] == 12345
         assert result["table_id"] == "in.c-data.users"
+        assert result["job_id"] == 4242
+        assert result["job_status"] == "success"
         mock_client.import_table_async.assert_called_once_with(
             table_id="in.c-data.users",
             file_id=12345,
@@ -416,6 +420,8 @@ class TestLoadFileToTableService:
             delimiter=",",
             enclosure='"',
             branch_id=None,
+            wait=True,
+            max_wait=None,
         )
 
     def test_load_incremental(self, tmp_path: Path) -> None:

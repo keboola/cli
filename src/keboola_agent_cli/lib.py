@@ -57,6 +57,7 @@ from .result_models import (
     JobResult,
     QueryResult,
     ScopedTokenResult,
+    StorageJobResult,
     StreamSourceResult,
     TokenListEntryResult,
     UploadTableResult,
@@ -501,6 +502,8 @@ class Client:
         delimiter: str = ",",
         enclosure: str = '"',
         branch_id: int | None = None,
+        wait: bool = True,
+        timeout: float | None = None,
     ) -> UploadTableResult:
         """Import a CSV into an **existing** Storage table -> :class:`UploadTableResult`.
 
@@ -511,28 +514,84 @@ class Client:
 
         Args:
             table_id: Target table ID (must exist).
-            file_path: Local CSV path.
+            file_path: Local CSV (or gzipped CSV) path.
             incremental: Append rows (True) or full load (False).
             delimiter: CSV column delimiter.
             enclosure: CSV value enclosure character.
             branch_id: Dev branch to target. Defaults to the client's branch
                 (``None`` = production).
+            wait: If False, return once the import job is queued (the upload
+                itself is always awaited); ``imported_rows`` is then None and
+                :meth:`storage_job` follows the job by ``job_id``.
+            timeout: Import wait budget in seconds (``None`` = 600).
+
+        Raises:
+            KeboolaApiError: On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
+                retryable -- the import keeps running; ``details`` carries
+                ``job_id`` and ``file_id``. Any failure after the upload
+                carries ``details["file_id"]``.
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
         file_size_bytes = Path(file_path).stat().st_size
-        results = self._client.upload_table(
+        outcome = self._client.upload_table(
             table_id=table_id,
             file_path=str(file_path),
             incremental=incremental,
             delimiter=delimiter,
             enclosure=enclosure,
             branch_id=effective_branch,
+            wait=wait,
+            max_wait=timeout,
         )
+        job = outcome.job
+        results = job.get("results") if job.get("status") == "success" else None
+        results = results if isinstance(results, dict) else {}
         return UploadTableResult.model_validate(
             {
                 "table_id": table_id,
                 "incremental": incremental,
                 "file_size_bytes": file_size_bytes,
+                "imported_rows": results.get("importedRowsCount"),
+                "warnings": results.get("warnings", []),
+                "file_id": outcome.file_id,
+                "job_id": job.get("id"),
+                "job_status": job.get("status"),
+            }
+        )
+
+    def storage_job(
+        self,
+        job_id: int,
+        *,
+        wait: bool = False,
+        timeout: float | None = None,
+    ) -> StorageJobResult:
+        """Fetch one Storage job (e.g. an import) -> :class:`StorageJobResult`.
+
+        Job IDs are project-wide, so no branch applies. A job that ended in
+        ``error`` is returned, not raised -- check ``result.failed``.
+
+        Args:
+            job_id: Storage job ID (e.g. ``upload_table(..., wait=False).job_id``).
+            wait: Poll until the job is terminal.
+            timeout: Wait budget in seconds (``None`` = 600).
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` when ``wait`` runs out
+                (the job keeps running; calling again is safe).
+        """
+        if wait:
+            job = self._client.follow_storage_job(job_id, max_wait=timeout)
+        else:
+            job = self._client.get_storage_job(job_id)
+        params = job.get("operationParams")
+        source = params.get("source") if isinstance(params, dict) else None
+        results = job.get("results")
+        results = results if isinstance(results, dict) else {}
+        return StorageJobResult.model_validate(
+            {
+                **job,
+                "file_id": source.get("fileId") if isinstance(source, dict) else None,
                 "imported_rows": results.get("importedRowsCount"),
                 "warnings": results.get("warnings", []),
             }

@@ -28,6 +28,8 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 
 if TYPE_CHECKING:
+    import datetime
+
     from ._client import KeboolaClient
 
 
@@ -558,24 +560,78 @@ class _CloudDownloader:
         return dest_path.stat().st_size
 
 
+# Headers the signer itself owns. A caller-supplied extra header with one of
+# these names would desynchronize the signature from what is sent, so it is
+# rejected instead of silently overriding.
+_S3_SIGNER_OWNED_HEADERS = frozenset(
+    {"authorization", "host", "x-amz-date", "x-amz-content-sha256", "x-amz-security-token"}
+)
+
+
+def _s3_uri_encode(value: str) -> str:
+    """URI-encode one SigV4 component: RFC 3986 unreserved chars stay, ``~`` too."""
+    return quote(value, safe="-_.~")
+
+
+def _s3_canonical_query(query: str) -> str:
+    """Build the SigV4 canonical query string from a raw URL query.
+
+    Each ``name[=value]`` pair is decoded once and re-encoded once (so an
+    already-encoded value is not double-encoded and ``+`` stays a literal
+    plus, never a space), a valueless name canonicalizes as ``name=`` (S3's
+    ``?uploads``), and pairs are sorted by encoded name, then encoded value.
+    """
+    from urllib.parse import unquote
+
+    pairs: list[tuple[str, str]] = []
+    for item in query.split("&"):
+        if not item:
+            continue
+        name, _, value = item.partition("=")
+        pairs.append((_s3_uri_encode(unquote(name)), _s3_uri_encode(unquote(value))))
+    return "&".join(f"{name}={value}" for name, value in sorted(pairs))
+
+
 def _s3_signed_headers(
     url: str,
     creds: dict[str, str],
     region: str,
     method: str = "GET",
     payload: bytes = b"",
+    *,
+    extra_headers: dict[str, str] | None = None,
+    payload_hash: str | None = None,
+    sign_payload_hash: bool = False,
+    now: "datetime.datetime | None" = None,
 ) -> dict[str, str]:
     """Generate AWS SigV4 signed headers for an S3 request.
 
     Implements minimal AWS Signature Version 4 signing using only stdlib
     (hmac, hashlib, urllib.parse). No boto3/botocore dependency required.
 
+    The GET download callers use the positional form and get exactly the
+    signature they always got (``host;x-amz-date[;x-amz-security-token]``).
+    The upload paths (single PUT, multipart) pass the keyword options.
+
     Args:
-        url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key).
+        url: Full S3 URL (https://bucket.s3.region.amazonaws.com/key). The
+            path must already be URI-encoded the way the request will send it
+            (``quote(key, safe="/~")``) -- the signer decodes and re-encodes it
+            once, so signing and the wire request see the identical target.
         creds: Dict with AccessKeyId, SecretAccessKey, SessionToken.
         region: AWS region (e.g. "us-east-1").
-        method: HTTP method (GET or PUT).
+        method: HTTP method (GET, PUT, POST, DELETE, HEAD).
         payload: Request body bytes (empty for GET).
+        extra_headers: Additional headers to sign AND send (e.g. ``x-amz-acl``).
+            Names are lowercased, values trimmed; they are returned in the
+            result dict. A name the signer owns (``authorization``,
+            ``x-amz-date``, ...) raises ``ValueError``.
+        payload_hash: Precomputed hex SHA-256 of the body (skips hashing
+            ``payload``); used when the body is hashed elsewhere.
+        sign_payload_hash: Also sign ``x-amz-content-sha256`` -- the AWS
+            documented form. Off by default to keep the download signature
+            byte-identical; every x-amz-* header an upload sends is signed.
+        now: Signing time override (tests / known-answer vectors).
 
     Returns:
         Dict of headers to include in the request.
@@ -591,10 +647,15 @@ def _s3_signed_headers(
 
     parsed = urlparse(url)
     host = parsed.hostname or ""
+    # httpx omits a default port from the Host header; sign what it sends.
+    default_port = {"https": 443, "http": 80}.get(parsed.scheme)
+    if parsed.port and parsed.port != default_port:
+        host = f"{host}:{parsed.port}"
     path = parsed.path or "/"
     query = parsed.query or ""
 
-    now = datetime.datetime.now(datetime.UTC)
+    if now is None:
+        now = datetime.datetime.now(datetime.UTC)
     date_stamp = now.strftime("%Y%m%d")
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
 
@@ -603,20 +664,26 @@ def _s3_signed_headers(
 
     # Canonical request
     canonical_uri = quote(unquote(path), safe="/~")
-    if query:
-        params_list = sorted(query.split("&"))
-        canonical_querystring = "&".join(params_list)
-    else:
-        canonical_querystring = ""
+    canonical_querystring = _s3_canonical_query(query)
 
-    headers_to_sign: dict[str, str] = {"host": host, "x-amz-date": amz_date}
+    if payload_hash is None:
+        payload_hash = hashlib.sha256(payload).hexdigest()
+
+    extra: dict[str, str] = {}
+    for name, value in (extra_headers or {}).items():
+        lowered = name.strip().lower()
+        if lowered in _S3_SIGNER_OWNED_HEADERS:
+            raise ValueError(f"extra_headers may not set signer-owned header {lowered!r}")
+        extra[lowered] = " ".join(str(value).split())
+
+    headers_to_sign: dict[str, str] = {"host": host, "x-amz-date": amz_date, **extra}
     if session_token:
         headers_to_sign["x-amz-security-token"] = session_token
+    if sign_payload_hash:
+        headers_to_sign["x-amz-content-sha256"] = payload_hash
 
     signed_headers = ";".join(sorted(headers_to_sign.keys()))
     canonical_headers = "".join(f"{k}:{v}\n" for k, v in sorted(headers_to_sign.items()))
-
-    payload_hash = hashlib.sha256(payload).hexdigest()
 
     canonical_request = f"{method}\n{canonical_uri}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
@@ -650,6 +717,7 @@ def _s3_signed_headers(
         "Authorization": authorization,
         "x-amz-date": amz_date,
         "x-amz-content-sha256": payload_hash,
+        **extra,
     }
     if session_token:
         result["x-amz-security-token"] = session_token

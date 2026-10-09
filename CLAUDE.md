@@ -627,7 +627,27 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
-kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]
+kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+# upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
+#   MULTIPART upload -- 64 MiB parts (auto-scaled so the file fits in 10,000 parts), 4 in parallel,
+#   per-part retry on 429/5xx/transport errors, peak memory ~4 x part size. Before, the whole file was
+#   read into RAM and sent as one PutObject (hard 5 GiB ceiling). Also covers the SDK
+#   Client.upload_table. Azure/GCP stacks unchanged (they already stream; chunked upload there is a
+#   follow-up in #834). Limits: S3 federation credentials last 12 h (200 GB needs ~5 MB/s sustained);
+#   the source file must not change during the upload (size/mtime checked); no resume across runs; an
+#   aborted multipart upload may leave orphaned parts (the token cannot abort). A .csv.gz is uploaded
+#   byte-for-byte and imported by Storage; auto-create reads its header through gzip. Human mode shows
+#   a progress bar on stderr. `serve`'s upload route streams the body to a temp file (needs temp disk
+#   of the file size) instead of holding it in memory.
+# upload-table / load-file async import (#834): --wait (default) waits --timeout SECONDS (default 600)
+#   for the Storage import job; --no-wait still waits for the cloud upload, then enqueues the import and
+#   returns file_id / job_id / job_status (imported_rows null while pending; keys are additive). A wait
+#   timeout is STORAGE_JOB_TIMEOUT, exit 4, retryable=false: the import KEEPS RUNNING server-side, the
+#   error names job_id + file_id and `storage job-detail --job-id ID --wait`. Never re-run the upload
+#   while that job is waiting/processing -- an incremental re-run duplicates rows. An enqueue failure
+#   after the upload carries file_id -> `storage load-file --file-id` instead of re-uploading.
+#   Workflow: plugins/kbagent/skills/kbagent/references/large-upload-workflow.md. Version gate for this
+#   entry lives in gotchas.md.
 kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
 kbagent storage add-column --project NAME --table-id ID --column COL:TYPE[(length)] [--not-null] [--default VALUE] [--branch ID]
 kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]
@@ -680,7 +700,13 @@ kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--o
 kbagent storage file-detail --project NAME --file-id ID
 kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
-kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
+kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+kbagent storage job-detail --project NAME --job-id ID [--wait] [--timeout SECONDS]
+# storage job-detail (#834): read-class; shows a Storage API job (status, operation_name, table_id,
+#   file_id, times, imported_rows, warnings, results, error). Exit 0 success/waiting/processing, exit 1
+#   STORAGE_JOB_FAILED when the job ended in error (details still returned), exit 4 on --wait timeout.
+#   Job ids are project-scoped, independent of the active branch (no --branch). Serve:
+#   GET /storage/jobs/{project}/{job_id}?wait=&timeout=. Version gate for this entry lives in gotchas.md.
 kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
 
 # stream: Data Streams (OpenTelemetry/OTLP). Storage token from config (no manage token).

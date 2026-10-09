@@ -2825,7 +2825,8 @@ class TestUploadTableClient:
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             result = client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
 
-        assert result.get("importedRowsCount") == 2
+        assert result.job["results"]["importedRowsCount"] == 2
+        assert result.file_id == 100
 
     def test_full_flow_gcp(self, httpx_mock, tmp_path) -> None:
         """upload_table orchestrates prepare -> GCP bearer PUT -> import-async -> poll."""
@@ -2875,7 +2876,8 @@ class TestUploadTableClient:
         with KeboolaClient(stack_url=_BASE, token=_TOKEN) as client:
             result = client.upload_table(table_id="in.c-b.users", file_path=str(csv_file))
 
-        assert result.get("importedRowsCount") == 1
+        assert result.job["results"]["importedRowsCount"] == 1
+        assert result.file_id == 200
 
     def test_cloud_upload_failure_raises(self, httpx_mock, tmp_path) -> None:
         """upload_table raises KeboolaApiError if cloud upload (signed URL PUT) returns error."""

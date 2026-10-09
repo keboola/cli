@@ -19,6 +19,12 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._storage_jobs import (
+    ImportTimeoutOption,
+    ImportWaitOption,
+    print_import_outcome,
+    upload_progress,
+)
 from ._storage_table_detail import (
     format_range_partitioning,
     format_time_partitioning,
@@ -764,12 +770,16 @@ def storage_upload_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    wait: ImportWaitOption = True,
+    timeout: ImportTimeoutOption = None,
 ) -> None:
-    """Upload a CSV file into a storage table.
+    """Upload a CSV (or gzipped CSV) file into a storage table.
 
     Auto-creates the bucket and table if they don't exist (columns inferred as
     STRING from the CSV header). Use --no-auto-create to require the table to
-    already exist.
+    already exist. The import runs as a Storage job: --no-wait returns once it
+    is queued, and a --timeout that runs out leaves it running server-side --
+    follow it with `storage job-detail --wait` rather than uploading again.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -788,16 +798,20 @@ def storage_upload_table(
         )
 
     try:
-        result = service.upload_table(
-            alias=project,
-            table_id=table_id,
-            file_path=file,
-            incremental=incremental,
-            delimiter=delimiter,
-            enclosure=enclosure,
-            auto_create=auto_create,
-            branch_id=effective_branch,
-        )
+        with upload_progress(formatter, p.stat().st_size) as on_progress:
+            result = service.upload_table(
+                alias=project,
+                table_id=table_id,
+                file_path=file,
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                auto_create=auto_create,
+                branch_id=effective_branch,
+                wait=wait,
+                timeout=timeout,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -805,7 +819,12 @@ def storage_upload_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -819,15 +838,12 @@ def storage_upload_table(
             formatter.console.print(f"[dim]Created table: {result['table_id']}[/dim]")
         load_type = "incremental" if result["incremental"] else "full"
         size_mb = result.get("file_size_bytes", 0) / (1024 * 1024)
+        file_note = f", Storage file {result['file_id']}" if result.get("file_id") else ""
         formatter.console.print(
             f"[bold green]Uploaded:[/bold green] {result['table_id']} "
-            f"({load_type} load, {size_mb:.2f} MB)"
+            f"({load_type} load, {size_mb:.2f} MB{file_note})"
         )
-        if result["imported_rows"] is not None:
-            formatter.console.print(f"  Rows imported: {result['imported_rows']}")
-        if result["warnings"]:
-            for w in result["warnings"]:
-                formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
+        print_import_outcome(formatter, project, result)
 
 
 @storage_app.command("download-table", rich_help_panel=_TABLES)
@@ -2139,11 +2155,14 @@ def storage_load_file(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    wait: ImportWaitOption = True,
+    timeout: ImportTimeoutOption = None,
 ) -> None:
     """Load a Storage File into a table.
 
-    Imports an already-uploaded file (from file-upload or component output)
-    into a storage table. Use --incremental to append rows.
+    Imports an already-uploaded file (from file-upload, component output, or
+    an upload-table whose import failed) into a storage table. Use
+    --incremental to append rows, --no-wait to return once the import is queued.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -2164,12 +2183,22 @@ def storage_load_file(
             delimiter=delimiter,
             enclosure=enclosure,
             branch_id=effective_branch,
+            wait=wait,
+            timeout=timeout,
         )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -2180,10 +2209,7 @@ def storage_load_file(
             f"[bold green]Loaded:[/bold green] file {result['file_id']} -> "
             f"{result['table_id']} ({load_type} load)"
         )
-        if result["imported_rows"] is not None:
-            formatter.console.print(f"  Rows imported: {result['imported_rows']}")
-        for w in result.get("warnings", []):
-            formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
+        print_import_outcome(formatter, project, result)
 
 
 @storage_app.command("unload-table", rich_help_panel=_FILES)
@@ -2329,3 +2355,9 @@ _register_snapshot_commands(storage_app)
 from ._storage_describe import register as _register_describe_commands  # noqa: E402
 
 _register_describe_commands(storage_app)
+
+
+# `job-detail` (issue #834) lives in a private module for the same reason.
+from ._storage_jobs import register as _register_job_commands  # noqa: E402
+
+_register_job_commands(storage_app)

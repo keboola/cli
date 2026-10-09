@@ -5955,3 +5955,71 @@ Not failures (exit 0, as before):
 
 On 0.97.0 and older, exit 0 from these commands does not prove success. Parse
 `--json` and check the keys above before you report the operation as done.
+
+## Uploads above 64 MiB on AWS are multipart -- the 5 GiB ceiling is gone
+
+*(since vNEXT, #834)* On an AWS stack (S3 file storage), `storage upload-table`,
+`storage file-upload` and the SDK `Client.upload_table` used to read the whole
+file into memory and send it as ONE `PutObject`. That capped every upload at
+5 GiB (the S3 single-PUT limit) and needed RAM the size of the file.
+
+Now a file above 64 MiB goes up as an S3 **multipart** upload:
+
+- 64 MiB parts, auto-scaled up so the file fits in S3's 10,000-part limit;
+  4 parts in flight; each part is retried on 429 / 5xx / transport errors.
+- Peak memory is about 4 x part size (~256 MiB), whatever the file size.
+- Human mode shows a progress bar on stderr; `--json` output is unaffected.
+
+What did NOT change, and the limits that remain:
+
+- **Azure and GCP stacks are unchanged.** They already streamed the file; a
+  chunked upload there is a follow-up in #834. Do not quote the AWS numbers
+  for them.
+- **The S3 credentials last 12 hours.** The federation token Storage hands out
+  for the upload expires after 12 h, so the whole upload must finish inside
+  that window: a 200 GB file needs about 5 MB/s sustained. Gzip the file first
+  when the link is slow (a `.csv.gz` is uploaded byte-for-byte and Storage
+  imports it).
+- **The source file must not change during the upload.** Size and mtime are
+  checked; a file that grows or is rewritten mid-upload fails the upload.
+- **No resume.** A failed upload starts again from the first byte on the next
+  run. An aborted multipart upload may leave orphaned parts behind -- the
+  Storage token has no permission to abort them.
+- **`kbagent serve`'s upload route** no longer holds the uploaded body in
+  memory, but it streams it to a temp file -- the serve host needs free temp
+  disk of the file's size.
+
+## `upload-table` / `load-file --no-wait` and `storage job-detail`: never re-run an upload whose import is still running
+
+*(since vNEXT, #834)* A table upload is two phases: the cloud upload, then an
+asynchronous Storage **import job**. For a big file the import can outlast any
+reasonable wait. Both `storage upload-table` and `storage load-file` now take
+`--wait/--no-wait` (default wait) and `--timeout SECONDS` (import wait budget,
+default 600).
+
+- `--no-wait` still waits for the cloud upload, then enqueues the import and
+  returns immediately. The result gains `file_id`, `job_id` and `job_status`
+  (additive keys; `imported_rows` is `null` while the job is pending). Human
+  mode prints the job id and the follow-up command.
+- Follow the job with the new read-only command
+  `kbagent storage job-detail --project P --job-id ID [--wait] [--timeout N]`.
+  Exit 0 while `waiting` / `processing` and on `success`; exit 1
+  `STORAGE_JOB_FAILED` when the job ended in `error` (the details are still in
+  the output); exit 4 when `--wait` times out. Job ids are project-scoped, so
+  the command takes no `--branch` and ignores the active branch.
+- **A wait timeout is no longer retryable.** For these imports
+  `STORAGE_JOB_TIMEOUT` still exits **4**, but now carries
+  `retryable: false`, says the import KEEPS RUNNING server-side, and names the
+  `job_id`, the `file_id` and the `storage job-detail ... --wait` command. A
+  caller that blindly retries on exit 4 must special-case this code: re-running
+  the upload while the first import is `waiting` / `processing` imports the data
+  twice. With `--incremental` that duplicates every row; a full load runs a
+  second, redundant import of the whole file.
+- **Recover without re-uploading.** If the import fails (or enqueueing it
+  fails after the upload -- that error carries `file_id`), import the
+  already-uploaded file with `storage load-file --file-id ID --table-id T`.
+  The uploaded file is a regular Storage File and expires after 15 days.
+
+On older versions there is no `--no-wait`, no `storage job-detail`, and a timed
+out import was reported as retryable -- check `kbagent version` before relying
+on any of this. See `large-upload-workflow.md` for the full procedure.

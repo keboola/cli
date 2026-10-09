@@ -8,6 +8,7 @@ the low-level client calls. No network.
 
 import logging
 from pathlib import Path
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,8 +21,10 @@ from keboola_agent_cli import (
     JobIdempotencyStore,
     JobResult,
     QueryResult,
+    StorageJobResult,
     UploadTableResult,
 )
+from keboola_agent_cli.client import TableUploadOutcome
 from keboola_agent_cli.errors import KeboolaApiError
 
 # Canonical fake token (projectId-tokenId-secret); never a realistic secret.
@@ -363,7 +366,10 @@ class TestUploadTable:
     ) -> None:
         csv = tmp_path / "data.csv"
         csv.write_text("a,b\n1,2\n3,4\n")
-        mock_kc.upload_table.return_value = {"importedRowsCount": 2, "warnings": []}
+        mock_kc.upload_table.return_value = TableUploadOutcome(
+            file_id=7,
+            job={"id": 9, "status": "success", "results": {"importedRowsCount": 2, "warnings": []}},
+        )
         result = client.upload_table("in.c-x.t", csv, incremental=True)
         assert isinstance(result, UploadTableResult)
         assert result.table_id == "in.c-x.t"
@@ -375,14 +381,69 @@ class TestUploadTable:
         call = mock_kc.upload_table.call_args.kwargs
         assert call["table_id"] == "in.c-x.t" and call["incremental"] is True
         assert call["branch_id"] is None
+        assert call["wait"] is True and call["max_wait"] is None
+        assert (result.file_id, result.job_id, result.job_status) == (7, 9, "success")
+
+    def test_no_wait_returns_queued_job(
+        self, client: Client, mock_kc: MagicMock, tmp_path: Path
+    ) -> None:
+        """wait=False: the queued job's id/status come back, no rows are claimed."""
+        csv = tmp_path / "data.csv"
+        csv.write_text("a\n1\n")
+        mock_kc.upload_table.return_value = TableUploadOutcome(
+            file_id=7, job={"id": 9, "status": "waiting"}
+        )
+        result = client.upload_table("in.c-x.t", csv, wait=False, timeout=30)
+        assert result.job_status == "waiting" and result.job_id == 9
+        assert result.imported_rows is None
+        call = mock_kc.upload_table.call_args.kwargs
+        assert call["wait"] is False and call["max_wait"] == 30
 
     def test_branch_scoped_upload(self, mock_kc: MagicMock, tmp_path: Path) -> None:
         c = _make_client(mock_kc, branch_id=33)
         csv = tmp_path / "d.csv"
         csv.write_text("a\n1\n")
-        mock_kc.upload_table.return_value = {"importedRowsCount": 1}
+        mock_kc.upload_table.return_value = TableUploadOutcome(
+            file_id=1, job={"id": 2, "status": "success", "results": {"importedRowsCount": 1}}
+        )
         c.upload_table("in.c-x.t", csv)
         assert mock_kc.upload_table.call_args.kwargs["branch_id"] == 33
+
+
+class TestStorageJob:
+    """Client.storage_job -- follow a Storage job (issue #834)."""
+
+    _IMPORT_JOB: ClassVar[dict[str, Any]] = {
+        "id": 9,
+        "status": "success",
+        "operationName": "tableImport",
+        "tableId": "in.c-x.t",
+        "operationParams": {"source": {"type": "file", "fileId": 7}},
+        "createdTime": "2026-10-09T10:00:00+0200",
+        "results": {"importedRowsCount": 3, "warnings": ["w"]},
+    }
+
+    def test_single_get_without_wait(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.get_storage_job.return_value = dict(self._IMPORT_JOB)
+        job = client.storage_job(9)
+        assert isinstance(job, StorageJobResult)
+        assert (job.job_id, job.status, job.operation_name) == (9, "success", "tableImport")
+        assert (job.table_id, job.file_id, job.imported_rows) == ("in.c-x.t", 7, 3)
+        assert job.warnings == ["w"] and job.created_time == "2026-10-09T10:00:00+0200"
+        assert job.finished and not job.failed
+        mock_kc.get_storage_job.assert_called_once_with(9)
+        mock_kc.follow_storage_job.assert_not_called()
+
+    def test_wait_returns_failed_job(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.follow_storage_job.return_value = {
+            "id": 9,
+            "status": "error",
+            "error": {"message": "bad csv", "code": "storage.import"},
+        }
+        job = client.storage_job(9, wait=True, timeout=5)
+        assert job.failed and job.error == {"message": "bad csv", "code": "storage.import"}
+        assert job.imported_rows is None
+        mock_kc.follow_storage_job.assert_called_once_with(9, max_wait=5)
 
 
 class TestModuleLayout:
@@ -406,6 +467,7 @@ class TestModuleLayout:
             "UploadTableResult",
             "SyncPushResult",
             "ConfigDetailResult",
+            "StorageJobResult",
         }
 
 

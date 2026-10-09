@@ -516,6 +516,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   are `cli:*` categories, exact operation names, or globs matching >=1
   operation (check with `kbagent permissions list`).
 
+**Big `storage upload-table` (since vNEXT)**
+- Use `--no-wait`, keep `job_id` + `file_id`, poll `storage job-detail --wait`.
+  `STORAGE_JOB_TIMEOUT` here = import still running: NEVER re-run the upload
+  (duplicate rows); recover with `load-file --file-id`.
+
 ---
 
 ## 4. WORKFLOWS (reference playbooks)

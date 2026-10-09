@@ -764,10 +764,24 @@ remain branch-aware because modifying a dev branch is the expected intent.
         --time-partitioning-field created_at --clustering-field tenant_id --primary-key id
       then: kbagent storage swap-tables --table-id in.c-main.events --target-table-id in.c-main.events_repart --branch ID
 
-  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--branch ID]
-    Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
-    Use --no-auto-create to require the table to already exist.
-    Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow. Branch-aware.
+  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+    Upload CSV (or .csv.gz, uploaded as-is) into a table. Auto-creates bucket and table if missing (columns inferred
+    as STRING from the CSV header; read through gzip for .csv.gz). Use --no-auto-create to require the table to exist.
+    Full load by default; --incremental to append rows. Branch-aware. Two phases: cloud upload, then an async
+    Storage import job.
+    Cloud upload (since vNEXT): on AWS stacks a file above 64 MiB goes up as an S3 MULTIPART upload (64 MiB parts,
+    auto-scaled to fit 10,000 parts, 4 in parallel, per-part retry; peak memory ~4 x part size). The old 5 GiB
+    single-PUT ceiling is gone. Azure/GCP stacks are unchanged. Human mode shows a progress bar on stderr.
+    The S3 credentials last 12 h (a 200 GB file needs ~5 MB/s sustained); the source file must not change during
+    the upload (error if size/mtime moves); a failed upload restarts from zero (no resume).
+    Import (since vNEXT): --wait (default) waits up to --timeout SECONDS (default 600) for the import job.
+    --no-wait still waits for the upload, then enqueues the import and returns at once with file_id, job_id,
+    job_status (imported_rows is null while pending) -- poll with `storage job-detail --job-id ID --wait`.
+    A wait timeout is STORAGE_JOB_TIMEOUT (exit 4, retryable=false): the import KEEPS RUNNING server-side; the
+    error names job_id + file_id. NEVER re-run the upload while that job is waiting/processing -- an incremental
+    re-run duplicates rows. If the import fails or its enqueue fails after the upload, re-import the already
+    uploaded file with `storage load-file --file-id ID` instead of uploading again.
+    For a 100+ GB file use --no-wait and poll (see the large-upload workflow in the kbagent skill).
 
   kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
     Export table data to a local CSV file. Async export with streaming download.
@@ -874,6 +888,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
     Upload any file to Storage Files. --tag assigns tags (repeatable). --permanent prevents auto-deletion after 15 days.
     --name overrides the filename (default: local filename). Branch-aware.
+    Since vNEXT: same S3 multipart upload as upload-table on AWS stacks (above 64 MiB; no 5 GiB ceiling).
 
   kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
     Download a Storage File. Either --file-id (by ID) or --tag (latest file matching all tags).
@@ -888,9 +903,18 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
     Add and/or remove tags on a file in a single operation. Both --add and --remove are repeatable.
 
-  kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
-    Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload.
-    --incremental to append rows. Branch-aware.
+  kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+    Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload,
+    and the recovery path after a failed upload-table import (no re-upload). --incremental to append rows.
+    Since vNEXT: --wait/--no-wait + --timeout SECONDS (default 600) behave exactly as on upload-table
+    (--no-wait returns job_id; a wait timeout is STORAGE_JOB_TIMEOUT, exit 4, the import keeps running). Branch-aware.
+
+  kbagent storage job-detail --project NAME --job-id ID [--wait] [--timeout SECONDS]
+    (since vNEXT) Show one Storage API job: status, operation_name, table_id, file_id, created/start/end times,
+    imported_rows, warnings, results, error. --wait polls until the job finishes (--timeout budget).
+    Exit 0 for success/waiting/processing; exit 1 STORAGE_JOB_FAILED when the job ended in error (details are
+    still returned); exit 4 on a --wait timeout. Job ids are project-scoped (no --branch; the active branch does
+    not matter). Read-only. Use it to follow `upload-table --no-wait` / `load-file --no-wait`.
 
   kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
     Export a table to a Storage File. The file stays in Keboola for other components to use.

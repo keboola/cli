@@ -15,6 +15,13 @@ from ..constants import STORAGE_BRANCHES_FEATURE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
+from ._storage_jobs import (
+    import_job_fields,
+    read_csv_header,
+    summarize_storage_job,
+    validate_wait_timeout,
+    with_import_hint,
+)
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
 from .table_usage import collect_table_usage, fetch_usage_components
@@ -83,24 +90,6 @@ _COL_SPEC_RE = re.compile(
     r"\s*(?:\(\s*(?P<length>[0-9][0-9,\s]*)\s*\))?"
     r"\s*$"
 )
-
-
-def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
-    """Return column names from the first row of a CSV file.
-
-    Strips leading/trailing whitespace and skips empty fields. Handles
-    UTF-8 BOM automatically (utf-8-sig encoding).
-
-    Raises:
-        ValueError: If the first row is empty or contains no non-empty fields.
-    """
-    with open(file_path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.reader(fh, delimiter=delimiter)
-        header = next(reader, [])
-    columns = [col.strip() for col in header if col.strip()]
-    if not columns:
-        raise ValueError("CSV file has no column headers in the first row.")
-    return columns
 
 
 def _parse_column_spec(
@@ -1063,6 +1052,10 @@ class StorageService(ColumnDescriptionsMixin):
         enclosure: str = '"',
         auto_create: bool = True,
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
@@ -1079,12 +1072,22 @@ class StorageService(ColumnDescriptionsMixin):
             enclosure: CSV value enclosure character.
             auto_create: Auto-create bucket and table if missing.
             branch_id: If set, target a specific dev branch.
+            wait: If False, return once the import job is queued (the cloud
+                upload is always awaited); ``imported_rows`` is then None.
+            timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+            on_progress: ``(bytes_sent, total_bytes)`` callback for the upload.
 
         Returns:
-            Dict with import results plus auto_created_bucket / auto_created_table flags.
-        """
-        from ..errors import KeboolaApiError
+            Dict with import results, ``file_id`` / ``job_id`` / ``job_status``,
+            plus auto_created_bucket / auto_created_table flags.
 
+        Raises:
+            ValueError: ``timeout`` is not a positive finite number, or the
+                header of a file to auto-create a table from is unreadable.
+            KeboolaApiError: An import timeout names the still-running job and
+                the ``storage job-detail`` command to follow it.
+        """
+        validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -1123,7 +1126,7 @@ class StorageService(ColumnDescriptionsMixin):
                         branch_id=branch_id,
                     )
                     if not any(t.get("name") == table_name for t in existing):
-                        columns = _read_csv_header(file_path, delimiter=delimiter)
+                        columns = read_csv_header(file_path, delimiter, enclosure)
                         client.create_table(
                             bucket_id=bucket_id,
                             name=table_name,
@@ -1136,14 +1139,19 @@ class StorageService(ColumnDescriptionsMixin):
                         auto_created_table = True
                         logger.info("Auto-created table %s (%d columns)", table_id, len(columns))
 
-            results = client.upload_table(
+            outcome = client.upload_table(
                 table_id=table_id,
                 file_path=file_path,
                 incremental=incremental,
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                wait=wait,
+                max_wait=timeout,
+                on_progress=on_progress,
             )
+        except KeboolaApiError as exc:
+            raise with_import_hint(exc, alias, table_id) from exc
         finally:
             client.close()
 
@@ -1152,8 +1160,8 @@ class StorageService(ColumnDescriptionsMixin):
             "table_id": table_id,
             "incremental": incremental,
             "file_size_bytes": file_size_bytes,
-            "imported_rows": results.get("importedRowsCount"),
-            "warnings": results.get("warnings", []),
+            "file_id": outcome.file_id,
+            **import_job_fields(outcome.job),
             "auto_created_bucket": auto_created_bucket,
             "auto_created_table": auto_created_table,
         }
@@ -2181,6 +2189,9 @@ class StorageService(ColumnDescriptionsMixin):
         delimiter: str = ",",
         enclosure: str = '"',
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Load an existing Storage File into a table.
 
@@ -2195,10 +2206,13 @@ class StorageService(ColumnDescriptionsMixin):
             delimiter: CSV column delimiter.
             enclosure: CSV value enclosure character.
             branch_id: If set, target a specific dev branch.
+            wait: If False, return once the import job is queued.
+            timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
 
         Returns:
-            Dict with import results.
+            Dict with import results plus ``job_id`` / ``job_status``.
         """
+        validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -2211,19 +2225,56 @@ class StorageService(ColumnDescriptionsMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                wait=wait,
+                max_wait=timeout,
             )
+        except KeboolaApiError as exc:
+            raise with_import_hint(exc, alias, table_id) from exc
         finally:
             client.close()
 
-        results = job.get("results", {})
         return {
             "project_alias": alias,
             "file_id": file_id,
             "table_id": table_id,
             "incremental": incremental,
-            "imported_rows": results.get("importedRowsCount"),
-            "warnings": results.get("warnings", []),
+            **import_job_fields(job),
         }
+
+    def storage_job_detail(
+        self,
+        alias: str,
+        job_id: int,
+        wait: bool = False,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Report one Storage job (e.g. a table import), optionally waiting for it.
+
+        Storage job IDs are project-scoped and branch-independent, so no
+        branch is resolved. A job that ended in ``error`` is returned (with
+        ``error``), not raised -- the command decides the exit code.
+
+        Args:
+            alias: Project alias.
+            job_id: Storage job ID.
+            wait: Poll until the job is terminal.
+            timeout: Wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+
+        Raises:
+            ValueError: ``timeout`` is not a positive finite number.
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` when ``wait`` runs out.
+        """
+        validate_wait_timeout(timeout)
+        project = self.resolve_projects([alias])[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            if wait:
+                job = client.follow_storage_job(job_id, max_wait=timeout)
+            else:
+                job = client.get_storage_job(job_id)
+        finally:
+            client.close()
+        return summarize_storage_job(alias, job)
 
     def unload_table_to_file(
         self,

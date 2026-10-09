@@ -27,11 +27,13 @@ from ._transfer import (
     _iter_poll_intervals,
     _unwrap_bigquery_error,
 )
+from .storage_tables import TableUploadOutcome
 
 __all__ = [
     "QUERY_RESULTS_PAGE_SIZE",
     "InlineQueryResult",
     "KeboolaClient",
+    "TableUploadOutcome",
     "_CloudDownloader",
     "_assert_safe_download_url",
     "_build_abs_upload_url",

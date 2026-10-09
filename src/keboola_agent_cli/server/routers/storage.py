@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...constants import FILE_DOWNLOAD_CHUNK_SIZE
+from ..dependencies import ServiceRegistry, get_registry, require_permission
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
@@ -105,6 +107,10 @@ class LoadFileToTable(BaseModel):
     delimiter: str = ","
     enclosure: str = '"'
     branch_id: int | None = None
+    # Import job wait (issue #834): False returns once the job is queued; follow
+    # it with GET /storage/jobs/{project}/{job_id}.
+    wait: bool = True
+    timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class SwapTables(BaseModel):
@@ -347,28 +353,49 @@ def create_table(
 
 
 @router.post("/tables/{project}/upload", summary="Upload data into a table")
-async def upload_table(
+def upload_table(
     project: str,
     table_id: str = Form(...),
     incremental: bool = Form(False),
     branch_id: int | None = Form(None),
+    delimiter: str = Form(","),
+    enclosure: str = Form('"'),
+    auto_create: bool = Form(True),
+    wait: bool = Form(True),
+    timeout: float | None = Form(None, gt=0, allow_inf_nan=False),
     file: UploadFile = File(...),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Upload a CSV file into an existing table. Mirrors `kbagent storage upload-table`."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "x").suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = Path(tmp.name)
+    """Upload a CSV (or gzipped CSV) into a table. Mirrors `kbagent storage upload-table`.
+
+    A plain ``def`` route, so FastAPI runs it in its threadpool: the upload and
+    the import wait block for as long as they take without stalling the event
+    loop. The request body is streamed to a temp file in chunks -- never read
+    into memory whole. ``wait=false`` returns once the import job is queued
+    (``job_id`` / ``job_status`` in the result).
+    """
+    tmp_path: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=Path(file.filename or "x").suffix
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            shutil.copyfileobj(file.file, tmp, length=FILE_DOWNLOAD_CHUNK_SIZE)
         return registry.storage.upload_table(
             alias=project,
             table_id=table_id,
             file_path=str(tmp_path),
             incremental=incremental,
+            delimiter=delimiter,
+            enclosure=enclosure,
+            auto_create=auto_create,
             branch_id=branch_id,
+            wait=wait,
+            timeout=timeout,
         )
     finally:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 @router.delete("/tables/{project}", summary="Delete tables")
@@ -743,4 +770,30 @@ def load_file_to_table(
         delimiter=body.delimiter,
         enclosure=body.enclosure,
         branch_id=body.branch_id,
+        wait=body.wait,
+        timeout=body.timeout,
+    )
+
+
+@router.get(
+    "/jobs/{project}/{job_id}",
+    summary="Storage job detail",
+    dependencies=[Depends(require_permission("storage.job-detail"))],
+)
+def storage_job_detail(
+    project: str,
+    job_id: int,
+    wait: bool = False,
+    timeout: float | None = Query(None, gt=0, allow_inf_nan=False),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Report one Storage job (e.g. a table import). Mirrors `kbagent storage job-detail`.
+
+    A job that ended in ``error`` is a 200 with ``status: "error"`` and an
+    ``error`` object -- the job was read successfully; unlike the CLI there is
+    no exit code to carry the failure. A ``wait`` that runs out answers with
+    ``STORAGE_JOB_TIMEOUT`` (the job keeps running).
+    """
+    return registry.storage.storage_job_detail(
+        alias=project, job_id=job_id, wait=wait, timeout=timeout
     )

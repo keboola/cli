@@ -4,6 +4,7 @@ Extracted verbatim from the former single-file ``client.py`` (issue #520).
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -91,6 +92,8 @@ class _StorageFilesMixin(_CoreClient):
         is_permanent: bool = False,
         notify: bool = False,
         branch_id: int | None = None,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a local file to Storage Files.
 
@@ -103,6 +106,8 @@ class _StorageFilesMixin(_CoreClient):
             is_permanent: If True, file is not auto-deleted after 15 days.
             notify: If True, send notification on upload completion.
             branch_id: If set, upload to a specific dev branch.
+            on_progress: Called with ``(bytes_sent, total_bytes)`` during the
+                cloud upload.
 
         Returns:
             File resource dict with id, name, sizeBytes, tags, url.
@@ -117,7 +122,7 @@ class _StorageFilesMixin(_CoreClient):
             is_permanent=is_permanent,
             notify=notify,
         )
-        self._upload_to_cloud(upload_info, file_path)
+        self._upload_to_cloud(upload_info, file_path, on_progress=on_progress)
         # Return file info (prepare response has the file metadata)
         return {
             "id": upload_info["id"],
