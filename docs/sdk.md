@@ -251,7 +251,7 @@ Escape hatch for endpoints the facade omits. See [§7](#7-clientraw-the-escape-h
 
 ## 5. Typed result models
 
-`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`, `TokenListEntryResult` from `0.86.0+`, and `StorageJobResult` from `vNEXT+`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
+`result_models.py` defines the **stable return shapes** (`JobResult`, `QueryResult`, `UploadTableResult`, `ConfigDetailResult`, `SyncPushResult`, `CloneResult`, the `0.66.0+` device-enrollment pair `ScopedTokenResult` / `StreamSourceResult`, `TokenListEntryResult` from `0.86.0+`, and `StorageJobResult` from `0.98.0+`), all re-exported from the package root. They exist so a downstream consumer types against a **semver-versioned contract** instead of an undocumented `dict[str, Any]` — a contract change then surfaces at *type-check* time, not at runtime against a customer build.
 
 Two design rules every model follows (`_ApiResultModel` base):
 
@@ -272,7 +272,7 @@ The two device-enrollment models (`0.66.0+`) commit these named fields:
 - **`ScopedTokenResult`** — `id`, `token` (the one-time secret, see the gotcha in §4), `description`, `expires` (`str | None`), `can_read_all_file_uploads` (alias `canReadAllFileUploads`).
 - **`StreamSourceResult`** — `id`, `source_id`, `name`, `type`, `description`, `branch_id` (default `"default"`), `otlp_url` (ingest URL, secret in the path — unmasked), `otlp_secret`, `base_endpoint`, `sink_bucket_id` (`str | None`; the `in.c-otlp-<id>` bucket to grant a device token write on).
 
-`UploadTableResult` also commits (`vNEXT+`) `file_id`, `job_id` (`int | None`) and `job_status` (`str | None`). `StorageJobResult` (`vNEXT+`) commits `job_id` (alias `id`), `status`, `operation_name` (alias `operationName`), `table_id` (alias `tableId`), `file_id`, `created_time` / `start_time` / `end_time` (aliases `createdTime` / `startTime` / `endTime`), `imported_rows`, `warnings`, `results`, `error`, plus the properties `finished` and `failed`.
+`UploadTableResult` also commits (`0.98.0+`) `file_id`, `job_id` (`int | None`) and `job_status` (`str | None`). `StorageJobResult` (`0.98.0+`) commits `job_id` (alias `id`), `status`, `operation_name` (alias `operationName`), `table_id` (alias `tableId`), `file_id`, `created_time` / `start_time` / `end_time` (aliases `createdTime` / `startTime` / `endTime`), `imported_rows`, `warnings`, `results`, `error`, plus the properties `finished` and `failed`.
 
 `TokenListEntryResult` (`0.86.0+`) commits `id`, `description`, `created` (`str | None`), `expires` (`str | None`), `is_expired` (alias `isExpired`), `is_master_token` (alias `isMasterToken`), and (`0.88.0+`) `last_used` (alias `lastUsed`), `last_used_event` (alias `lastUsedEvent`) and `last_used_status` (alias `lastUsedStatus`) — all three `str | None`, `None` unless `list_tokens(with_last_used=True)` was used. It has **no secret field by design** — see `list_tokens` above.
 
