@@ -88,7 +88,7 @@ Result schema:
 
 The `rows[]` array is in **completion order**, not CSV order (parallel
 workers). Match by `email`, not by index. A run with `failed > 0` exits 1
-*(since vNEXT)*, like `org setup`; the JSON is emitted first. On 0.97.0 and
+*(since 0.98.0)*, like `org setup`; the JSON is emitted first. On 0.97.0 and
 older it exited 0, so check `failed` there.
 
 `--dry-run` resolves every row and reports what *would* happen without

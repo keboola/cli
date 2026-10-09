@@ -2,7 +2,7 @@
 
 Loading one very large CSV (100+ GB, optionally `.csv.gz`) into ONE Storage
 table. Everything here needs the version that added S3 multipart upload,
-`--no-wait` and `storage job-detail` *(since vNEXT, #834)* -- check
+`--no-wait` and `storage job-detail` *(since 0.98.0, #834)* -- check
 `kbagent version` first. On older versions an AWS upload stops at 5 GiB and
 there is no way to follow the import job.
 
@@ -87,7 +87,7 @@ FILE_ID=$(jq -r '.data.file_id' upload.json)
   handles for following and recovering the import.
 - In human mode (no `--json`) a progress bar on stderr shows the upload, and
   the command prints the job id plus the follow-up command.
-- **Use `--progress` for long runs** *(since vNEXT)*. It reports progress on
+- **Use `--progress` for long runs** *(since 0.98.0)*. It reports progress on
   stderr even with `--json` and without a terminal, so stdout stays clean JSON
   and `progress.log` gets one line every 10 s plus a final line:
 
