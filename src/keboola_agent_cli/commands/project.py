@@ -32,6 +32,7 @@ from ._helpers import (
     discard_token_file,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
     resolve_storage_token_input,
@@ -656,7 +657,13 @@ def project_refresh(
 
         would_refresh = len(preview.get("projects_refreshed", []))
         if would_refresh == 0:
-            formatter.console.print("\nAll tokens are valid.")
+            preview_failed = len(preview.get("projects_failed", []))
+            formatter.console.print(
+                "\nNo token to refresh." if preview_failed else "\nAll tokens are valid."
+            )
+            # The preview is the whole run here: its failed projects are real (#745).
+            if code := item_failure_exit_code(preview_failed):
+                raise typer.Exit(code=code)
             return
 
         if not typer.confirm(f"\nProceed to refresh {would_refresh} token(s)?"):
@@ -676,6 +683,10 @@ def project_refresh(
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(result, _format_refresh_result)
+
+    # A project whose token check or refresh failed is collected, not raised (#745).
+    if code := item_failure_exit_code(len(result.get("projects_failed", []))):
+        raise typer.Exit(code=code)
 
 
 # ── Project pin (default project) ─────────────────────────────────────
@@ -1109,6 +1120,10 @@ def project_invite(
             )
             payload = result.model_dump()
             formatter.output(payload, _format_bulk_invite_result)
+            # A CSV where every row failed still printed "failed=N" and exit 0,
+            # so a CI step could not tell a clean run from a total one (#745).
+            if code := item_failure_exit_code(payload.get("failed", 0)):
+                raise typer.Exit(code=code)
             return
 
         result = service.invite(

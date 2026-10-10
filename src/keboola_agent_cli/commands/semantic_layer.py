@@ -17,15 +17,33 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    item_failure_exit_code,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
-from ._semantic_layer_helpers import _handle_service_call
+from ._semantic_layer_helpers import (
+    ScopeChoice,
+    _handle_service_call,
+    gate_inherited_organization_scope,
+    resolve_scope_targets,
+)
 from ._semantic_layer_reference_data import reference_data_app
+from ._semantic_layer_scope import scope_app
+
+# `import` / `promote`: the scope of the NEW items they create (overwritten items keep theirs).
+_COPY_SCOPE_HELP = (
+    "Visibility of the NEW items: 'project', 'organization' or 'targeted'. "
+    "Omitted: the target model's own scope, as with `add <kind>`."
+)
+_COPY_TARGET_PROJECT_HELP = (
+    "Project alias or ID that can see the new items (repeatable or comma-separated; "
+    "--scope targeted only)."
+)
 
 semantic_layer_app = typer.Typer(
     name="semantic-layer",
@@ -112,10 +130,34 @@ def model_create(
     sql_dialect: str = typer.Option(
         "Snowflake", "--sql-dialect", help="SQL dialect (default: Snowflake)"
     ),
+    scope: ScopeChoice | None = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Visibility: 'project' (default, owner only), 'organization' "
+            "(every project in the org), or 'targeted' (owner + explicit "
+            "--target-project grants)."
+        ),
+    ),
+    target_project: list[str] = typer.Option(
+        [],
+        "--target-project",
+        help=(
+            "Project alias or ID to grant visibility to (repeatable or comma-separated; "
+            "--scope targeted only)."
+        ),
+    ),
 ) -> None:
     """Create a new semantic-layer model."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.model.create",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+    )
     result = _handle_service_call(
         ctx,
         service.create_model,
@@ -123,6 +165,8 @@ def model_create(
         name=name,
         description=description,
         sql_dialect=sql_dialect,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(
         result,
@@ -143,6 +187,7 @@ semantic_layer_app.add_typer(add_app, name="add")
 semantic_layer_app.add_typer(edit_app, name="edit")
 semantic_layer_app.add_typer(remove_app, name="remove")
 semantic_layer_app.add_typer(reference_data_app, name="reference-data")
+semantic_layer_app.add_typer(scope_app, name="scope")
 
 
 @model_app.command("delete")
@@ -338,6 +383,13 @@ def _print_build_result(console: Console, data: dict) -> None:
             console.print(f"  [red]✗[/red] {e['type']} {e['item']} — {e['detail']}")
     if warns:
         console.print(f"\n[bold yellow]Validation: {len(warns)} warning(s)[/bold yellow]")
+    fetch_errs = data.get("fetch_errors") or []
+    if fetch_errs:
+        console.print(
+            f"\n[bold red]Failed: {len(fetch_errs)} table(s) left out of the model[/bold red]"
+        )
+        for e in fetch_errs:
+            console.print(f"  [red]✗[/red] {e['table_id']} — {e['error']}")
     type_errs = data.get("type_resolution_errors") or []
     if type_errs:
         console.print(
@@ -488,6 +540,10 @@ def semantic_layer_build(
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
+    if model is not None:
+        gate_inherited_organization_scope(
+            ctx, operation="semantic-layer.build", alias=project, model=model
+        )
 
     result = _handle_service_call(
         ctx,
@@ -503,6 +559,9 @@ def semantic_layer_build(
         auto_resolve_types=auto_types_workspace,
     )
     formatter.output(result, _print_build_result)
+    # A table whose schema fetch failed is left out of the model (#745).
+    if code := item_failure_exit_code(len(result.get("fetch_errors") or [])):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("promote")
@@ -527,11 +586,15 @@ def semantic_layer_promote(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the cross-project confirmation prompt"
     ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
+    target_project: list[str] = typer.Option(
+        [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
+    ),
 ) -> None:
     """Promote a model from one project to another (NEW + overwrite CHANGED; never deletes).
 
     Default behaviour: NEW items are POSTed, CHANGED items are
-    DELETE+POSTed, IDENTICAL items are skipped. Items only present in
+    updated in place (scope kept), IDENTICAL items are skipped. Items only present in
     the target are never touched (additive-only).
     """
     formatter = get_formatter(ctx)
@@ -549,6 +612,14 @@ def semantic_layer_promote(
     ):
         formatter.console.print("Aborted.")
         raise typer.Exit(code=0)
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.promote",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=to_project,
+        inherit_from_model=(to_model,),
+    )
 
     result = _handle_service_call(
         ctx,
@@ -559,8 +630,14 @@ def semantic_layer_promote(
         to_model=to_model,
         types=type_list,
         dry_run=dry_run,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_promote_result)
+    # Per-item failures are collected per type, not raised (#745).
+    failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
+    if code := item_failure_exit_code(failed):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("import")
@@ -584,10 +661,14 @@ def semantic_layer_import(
         False, "--dry-run", help="Plan the import without calling any write API"
     ),
     overwrite: bool = typer.Option(
-        False, "--overwrite", help="DELETE+POST conflicting items (default: skip)"
+        False, "--overwrite", help="Update conflicting items in place (default: skip)"
     ),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip confirmation (alias for default SKIP behavior)"
+    ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
+    target_project: list[str] = typer.Option(
+        [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
     ),
 ) -> None:
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
@@ -597,6 +678,14 @@ def semantic_layer_import(
     # still opt into destructive overwrite via --overwrite.
     _ = yes  # explicit (no behavioural effect when --overwrite is False)
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.import",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.import_snapshot,
@@ -606,8 +695,14 @@ def semantic_layer_import(
         types=type_list,
         dry_run=dry_run,
         overwrite=overwrite,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_import_result)
+    # Per-item failures are collected per type, not raised (#745).
+    failed = sum(len(per.get("failed", [])) for per in (result.get("imported") or {}).values())
+    if code := item_failure_exit_code(failed):
+        raise typer.Exit(code=code)
 
 
 @semantic_layer_app.command("show")

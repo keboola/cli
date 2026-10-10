@@ -132,7 +132,7 @@ def test_download_table_survives_empty_array_column_definition(tmp_path: Path) -
         "isSliced": False,
     }
 
-    def _write_body(url: str, dest: str) -> int:
+    def _write_body(url: str, dest: str, on_progress=None) -> int:
         Path(dest).write_text("INWARD-1,KEY-1\nINWARD-2,KEY-2\n", encoding="utf-8")
         return Path(dest).stat().st_size
 

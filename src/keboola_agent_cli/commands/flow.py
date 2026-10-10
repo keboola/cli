@@ -31,6 +31,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    item_failure_exit_code,
     map_error_to_exit_code,
 )
 
@@ -1034,12 +1035,24 @@ def flow_schedule_remove(
         formatter.output(result)
     else:
         count = result.get("deleted_count", 0)
-        if count == 0:
+        errors = result.get("errors", [])
+        headline = f"Removed {count} schedule(s) from flow {escape(flow_id)}"
+        if errors:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed"
+            )
+        elif count == 0:
             formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
         else:
-            formatter.success(f"Removed {count} schedule(s) from flow {escape(flow_id)}")
+            formatter.success(headline)
+        for err in errors:
+            formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
         for warning in result.get("warnings", []):
             formatter.warning(warning)
+
+    # A schedule whose config could not be deleted is collected, not raised (#745).
+    if code := item_failure_exit_code(len(result.get("errors", []))):
+        raise typer.Exit(code=code)
 
 
 # Mounted from a private module: `commands/flow.py` is exactly at the

@@ -67,6 +67,8 @@ kbagent sync push --all-projects             # apply
 
 Each project gets its own subdirectory (named by alias). Projects are processed in parallel.
 
+A project that fails does not stop the others. *(since 0.98.0)* `sync pull --all-projects` and `sync push --all-projects` then exit 1, and push counts a project whose push returned per-config `errors[]` as failed (its line is marked `x`, not `OK`). `sync diff --all-projects` exits 1 too when a project failed (`summary.failed`). A `--dry-run` exits 1 when it reports a failed project, like the real run.
+
 ## Reconciling a drifted tree with production (since v0.72.0)
 
 When production was edited directly (by people or other tooling) and the local
@@ -90,7 +92,7 @@ Related semantics (all since v0.72.0):
 - Plain `sync pull` re-materializes a tracked config whose local dir was
   deleted (delete-dir-then-pull refetches; delete-dir-then-`push --force`
   deletes the remote config -- the direction of the command picks the winner).
-  *(since 0.96.0, #792)* A plain `sync push` deletes nothing: it lists the
+  *(since 0.96.1, #792)* A plain `sync push` deletes nothing: it lists the
   deletion under `skipped_deletions` and says to add `--force`.
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
@@ -147,7 +149,7 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
-Promoting is idempotent (since 0.96.0): a config the dev branch lacks is created
+Promoting is idempotent (since 0.96.1): a config the dev branch lacks is created
 there once, and the manifest records that dev copy for the same `main/`
 directory. Re-running the same push creates nothing; a later edit in `main/`
 updates the dev copy, never production. Older versions created another dev copy
@@ -416,8 +418,8 @@ Stored in `.keboola/branch-mapping.json`:
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
 | CONFLICT | Both sides changed | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
-| DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.0)* |
-| REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.0)* |
+| DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
+| REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.1)* |
 
 ## Key behaviors
 
@@ -425,12 +427,12 @@ Stored in `.keboola/branch-mapping.json`:
 - **Pull protects local edits**: locally-modified files are skipped by default
   -- and "locally modified" covers the whole config, not only `_config.yml`:
   an edit to a companion file (`transform.sql`, `code.py`, `_description.md`,
-  ...) protects the config the same way *(since 0.96.0, #792)*. Before, such an
+  ...) protects the config the same way *(since 0.96.1, #792)*. Before, such an
   edit was silently overwritten whenever the remote changed, plain or `--force`
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified, conflict and remote_deleted
   changes are skipped (`skipped` in the result), and local deletions are applied
-  only with `--force` (`skipped_deletions` otherwise) *(since 0.96.0, #792)*
+  only with `--force` (`skipped_deletions` otherwise) *(since 0.96.1, #792)*
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
   read-back), never from the files on disk. Before 0.91.0 the two producers
@@ -460,7 +462,7 @@ internal state:
   `keboola.mcp-server-tool` (the Keboola MCP server auto-creates one empty
   workspace-record config per project it touches, `configuration: {}`, name
   like `mcp-workspace-<hex>`). This is a hardcoded floor. The one exception
-  *(since 0.96.0)*: the manifest key `syncWorkspaces` takes `keboola.sandboxes`
+  *(since 0.96.1)*: the manifest key `syncWorkspaces` takes `keboola.sandboxes`
   off the list for its shared SQL workspaces, see
   [Shared SQL workspaces](#shared-sql-workspaces). `keboola.mcp-server-tool`
   stays ignored.
@@ -490,7 +492,7 @@ internal state:
 
 ## Shared SQL workspaces
 
-*(since 0.96.0)* A tree can sync the shared SQL workspaces (Snowflake,
+*(since 0.96.1)* A tree can sync the shared SQL workspaces (Snowflake,
 BigQuery) of a project. It is opt-in per tree, with the manifest key
 `syncWorkspaces`:
 
@@ -563,7 +565,7 @@ sync skips `keboola.sandboxes` exactly as before.
 `--force` no longer blindly overwrites locally-modified configs. It branches on
 the 3-way diff state per config (and per row). "Local edited" means any file
 of the config -- `_config.yml` or a companion file such as `transform.sql`
-*(since 0.96.0, #792)*; before, a companion-only edit was never a conflict and
+*(since 0.96.1, #792)*; before, a companion-only edit was never a conflict and
 was overwritten:
 
 - **Local edited, remote UNCHANGED** -> the file and its sync baseline are
@@ -575,7 +577,7 @@ was overwritten:
   error code `SYNC_CONFLICT`, listing every conflicting config/row. Resolve with
   `sync diff`, then `sync push` your edits (or discard them), then pull again.
 - **Local untouched, remote changed** -> `--force` takes remote as before.
-- **Local edited, remote DELETED** *(since 0.96.0, #792)* -> `--force` aborts
+- **Local edited, remote DELETED** *(since 0.96.1, #792)* -> `--force` aborts
   with `SYNC_CONFLICT` (conflict `reason: "deleted on remote"`). Plain pull
   keeps the edited directory and its manifest entry and reports it as
   `skipped` (`locally modified, deleted on remote`). Only `--theirs` deletes it.
@@ -583,7 +585,7 @@ was overwritten:
   (it diffs as `remote_deleted`); delete the directory if the remote delete was
   intended, or restore the config with `kbagent config restore` to keep it.
 
-> A config deleted and re-created remotely under the same name *(since 0.96.0,
+> A config deleted and re-created remotely under the same name *(since 0.96.1,
 > #792)* is written to a suffixed directory while the old one is removed; the
 > next pull renames it back. Before, the sweep deleted the new config's files
 > and the next push deleted the new config remotely.
@@ -593,7 +595,7 @@ was overwritten:
 > stops you loudly instead of losing work. To intentionally drop a local edit,
 > run `sync pull --theirs`, or delete the whole config directory and pull.
 > Deleting only a companion file (`transform.sql`, ...) counts as a local edit
-> *(since 0.96.0, #792)* -- `sync diff` / `sync push` read it that way too -- so
+> *(since 0.96.1, #792)* -- `sync diff` / `sync push` read it that way too -- so
 > plain pull keeps it deleted.
 
 ## Migrating a legacy sync tree (#686)
@@ -657,7 +659,7 @@ nested mapping, list, or empty (`null`) value is rejected with `CONFIG_ERROR`
 (exit 5) naming the offending key and its actual type, instead of being
 silently stringified into a bogus ID.
 
-**Storage buckets (since 0.96.0):** clone copies configs, not storage — a cloned
+**Storage buckets (since 0.96.1):** clone copies configs, not storage — a cloned
 config's input/output mappings point at buckets a fresh target does not have. By
 default clone reads the `storage/buckets.json` pull export and creates the missing
 buckets in the target. Pass `--no-create-buckets` to skip it — a clone is a
@@ -684,9 +686,9 @@ id, the **Phase-C** transformation variable links **and the Phase-D
 `keboola.flow` task `configId`s** remap reference→ULID automatically — no manual
 "remap orchestrator task" pass. The push result carries `flow_task_remaps`.
 
-Since 0.96.0 push also remaps a transformation's shared code (`shared_code_id`, `shared_code_row_ids` and the `{{<row id>}}` script placeholders), legacy `keboola.orchestrator` task `configId`s, task `configRowIds`, and a schedule's `target.configurationId`. The result carries `link_remaps` with one count per kind. A link push cannot set is an `errors[]` entry (`shared_code_link`, `flow_task_link`, `schedule_target_link`). After a failed PUT the next `sync push` or clone re-run sends the link again.
+Since 0.96.1 push also remaps a transformation's shared code (`shared_code_id`, `shared_code_row_ids` and the `{{<row id>}}` script placeholders), legacy `keboola.orchestrator` task `configId`s, task `configRowIds`, and a schedule's `target.configurationId`. The result carries `link_remaps` with one count per kind. A link push cannot set is an `errors[]` entry (`shared_code_link`, `flow_task_link`, `schedule_target_link`). After a failed PUT the next `sync push` or clone re-run sends the link again.
 
-**Check `warnings[]` after a clone (since 0.96.0).** Some configs need an action in the target. The clone result lists each one in `warnings[]` next to the push warnings, also for `--dry-run`, and human mode prints them. Only the run that creates the configs reports them, so keep them from the first run:
+**Check `warnings[]` after a clone (since 0.96.1).** Some configs need an action in the target. The clone result lists each one in `warnings[]` next to the push warnings, also for `--dry-run`, and human mode prints them. Only the run that creates the configs reports them, so keep them from the first run:
 
 - `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config.
 - `encrypted_values_copied`: `KBC::` values that only the reference project can decrypt, as `_config.yml` paths. For `secret_keys` put the plaintext into the clone's `_config.yml` and run `sync push`. `unencryptable_keys` need `kbagent encrypt values`, `oauth_keys` a new authorization.
