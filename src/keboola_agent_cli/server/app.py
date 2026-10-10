@@ -42,6 +42,7 @@ from .dependencies import (
     install_registry,
     translate_project_refs,
 )
+from .route_permissions import enforce_route_permission
 from .routers import (
     agents,
     ai_chat,
@@ -74,6 +75,9 @@ from .routers import (
     token,
     transformation,
     workspaces,
+)
+from .routers import (
+    permissions as permissions_router,
 )
 
 logger = logging.getLogger(__name__)
@@ -380,6 +384,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     # ---- System ----
+    {
+        "name": "permissions",
+        "description": (
+            "**System.** "
+            "Read the session firewall policy this server enforces on every "
+            "route (issue #655). Read-only: `permissions set|reset` stay "
+            "terminal actions on the host, so a bearer token can never widen "
+            "the policy that constrains it. "
+            "Mirrors `kbagent permissions show`."
+        ),
+    },
     {
         "name": "health",
         "description": (
@@ -849,8 +864,17 @@ def create_app(
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # The session firewall, applied to EVERY route the app declares
+        # (issue #655). App-level rather than per-router so a new router
+        # cannot be added outside it; the route -> operation classification
+        # lives in `route_permissions.ROUTE_OPERATIONS`, and an unclassified
+        # route is refused rather than silently exempted. Listed first, so a
+        # denied request is refused before any other dependency runs.
         # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
-        dependencies=[Depends(translate_project_refs("project"))],
+        dependencies=[
+            Depends(enforce_route_permission),
+            Depends(translate_project_refs("project")),
+        ],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,
@@ -965,6 +989,7 @@ def create_app(
         return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
+    app.include_router(permissions_router.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(members.router)

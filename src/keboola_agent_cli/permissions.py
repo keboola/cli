@@ -372,16 +372,24 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.scope.set": "write",
     "semantic-layer.scope.request-create": "write",
     "semantic-layer.scope.request-delete": "write",
+    # Serve-only AI helpers (since vNEXT). Neither touches Keboola, but both
+    # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
+    # like `agent prompt-improve` -- classified `write` for the same reason, so
+    # one --deny-writes keeps an agent from spawning subprocesses through any
+    # of the three. Exempted from the dead-key check via SERVE_ONLY_OPERATIONS.
+    "ai.chat": "write",
+    "workspace.sql-improve": "write",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
     # Categorised by the underlying HTTP method under the taxonomy at the top
     # of this registry: GET = read, POST/PATCH = write (they create/modify),
     # DELETE = destructive (it deletes). DELETE is deliberately a rung above
     # the other mutating verbs -- lumping it in as `write` would let a
     # `--deny-destructive` session delete through the REST boundary.
-    # These keys are the ONLY firewall an `http.*` call meets for
-    # most routes: on the serve side only `/auth/*` re-checks the policy
-    # (since 0.90.1) -- every other router is still unguarded, so a deny
-    # policy does not survive the REST boundary there (issue #655).
+    # Since vNEXT (issue #655) the serve's own routes DO enforce the served
+    # config dir's policy on top, so a denied operation is refused at both
+    # ends; before that, only `/auth/*` (since 0.90.1) and `/merge-requests/*`
+    # re-checked the policy and every other router was unguarded, so these
+    # keys were the only firewall an `http.*` call met there.
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
@@ -476,7 +484,17 @@ FLAG_ESCALATIONS: dict[str, str] = {
 # they have no CLI leaf command, so the command-sync gate would otherwise report
 # them as dead keys -- `scripts/check_command_sync.py` subtracts this set before
 # its "key matching no live command" check.
-SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset({"auth.projects", "merge-request.by-branch"})
+SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "auth.projects",
+        "merge-request.by-branch",
+        # Both back a web-UI affordance with no terminal equivalent: the
+        # dashboard's Local AI chat tile and the workspace SQL editor's
+        # "improve this query" helper.
+        "ai.chat",
+        "workspace.sql-improve",
+    }
+)
 
 
 # The operation namespace that disappeared with the MCP passthrough, and the
@@ -649,6 +667,20 @@ class PermissionEngine:
     def active(self) -> bool:
         """Whether a permission policy is configured."""
         return self._policy is not None
+
+    @property
+    def policy(self) -> PermissionPolicy | None:
+        """The EFFECTIVE policy this engine evaluates, or None when unrestricted.
+
+        On the serve side the engine is built by ``create_app`` from the served
+        directory's persisted policy already merged with ``--deny-writes`` /
+        ``--deny-destructive`` (:func:`apply_firewall_flags`), so this is what
+        ``GET /permissions/show`` must report: a caller needs the rules that
+        actually apply, not the persisted half of them.
+
+        Read-only by design -- a policy is chosen once, at engine construction.
+        """
+        return self._policy
 
     def is_allowed(self, operation: str) -> bool:
         """Check if an operation is allowed by the active policy.

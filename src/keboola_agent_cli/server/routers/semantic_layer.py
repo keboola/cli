@@ -26,8 +26,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from ...errors import ErrorCode
+from ...permissions import PermissionEngine
 from ...services.semantic_layer_service import SCHEMA_TYPE_ALIAS
-from ..dependencies import ServiceRegistry, get_registry
+from ..dependencies import ServiceRegistry, get_permission_engine, get_registry
 
 router = APIRouter(prefix="/semantic-layer", tags=["semantic-layer"])
 
@@ -232,6 +233,32 @@ class RefDataSet(BaseModel):
     description: str | None = None
 
 
+def _gate_organization_scope(
+    engine: PermissionEngine,
+    operation: str,
+    scope: str | None,
+    *,
+    inherit_from: tuple[ServiceRegistry, str, str | None] | None = None,
+) -> None:
+    """Check ``<operation> --scope organization`` when the write lands at organization scope.
+
+    The REST form of the CLI's ``resolve_scope_targets`` /
+    ``gate_inherited_organization_scope``. The route table checks only the base
+    key (``write``); an ``organization`` scope is one-way and widens visibility
+    to the whole organization, so ``FLAG_ESCALATIONS`` makes it destructive-class.
+
+    ``inherit_from=(registry, alias, model)`` marks a write whose items take the
+    model's scope when ``scope`` is omitted. As on the CLI, the model lookup runs
+    only when a policy is active, and an inherited ``organization`` gets the same
+    check as a typed one.
+    """
+    if scope is None and inherit_from is not None and engine.active:
+        registry, alias, model = inherit_from
+        scope = registry.semantic_layer.child_scope(alias=alias, model_name_or_uuid=model)
+    if scope == "organization":
+        engine.check_or_raise(f"{operation} --scope organization")
+
+
 # ── Routes (14 declarations, in the order from the plan) ────────────
 
 
@@ -246,9 +273,12 @@ def list_models(
 
 @router.post("/models", summary="Create a semantic-layer model")
 def create_model(
-    body: ModelCreate, registry: ServiceRegistry = Depends(get_registry)
+    body: ModelCreate,
+    registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Create a semantic-layer model (POST /repository/semantic-model)."""
+    _gate_organization_scope(engine, "semantic-layer.model.create", body.scope)
     return registry.semantic_layer.create_model(
         alias=body.project,
         name=body.name,
@@ -427,6 +457,7 @@ def add_item(
     kind: ItemKind,
     body: dict[str, Any],
     registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Add an entity to a model. ``kind`` selects the entity type.
 
@@ -438,6 +469,12 @@ def add_item(
     svc = registry.semantic_layer
     if kind == "metric":
         m = AddMetric.model_validate(body)
+        _gate_organization_scope(
+            engine,
+            "semantic-layer.add.metric",
+            m.scope,
+            inherit_from=(registry, m.project, m.model),
+        )
         return svc.add_metric(
             alias=m.project,
             model_name_or_uuid=m.model,
@@ -452,6 +489,12 @@ def add_item(
         )
     if kind == "dataset":
         d = AddDataset.model_validate(body)
+        _gate_organization_scope(
+            engine,
+            "semantic-layer.add.dataset",
+            d.scope,
+            inherit_from=(registry, d.project, d.model),
+        )
         return svc.add_dataset(
             alias=d.project,
             model_name_or_uuid=d.model,
@@ -467,6 +510,12 @@ def add_item(
         )
     if kind == "relationship":
         r = AddRelationship.model_validate(body)
+        _gate_organization_scope(
+            engine,
+            "semantic-layer.add.relationship",
+            r.scope,
+            inherit_from=(registry, r.project, r.model),
+        )
         return svc.add_relationship(
             alias=r.project,
             model_name_or_uuid=r.model,
@@ -480,6 +529,12 @@ def add_item(
         )
     if kind == "constraint":
         c = AddConstraint.model_validate(body)
+        _gate_organization_scope(
+            engine,
+            "semantic-layer.add.constraint",
+            c.scope,
+            inherit_from=(registry, c.project, c.model),
+        )
         return svc.add_constraint(
             alias=c.project,
             model_name_or_uuid=c.model,
@@ -493,6 +548,12 @@ def add_item(
         )
     if kind == "glossary":
         g = AddGlossary.model_validate(body)
+        _gate_organization_scope(
+            engine,
+            "semantic-layer.add.glossary",
+            g.scope,
+            inherit_from=(registry, g.project, g.model),
+        )
         return svc.add_glossary(
             alias=g.project,
             model_name_or_uuid=g.model,
@@ -610,9 +671,17 @@ def remove_item(
 
 @router.post("/import", summary="Import a snapshot into a project")
 def import_snapshot(
-    body: ImportRequest, registry: ServiceRegistry = Depends(get_registry)
+    body: ImportRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Replay an inline snapshot into a project. Default: skip on conflict."""
+    _gate_organization_scope(
+        engine,
+        "semantic-layer.import",
+        body.scope,
+        inherit_from=(registry, body.project, body.model),
+    )
     return registry.semantic_layer.import_snapshot_from_dict(
         body.project,
         snapshot=body.snapshot,
@@ -627,9 +696,17 @@ def import_snapshot(
 
 @router.post("/promote", summary="Promote a model between projects")
 def promote(
-    body: PromoteRequest, registry: ServiceRegistry = Depends(get_registry)
+    body: PromoteRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Promote a model from one project to another (additive + overwrite)."""
+    _gate_organization_scope(
+        engine,
+        "semantic-layer.promote",
+        body.scope,
+        inherit_from=(registry, body.to_project, body.to_model),
+    )
     return registry.semantic_layer.promote_model(
         from_project=body.from_project,
         to_project=body.to_project,
@@ -643,8 +720,17 @@ def promote(
 
 
 @router.post("/build", summary="Build a model from tables")
-def build(body: BuildRequest, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
+def build(
+    body: BuildRequest,
+    registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
+) -> dict[str, Any]:
     """Heuristic greenfield builder — synthesize a model from a list of tables."""
+    if body.model is not None:
+        # No `scope` field: only building INTO an existing model can land at organization.
+        _gate_organization_scope(
+            engine, "semantic-layer.build", None, inherit_from=(registry, body.project, body.model)
+        )
     return registry.semantic_layer.build_model(
         alias=body.project,
         table_ids=body.tables,
@@ -715,8 +801,9 @@ def delete_reference_data(
 
 # ── scope (visibility, target-project grants, org-elevation requests) ──
 # Mirrors `kbagent semantic-layer scope *`. A write to `organization` scope is
-# irreversible; like every router outside /auth, these do not consult the
-# permission engine -- the bearer token of `serve` is the gate.
+# irreversible: the route table checks the base key, and `scope_set` escalates
+# an elevation to the destructive-class `semantic-layer.scope.set --scope
+# organization`, as the CLI does.
 
 ScopeKind = Literal["model", "dataset", "metric", "relationship", "constraint", "glossary"]
 
@@ -767,8 +854,10 @@ def scope_set(
     context_id: str,
     body: ScopeSet,
     registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Elevate to organization (irreversible), or replace/clear the target projects."""
+    _gate_organization_scope(engine, "semantic-layer.scope.set", body.scope)
     return registry.semantic_layer.scope_set(
         alias=body.project,
         kind=body.type,

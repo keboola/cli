@@ -120,6 +120,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ): "merge-request diff",
     ("GET", "/notifications"): "notification list",
     ("GET", "/notifications/{project}/{subscription_id}"): "notification detail",
+    ("GET", "/permissions/show"): "permissions show",
     ("GET", "/projects"): "project list",
     ("GET", "/projects/current"): "project current",
     ("GET", "/projects/status"): "project status",

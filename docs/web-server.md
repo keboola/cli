@@ -100,14 +100,13 @@ the web UI's chat. `agents` mirrors `kbagent agent *` (both sides read the
 same `agents.json`); what is serve-only there is the cron loop, so a
 scheduled task fires only while the server runs. `auth` mirrors only the
 read/audit half of `kbagent auth` *(since v0.90.1)* — `login` /
-`login-password` / `logout` deliberately have no endpoint — and it is so far
-the only router that enforces the permission policy; see "`/auth/*` — three
-read/audit endpoints, three deliberate gaps" below.
+`login-password` / `logout` deliberately have no endpoint.
 
 Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
-(filesystem-local by design), `permissions`, and `init`. The mirrors still
-considered missing are tracked in #657, and the fact that `permissions`
-constrains only `/auth/*` and not the other ~30 routers is #655.
+(filesystem-local by design), `init`, and the *write* half of `permissions`
+(`set` / `reset`). The mirrors still considered missing are tracked in #657.
+`GET /permissions/show` *(since vNEXT)* is the read half — see "The session
+firewall applies to every route" below.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
@@ -485,23 +484,25 @@ None of the three response shapes (`ProjectCandidatesResult`,
 `RegisterProjectsResult`, `AuthStatusResult`) ever carries a token value,
 including the `kbc-session://` sentinel.
 
-`/auth/*` is also the **first router to enforce the permission policy**: every
-route above declares `Depends(require_permission(...))`, so a denied operation
-answers **HTTP 403** with `error_code: PERMISSION_DENIED` — the same code the
-CLI exits on. The other ~30 routers do not check the engine yet; see the
-gotchas entry on this before assuming a deny policy firewalls the whole REST
-surface.
+`/auth/*` was the **first router to enforce the permission policy** (0.90.1):
+every route above declares `Depends(require_permission(...))` at its own call
+site. Since vNEXT that is no longer special — *every* route on the server is
+enforced (see "The session firewall applies to every route" below) — and the
+three inline declarations survive only as the per-route override form.
 
 The policy in force is the **persisted `permissions` block of the config dir
 `serve` resolves**, plus whichever session flags the `kbagent` invocation
-carried. Two consequences worth knowing before you reach for a flag:
+carried. The server reads that block once, when it starts. After
+`permissions set` or `permissions reset`, restart `kbagent serve`: until then
+the running server keeps the old policy. Two consequences worth knowing before
+you reach for a flag:
 
 - **`kbagent --deny-writes serve` never starts the server.** `serve` is
   classified `admin`, and `--deny-writes` appends `cli:write`, which spans
   write + destructive + admin — so the CLI callback blocks the `serve` command
   itself (exit code 6, `Operation 'serve' is blocked by the active permission
-  policy`). `--deny-destructive` does start the server, but no `/auth/*`
-  operation is destructive, so it changes nothing here.
+  policy`). `--deny-destructive` does start the server, and since vNEXT it
+  blocks every destructive route (no `/auth/*` operation is destructive).
 - **Use a persisted policy instead.** Run, on the host, in a real terminal
   (`permissions set` requires a typed confirmation code — there is no `--yes`):
 
@@ -572,6 +573,84 @@ Sign in via the CLI directly (`kbagent auth login-password`, or `auth login`
 for a human), then use `POST /auth/register-projects` — or `auth
 register-projects` on the CLI — to register the resulting session's projects
 for `serve` to use.
+
+### The session firewall applies to every route
+
+*(since vNEXT — issue #655)*
+
+`PermissionEngine` used to be built only in the Typer callback, so a persisted
+`permissions set --mode deny` policy — and both `--deny-writes` and
+`--deny-destructive` — protected the CLI process and nothing else. `kbagent
+serve` exposed every route, `DELETE /storage/buckets` included, behind a single
+all-or-nothing bearer token. 0.90.1 closed that for `/auth/*` and 0.94.0 for
+`/merge-requests/*`; vNEXT closes it for the whole surface.
+
+**How it works.** One app-level dependency (`server/route_permissions.py`) runs
+on every request, looks the matched route up by `(method, path template)` in
+`ROUTE_OPERATIONS`, and calls the same `PermissionEngine.check_or_raise` the CLI
+uses. A denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` and the
+same message the CLI prints, so a client can branch on one value across both
+surfaces. The body is the error envelope every other `serve` error uses
+(`{"status": "error", "error": {"code", "message"}}`). A route that declares its
+own `Depends(require_permission(...))` (`/auth/*`, `/merge-requests/*`) is
+checked by that dependency and skipped by the table.
+
+Three properties worth knowing:
+
+- **A route with no classification is refused, not exempted.** Failing open
+  would make the newest, least-reviewed part of the surface the one outside the
+  firewall. A test (`tests/test_server_route_permissions.py`) asserts the table
+  matches the live app in both directions, so the refusal path should never be
+  reached in a released build — if you hit it, a route was added without a table
+  entry.
+- **No policy configured changes nothing.** With a clean `config.json` and no
+  session flags, `is_allowed` returns True for everything and the surface
+  behaves exactly as it did before.
+- **Bootstrap paths are never checked** (`UNGUARDED_PATHS`: `/health/ping`,
+  `/health/auth-info`, `/ui-config`, `/docs`, `/redoc`, `/openapi.json`, and the
+  SPA shell). A locked-down server must still be able to say who it is;
+  otherwise a client cannot tell a policy refusal from a dead process.
+
+**Per-kind leaf keys.** `POST /semantic-layer/items/{kind}`, `PUT
+/semantic-layer/items/{kind}/{name}` and `DELETE
+/semantic-layer/items/{kind}/{name}` cover all five kinds in one route each. Like
+the CLI, the server checks two keys for them: the parent (`semantic-layer.add`)
+and the leaf built from the `{kind}` path parameter (`semantic-layer.add.metric`).
+A policy that names only a leaf key, or a leaf glob like `semantic-layer.add.*`,
+is enforced over REST the same as on the CLI. A `mode: deny` policy must allow
+both keys, as on the CLI.
+
+**`--scope organization` writes are destructive-class over REST too.** The table
+sees the route, not the body, so it checks only the non-flag keys (`write`). An
+organization scope is one-way and makes an item visible to every project in the
+organization, so `FLAG_ESCALATIONS` classifies it `destructive`, and the
+handlers add that check: `PUT /semantic-layer/scope/{context_id}` with
+`"scope": "organization"` checks `semantic-layer.scope.set --scope
+organization`; `POST /semantic-layer/models`, `POST /semantic-layer/items/{kind}`
+(per kind: `semantic-layer.add.<kind> --scope organization`), `POST
+/semantic-layer/import` and `POST /semantic-layer/promote` check their own
+escalated key when the body asks for `organization`. As on the CLI, an omitted
+`scope` that would INHERIT `organization` from the target model (`items`,
+`import`, `promote`, and `build` with a `model`) gets the same check; the model
+lookup runs only when a policy is active. Under `--deny-destructive` these calls
+answer 403 `PERMISSION_DENIED`; the same calls at `project` or `targeted` scope
+are allowed.
+
+**Discovering the policy.** `GET /permissions/show` returns the *effective*
+policy the server enforces — the persisted block already merged with the
+`--deny-*` flags the daemon was launched with, which a REST caller can neither
+see nor change:
+
+```json
+{"active": true, "policy": {"mode": "allow", "allow": [], "deny": ["cli:destructive"]}}
+```
+
+It stays reachable under any policy (`permissions.*` operations are always
+allowed, by the same anti-lockout rule the CLI has) but still requires the
+bearer token. There is deliberately **no write counterpart**: letting a bearer
+token widen the policy that constrains it would make the firewall
+self-defeating, so `permissions set` / `reset` stay terminal actions on the
+host.
 
 ### Manage tokens are per-request
 

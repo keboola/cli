@@ -2272,7 +2272,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
     is not an error; the serve-level flag wins. That directory decides which
     projects the REST surface exposes AND which persisted `permissions`
-    policy the /auth/* routes enforce. NOTE for older installs: up to 0.90.1
+    policy its routes enforce (every route since vNEXT; only /auth/* and
+    /merge-requests/* on 0.98.0 and older). NOTE for older installs: up to 0.90.1
     `serve` ignored the root-level flag entirely, silently serving a
     different directory -- there, always pass --config-dir to `serve` itself.
 
@@ -2328,7 +2329,10 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     List all operations with risk categories and current allowed/denied status.
 
   kbagent permissions show
-    Show current active permission policy.
+    Show current active permission policy. The persisted policy also applies
+    to every route of `kbagent serve` (denial = HTTP 403 PERMISSION_DENIED),
+    against the config dir the SERVER resolved; `GET /permissions/show` over
+    serve reports that effective policy. No REST route can change it.
 
   kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
     Set firewall-style permission policy. Patterns: exact (branch.delete),
