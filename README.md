@@ -77,7 +77,7 @@ On Windows, run the PowerShell install from the Windows section above as the sec
 
 If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the latest version number from the [releases page](https://github.com/keboola/cli/releases/latest).
 
-A failed startup update prints the last line of the uv output as `Cause:` (since vNEXT). On an install under the old name it also prints the two commands above.
+A failed startup update prints the last line of the uv output as `Cause:` (since vNEXT). When uv stops with `Executable already exists` on an install under the old name, it prints the two commands above instead of the recovery command.
 
 ## Web UI (optional)
 

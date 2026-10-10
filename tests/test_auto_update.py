@@ -1044,6 +1044,17 @@ class TestStartupFailureBanner:
         # run first.
         assert uninstall < install
 
+    def test_legacy_install_with_another_failure_gets_the_recovery_command(self, run_failed_update):
+        # A network error on a legacy-named install is not the executable
+        # conflict, so the uninstall steps would not help.
+        err = run_failed_update(
+            app_name="keboola-agent-cli",
+            install_output="error: Failed to fetch: `https://example.test/k.whl`\n",
+        )
+
+        assert "uv tool uninstall" not in err
+        assert f"Recover with: {self.RECOVERY}" in err
+
     def test_no_installer_output_prints_no_cause_line(self, run_failed_update):
         err = run_failed_update(app_name="keboola-cli", install_output="")
 
