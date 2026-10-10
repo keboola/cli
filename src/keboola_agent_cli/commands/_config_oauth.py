@@ -73,7 +73,7 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Generate an OAuth authorization URL for a component configuration.
 
-        Mints a short-lived, component-scoped authorization link and opens it in
+        Creates a short-lived, component-scoped authorization link and opens it in
         the default browser, so the URL never has to be clicked or copied: it is
         ~200 characters, and a terminal or chat renderer that wraps it turns the
         visible link into its first row only, which drops the configuration id

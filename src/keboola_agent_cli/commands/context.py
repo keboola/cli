@@ -574,9 +574,10 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
     Delete a configuration row. Destructive; --yes to skip confirmation prompt.
 
-  kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+  kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL] [--no-open]
     Return the OAuth authorization URL for a component that uses OAuth authentication.
     Open the URL in a browser to complete the OAuth flow.
+    Opens it in the default browser in interactive human mode (never with --json); --no-open only prints it (since vNEXT).
 
   kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
     Read a configuration's runtime state (the same dict --with-state attaches

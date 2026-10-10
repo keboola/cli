@@ -5,7 +5,7 @@ Getting an OAuth-based component (`keboola.ex-facebook-ads-v2`, `keboola.ex-goog
 ## Steps
 
 1. `kbagent config oauth-url --project NAME --component-id ID --config-id ID`
-   Needs a **master** token (`canManageTokens`); a non-master token fails fast with `MISSING_MASTER_TOKEN` (exit 3). The minted token lives 1 hour, so generate the link when the user is ready to click through, not ahead of time.
+   Needs a **master** token (`canManageTokens`); a non-master token fails fast with `MISSING_MASTER_TOKEN` (exit 3). The created token lives 1 hour, so generate the link when the user is ready to click through, not ahead of time.
    Since vNEXT the command opens the URL in the user's default browser itself (interactive human mode only -- never under `--json`, never when stdout is not a terminal, suppressed by `--no-open`). Under `--json` the result has `browser_opened: false`.
    Before you give the link to the user, run `kbagent config detail --project NAME --component-id ID --config-id ID` and note the configuration `version`. Step 3 compares against it.
 2. The user completes the provider's consent screen in the browser.

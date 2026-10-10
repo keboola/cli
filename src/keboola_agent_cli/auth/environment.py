@@ -172,24 +172,22 @@ def detect_browser_environment() -> BrowserEnvironment:
     return BrowserEnvironment(loopback_browser_usable=True, reason="", opener=opener)
 
 
-def _open_via_wslview(url: str) -> bool:
-    """Hand ``url`` to the Windows-side default browser through `wslview`.
+def _open_via_wslview(url: str) -> None:
+    """Thread target for `open_browser` under WSL: hand ``url`` to `wslview`.
 
-    Runs synchronously so the exit status is the answer: unlike the
-    `webbrowser` path there is no thread to swallow, and the whole point is to
-    know whether Windows accepted the URL. Output is captured, never logged --
-    the URL must not reach stderr.
+    `wslview` passes the URL to the Windows-side default browser. Output is
+    captured, never logged, and every error is swallowed -- the URL must not
+    reach stderr (see `_open_silently`).
     """
     try:
-        completed = subprocess.run(
+        subprocess.run(
             ["wslview", url],
             capture_output=True,
             timeout=_WSLVIEW_OPEN_TIMEOUT_SECONDS,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return completed.returncode == 0
+    except Exception:
+        return
 
 
 def open_browser(url: str, *, wait_seconds: float = 0.0) -> bool:
@@ -211,16 +209,19 @@ def open_browser(url: str, *, wait_seconds: float = 0.0) -> bool:
     handling off ``sys.platform == "win32"``, which is ``linux`` inside WSL, so
     it would either find no handler at all or open a browser in the Linux
     session -- a separate profile that shares none of the logins the URL needs.
+    It runs on the same daemon thread and honors ``wait_seconds`` the same way;
+    a working `wslview` (probed synchronously) counts as the available handler.
     """
     if _env_flag_set("WSL_INTEROP") and _wslview_is_working():
-        return _open_via_wslview(url)
+        target = _open_via_wslview
+    else:
+        try:
+            webbrowser.get()
+        except webbrowser.Error:
+            return False
+        target = _open_silently
 
-    try:
-        webbrowser.get()
-    except webbrowser.Error:
-        return False
-
-    thread = threading.Thread(target=_open_silently, args=(url,), daemon=True)
+    thread = threading.Thread(target=target, args=(url,), daemon=True)
     thread.start()
     if wait_seconds > 0:
         thread.join(timeout=wait_seconds)
