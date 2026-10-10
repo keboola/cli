@@ -20,6 +20,12 @@ from ..auth.environment import open_browser
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
+# The command exits right after the open, and `open_browser` runs the opener
+# on a daemon thread that dies with the process. Same wait as
+# `data-app password --open`: long enough for `webbrowser` to start the
+# opener, short enough that an opener it blocks on cannot hold the command.
+_BROWSER_OPEN_WAIT_SECONDS = 2.0
+
 
 def _should_open(*, no_open: bool, is_terminal: bool) -> bool:
     """Whether to hand the URL to a browser: interactive use, unless opted out."""
@@ -76,7 +82,8 @@ def register(app: typer.Typer) -> None:
 
         The browser is left alone in `--json` mode and when stdout is not a
         terminal, so scripted and piped callers never get a stray window;
-        `--no-open` suppresses it in interactive use too.
+        `--no-open` suppresses it in interactive use too. The `--json` output
+        has `browser_opened: false`: give the URL to the user.
 
         \b
         Examples:
@@ -114,6 +121,9 @@ def register(app: typer.Typer) -> None:
         url = result["url"]
 
         if formatter.json_mode:
+            # --json never opens a browser. The key tells an agent so, so that
+            # it gives the URL to the user and does not report an open.
+            result["browser_opened"] = False
             formatter.output(result)
             return
 
@@ -128,7 +138,7 @@ def register(app: typer.Typer) -> None:
         formatter.console.print(url, soft_wrap=True, highlight=False, markup=False)
 
         should_open = _should_open(no_open=no_open, is_terminal=formatter.console.is_terminal)
-        if should_open and open_browser(url):
+        if should_open and open_browser(url, wait_seconds=_BROWSER_OPEN_WAIT_SECONDS):
             formatter.console.print(
                 "\n[dim]Opened in your default browser. Grant access there.[/dim]"
             )

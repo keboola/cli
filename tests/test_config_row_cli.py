@@ -1,6 +1,7 @@
 """CLI tests for config row-create, row-update, and oauth-url commands."""
 
 import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from helpers import setup_single_project
+from keboola_agent_cli.auth import environment
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands._config_oauth import _should_open
 from keboola_agent_cli.errors import KeboolaApiError
@@ -748,7 +750,7 @@ class TestConfigOauthUrlCli:
                 lambda ctx, name: service,
             )
 
-            def _record(url: str) -> bool:
+            def _record(url: str, **_kwargs: float) -> bool:
                 opened.append(url)
                 return True
 
@@ -777,6 +779,79 @@ class TestConfigOauthUrlCli:
         assert result.exit_code == 0, result.output
         assert opened == [OAUTH_RESULT["url"]]
         assert "Opened in your default browser" in result.output
+
+    def test_opener_has_run_when_the_command_returns(self, tmp_config_dir: Path) -> None:
+        """The process exits right after the command, and the opener thread dies with it.
+
+        The fake opener is slow on purpose: without the wait, the command
+        returns (and reports an open) before the opener has run.
+        """
+        service = self._make_oauth_service(tmp_config_dir)
+        opened: list[str] = []
+
+        def _slow_open(url: str) -> bool:
+            time.sleep(0.2)
+            opened.append(url)
+            return True
+
+        def _always_open(**_kwargs: bool) -> bool:
+            return True
+
+        with pytest.MonkeyPatch.context() as mp:
+            # The real open_browser, on its webbrowser path: no WSL, no real browser.
+            mp.delenv("WSL_INTEROP", raising=False)
+            mp.setattr(environment, "_wslview_is_working", lambda: False)
+            mp.setattr(environment.webbrowser, "get", lambda: object())
+            mp.setattr(environment.webbrowser, "open", _slow_open)
+            mp.setattr(
+                "keboola_agent_cli.commands._config_oauth.get_service",
+                lambda ctx, name: service,
+            )
+            mp.setattr("keboola_agent_cli.commands._config_oauth._should_open", _always_open)
+            result = runner.invoke(
+                app,
+                [
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "config",
+                    "oauth-url",
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                ],
+            )
+            assert opened == [OAUTH_RESULT["url"]]
+
+        assert result.exit_code == 0, result.output
+        assert "Opened in your default browser" in result.output
+
+    def test_json_mode_says_no_browser_opened(self, tmp_config_dir: Path) -> None:
+        """An agent runs with --json: the output must tell it that nothing opened."""
+        service = self._make_oauth_service(tmp_config_dir)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands._config_oauth.get_service",
+                lambda ctx, name: service,
+            )
+            result = _invoke(
+                tmp_config_dir,
+                "oauth-url",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-google-drive",
+                    "--config-id",
+                    "cfg-001",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["browser_opened"] is False
 
 
 class TestShouldOpenBrowser:
