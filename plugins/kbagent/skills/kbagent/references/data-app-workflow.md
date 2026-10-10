@@ -355,16 +355,18 @@ contract), so `data-app deploy` on a pure managed repo deploys straight from
 `app.managedGitRepoId`. If a deploy ever reverts to stopped, diagnose it with
 `data-app runs` (`failure_reason` + `startup_logs`).
 
-**Workspace access is a separate concern from cloning (since vNEXT/CLI-15).**
+**Workspace access is a separate concern from cloning (since vNEXT; CLI-15).**
 Cloning needs no credential wiring, as above -- but an app that also reads
 Storage (`runtime.workspace.enabled: true`, the `--workspace` default) needs a
 workspace grant, and that grant is gated on `parameters.dataApp.git` being
 present in Storage config, independent of `managedGitRepoId`. Step 4 above now
 backfills that block automatically before the first deploy, so this flow needs
-no extra manual step. **Push to `main` specifically:** the backfilled block
-always sets `branch: main`, because the managed repo's `git-repo` lookup
-returns no branch to read -- code pushed only to another branch is never
-deployed, and nothing warns you. On an older kbagent version, the tell for the
+no extra manual step. **Push to the backfilled branch:** the block sets
+`branch` from `data-app deploy --git-branch` (default `main`; since vNEXT),
+because the managed repo's `git-repo` lookup returns no branch to read. The
+deploy result reports the branch it wrote (`git_branch`). `--git-branch` has
+no effect on a deploy that does not backfill. Code pushed only to another
+branch is never deployed. On an older kbagent version, the tell for the
 unpatched gap is `data-app detail` showing `Git: {}` (empty) on a `running`
 app with no `WORKSPACE_ID` -- see the gotchas reference for the manual
 workaround.

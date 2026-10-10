@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any
 
 from ..client import KeboolaClient
-from ..constants import DEFAULT_JOB_RUN_TIMEOUT
+from ..constants import DEFAULT_GIT_BRANCH, DEFAULT_JOB_RUN_TIMEOUT
 from ..data_science_client import DataScienceClient
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
@@ -35,15 +35,19 @@ from ..models import ProjectConfig
 # Re-exported so existing `from ...data_app_service import _x` call sites
 # (tests included) keep resolving after the split into _data_app_bodies.py.
 from ._data_app_bodies import (
+    DATA_APP_COMPONENT_ID,
     ENCRYPTED_PASSWORD_PREFIXES,
     RESERVED_RUNTIME_ENV_VARS,
     _auth_block_for,
     _build_runtime_block,
+    _check_text_field,
     _coerce_config_dict,
     _derive_runtime_env_var_name,
+    _has_control_chars,
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
+    git_backfill_warning,
     resolve_effective_version,
 )
 from ._data_app_password import (
@@ -71,8 +75,6 @@ def make_default_ds_client_factory(config_store: Any) -> DataScienceClientFactor
 # ---------------------------------------------------------------------------
 # Constants encoded from the writeup
 # ---------------------------------------------------------------------------
-
-DATA_APP_COMPONENT_ID = "keboola.data-apps"
 
 VALID_TYPES: tuple[str, ...] = (
     "python-js",
@@ -107,22 +109,6 @@ POLL_INTERVAL_SECONDS = 5.0
 TERMINAL_ERROR_STATE = "error"
 RUNNING_STATE = "running"
 STOPPED_STATE = "stopped"
-
-
-def _has_control_chars(value: str, *, allow_whitespace: bool = False) -> bool:
-    """Return True if ``value`` contains any ASCII control byte (0x00-0x1f / 0x7f).
-
-    Set ``allow_whitespace=True`` to permit ``\\t \\n \\r`` (description markdown);
-    everything else under 0x20 + 0x7f is still rejected.
-    """
-    allowed = {0x09, 0x0A, 0x0D} if allow_whitespace else set()
-    for ch in value:
-        code = ord(ch)
-        if code in allowed:
-            continue
-        if code < 0x20 or code == 0x7F:
-            return True
-    return False
 
 
 # URL schemes accepted for ``--git-repo``. Anything else (file://, gopher://,
@@ -585,6 +571,7 @@ class DataAppService(BaseService):
         wait: bool = False,
         timeout_seconds: float = DEFAULT_JOB_RUN_TIMEOUT,
         branch_id: int | None = None,
+        git_branch: str = DEFAULT_GIT_BRANCH,
     ) -> dict[str, Any]:
         """Encapsulate the §9 redeploy contract.
 
@@ -592,7 +579,11 @@ class DataAppService(BaseService):
         ``config_version`` to deploy an older version. ALWAYS sends
         ``restartIfRunning=true`` together with ``configVersion`` -- the
         server returns HTTP 422 for any other shape.
+
+        ``git_branch`` is the branch written into ``parameters.dataApp.git``
+        when deploy backfills a pure managed repo; it has no effect otherwise.
         """
+        _check_text_field("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -612,11 +603,13 @@ class DataAppService(BaseService):
             # An explicit --config-version always wins as an escape hatch; see
             # resolve_effective_version's docstring for the resolution rules.
             effective_version: str | None = config_version
+            git_backfilled = False
             if config_version is None:
                 storage_client = self._client_factory(project.stack_url, project.token)
-                effective_version = resolve_effective_version(
-                    ds_client, storage_client, app, app_id, config_id, branch_id
+                resolved = resolve_effective_version(
+                    ds_client, storage_client, app, app_id, config_id, branch_id, git_branch
                 )
+                effective_version, git_backfilled = resolved.version, resolved.git_backfilled
 
             deployed = ds_client.patch_app(
                 app_id,
@@ -632,7 +625,7 @@ class DataAppService(BaseService):
                     target_desired_state=RUNNING_STATE,
                     timeout_seconds=timeout_seconds,
                 )
-            return self._format_lifecycle_result(
+            result = self._format_lifecycle_result(
                 alias=alias,
                 app_id=app_id,
                 action="deploy",
@@ -640,6 +633,11 @@ class DataAppService(BaseService):
                 poll_result=poll_result,
                 config_version=effective_version or "",
             )
+            if git_backfilled:
+                result["git_backfilled"] = True
+                result["git_branch"] = git_branch
+                result["warnings"] = [git_backfill_warning(git_branch)]
+            return result
         finally:
             ds_client.close()
             if storage_client is not None:
@@ -1564,28 +1562,7 @@ class DataAppService(BaseService):
             ("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False),
             ("--git-username", git_username or "", MAX_GIT_USERNAME_LENGTH, False),
         ):
-            if not isinstance(field_value, str):
-                continue
-            if len(field_value) > max_len:
-                raise KeboolaApiError(
-                    message=(
-                        f"{field_name} exceeds the {max_len}-character limit "
-                        "enforced at the service boundary."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            # Description allows tab/LF/CR (markdown); other fields reject any
-            # control char including CR/LF (would break URL host derivation,
-            # JSON serialization, or audit-log change descriptions).
-            if _has_control_chars(field_value, allow_whitespace=allow_ws):
-                raise KeboolaApiError(
-                    message=(f"{field_name} contains disallowed control characters."),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
+            _check_text_field(field_name, field_value, max_len, allow_ws)
 
         # Reject git_repo URLs that don't use a known clone scheme. The
         # data-app runner only handles https / http / git / ssh; anything

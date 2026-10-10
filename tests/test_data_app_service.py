@@ -1210,6 +1210,166 @@ class TestDataAppDeploy:
         storage_mock.update_config.assert_called_once()
         ds_mock.patch_app.assert_not_called()
 
+    def test_deploy_pure_managed_result_reports_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        assert result["git_backfilled"] is True
+        assert len(result["warnings"]) == 1
+        assert "parameters.dataApp.git" in result["warnings"][0]
+        assert "main" in result["warnings"][0]
+
+    @pytest.mark.parametrize("branch", ["dev", "release/1.0"])
+    def test_deploy_backfill_writes_and_reports_git_branch(
+        self, tmp_path: Path, branch: str
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch=branch)
+
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == branch
+        assert result["git_branch"] == branch
+        assert f"branch {branch})" in result["warnings"][0]
+        assert f"Push your code to {branch} " in result["warnings"][0]
+
+    def test_deploy_backfill_defaults_to_main(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == "main"
+        assert result["git_branch"] == "main"
+
+    def test_deploy_git_branch_is_ignored_without_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        git_block = {"repository": "https://g/r", "branch": "main"}
+        storage_mock.get_config_detail.return_value = {
+            "version": 9,
+            "configuration": {"parameters": {"dataApp": {"git": git_block}}},
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch="dev")
+
+        storage_mock.update_config.assert_not_called()
+        assert "git_branch" not in result
+        assert "git_backfilled" not in result
+
+    def test_deploy_rejects_invalid_git_branch(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage_mock, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.deploy_data_app(alias="prod", app_id="42", git_branch="x" * 256)
+
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+        ds_mock.get_app.assert_not_called()
+
+    def test_deploy_with_git_block_does_not_report_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 9,
+            "configuration": {"parameters": {"dataApp": {"git": {"repository": "https://g/r"}}}},
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        assert "git_backfilled" not in result
+        assert "warnings" not in result
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [[], {"dataApp": None}, {"dataApp": []}],
+        ids=["parameters-list", "dataApp-null", "dataApp-list"],
+    )
+    def test_deploy_pure_managed_backfill_tolerates_non_dict_shapes(
+        self, tmp_path: Path, parameters: Any
+    ) -> None:
+        """The read treats a non-dict parameters / dataApp as empty; the write must too."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": parameters},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["repository"] == (
+            "https://git.example.com/app-42.git"
+        )
+
+    def test_deploy_pure_managed_backfill_targets_deploy_branch(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42", branch_id=777)
+
+        assert storage_mock.get_config_detail.call_args.kwargs["branch_id"] == 777
+        assert storage_mock.update_config.call_args.kwargs["branch_id"] == 777
+
+    def test_deploy_explicit_version_on_pure_managed_skips_backfill(self, tmp_path: Path) -> None:
+        """An explicit --config-version bypasses resolve_effective_version entirely."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", config_version="3")
+
+        ds_mock.get_git_repo.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+        assert ds_mock.patch_app.call_args.kwargs["config_version"] == "3"
+        assert "git_backfilled" not in result
+
     def test_deploy_managed_with_git_block_pins_latest(self, tmp_path: Path) -> None:
         """Once a credential is wired (parameters.dataApp.git present), the source
         pointer lives in Storage, so the latest configVersion is pinned."""

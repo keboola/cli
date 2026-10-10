@@ -19,7 +19,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from ..constants import DEFAULT_JOB_RUN_TIMEOUT
+from ..constants import DEFAULT_GIT_BRANCH, DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._data_app_git import register_git_commands
@@ -565,6 +565,14 @@ def data_app_deploy(
         "--branch",
         help="Storage branch for reading the latest version (defaults to production).",
     ),
+    git_branch: str = typer.Option(
+        DEFAULT_GIT_BRANCH,
+        "--git-branch",
+        help=(
+            "Git branch to clone (default: main). Used only when deploy writes the "
+            "git block of a pure managed repo; otherwise it has no effect."
+        ),
+    ),
     copy: CopyOption = False,
     reveal: RevealOption = False,
 ) -> None:
@@ -584,7 +592,7 @@ def data_app_deploy(
         app_id=app_id,
         wait=wait,
         timeout=timeout,
-        extra={"config_version": config_version, "branch_id": branch},
+        extra={"config_version": config_version, "branch_id": branch, "git_branch": git_branch},
         delivery=flags,
     )
 

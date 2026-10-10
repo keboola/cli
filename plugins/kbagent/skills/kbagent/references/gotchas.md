@@ -4144,11 +4144,12 @@ Other behaviors of this family:
   `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
-## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
+## `data-app` managed-repo deploy: the platform injects clone creds; deploy backfills the git block (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
 
-**A workspace-provisioning gap in the guidance below was fixed in vNEXT
-(CLI-15)** -- see the correction bullet at the end of this section before
-relying on anything above it about workspace access.
+*(since vNEXT)* `data-app deploy` no longer omits configVersion for a pure
+managed repo (CLI-15). It backfills `parameters.dataApp.git` and pins the
+resulting version. Read the bullets below with that in mind; the last bullet
+has the details.
 
 `--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
 (POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It
@@ -4176,14 +4177,15 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 
 The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
 
-- **configVersion at deploy depends on the source location.** `data-app deploy`
-  **omits** configVersion for a *pure* managed repo (no git block), which deploys
-  from `managedGitRepoId`; it pins the **latest** Storage configVersion only when
-  a git block is present (external repos). Pinning a managed app's no-git-block
-  Storage config made the runtime demand `dataApp.git.repository` and the deploy
-  reverted to `stopped` -- that was the misdiagnosed "could not read Username"
-  symptom, NOT a missing credential. Fixed in 0.65.0 by omitting configVersion for
-  pure managed repos. There is **no** cross-stack "platform doesn't inject
+- **configVersion at deploy depends on the source location.** In 0.65.0 through
+  the release before vNEXT, `data-app deploy` **omitted** configVersion for a
+  *pure* managed repo (no git block) and pinned the **latest** Storage
+  configVersion only when a git block was present (external repos). Pinning a
+  managed app's no-git-block Storage config made the runtime demand
+  `dataApp.git.repository` and the deploy reverted to `stopped` -- that was the
+  misdiagnosed "could not read Username" symptom, NOT a missing credential.
+  Omitting configVersion fixed that crash. Since vNEXT, deploy backfills the git
+  block instead (last bullet). There is **no** cross-stack "platform doesn't inject
   credentials" gap (issue #454 closed as not-a-bug).
 - **Diagnose a stopped-reverting deploy with `data-app runs`**, not `data-app
   logs`. `runs` returns each attempt's `failure_reason` + `startup_logs` --
@@ -4193,18 +4195,21 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   command on the misdiagnosis that a credential had to be wired into the config.
   It was removed in 0.65.1 -- it is unnecessary because no platform-injection gap
   exists.
-- **Correction (vNEXT/CLI-15): omitting configVersion alone does NOT provision a
-  workspace.** The 0.65.0 fix above solves the "could not read Username" crash,
+- **Correction (since vNEXT, CLI-15): omitting configVersion alone does NOT
+  provision a workspace.** The 0.65.0 fix above solves the "could not read Username" crash,
   but a *pure* managed repo (no git block yet) still deployed with no
   `WORKSPACE_ID`/`KBC_WORKSPACE_MANIFEST_PATH`, even with
   `runtime.workspace.enabled: true` and `state: running` -- the same
   no-platform-diagnostic failure mode as the `--workspace` gotcha above. Root
   cause: workspace grant provisioning is gated on `parameters.dataApp.git` being
   present in Storage config, independent of `managedGitRepoId`/
-  `hasManagedGitRepo`/`configVersion`. Fixed in vNEXT: `data-app deploy` now
-  resolves the managed repo's URL and backfills that git block *before* pinning
-  a version, for any pure managed repo -- no manual `config update --merge` step
-  needed. `data-app detail`'s `Git: {}` (empty) on a `running` app is the tell
+  `hasManagedGitRepo`/`configVersion`. Fixed since vNEXT: `data-app deploy` now
+  resolves the managed repo's URL and backfills that git block (repository URL,
+  branch from `--git-branch`, default `main`) *before* pinning a version, for
+  any pure managed repo -- no manual `config update --merge` step needed.
+  `--git-branch` has no effect on a deploy that does not backfill. The deploy
+  result reports it with `git_backfilled: true`, `git_branch` and a `warnings[]`
+  entry. Push your code to that branch of the managed repo. `data-app detail`'s `Git: {}` (empty) on a `running` app is the tell
   for this on an older kbagent version; the workaround there is to merge the
   block manually, then redeploy.
 

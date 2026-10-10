@@ -960,10 +960,14 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   The platform injects the clone credentials at deploy time, so no credential wiring is needed.
 #   deploy pins the LATEST configVersion. For a PURE managed repo (no git block yet), it first
 #   backfills parameters.dataApp.git from the managed repo's URL, then pins the resulting version
-#   (since vNEXT/CLI-15) -- omitting configVersion alone does NOT provision the app's workspace;
-#   grant provisioning is gated on that block's presence, not on configVersion. Use `data-app runs`
+#   (CLI-15) -- omitting configVersion alone does NOT provision the app's workspace;
+#   grant provisioning is gated on that block's presence, not on configVersion. The deploy result
+#   reports it (`git_backfilled`, `git_branch`, `warnings[]`). The branch written is `--git-branch`
+#   (default `main`); it has no effect on a deploy that does not backfill. Push the managed repo's
+#   code to that branch.
+#   Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines). Use `data-app runs`
 #   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
-kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch main] [--copy] [--reveal]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]

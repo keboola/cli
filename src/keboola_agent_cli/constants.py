@@ -664,6 +664,7 @@ CHANGELOG_SUMMARY_NOTES: int = 2
 
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
+DEFAULT_GIT_BRANCH = "main"  # data-app deploy --git-branch default (same as create, validate-repo)
 
 # --- Job Terminate ---
 # States where POST /jobs/{id}/kill returns HTTP 200; any other state yields 400.

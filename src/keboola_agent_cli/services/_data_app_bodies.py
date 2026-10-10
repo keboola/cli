@@ -19,7 +19,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from ..constants import DEFAULT_GIT_BRANCH
 from ..errors import ErrorCode, KeboolaApiError
+
+DATA_APP_COMPONENT_ID = "keboola.data-apps"
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +211,49 @@ def _build_runtime_block(*, size: str, workspace: bool) -> dict[str, Any]:
     return runtime
 
 
-def _build_managed_git_block(repo: dict[str, Any], app_id: str) -> dict[str, Any]:
+def _has_control_chars(value: str, *, allow_whitespace: bool = False) -> bool:
+    """Return True if ``value`` contains any ASCII control byte (0x00-0x1f / 0x7f).
+
+    Set ``allow_whitespace=True`` to permit ``\\t \\n \\r`` (description markdown);
+    everything else under 0x20 + 0x7f is still rejected.
+    """
+    allowed = {0x09, 0x0A, 0x0D} if allow_whitespace else set()
+    for ch in value:
+        code = ord(ch)
+        if code in allowed:
+            continue
+        if code < 0x20 or code == 0x7F:
+            return True
+    return False
+
+
+def _check_text_field(field_name: str, value: Any, max_len: int, allow_ws: bool) -> None:
+    """Reject a too-long or control-char-bearing string; non-strings are skipped."""
+    if not isinstance(value, str):
+        return
+    if len(value) > max_len:
+        raise KeboolaApiError(
+            message=(
+                f"{field_name} exceeds the {max_len}-character limit "
+                "enforced at the service boundary."
+            ),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    # Description allows tab/LF/CR (markdown); other fields reject any
+    # control char including CR/LF (would break URL host derivation,
+    # JSON serialization, or audit-log change descriptions).
+    if _has_control_chars(value, allow_whitespace=allow_ws):
+        raise KeboolaApiError(
+            message=(f"{field_name} contains disallowed control characters."),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+
+
+def _build_managed_git_block(repo: dict[str, Any], app_id: str, git_branch: str) -> dict[str, Any]:
     """Build ``parameters.dataApp.git`` for a managed-repo app from a
     ``get_git_repo`` response.
 
@@ -229,9 +274,25 @@ def _build_managed_git_block(repo: dict[str, Any], app_id: str) -> dict[str, Any
             status_code=500,
             retryable=False,
         )
-    # get_git_repo carries no branch field, so "main" is the documented contract
-    # (data-app-workflow.md: push the managed repo's code to main).
-    return {"repository": git_url, "branch": "main", "private": True}
+    # get_git_repo carries no branch field, so the caller (``deploy --git-branch``)
+    # decides which branch the platform clones.
+    return {"repository": git_url, "branch": git_branch, "private": True}
+
+
+def git_backfill_warning(git_branch: str) -> str:
+    return (
+        f"Deploy wrote parameters.dataApp.git (managed repository URL, branch {git_branch}) "
+        f"into the configuration. Push your code to {git_branch} of the managed repository."
+    )
+
+
+@dataclass(frozen=True)
+class EffectiveVersion:
+    """The Storage ``configVersion`` deploy pins, and whether deploy backfilled the git block."""
+
+    version: str
+    git_backfilled: bool
+    git_branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +304,7 @@ class ManagedGitBackfillTarget:
     config_id: str
     branch_id: int | None
     latest_version: str
+    git_branch: str = DEFAULT_GIT_BRANCH
 
 
 def backfill_managed_git(
@@ -259,10 +321,19 @@ def backfill_managed_git(
     present. Takes pre-constructed clients (not a service instance) so
     ``deploy_data_app`` can call it inline with no new constructor wiring.
     """
-    git_block = _build_managed_git_block(ds_client.get_git_repo(ctx.app_id), ctx.app_id)
-    configuration.setdefault("parameters", {}).setdefault("dataApp", {})["git"] = git_block
+    git_block = _build_managed_git_block(
+        ds_client.get_git_repo(ctx.app_id), ctx.app_id, ctx.git_branch
+    )
+    # Match the read in resolve_effective_version: a non-dict value counts as empty.
+    parameters = configuration.get("parameters")
+    if not isinstance(parameters, dict):
+        parameters = configuration["parameters"] = {}
+    data_app = parameters.get("dataApp")
+    if not isinstance(data_app, dict):
+        data_app = parameters["dataApp"] = {}
+    data_app["git"] = git_block
     updated = storage_client.update_config(
-        component_id="keboola.data-apps",  # mirrors data_app_service.DATA_APP_COMPONENT_ID
+        component_id=DATA_APP_COMPONENT_ID,
         config_id=ctx.config_id,
         configuration=configuration,
         change_description="Auto-backfill managed-repo git block (workspace provisioning fix)",
@@ -300,8 +371,13 @@ def resolve_effective_version(
     app_id: str,
     config_id: str,
     branch_id: int | None,
-) -> str:
+    git_branch: str = DEFAULT_GIT_BRANCH,
+) -> EffectiveVersion:
     """Resolve the Storage ``configVersion`` for ``deploy_data_app`` to pin.
+
+    ``git_backfilled`` in the result is True when the git block was written
+    into the Storage config; ``git_branch`` then names the branch it wrote.
+    ``git_branch`` is used only for that backfill and ignored otherwise.
 
     configVersion resolution depends on where the app's *source* lives:
 
@@ -316,7 +392,7 @@ def resolve_effective_version(
     resolvable.
     """
     storage_config = storage_client.get_config_detail(
-        "keboola.data-apps",  # mirrors data_app_service.DATA_APP_COMPONENT_ID
+        DATA_APP_COMPONENT_ID,
         config_id,
         branch_id=branch_id,
     )
@@ -326,8 +402,9 @@ def resolve_effective_version(
     is_managed = bool(app.get("hasManagedGitRepo"))
     has_git_block = bool(data_app_cfg.get("git"))
     if is_managed and not has_git_block:
-        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version)
-        return backfill_managed_git(ds_client, storage_client, configuration, ctx)
+        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version, git_branch)
+        version = backfill_managed_git(ds_client, storage_client, configuration, ctx)
+        return EffectiveVersion(version=version, git_backfilled=True, git_branch=git_branch)
     if not latest_version:
         raise KeboolaApiError(
             message=(
@@ -338,7 +415,7 @@ def resolve_effective_version(
             error_code=ErrorCode.API_ERROR,
             retryable=False,
         )
-    return latest_version
+    return EffectiveVersion(version=latest_version, git_backfilled=False)
 
 
 def _redact_secret(value: Any) -> Any:

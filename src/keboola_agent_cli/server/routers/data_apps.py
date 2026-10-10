@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ...constants import DEFAULT_GIT_BRANCH
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
@@ -152,6 +153,7 @@ def deploy(
     wait: bool = False,
     timeout_seconds: float = 600.0,
     branch_id: int | None = None,
+    git_branch: str = DEFAULT_GIT_BRANCH,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Deploy the configured version of a data app. Mirrors `kbagent data-app deploy`."""
@@ -162,6 +164,7 @@ def deploy(
         wait=wait,
         timeout_seconds=timeout_seconds,
         branch_id=branch_id,
+        git_branch=git_branch,
     )
 
 
