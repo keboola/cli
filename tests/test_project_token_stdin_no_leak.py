@@ -13,6 +13,7 @@ preview, the error message, the log records.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -191,8 +192,12 @@ SECOND_LINE = "second-line-of-something-piped-in-by-mistake"
 
 
 def _error_text(output: str) -> str:
-    """Join the lines of the Rich error box, so a wrapped message reads as one line."""
-    return " ".join(output.replace("\u2502", " ").split())
+    """Join the lines of the Rich error box, so a wrapped message reads as one line.
+
+    CI renders the box with colour codes, so drop them too.
+    """
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    return " ".join(plain.replace("\u2502", " ").split())
 
 
 @pytest.mark.parametrize("separator", ["\n", "\x1b"], ids=["line-break", "control-char"])
