@@ -178,7 +178,7 @@ class TestWorkspaceCreate:
     def test_workspace_create_ui_failure_json_carries_rollback_details(
         self, tmp_path: Path
     ) -> None:
-        """A failed --ui create surfaces the service's rollback context in --json (issue #755).
+        """A failed --ui create reports the service's rollback context in --json (issue #755).
 
         The envelope stays the stable {status, error{code, message, ...}}; the
         structured details tell an agent whether the sandbox config was

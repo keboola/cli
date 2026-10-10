@@ -2619,7 +2619,7 @@ class TestCreateWorkspaceUiMode:
             "keboola.sandboxes", "cfg-400", branch_id=200
         )
 
-    def test_ui_mode_rollback_failure_is_surfaced_not_swallowed(self, tmp_config_dir: Path) -> None:
+    def test_ui_mode_rollback_failure_is_reported_not_swallowed(self, tmp_config_dir: Path) -> None:
         """When the cleanup itself fails the original error still wins, but the
         user is told which config is left behind and how to remove it."""
         mock_client = MagicMock()

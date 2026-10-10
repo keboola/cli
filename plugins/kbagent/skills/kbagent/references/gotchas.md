@@ -38,8 +38,6 @@ Versioning convention:
     `merge-request merge` and an armed `merge-request auto-merge` also print
     `Target: project 'prod', production`.
   - A command that uses two branches prints a line for each:
-    - `workspace create --ui` creates the config in the active branch but
-      runs its job on production.
     - `workspace from-transformation` reads the transformation from
       production.
     - `sync clone` creates the buckets in production.
