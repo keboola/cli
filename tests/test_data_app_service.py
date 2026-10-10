@@ -1287,12 +1287,13 @@ class TestDataAppDeploy:
         assert "git_branch" not in result
         assert "git_backfilled" not in result
 
-    def test_deploy_rejects_invalid_git_branch(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("git_branch", ["x" * 256, "", " "])
+    def test_deploy_rejects_invalid_git_branch(self, tmp_path: Path, git_branch: str) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage_mock, _enc = _make_service(store)
 
         with pytest.raises(KeboolaApiError) as exc:
-            service.deploy_data_app(alias="prod", app_id="42", git_branch="x" * 256)
+            service.deploy_data_app(alias="prod", app_id="42", git_branch=git_branch)
 
         assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
         ds_mock.get_app.assert_not_called()

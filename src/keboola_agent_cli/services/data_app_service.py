@@ -583,7 +583,7 @@ class DataAppService(BaseService):
         ``git_branch`` is the branch written into ``parameters.dataApp.git``
         when deploy backfills a pure managed repo; it has no effect otherwise.
         """
-        _check_text_field("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False)
+        _check_text_field("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False, required=True)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 

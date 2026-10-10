@@ -227,10 +227,22 @@ def _has_control_chars(value: str, *, allow_whitespace: bool = False) -> bool:
     return False
 
 
-def _check_text_field(field_name: str, value: Any, max_len: int, allow_ws: bool) -> None:
-    """Reject a too-long or control-char-bearing string; non-strings are skipped."""
+def _check_text_field(
+    field_name: str, value: Any, max_len: int, allow_ws: bool, *, required: bool = False
+) -> None:
+    """Reject a too-long or control-char-bearing string; non-strings are skipped.
+
+    ``required=True`` also rejects an empty or whitespace-only string.
+    """
     if not isinstance(value, str):
         return
+    if required and not value.strip():
+        raise KeboolaApiError(
+            message=f"{field_name} must not be empty.",
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
     if len(value) > max_len:
         raise KeboolaApiError(
             message=(
