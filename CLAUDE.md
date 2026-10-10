@@ -821,9 +821,10 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   own `require_permission(...)` (those two routers) are skipped by the table. An unclassified
 #   route is REFUSED, not exempted (a test keeps the table
 #   and the live app in sync both ways); bootstrap paths (/health/ping, /health/auth-info,
-#   /ui-config, /docs, /redoc, /openapi.json, SPA shell) are never checked. Coarser than the
-#   CLI where a path param collapses leaves: POST /semantic-layer/items/{kind} maps to the
-#   parent key `semantic-layer.add`, so a leaf-only policy pattern is CLI-only.
+#   /ui-config, /docs, /redoc, /openapi.json, SPA shell) are never checked. A path param
+#   that collapses CLI leaves is checked like the CLI: POST/PUT/DELETE
+#   /semantic-layer/items/{kind}[/{name}] check the parent key (`semantic-layer.add`) AND
+#   the leaf `semantic-layer.add.<kind>` (route_permissions.LEAF_PATH_PARAMS).
 #   A `--scope organization` semantic-layer write is destructive-class over REST too:
 #   the handlers of scope PUT, models, items/{kind} (per-kind leaf key), import, promote
 #   and build check `<key> --scope organization` (FLAG_ESCALATIONS) for a typed OR an

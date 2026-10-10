@@ -34,6 +34,7 @@ from keboola_agent_cli.permissions import OPERATION_REGISTRY, SERVE_ONLY_OPERATI
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import PERMISSION_DEPENDENCY_MARKER
 from keboola_agent_cli.server.route_permissions import (
+    LEAF_PATH_PARAMS,
     ROUTE_OPERATIONS,
     UNGUARDED_PATHS,
     is_unguarded,
@@ -537,6 +538,102 @@ class TestOrganizationScopeEscalation:
         body = {"project": "demo", "term": "t", "definition": "d"}
         assert client.post(f"{_SL}/items/glossary", headers=AUTH, json=body).status_code == 200
         sl.child_scope.assert_not_called()
+
+
+_METRIC = {"project": "demo", "name": "n", "sql": "1", "dataset": "d"}
+_GLOSSARY = {"project": "demo", "term": "t", "definition": "d"}
+
+
+class TestLeafKeysFromPathParam:
+    """`/semantic-layer/items/{kind}` checks the per-kind leaf key, like the CLI.
+
+    The CLI checks `semantic-layer.add` and `semantic-layer.add.<kind>`. A leaf
+    pattern does not match the parent key (fnmatch), so without the second
+    check a policy that works on the CLI would not apply over REST.
+    """
+
+    @staticmethod
+    def _client(tmp_path: Path, policy: PermissionPolicy) -> tuple[TestClient, Any]:
+        _persist_policy(tmp_path, policy)
+        client, sl = TestOrganizationScopeEscalation._client(tmp_path)
+        for method in ("edit_metric", "edit_glossary", "remove_item"):
+            getattr(sl, method).return_value = {}
+        return client, sl
+
+    @staticmethod
+    def _assert_denied(response: Any, operation: str) -> None:
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        assert operation in response.json()["error"]["message"]
+
+    def test_exact_leaf_deny_blocks_only_that_kind(self, tmp_path: Path) -> None:
+        policy = PermissionPolicy(mode="allow", deny=["semantic-layer.add.metric"])
+        client, sl = self._client(tmp_path, policy)
+        self._assert_denied(
+            client.post(f"{_SL}/items/metric", headers=AUTH, json=_METRIC),
+            "semantic-layer.add.metric",
+        )
+        sl.add_metric.assert_not_called()
+        assert client.post(f"{_SL}/items/glossary", headers=AUTH, json=_GLOSSARY).status_code == 200
+
+    def test_leaf_glob_and_exact_leaves_block_add_edit_and_remove(self, tmp_path: Path) -> None:
+        policy = PermissionPolicy(
+            mode="allow",
+            deny=[
+                "semantic-layer.add.*",
+                "semantic-layer.edit.metric",
+                "semantic-layer.remove.metric",
+            ],
+        )
+        client, sl = self._client(tmp_path, policy)
+        edit = {"project": "demo", "new_description": "x"}
+        self._assert_denied(
+            client.post(f"{_SL}/items/glossary", headers=AUTH, json=_GLOSSARY),
+            "semantic-layer.add.glossary",
+        )
+        self._assert_denied(
+            client.put(f"{_SL}/items/metric/x", headers=AUTH, json=edit),
+            "semantic-layer.edit.metric",
+        )
+        self._assert_denied(
+            client.delete(f"{_SL}/items/metric/x", headers=AUTH, params={"project": "demo"}),
+            "semantic-layer.remove.metric",
+        )
+        sl.add_glossary.assert_not_called()
+        sl.edit_metric.assert_not_called()
+        sl.remove_item.assert_not_called()
+        # Other kinds of edit and remove stay allowed.
+        assert client.put(f"{_SL}/items/glossary/t", headers=AUTH, json=edit).status_code == 200
+        response = client.delete(
+            f"{_SL}/items/glossary/t", headers=AUTH, params={"project": "demo"}
+        )
+        assert response.status_code == 200
+
+    def test_deny_mode_needs_both_parent_and_leaf(self, tmp_path: Path) -> None:
+        """As on the CLI: allowing the parent key alone does not allow a kind."""
+        parent_only = PermissionPolicy(mode="deny", allow=["semantic-layer.add"])
+        client, _ = self._client(tmp_path, parent_only)
+        self._assert_denied(
+            client.post(f"{_SL}/items/metric", headers=AUTH, json=_METRIC),
+            "semantic-layer.add.metric",
+        )
+        both = PermissionPolicy(
+            mode="deny", allow=["semantic-layer.add", "semantic-layer.add.metric"]
+        )
+        client, _ = self._client(tmp_path, both)
+        assert client.post(f"{_SL}/items/metric", headers=AUTH, json=_METRIC).status_code == 200
+
+    def test_every_composed_leaf_is_a_registry_key(self) -> None:
+        """A leaf key missing from the registry would never match an exact-name pattern."""
+        from typing import get_args
+
+        from keboola_agent_cli.server.routers.semantic_layer import ItemKind
+
+        for route, param in LEAF_PATH_PARAMS.items():
+            assert param == "kind"
+            parent = ROUTE_OPERATIONS[route]
+            for kind in get_args(ItemKind):
+                assert f"{parent}.{kind}" in OPERATION_REGISTRY, (route, kind)
 
 
 class TestDenialEnvelope:

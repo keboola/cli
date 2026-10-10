@@ -32,18 +32,19 @@ skipped here (see :func:`resolve_route_operation`). That is what keeps the
 ``/auth/*`` routes from #677 -- and test-only probe routes registered after
 ``create_app`` -- working unchanged.
 
-Granularity caveat
-------------------
-A few CLI operations are finer-grained than the route that mirrors them.
+Leaf keys from a path parameter
+-------------------------------
 ``POST /semantic-layer/items/{kind}`` covers ``metric``/``dataset``/... in one
-route, so it maps to the collapsed parent key ``semantic-layer.add`` rather
-than ``semantic-layer.add.metric``. A policy naming only the leaf key is
-therefore enforced on the CLI but not over REST; name the parent (or
-``cli:write``) to cover both. Documented in ``docs/web-server.md``.
+route. The CLI checks two keys for ``semantic-layer add metric``: the parent
+``semantic-layer.add`` and the leaf ``semantic-layer.add.metric``. The table
+maps the route to the parent key, and :data:`LEAF_PATH_PARAMS` names the path
+parameter that the dependency appends to it for the second check. So a policy
+that names only a leaf key, or a leaf glob like ``semantic-layer.add.*``, is
+enforced over REST the same as on the CLI.
 
 Flag escalations
 ----------------
-The table sees the route, not the body, so it checks the base key only. The
+The table sees the route, not the body, so it never checks a flag key. The
 semantic-layer writes that can land at ``organization`` scope (``FLAG_ESCALATIONS``
 makes that destructive-class) add the escalated check in their handlers, with
 the per-kind leaf key for ``POST /semantic-layer/items/{kind}``.
@@ -342,8 +343,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/semantic-layer/schema"): "semantic-layer.schema",
     ("GET", "/semantic-layer/export"): "semantic-layer.export",
     ("POST", "/semantic-layer/diff"): "semantic-layer.diff",
-    # Collapsed parent keys -- `kind` is a path param, see "Granularity
-    # caveat" in the module docstring.
+    # Parent keys -- the leaf `<key>.<kind>` is checked too, see LEAF_PATH_PARAMS.
     ("POST", "/semantic-layer/items/{kind}"): "semantic-layer.add",
     ("PUT", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.edit",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.remove",
@@ -402,6 +402,19 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
 }
 
 
+# Routes that collapse several CLI leaf commands into one path parameter.
+# After the table key passes, the dependency also checks
+# ``<table key>.<value of this path parameter>`` -- the leaf key the CLI's
+# ``check_cli_permission`` composes from the subcommand name. The value comes
+# from the request, but it can only add a check: the parent key is checked
+# first in every case.
+LEAF_PATH_PARAMS: dict[tuple[str, str], str] = {
+    ("POST", "/semantic-layer/items/{kind}"): "kind",
+    ("PUT", "/semantic-layer/items/{kind}/{name}"): "kind",
+    ("DELETE", "/semantic-layer/items/{kind}/{name}"): "kind",
+}
+
+
 def resolve_route_operation(method: str, path: str) -> str | None:
     """Return the operation key guarding ``method path``, or None when exempt.
 
@@ -439,7 +452,8 @@ def enforce_route_permission(
 
     * exempt path (:data:`UNGUARDED_PATHS`) -> allowed, no policy consulted;
     * mapped route -> ``engine.check_or_raise(operation)``, i.e. HTTP 403 with
-      ``error_code: PERMISSION_DENIED`` when the policy says no;
+      ``error_code: PERMISSION_DENIED`` when the policy says no, plus the leaf
+      key for a route in :data:`LEAF_PATH_PARAMS`;
     * unmapped route -> **denied**. See :func:`_deny_unmapped`.
 
     With no policy configured (the default) ``is_allowed`` returns True for
@@ -457,7 +471,8 @@ def enforce_route_permission(
     if is_unguarded(request.method, path):
         return
 
-    operation = ROUTE_OPERATIONS.get((request.method.upper(), path))
+    key = (request.method.upper(), path)
+    operation = ROUTE_OPERATIONS.get(key)
     if operation is None:
         if _declares_inline_permission(route):
             # The route carries its own `require_permission(...)`, which has
@@ -469,6 +484,9 @@ def enforce_route_permission(
         return
 
     engine.check_or_raise(operation)
+    leaf_param = LEAF_PATH_PARAMS.get(key)
+    if leaf_param is not None:
+        engine.check_or_raise(f"{operation}.{request.path_params[leaf_param]}")
 
 
 def _declares_inline_permission(route: object) -> bool:

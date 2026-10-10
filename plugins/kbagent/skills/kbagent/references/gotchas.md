@@ -5360,11 +5360,13 @@ endpoint shapes.
   launched with. Read-only: there is no REST way to change the policy, so an
   agent cannot widen the firewall that constrains it. Reachable under any
   policy (`permissions.*` is always allowed), but still needs the bearer token.
-- **REST classification is coarser than the CLI for `semantic-layer` sub-apps.**
-  `POST /semantic-layer/items/{kind}` maps to the collapsed parent key
-  `semantic-layer.add`, not `semantic-layer.add.metric` (`kind` is a path
-  param). A policy naming only the leaf key is enforced on the CLI but not
-  over REST -- name the parent or a `cli:*` category to cover both.
+- **`semantic-layer` item routes check the per-kind leaf key, like the CLI.**
+  `POST /semantic-layer/items/{kind}` and `PUT` / `DELETE
+  /semantic-layer/items/{kind}/{name}` check the parent key
+  (`semantic-layer.add`) and the leaf key built from `{kind}`
+  (`semantic-layer.add.metric`). A deny of a leaf key or of a leaf glob like
+  `semantic-layer.add.*` applies over REST too. A `mode: deny` policy must
+  allow both keys.
 - Four registry keys back a serve-only surface with no CLI leaf command:
   `auth.projects` (the terminal equivalent is `auth register-projects`'s
   interactive picker), `merge-request.by-branch` (the CLI resolves it behind an

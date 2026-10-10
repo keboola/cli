@@ -611,16 +611,17 @@ Three properties worth knowing:
   SPA shell). A locked-down server must still be able to say who it is;
   otherwise a client cannot tell a policy refusal from a dead process.
 
-**Granularity caveat.** A few routes are coarser than the CLI operation they
-mirror. `POST /semantic-layer/items/{kind}` covers `metric`/`dataset`/… in one
-route, so it maps to the collapsed parent key `semantic-layer.add`, not
-`semantic-layer.add.metric`. A policy naming only a leaf key is enforced on the
-CLI but not over REST — name the parent, or a `cli:*` category, to cover both.
-The `--scope organization` escalation below is the exception: it is checked per
-kind.
+**Per-kind leaf keys.** `POST /semantic-layer/items/{kind}`, `PUT
+/semantic-layer/items/{kind}/{name}` and `DELETE
+/semantic-layer/items/{kind}/{name}` cover all five kinds in one route each. Like
+the CLI, the server checks two keys for them: the parent (`semantic-layer.add`)
+and the leaf built from the `{kind}` path parameter (`semantic-layer.add.metric`).
+A policy that names only a leaf key, or a leaf glob like `semantic-layer.add.*`,
+is enforced over REST the same as on the CLI. A `mode: deny` policy must allow
+both keys, as on the CLI.
 
 **`--scope organization` writes are destructive-class over REST too.** The table
-sees the route, not the body, so it checks only the base key (`write`). An
+sees the route, not the body, so it checks only the non-flag keys (`write`). An
 organization scope is one-way and makes an item visible to every project in the
 organization, so `FLAG_ESCALATIONS` classifies it `destructive`, and the
 handlers add that check: `PUT /semantic-layer/scope/{context_id}` with
