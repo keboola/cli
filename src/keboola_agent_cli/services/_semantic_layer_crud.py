@@ -6,9 +6,11 @@ externally-provided :class:`MetastoreClient`; the class methods in the
 main module are thin orchestrators that resolve credentials + the model
 UUID, then delegate.
 
+Edits are an in-place ``PUT`` (the item keeps its ID, scope, grants, pending
+elevation request and revision history); a failed PUT leaves the original intact.
+
 Helpers:
 
-- :func:`delete_then_post` -- safe DELETE+POST with rollback
 - :func:`edit_metric_with_cascade` -- metric rename + constraint cascade
 - :func:`scan_orphan_constraints` -- pre-deletion orphan scan for metric
 - :data:`REMOVE_KINDS` -- accepted kinds for ``remove_item`` /
@@ -24,6 +26,7 @@ from ..errors import ErrorCode, KeboolaApiError
 
 if TYPE_CHECKING:
     from ..metastore_client import MetastoreClient, SemanticType
+
 
 # Kinds accepted by `remove_item` / `preview_remove`. Relationship and
 # glossary were added in iter-4 (NB-5) -- neither is referenced by
@@ -46,52 +49,6 @@ def code_metric(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")
 
 
-def delete_then_post(
-    client: MetastoreClient,
-    item_type: SemanticType,
-    *,
-    old_id: str,
-    original_attrs: dict[str, Any],
-    new_name: str,
-    new_attrs: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Run a safe DELETE+POST, rolling back to ``original_attrs`` on POST failure.
-
-    Returns ``(new_item, rollback)`` where ``rollback`` is None on
-    success. On POST failure we re-POST the original payload; the
-    rollback dict records whether that re-POST succeeded. The original
-    exception is re-raised wrapped in a KeboolaApiError with the
-    rollback context.
-    """
-    client.delete_item(item_type, old_id)
-    try:
-        new_item = client.post_item(item_type, name=new_name, data=new_attrs)
-    except KeboolaApiError as exc:
-        rollback_status: dict[str, Any] = {
-            "attempted": True,
-            "original_name": original_attrs.get("name") or original_attrs.get("term", ""),
-            "error": exc.message,
-        }
-        try:
-            old_name = original_attrs.get("name") or original_attrs.get("term", "")
-            restored = client.post_item(item_type, name=old_name, data=original_attrs)
-            rollback_status["status"] = "succeeded"
-            rollback_status["restored_id"] = restored.get("id", "")
-        except KeboolaApiError as rollback_exc:
-            rollback_status["status"] = "failed"
-            rollback_status["rollback_error"] = rollback_exc.message
-        raise KeboolaApiError(
-            message=(
-                f"edit failed (POST after DELETE raised): {exc.message}. "
-                f"Rollback: {rollback_status['status']}."
-            ),
-            error_code=exc.error_code,
-            status_code=exc.status_code,
-            details={"rollback": rollback_status},
-        ) from exc
-    return new_item, None
-
-
 def edit_metric_with_cascade(
     client: MetastoreClient,
     *,
@@ -108,8 +65,8 @@ def edit_metric_with_cascade(
     """Body of :meth:`SemanticLayerService.edit_metric`.
 
     Resolves the target metric, computes the constraint cascade list,
-    enforces TTY/--yes guards, then DELETE+POSTs the metric and
-    DELETE+POSTs each cascaded constraint individually so per-item
+    enforces TTY/--yes guards, then PUTs the metric and
+    PUTs each cascaded constraint individually so per-item
     failures don't poison the rest.
     """
     metrics = client.list_items("semantic-metric", model_uuid)
@@ -167,14 +124,7 @@ def edit_metric_with_cascade(
     if new_description is not None:
         new_attrs["description"] = new_description
 
-    new_item, rollback = delete_then_post(
-        client,
-        "semantic-metric",
-        old_id=old_id,
-        original_attrs=original_attrs,
-        new_name=effective_new_name,
-        new_attrs=new_attrs,
-    )
+    new_item = client.put_item("semantic-metric", old_id, effective_new_name, new_attrs)
 
     # Cascade constraints individually (each is independent --
     # report per-constraint success/failure).
@@ -186,14 +136,7 @@ def edit_metric_with_cascade(
         cattrs["metrics"] = cmetrics
         cname = cattrs.get("name", "")
         try:
-            cascaded_item, _ = delete_then_post(
-                client,
-                "semantic-constraint",
-                old_id=c["id"],
-                original_attrs=c.get("attributes") or {},
-                new_name=cname,
-                new_attrs=cattrs,
-            )
+            cascaded_item = client.put_item("semantic-constraint", c["id"], cname, cattrs)
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
             cascaded.append(
@@ -201,7 +144,6 @@ def edit_metric_with_cascade(
                     "constraint": cname,
                     "status": "failed",
                     "error": exc.message,
-                    "rollback": (exc.details or {}).get("rollback"),
                 }
             )
 
@@ -210,7 +152,7 @@ def edit_metric_with_cascade(
     return {
         "updated": new_item,
         "cascaded_constraints": cascaded,
-        "rollback": rollback,
+        "rollback": None,
         "partial_state": partial_state,
         "recovery_hint": (
             (
@@ -340,18 +282,11 @@ def edit_simple(
         if v is not None:
             new_attrs[k] = v
     effective_new = new_attrs.get(id_key) or current_key
-    new_item, rollback = delete_then_post(
-        client,
-        item_type,
-        old_id=target["id"],
-        original_attrs=original_attrs,
-        new_name=effective_new,
-        new_attrs=new_attrs,
-    )
+    new_item = client.put_item(item_type, target["id"], effective_new, new_attrs)
     return {
         "updated": new_item,
         "cascaded_constraints": [],
-        "rollback": rollback,
+        "rollback": None,
         "partial_state": False,
         "recovery_hint": None,
     }

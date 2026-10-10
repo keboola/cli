@@ -3,7 +3,9 @@
 Extracted verbatim from the former single-file ``client.py`` (issue #520).
 """
 
+import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -17,15 +19,50 @@ from ..constants import (
 from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
 from ._transfer import (
+    DownloadProgress,
     _assert_safe_download_url,
     _CloudDownloader,
-    _IterBytesReader,
+    _manifest_total_bytes,
+    _SliceProgress,
+    _write_response_body,
 )
 
 if TYPE_CHECKING:
     from ._client import KeboolaClient
 
 logger = logging.getLogger(__name__)
+
+
+_UNSAFE_SLICE_NAME_CHARS = ("/", "\\", ":", "\x00")
+
+
+def _contained_slice_name(name: str, idx: int, out: Path, used: set[str]) -> str:
+    """A local file name for slice ``idx`` that cannot leave ``out``.
+
+    ``name`` comes from the manifest entry URL, i.e. from the server. A name
+    that is empty, ``.``/``..``, carries a path separator (``/``, or ``\\``
+    which Windows treats as one), a drive/stream colon or a NUL, or that
+    resolves anywhere but directly inside ``out`` falls back to
+    ``part-{idx:05d}``. A name already taken (another slice, or the
+    ``_manifest.json`` written beside them) gets the slice index as a prefix,
+    so no slice overwrites another. ``used`` is updated in place.
+    """
+    safe = (
+        name not in ("", ".", "..")
+        and not any(c in name for c in _UNSAFE_SLICE_NAME_CHARS)
+        and (out / name).resolve().parent == out.resolve()
+    )
+    candidate = name if safe else f"part-{idx:05d}"
+    if candidate in used:
+        candidate = f"{idx:05d}-{candidate}"
+        while candidate in used:
+            candidate = f"_{candidate}"
+    used.add(candidate)
+    return candidate
+
+
+def _report_bytes(on_progress: DownloadProgress, total: int | None, done: int) -> None:
+    on_progress(done, total)
 
 
 class _StorageFilesMixin(_CoreClient):
@@ -91,6 +128,8 @@ class _StorageFilesMixin(_CoreClient):
         is_permanent: bool = False,
         notify: bool = False,
         branch_id: int | None = None,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a local file to Storage Files.
 
@@ -103,6 +142,8 @@ class _StorageFilesMixin(_CoreClient):
             is_permanent: If True, file is not auto-deleted after 15 days.
             notify: If True, send notification on upload completion.
             branch_id: If set, upload to a specific dev branch.
+            on_progress: Called with ``(bytes_sent, total_bytes)`` during the
+                cloud upload.
 
         Returns:
             File resource dict with id, name, sizeBytes, tags, url.
@@ -117,7 +158,7 @@ class _StorageFilesMixin(_CoreClient):
             is_permanent=is_permanent,
             notify=notify,
         )
-        self._upload_to_cloud(upload_info, file_path)
+        self._upload_to_cloud(upload_info, file_path, on_progress=on_progress)
         # Return file info (prepare response has the file metadata)
         return {
             "id": upload_info["id"],
@@ -161,7 +202,12 @@ class _StorageFilesMixin(_CoreClient):
         safe_tag = quote(tag, safe="")
         self._request("DELETE", f"{prefix}/files/{file_id}/tags/{safe_tag}")
 
-    def download_sliced_file(self, file_detail: dict[str, Any], output_path: str) -> int:
+    def download_sliced_file(
+        self,
+        file_detail: dict[str, Any],
+        output_path: str,
+        on_progress: DownloadProgress | None = None,
+    ) -> int:
         """Download a sliced file by fetching manifest and concatenating slices.
 
         Handles S3 (SigV4 auth) and GCS (bearer token) providers.
@@ -179,6 +225,9 @@ class _StorageFilesMixin(_CoreClient):
             file_detail: Full file info dict from get_file_info()
                 (must include provider credentials from federationToken=1).
             output_path: Local file path to write to.
+            on_progress: ``(network_bytes_done, total)`` across all slices;
+                total is the manifest's summed ``content_length``, or None
+                when an entry lacks it.
 
         Returns:
             Number of bytes written.
@@ -188,6 +237,9 @@ class _StorageFilesMixin(_CoreClient):
         import tempfile
 
         entries, base_url, downloader, _manifest_data = self._prepare_sliced_download(file_detail)
+        tracker = (
+            _SliceProgress(on_progress, _manifest_total_bytes(entries)) if on_progress else None
+        )
 
         # Stream each slice into a temp file, then copy-append into output.
         # Keeping per-slice temp files on disk (not in RAM) is the whole point.
@@ -210,7 +262,9 @@ class _StorageFilesMixin(_CoreClient):
                 os.close(fd)
                 tmp_path = Path(tmp_name)
                 try:
-                    downloader.stream_to_file(slice_url, tmp_name, decompress_gzip=is_gz)
+                    downloader.stream_to_file(slice_url, tmp_name, is_gz, tracker)
+                    if tracker is not None:
+                        tracker.next_slice()
                     with tmp_path.open("rb") as tmp:
                         shutil.copyfileobj(tmp, out_fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
                     total += tmp_path.stat().st_size
@@ -256,7 +310,10 @@ class _StorageFilesMixin(_CoreClient):
         return entries, base_url, downloader, manifest_data
 
     def download_sliced_file_to_dir(
-        self, file_detail: dict[str, Any], output_dir: str
+        self,
+        file_detail: dict[str, Any],
+        output_dir: str,
+        on_progress: DownloadProgress | None = None,
     ) -> dict[str, Any]:
         """Download a sliced file preserving each slice as a separate local file.
 
@@ -278,6 +335,7 @@ class _StorageFilesMixin(_CoreClient):
             file_detail: Full file info dict from get_file_info() with
                 federationToken=1 provider credentials.
             output_dir: Directory to write slices into. Created if missing.
+            on_progress: As for :meth:`download_sliced_file`.
 
         Returns:
             Dict with ``output_dir``, ``slice_count``, ``total_bytes``, and
@@ -287,12 +345,16 @@ class _StorageFilesMixin(_CoreClient):
         out.mkdir(parents=True, exist_ok=True)
 
         entries, base_url, downloader, manifest_data = self._prepare_sliced_download(file_detail)
+        tracker = (
+            _SliceProgress(on_progress, _manifest_total_bytes(entries)) if on_progress else None
+        )
 
         # Persist the manifest alongside slices for traceability.
         (out / "_manifest.json").write_bytes(manifest_data)
 
         slices: list[dict[str, Any]] = []
         total = 0
+        used_names = {"_manifest.json"}
 
         for idx, entry in enumerate(entries):
             entry_url = entry.get("url", "")
@@ -303,11 +365,11 @@ class _StorageFilesMixin(_CoreClient):
             is_gz = clean_url.endswith(".gz")
             if is_gz:
                 basename = basename.removesuffix(".gz")
-            if not basename:
-                basename = f"part-{idx:05d}"
 
-            slice_path = out / basename
-            written = downloader.stream_to_file(slice_url, slice_path, decompress_gzip=is_gz)
+            slice_path = out / _contained_slice_name(basename, idx, out, used_names)
+            written = downloader.stream_to_file(slice_url, slice_path, is_gz, tracker)
+            if tracker is not None:
+                tracker.next_slice()
             slices.append({"path": str(slice_path.resolve()), "size_bytes": written})
             total += written
 
@@ -318,7 +380,9 @@ class _StorageFilesMixin(_CoreClient):
             "slices": slices,
         }
 
-    def download_file(self, url: str, output_path: str) -> int:
+    def download_file(
+        self, url: str, output_path: str, on_progress: DownloadProgress | None = None
+    ) -> int:
         """Download a non-sliced file from a presigned URL.
 
         Streams the body chunk-by-chunk and decompresses gzip on the fly, so
@@ -327,13 +391,12 @@ class _StorageFilesMixin(_CoreClient):
         Args:
             url: Presigned download URL from file info.
             output_path: Local file path to write to.
+            on_progress: ``(network_bytes_done, total)``; total is the
+                response's ``Content-Length``, or None without one.
 
         Returns:
             Number of bytes written (post-decompression if the URL is gzipped).
         """
-        import gzip
-        import shutil
-
         _assert_safe_download_url(url)
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,10 +407,12 @@ class _StorageFilesMixin(_CoreClient):
             http.stream("GET", url) as response,
         ):
             response.raise_for_status()
-            source: Any = _IterBytesReader(response.iter_bytes(FILE_DOWNLOAD_CHUNK_SIZE))
-            if is_gzipped:
-                source = gzip.GzipFile(fileobj=source, mode="rb")
-            with out_path.open("wb") as fh:
-                shutil.copyfileobj(source, fh, length=FILE_DOWNLOAD_CHUNK_SIZE)
+            on_bytes = None
+            if on_progress is not None:
+                length = response.headers.get("content-length", "")
+                total = int(length) if length.isdigit() else None
+                on_progress(0, total)
+                on_bytes = functools.partial(_report_bytes, on_progress, total)
+            _write_response_body(response, out_path, is_gzipped, on_bytes)
 
         return out_path.stat().st_size

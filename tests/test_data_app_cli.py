@@ -420,6 +420,86 @@ class TestDataAppCreateValidation:
 
 
 # ---------------------------------------------------------------------------
+# data-app detail / create -- the link to the running app
+# ---------------------------------------------------------------------------
+
+APP_URL = "https://x.hub.example.com"
+BOLD_CYAN = "\x1b[1;36m"  # the style of the `auth login --device-code` link
+RESET = "\x1b[0m"
+
+
+class TestDataAppLinkOutput:
+    def _detail(self, tmp_path: Path) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.get_data_app.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "name": "App",
+            "url": APP_URL,
+        }
+        return _invoke(
+            ["data-app", "detail", "--project", "prod", "--app-id", "42"],
+            store=store,
+            data_app_mock=mock,
+        )
+
+    def _create(self, tmp_path: Path) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.create_data_app.return_value = {
+            "app_id": "42",
+            "config_id": "ulid",
+            "workspace": True,
+            "url": APP_URL,
+            "state": "created",
+            "desired_state": "stopped",
+            "message": "created",
+        }
+        return _invoke(
+            [
+                "data-app",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "App",
+                "--slug",
+                "my-app",
+                "--git-repo",
+                "https://github.com/o/r",
+                "--git-public",
+                "--auth",
+                "public",
+                "--no-deploy",
+            ],
+            store=store,
+            data_app_mock=mock,
+        )
+
+    @pytest.mark.parametrize("command", ["_detail", "_create"])
+    def test_app_link_is_labelled_by_what_it_opens(self, tmp_path: Path, command: str) -> None:
+        result = getattr(self, command)(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert f"Open the app: {APP_URL}" in result.output
+        assert "  URL:" not in result.output
+
+    @pytest.mark.parametrize("command", ["_detail", "_create"])
+    def test_app_link_is_bold_cyan_like_the_device_login_link(
+        self, tmp_path: Path, force_colour, command: str
+    ) -> None:
+        result = getattr(self, command)(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        assert f"{BOLD_CYAN}{APP_URL}{RESET}" in result.output
+
+
+# ---------------------------------------------------------------------------
 # data-app deploy
 # ---------------------------------------------------------------------------
 

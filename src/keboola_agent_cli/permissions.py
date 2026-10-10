@@ -259,6 +259,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "storage.tables": "read",
     "storage.table-detail": "read",
     "storage.download-table": "read",
+    "storage.job-detail": "read",
     # Storage write
     "storage.create-bucket": "write",
     "storage.create-table": "write",
@@ -357,6 +358,20 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.reference-data.get": "read",
     "semantic-layer.reference-data.set": "write",
     "semantic-layer.reference-data.delete": "destructive",
+    # `scope` sub-app: visibility scope / target-project grants / elevation
+    # requests (PSGO-140). Parent key at the least-privileged level (read),
+    # same pattern as `reference-data` above. `set --scope organization` is
+    # escalated to `destructive` (FLAG_ESCALATIONS): it is one-way (no
+    # downgrade endpoint exists) and widens an item's visibility to every
+    # project in the organization.
+    "semantic-layer.scope": "read",
+    "semantic-layer.scope.get": "read",
+    "semantic-layer.scope.request-list": "read",
+    "semantic-layer.scope.add": "write",
+    "semantic-layer.scope.remove": "write",
+    "semantic-layer.scope.set": "write",
+    "semantic-layer.scope.request-create": "write",
+    "semantic-layer.scope.request-delete": "write",
     # Serve-only AI helpers (since vNEXT). Neither touches Keboola, but both
     # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
     # like `agent prompt-improve` -- classified `write` for the same reason, so
@@ -448,6 +463,20 @@ OPERATION_REGISTRY: dict[str, str] = {
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
     "sync.push --force": "destructive",
+    # `--scope organization` makes an item (and its revision history) visible to
+    # every project in the org with no downgrade endpoint -- irreversible.
+    "semantic-layer.scope.set --scope organization": "destructive",
+    "semantic-layer.model.create --scope organization": "destructive",
+    "semantic-layer.add.metric --scope organization": "destructive",
+    "semantic-layer.add.dataset --scope organization": "destructive",
+    "semantic-layer.add.relationship --scope organization": "destructive",
+    "semantic-layer.add.constraint --scope organization": "destructive",
+    "semantic-layer.add.glossary --scope organization": "destructive",
+    # `import`, `promote` and `build --model` create new items at the TARGET model's scope, so
+    # into an organization-scope model they widen visibility like a typed `--scope organization`.
+    "semantic-layer.import --scope organization": "destructive",
+    "semantic-layer.promote --scope organization": "destructive",
+    "semantic-layer.build --scope organization": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

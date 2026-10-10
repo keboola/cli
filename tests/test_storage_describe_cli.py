@@ -765,7 +765,10 @@ class TestStorageDescribeBatch:
         assert callable(kwargs["progress_callback"])
 
     def test_describe_batch_partial_errors(self, tmp_path: Path) -> None:
-        """describe-batch with partial errors still exits 0 (errors collected, not raised)."""
+        """describe-batch --json with partial errors keeps going and exits 1 (#745).
+
+        The errors are collected, not raised: the full payload is still emitted.
+        """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
@@ -807,7 +810,7 @@ class TestStorageDescribeBatch:
                 ],
             )
 
-        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert result.exit_code == 1, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
         assert output["status"] == "ok"
         assert len(output["data"]["applied"]) == 1

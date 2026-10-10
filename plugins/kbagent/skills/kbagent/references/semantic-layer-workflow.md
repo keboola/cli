@@ -4,12 +4,17 @@ The Keboola semantic layer (aka **metastore**) is a project-scoped catalogue
 of datasets, metrics, relationships, constraints, and glossary terms. It is
 served from a separate API at `metastore.<stack>` (derived from
 `connection.<stack>` by string-substitution; cloud/region-agnostic). Auth is
-the same `X-StorageApi-Token` as Storage, **with one extra requirement: it
-must be a MASTER (project admin) token**. The metastore's auth gate rejects
-every valid non-master token with an opaque 401 `Failed to create project
-scope`, which kbagent reclassifies to `MISSING_MASTER_TOKEN` with the remedy
-(since 0.92.0, #711). Pre-flight: `kbagent --json project info --project P`
--> `is_master_token`.
+the same `X-StorageApi-Token` as Storage: **reads work with any valid,
+non-disabled, non-expired token** (0.97.0, PSGO-282); **writes** (add /
+edit / remove / import / promote / build / scope add|remove|set) still need
+a project-admin token -- a master token qualifies, but so does any other
+project-admin user's token. Before PSGO-282, the metastore's auth gate
+rejected every valid non-master token -- including reads -- with an opaque
+401 `Failed to create project scope`, which kbagent reclassifies to
+`MISSING_MASTER_TOKEN` with the remedy (since 0.92.0, #711); that
+reclassification now only fires on a write against a non-admin token, or
+against a metastore deployment that predates the fix. Pre-flight for a
+write: `kbagent --json project info --project P` -> `is_master_token`.
 
 `kbagent semantic-layer ...` (alias `kbagent sl ...`, hidden) wraps the
 metastore so AI agents and CI scripts don't roll their own `urllib` loops.
@@ -18,6 +23,10 @@ For one-line command reference, see
 For the live-validated metastore contract surprises (constraint rule shape,
 name regex, CODE_METRIC cascade), see
 [gotchas.md](gotchas.md#semantic-layer-constraint-rule-is-a-string-not-an-object-since-v0340).
+To share an item with specific other projects, or make it organization-wide,
+see [metastore-scope-workflow.md](metastore-scope-workflow.md) -- **always
+ask the user which project(s) first**, this is a security-relevant, mostly
+irreversible decision.
 
 ## When to use what
 
@@ -34,6 +43,7 @@ name regex, CODE_METRIC cascade), see
 | Promote dev -> prod | `semantic-layer promote --from-project dev --to-project prod` |
 | Bootstrap a model from storage tables | `semantic-layer build --tables ...` (heuristic) |
 | Encrypt the storage token for a Python container | `semantic-layer token --encrypt` |
+| Share an item with named projects, or make it org-wide | see [metastore-scope-workflow.md](metastore-scope-workflow.md) |
 
 ---
 
@@ -217,7 +227,7 @@ kbagent semantic-layer edit metric \
     --new-name revenue_growth_qoq
 # Will print something like:
 #   CODE_METRIC: REVENUE_GROWTH -> REVENUE_GROWTH_QOQ
-#   Will DELETE+POST the following constraints (cascade):
+#   Will update the following constraints in place (cascade):
 #     - revenue_growth_minimum_warning
 #     - revenue_growth_band_review
 #   Proceed? [y/N]:
@@ -235,18 +245,18 @@ kbagent --json semantic-layer show --project prod --model core_model --type cons
 #    These joins WILL silently start returning empty rows otherwise.
 ```
 
-If the new POST fails (e.g. the new name collides), the service
-re-POSTs `original_attrs` to roll back and reports rollback
-success/failure in the response envelope's `rollback` field. If the
-rollback itself fails, the model is left in a partial state -- run
-`semantic-layer validate` immediately.
+Edits are an in-place `PUT`, so if the update fails (e.g. the new name
+collides) nothing was deleted and nothing needs rolling back -- the item is
+exactly as it was (the envelope's `rollback` field is always `null`). Items
+keep their id, scope and revision history across an edit.
 
-**Partial cascade state**: the cascade has per-item
-rollback only -- each constraint DELETE+POST rolls back individually.
+**Partial cascade state**: each cascaded constraint is
+updated independently (an in-place PUT, no rollback needed).
 If the metric rename succeeds but M of N dependent constraints fail
 to repoint, the envelope sets `partial_state: true` at the top level
 and a `recovery_hint` string. Human-mode CLI prints a bright red
-`PARTIAL STATE` banner. Use the recovery recipe:
+`PARTIAL STATE` banner, and *(since 0.98.0)* the command exits 1. Use the
+recovery recipe:
 
 ```bash
 # 1. Diagnose: surface every dangling constraint reference
@@ -257,10 +267,9 @@ kbagent semantic-layer edit constraint --project prod --model core_model \
     --name revenue_growth_minimum_warning --new-metrics revenue_growth_qoq
 ```
 
-Atomic two-phase commit was rejected as disproportionate: the
-metastore has no PATCH endpoint, so every cascade 'stage' is itself a
-DELETE+POST that can fail; true atomicity would require side-staging
-every cascade item.
+Atomic two-phase commit was rejected as disproportionate: every cascade
+'stage' is itself a PUT that can fail; true atomicity would require
+side-staging every cascade item.
 
 ---
 
@@ -318,7 +327,7 @@ kbagent --json semantic-layer promote \
     | jq '.metrics, .constraints'
 # Inspect:
 #   metrics.new          -- count of items the promote will POST
-#   metrics.overwritten  -- count of CHANGED items that will be DELETE+POSTed
+#   metrics.overwritten  -- count of CHANGED items that will be updated in place
 #   metrics.identical    -- count of items skipped (already match)
 #   metrics.changes[]    -- per-item diff with diff_keys
 #   metrics.failed[]     -- per-item failures (e.g. dry-run validators)
@@ -501,8 +510,8 @@ For the live-validated metastore contract surprises -- where the
 
 Quick reminders:
 
-- **POST envelope**: `{name, data, branch: "main", schemaVersion:
-  "1.0.0", scope: "project"}` -> 201 with `{data: {type, id,
+- **POST envelope**: `{name, data, branch: "main", scope: "project"}`
+  (no `schemaVersion`: the server stores the stack's default) -> 201 with `{data: {type, id,
   attributes, meta}}`. kbagent handles this.
 - **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
   `"Object with this name already exists in this project"`, or **500** with
@@ -511,10 +520,11 @@ Quick reminders:
   the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
   still pays.
 - **DELETE -> 204** empty body.
-- **No PATCH endpoint** -- every "edit" is DELETE+POST. kbagent's
-  `edit metric / dataset / relationship / constraint / glossary`
-  (five sub-subcommands matching `add`) rolls back on POST failure.
-  Same five types are available under `remove`.
+- **Data edits are a `PUT`** (revisioned, in place; `PATCH` only changes
+  the scope). kbagent's `edit metric / dataset / relationship / constraint
+  / glossary` (five sub-subcommands matching `add`) keep the item's id,
+  scope and grants, and a failed PUT changes nothing. Same five types are
+  available under `remove`.
 - **`X-StorageApi-Token` is the only auth** -- no separate metastore
   token. `kbagent semantic-layer token --encrypt` encrypts the
   STORAGE token for a `user_properties` slot named `#metastore_token`,
