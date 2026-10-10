@@ -324,6 +324,10 @@ Versioning convention:
   heuristic. `--device-code` forces the device flow unconditionally. Once the
   browser callback succeeds (the authorization code was received), there is
   **no** fallback -- an exchange failure past that point is terminal.
+  Before the browser wait starts, the CLI prints a notice (since vNEXT; to
+  stderr with `--json`): it waits up to 115 s, and a browser that shows the
+  project list instead of "Login complete" cannot return. The way out is
+  Ctrl+C and `kbagent auth login --device-code`.
 - **A session is USER-scoped, not project-scoped.** One `auth login` covers
   every project the signed-in user can access; which project a given command
   talks to is still chosen the normal way (`--project` / `KBAGENT_PROJECT` /

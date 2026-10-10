@@ -114,6 +114,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     PKCE auto-falls-back to the device flow ONLY on a pre-exchange
     failure (no loopback browser, callback timeout, SSH/container/WSL
     detected) -- once the browser callback succeeds there is no fallback.
+    Before the browser wait, login prints a notice (stderr with --json): it
+    waits up to 115 s. If the browser shows the project list and not
+    "Login complete", the sign-in cannot return; the way out is Ctrl+C and
+    `kbagent auth login --device-code`.
     A 404 from any auth endpoint means browser login is not enabled on that
     stack yet (per-stack feature flag); use a static token instead.
 
