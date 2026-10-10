@@ -161,8 +161,11 @@ def _require_single_line(token: str, param_hint: str) -> str:
     an error that quotes the entire header value ("Illegal header value b'...'"),
     and nothing catches it, so the traceback would print the token and
     everything piped in with it. Refusing here keeps the value out of that
-    message: the error names the flag, never the value.
+    message: the error names the flag, never the value. An empty or blank
+    value is refused too, so an unset variable piped in does not reach the API.
     """
+    if not token.strip():
+        raise typer.BadParameter("The token is empty.", param_hint=param_hint)
     if not token.isprintable():
         raise typer.BadParameter(
             "The token contains a line break or another control character. "
