@@ -216,6 +216,25 @@ class KeboolaApiError(Exception):
         self.details: dict = details if details is not None else {}
 
 
+def request_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could a failed, non-replayed POST still have changed state on the server?
+
+    Mirrors how ``BaseHttpClient._request`` classifies a POST it did not
+    replay. A 5xx, or a failure with no HTTP response other than one proven
+    undelivered, means the request may have reached the server and only the
+    answer was lost. Undelivered for certain: a connect error, and a connect /
+    pool timeout (raised ``retryable=True``; a read/write timeout is raised
+    ``retryable=False``). A 4xx is a definitive refusal -- nothing changed.
+    """
+    if exc.status_code >= 500:
+        return True
+    if exc.status_code != 0:
+        return False
+    if exc.error_code == ErrorCode.CONNECTION_ERROR:
+        return False
+    return not (exc.error_code == ErrorCode.TIMEOUT and exc.retryable)
+
+
 class ConfigError(Exception):
     """Raised when there is a configuration problem."""
 

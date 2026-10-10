@@ -38,8 +38,6 @@ Versioning convention:
     `merge-request merge` and an armed `merge-request auto-merge` also print
     `Target: project 'prod', production`.
   - A command that uses two branches prints a line for each:
-    - `workspace create --ui` creates the config in the active branch but
-      runs its job on production.
     - `workspace from-transformation` reads the transformation from
       production.
     - `sync clone` creates the buckets in production.
@@ -1351,6 +1349,58 @@ active branch: the line was wrong, the listing was not. Since 0.96.1 they
 print `Target:` with the branch they use (see the #766 entry at the top).
 `storage buckets` / `storage tables` are the reads that use production
 under an active branch. `--branch` requires exactly one `--project`.
+
+## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
+
+Applies since vNEXT (issue #755). The `--ui` path queues a `keboola.sandboxes`
+job with `task: create`. That component **dropped Snowflake/BigQuery workspace
+provisioning in March 2026**: the `create` task now only registers a
+sandbox-service record and writes `parameters.id` back into the config -- no
+Storage workspace is created, and the job still reports `success`. The Keboola
+UI creates SQL workspaces through **SQL Editor sessions** (`editor` service,
+`POST /sql/sessions`), which kbagent does not drive. So on a current SaaS
+stack `--ui` ends in `WORKSPACE_NOT_FOUND` after ~15s, on every branch.
+
+What changed in kbagent:
+
+- The job is now queued **on the branch the config was created in** (`branchId`
+  forwarded). Before, an alias pinned to a dev branch got a Queue 400
+  `Cannot resolve job parameters: Configuration "..." not found` -- the config
+  existed, in the dev branch; the job looked on the default one.
+- **Rollback**: whenever step 2 (Storage workspace / Queue job) fails, the
+  `keboola.sandboxes` config from step 1 is moved to the trash (restorable via
+  `config restore`) -- headless and `--ui` alike. The error message says so;
+  `--json` carries `error.details.sandbox_config_id`,
+  `sandbox_config_rolled_back` (bool), `branch_id`, and for `--ui` `job_id`.
+  A failed cleanup is reported (`sandbox_config_rolled_back: false`,
+  `sandbox_config_cleanup_error`) with the exact `config delete` to run --
+  it never masks the original failure. Exception: when the **outcome is
+  unknown**, a workspace may exist or still appear, so the config is **kept**
+  (`sandbox_config_rolled_back: false`,
+  `sandbox_config_kept_reason: outcome_unknown`). Unknown means: a 5xx, a
+  read/write `TIMEOUT` or `RETRY_EXHAUSTED` on the create POST (headless
+  workspace or `--ui` job), or any error after the `--ui` job was queued
+  except `QUEUE_JOB_FAILED` and the empty-lookup `WORKSPACE_NOT_FOUND`
+  (`QUEUE_JOB_TIMEOUT`, a failed job poll, a failed workspace lookup after a
+  green job). A 4xx refusal, a `CONNECTION_ERROR` or a connect timeout on
+  the create POST is definite (the request was refused or never sent), so
+  the config is trashed. The message names
+  the config and job; run `workspace list --project ALIAS`, and if no
+  workspace for that config appears, `config delete --component-id
+  keboola.sandboxes --config-id ID`. Before, three failed `--ui` attempts
+  left three orphaned configs that `workspace gc` cannot see (gc detects the
+  inverse: a workspace whose config is gone).
+- The `WORKSPACE_NOT_FOUND` message now names the job and explains WHY nothing
+  is attached, instead of the bare "no workspace found for config".
+
+**Do not retry `--ui`** on a `WORKSPACE_NOT_FOUND`; it is not a provisioning
+race. Create the workspace headless (default mode, `private_key` for
+Snowflake) and, if the team needs it in the UI Workspaces tab, create that one
+in the Keboola UI. The job is still queued (not refused up front) because a
+BYOC/private stack running an older `keboola.sandboxes` image may still
+provision SQL workspaces through it. The sandbox-service record the green job
+registered is not removed by the rollback (the UI lists only `python`/`r`
+sandboxes, so it is invisible there).
 
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 

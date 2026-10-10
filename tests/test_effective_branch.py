@@ -230,6 +230,26 @@ class TestResolvers:
             (3001, "production")
         ]
 
+    def test_workspace_create_ui_reports_the_one_branch_of_config_and_job(
+        self, tmp_path, printed
+    ) -> None:
+        # Issue #755: the sandbox job runs on the branch of its config, so there is
+        # no second `production` target next to the active branch.
+        client = MagicMock()
+        client.create_sandbox_config.return_value = {"id": "cfg-ui"}
+        client.create_job.return_value = {"id": "j1", "branchId": "456"}
+        client.list_config_workspaces.return_value = [{"id": 42, "connection": {}}]
+        client.reset_workspace_password.return_value = {"password": "pw"}
+        service = WorkspaceService(
+            config_store=_store(tmp_path, prod=_project(456, "feature-x")),
+            client_factory=lambda url, token: client,
+        )
+        service.create_workspace(alias="prod", name="ws", backend="snowflake", ui_mode=True)
+        assert client.create_job.call_args.kwargs["branch_id"] == 456
+        assert [(t.branch_id, t.branch_source) for t in recorded_targets()] == [
+            (456, "active_branch")
+        ]
+
     def test_sync_manifest_fallback_is_one_manifest_record(self, store, tmp_path, printed) -> None:
         # `sync clone --branch 388` writes 388 as the first manifest branch.
         manifest = Manifest.model_construct(

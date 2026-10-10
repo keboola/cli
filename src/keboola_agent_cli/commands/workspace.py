@@ -101,13 +101,19 @@ def workspace_create(
     ui: bool = typer.Option(
         False,
         "--ui",
-        help="Create via Queue job (slower ~15s, visible in Keboola UI)",
+        help=(
+            "Fails on current SaaS stacks: the keboola.sandboxes component no longer "
+            "provisions SQL workspaces, so the job ends in WORKSPACE_NOT_FOUND and the attempt "
+            "is rolled back (#755). Works only on stacks where that component still provisions "
+            "them: creates via Queue job (~15s), visible in the Keboola UI"
+        ),
     ),
 ) -> None:
     """Create a new workspace.
 
     Default: fast headless mode via Storage API (~1s).
-    With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab.
+    With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --
+    only on stacks where keboola.sandboxes still provisions SQL workspaces.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
@@ -137,12 +143,17 @@ def workspace_create(
                 ),
             ),
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
+        # details carries the #755 rollback context (sandbox_config_id,
+        # sandbox_config_rolled_back, job_id) -- omitted from JSON when empty.
         formatter.error(
             message=exc.message,
             error_code=exc.error_code,
             retryable=exc.retryable,
+            details=exc.details,
         )
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
