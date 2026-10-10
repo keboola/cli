@@ -28,6 +28,11 @@ from rich.console import Console
 
 _POSIX = sys.platform != "win32"
 
+# Rich style of the main link the user opens. The device-login panel
+# (commands/auth.py) and the data-app app link (commands/data_app.py,
+# commands/_data_app_password.py) share this one definition.
+LINK_STYLE = "bold cyan"
+
 # A clipboard command that hangs (e.g. xclip waiting on an unreachable X
 # display) must not hang the command that called it.
 _CLIPBOARD_TIMEOUT_SECONDS = 5.0

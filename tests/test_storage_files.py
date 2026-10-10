@@ -400,6 +400,8 @@ class TestLoadFileToTableService:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.import_table_async.return_value = {
+            "id": 4242,
+            "status": "success",
             "results": {"importedRowsCount": 100, "warnings": []},
         }
         service = _make_service(store, mock_client)
@@ -409,6 +411,8 @@ class TestLoadFileToTableService:
         assert result["imported_rows"] == 100
         assert result["file_id"] == 12345
         assert result["table_id"] == "in.c-data.users"
+        assert result["job_id"] == 4242
+        assert result["job_status"] == "success"
         mock_client.import_table_async.assert_called_once_with(
             table_id="in.c-data.users",
             file_id=12345,
@@ -416,6 +420,8 @@ class TestLoadFileToTableService:
             delimiter=",",
             enclosure='"',
             branch_id=None,
+            wait=True,
+            max_wait=None,
         )
 
     def test_load_incremental(self, tmp_path: Path) -> None:
@@ -1351,7 +1357,7 @@ class TestClientDownloadSlicedFileToDir:
         # than returning bytes, so the fake has to side-effect the destination.
         slice_payloads = iter([b"PAR1_slice_1", b"PAR1_slice_2"])
 
-        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
             payload = next(slice_payloads)
             Path(dest).write_bytes(payload)
             return len(payload)
@@ -1384,6 +1390,71 @@ class TestClientDownloadSlicedFileToDir:
 
         client.close()
 
+    def test_slice_names_are_contained_in_output_dir(self, tmp_path: Path, httpx_mock) -> None:
+        """A crafted manifest entry name must never write outside output_dir."""
+        import json as json_mod
+
+        from keboola_agent_cli.client import KeboolaClient
+
+        names = [
+            "..",
+            "..\\..\\evil.csv",
+            "C:evil",
+            ".",
+            "a\x00b",
+            "part-1.csv",
+            "part-1.csv",
+            "_manifest.json",
+            "part-00000",
+        ]
+        manifest = {"entries": [{"url": f"s3://bucket/export/{n}"} for n in names]}
+        file_detail = {
+            "id": 44,
+            "name": "x.csv",
+            "isSliced": True,
+            "url": "https://storage.example.com/manifest3",
+            "provider": "aws",
+        }
+        httpx_mock.add_response(
+            url="https://storage.example.com/manifest3",
+            content=json_mod.dumps(manifest).encode(),
+        )
+        written: list[Path] = []
+
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
+            written.append(Path(dest))
+            Path(dest).write_bytes(b"x")
+            return 1
+
+        fake_downloader = MagicMock()
+        fake_downloader.resolve_slice_url.side_effect = lambda base, entry_url, fd: entry_url
+        fake_downloader.stream_to_file.side_effect = _fake_stream_to_file
+
+        out_dir = tmp_path / "work" / "out"
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN) as client,
+            patch("keboola_agent_cli.client._CloudDownloader.create", return_value=fake_downloader),
+        ):
+            result = client.download_sliced_file_to_dir(file_detail, str(out_dir))
+
+        assert [p.name for p in written] == [
+            "part-00000",
+            "part-00001",
+            "part-00002",
+            "part-00003",
+            "part-00004",
+            "part-1.csv",
+            "00006-part-1.csv",
+            "00007-_manifest.json",
+            "00008-part-00000",
+        ]
+        assert all(p.resolve().parent == out_dir.resolve() for p in written)
+        assert len({p.name for p in written}) == len(names)
+        # The manifest itself was not overwritten by a slice named like it.
+        assert json_mod.loads((out_dir / "_manifest.json").read_text()) == manifest
+        assert not (tmp_path / "work" / "evil.csv").exists()
+        assert result["slice_count"] == len(names)
+
     def test_gunzips_gz_slices_and_strips_suffix(self, tmp_path: Path, httpx_mock) -> None:
         """CSV slices are often .gz; we decompress and drop the suffix."""
         import gzip
@@ -1409,7 +1480,7 @@ class TestClientDownloadSlicedFileToDir:
 
         # The real stream_to_file streams+decompresses gzip; mirror that so
         # the test still verifies the .gz-suffix handling in the caller.
-        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool) -> int:
+        def _fake_stream_to_file(url: str, dest, decompress_gzip: bool, on_bytes=None) -> int:
             data = payload if decompress_gzip else gz_payload
             Path(dest).write_bytes(data)
             return len(data)
@@ -1499,7 +1570,7 @@ class TestDownloadTableKeepSlices:
         slice_a = out_dir / "part-0.csv"
         slice_b = out_dir / "part-1.csv"
 
-        def _fake_download_to_dir(file_detail: dict, output_dir: str) -> dict:
+        def _fake_download_to_dir(file_detail: dict, output_dir: str, on_progress=None) -> dict:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             slice_a.write_bytes(b"1,2\n")
             slice_b.write_bytes(b"3,4\n")

@@ -4,6 +4,8 @@ Extracted verbatim from the former single-file ``client.py`` (issue #520).
 """
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -15,9 +17,16 @@ from ..constants import (
     EXPORT_JOB_MAX_WAIT,
     FILE_UPLOAD_TIMEOUT,
     IMPORT_JOB_MAX_WAIT,
+    S3_MULTIPART_THRESHOLD,
 )
 from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
+from ._s3_multipart import (
+    S3Target,
+    assert_credentials_fresh,
+    head_s3_object_size,
+    upload_s3_multipart,
+)
 from ._transfer import (
     _build_abs_upload_url,
     _extract_cloud_error_code,
@@ -25,6 +34,58 @@ from ._transfer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TableUploadOutcome:
+    """What :meth:`_StorageTablesMixin.upload_table_with_outcome` leaves behind.
+
+    Attributes:
+        file_id: The Storage file the CSV was uploaded as. It outlives a failed
+            or abandoned import, so ``storage load-file --file-id`` can import
+            it again without re-uploading.
+        job: The import job dict -- terminal when the caller waited, otherwise
+            the enqueue response (``waiting`` / ``processing``, or already
+            terminal when Storage finished or failed fast).
+    """
+
+    file_id: int
+    job: dict[str, Any]
+
+
+def _enqueue_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could this failed import POST still have started an import job?
+
+    Mirrors how ``BaseHttpClient._request`` classifies a POST it did not
+    replay. A 5xx, or a failure with no HTTP response other than one proven
+    undelivered, means the request may have reached Storage and only the
+    answer was lost. Undelivered for certain: a connect error, and a connect /
+    pool timeout (raised ``retryable=True``; a read/write timeout is raised
+    ``retryable=False``). A 4xx is a definitive refusal -- nothing started.
+    """
+    if exc.status_code >= 500:
+        return True
+    if exc.status_code != 0:
+        return False
+    if exc.error_code == ErrorCode.CONNECTION_ERROR:
+        return False
+    return not (exc.error_code == ErrorCode.TIMEOUT and exc.retryable)
+
+
+def _import_may_be_running(file_id: int, exc: KeboolaApiError) -> KeboolaApiError:
+    """Re-raise an ambiguous enqueue failure flagged ``import_may_be_running``."""
+    return KeboolaApiError(
+        message=(
+            f"{exc.message} The import request may have reached Storage, so an import "
+            f"of Storage file {file_id} may already be running; check the table before "
+            "importing the file again."
+        ),
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        # Repeating the POST is exactly the double import this guards against.
+        retryable=False,
+        details={**exc.details, "file_id": file_id, "import_may_be_running": True},
+    )
 
 
 class _StorageTablesMixin(_CoreClient):
@@ -604,6 +665,7 @@ class _StorageTablesMixin(_CoreClient):
         self,
         upload_info: dict[str, Any],
         file_path: str,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         """Upload a file to cloud storage using credentials from files/prepare.
 
@@ -618,8 +680,13 @@ class _StorageTablesMixin(_CoreClient):
             with ``x-ms-blob-type: BlockBlob`` header.
 
         AWS stack with federation (``uploadParams.credentials`` present):
-            PUT to ``https://{bucket}.s3.{region}.amazonaws.com/{key}``
-            with AWS SigV4 signed headers.
+            Up to ``S3_MULTIPART_THRESHOLD``: one PUT to
+            ``https://{bucket}.s3.{region}.amazonaws.com/{key}`` with AWS
+            SigV4 signed headers. Larger: S3 multipart upload in parallel
+            parts (``_s3_multipart.py``) -- no 5 GiB ceiling, memory bounded
+            by the parts in flight instead of the file size. The allowlisted
+            ``uploadParams`` headers (ACL, server-side encryption) are sent
+            signed on the object-creating call either way.
 
         Legacy S3 presigned POST (``uploadParams`` without credentials):
             Multipart form POST — deprecated on newer stacks.
@@ -627,8 +694,14 @@ class _StorageTablesMixin(_CoreClient):
         Args:
             upload_info: Full response dict from prepare_file_upload().
             file_path: Local path to the file.
+            on_progress: ``(bytes_done, total_bytes)``; called after each
+                multipart part, or once at the end of a single-request upload.
+
+        Raises:
+            KeboolaApiError: UPLOAD_FAILED (``retryable=False``) on failure.
         """
         p = Path(file_path)
+        size = p.stat().st_size
 
         gcs_params = upload_info.get("gcsUploadParams")
         abs_params = upload_info.get("absUploadParams")
@@ -658,19 +731,33 @@ class _StorageTablesMixin(_CoreClient):
                 )
             success_codes = (200, 201)
         elif upload_params.get("credentials"):
-            # AWS S3 with federation token: PUT with SigV4 signed headers
-            creds = upload_params["credentials"]
-            bucket = upload_params["bucket"]
-            key = upload_params["key"]
-            region = upload_info.get("region", "us-east-1")
-            upload_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+            # AWS S3 with federation token: SigV4-signed PUT, or multipart
+            target = S3Target.from_upload_params(
+                upload_params, upload_info.get("region", "us-east-1")
+            )
+            if size > S3_MULTIPART_THRESHOLD:
+                upload_s3_multipart(
+                    file_path,
+                    target,
+                    on_progress=on_progress,
+                    verify_uploaded=self._s3_upload_verifier(upload_info.get("id")),
+                    file_label=str(upload_info.get("id", "")),
+                )
+                return
+            assert_credentials_fresh(target.credentials)
             with p.open("rb") as fh:
                 file_bytes = fh.read()
             headers = _s3_signed_headers(
-                upload_url, creds, region, method="PUT", payload=file_bytes
+                target.object_url,
+                target.credentials,
+                target.region,
+                method="PUT",
+                payload=file_bytes,
+                extra_headers=target.upload_headers,
+                sign_payload_hash=True,
             )
             with httpx.Client(timeout=FILE_UPLOAD_TIMEOUT) as http:
-                response = http.put(upload_url, content=file_bytes, headers=headers)
+                response = http.put(target.object_url, content=file_bytes, headers=headers)
             success_codes = (200,)
         elif upload_params:
             # Legacy S3 presigned POST: multipart form — uploadParams first, file last
@@ -709,6 +796,31 @@ class _StorageTablesMixin(_CoreClient):
                 error_code=ErrorCode.UPLOAD_FAILED,
                 retryable=False,
             )
+        if on_progress is not None:
+            on_progress(size, size)
+
+    def _s3_upload_verifier(self, file_id: Any) -> Callable[[int], bool]:
+        """Build the check for an ambiguous S3 multipart completion.
+
+        A retried CompleteMultipartUpload that gets NoSuchUpload means the
+        lost earlier attempt either completed the upload or it was aborted.
+        The write credentials cannot HeadObject, so this re-reads the file
+        detail (READ credentials) and compares the object's size.
+        """
+
+        def verify_uploaded(expected_size: int) -> bool:
+            if file_id is None:
+                return False
+            # Same call as get_file_info() (storage_files mixin, not visible here).
+            try:
+                detail = self._request(
+                    "GET", f"/v2/storage/files/{int(file_id)}", params={"federationToken": "1"}
+                ).json()
+            except (KeboolaApiError, ValueError):
+                return False
+            return head_s3_object_size(detail) == expected_size
+
+        return verify_uploaded
 
     def import_table_async(
         self,
@@ -718,10 +830,15 @@ class _StorageTablesMixin(_CoreClient):
         delimiter: str = ",",
         enclosure: str = '"',
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Trigger async import of a pre-uploaded file into a table (step 3).
 
-        Polls until the import job completes (up to IMPORT_JOB_MAX_WAIT seconds).
+        The enqueue POST is sent once: ``BaseHttpClient`` never replays an
+        ambiguous POST, and a replayed import is a second load (duplicate rows
+        on an incremental one).
 
         Args:
             table_id: Target table ID (e.g. "in.c-my-bucket.my-table").
@@ -730,9 +847,22 @@ class _StorageTablesMixin(_CoreClient):
             delimiter: CSV column delimiter.
             enclosure: CSV value enclosure character.
             branch_id: If set, target a specific dev branch.
+            wait: If False, return the enqueue response immediately (it may
+                already be terminal); follow it with :meth:`get_storage_job`.
+            max_wait: Seconds to poll when ``wait`` is True. ``None`` means
+                ``IMPORT_JOB_MAX_WAIT``.
 
         Returns:
-            Completed import job dict.
+            The import job dict -- terminal when ``wait`` is True.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` when the import fails;
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details
+                ``job_id`` + ``file_id``) when the wait budget runs out -- the
+                import keeps running server-side. An enqueue failure whose
+                outcome is unknown (5xx, read timeout, dropped connection)
+                carries ``details["import_may_be_running"] = True`` plus
+                ``file_id`` and is never retryable.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
@@ -742,8 +872,66 @@ class _StorageTablesMixin(_CoreClient):
             "delimiter": delimiter,
             "enclosure": enclosure,
         }
-        response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
-        return self._wait_for_storage_job(response.json(), max_wait=IMPORT_JOB_MAX_WAIT)
+        try:
+            response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
+        except KeboolaApiError as exc:
+            if _enqueue_outcome_unknown(exc):
+                raise _import_may_be_running(file_id, exc) from exc
+            raise
+        except httpx.TransportError as exc:
+            # ``_request`` maps connect errors and timeouts; anything else
+            # (a dropped connection, a protocol error) hit a request that was
+            # already being sent.
+            lost = KeboolaApiError(
+                message=f"Connection to Storage failed during the import request ({exc}).",
+                error_code=ErrorCode.CONNECTION_ERROR,
+            )
+            raise _import_may_be_running(file_id, lost) from exc
+        job = response.json()
+        if not wait:
+            return job
+        return self._wait_for_import_job(job, file_id=file_id, max_wait=max_wait)
+
+    def _wait_for_import_job(
+        self,
+        job: dict[str, Any],
+        *,
+        file_id: int,
+        max_wait: float | None,
+    ) -> dict[str, Any]:
+        """Poll an import job; a failure carries the job and file IDs.
+
+        A timeout is re-raised NOT retryable: the import is still running, so
+        replaying the upload would start a second load next to it (duplicate
+        rows on an incremental import). The details let a caller point at
+        the job (``storage job-detail``) or the file (``storage load-file``).
+        """
+        budget = IMPORT_JOB_MAX_WAIT if max_wait is None else max_wait
+        try:
+            return self._wait_for_storage_job(job, max_wait=budget)
+        except KeboolaApiError as exc:
+            job_id = exc.details.get("job_id", job.get("id"))
+            details = {**exc.details, "job_id": job_id, "file_id": file_id}
+            if exc.error_code != ErrorCode.STORAGE_JOB_TIMEOUT:
+                raise KeboolaApiError(
+                    message=exc.message,
+                    status_code=exc.status_code,
+                    error_code=exc.error_code,
+                    retryable=exc.retryable,
+                    details=details,
+                ) from exc
+            raise KeboolaApiError(
+                message=(
+                    f"Storage import job {job_id} did not finish within {budget:g}s. "
+                    "Waiting stopped locally; the import keeps running server-side "
+                    f"(source: Storage file {file_id}). Re-running an incremental "
+                    "upload can duplicate rows -- check the job before retrying."
+                ),
+                status_code=exc.status_code,
+                error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+                retryable=False,
+                details=details,
+            ) from exc
 
     def upload_table(
         self,
@@ -753,39 +941,109 @@ class _StorageTablesMixin(_CoreClient):
         delimiter: str = ",",
         enclosure: str = '"',
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        max_wait: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
-        """Upload a CSV file into an existing table (async, waits for completion).
+        """Upload a CSV file into an existing table; return the job ``results``.
 
-        Uses the file-first async flow to support files up to 5 GB:
-        1. Register file with Storage API → get presigned cloud upload URL
-        2. Upload file bytes directly to cloud storage (GCP bearer token, S3 presigned POST, or signed URL PUT)
-        3. Trigger import-async job → poll until complete
+        Public SDK surface (``Client.raw.upload_table``): it keeps its original
+        contract -- the import job's ``results`` dict (``importedRowsCount``,
+        ``warnings``, ...). Callers that need the Storage file ID or the job
+        itself (e.g. with ``wait=False``, where ``results`` is still empty) use
+        :meth:`upload_table_with_outcome`. Arguments are identical.
+        """
+        outcome = self.upload_table_with_outcome(
+            table_id,
+            file_path,
+            incremental,
+            delimiter,
+            enclosure,
+            branch_id,
+            wait=wait,
+            max_wait=max_wait,
+            on_progress=on_progress,
+        )
+        return outcome.job.get("results") or {}
+
+    def upload_table_with_outcome(
+        self,
+        table_id: str,
+        file_path: str,
+        incremental: bool = False,
+        delimiter: str = ",",
+        enclosure: str = '"',
+        branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        max_wait: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> TableUploadOutcome:
+        """Upload a CSV file into an existing table; return file ID and job.
+
+        File-first async flow:
+        1. Register file with Storage API → get cloud upload credentials
+        2. Upload file bytes directly to cloud storage
+        3. Trigger import-async job → poll until complete (unless ``wait`` is False)
 
         Args:
             table_id: Target table ID (e.g. "in.c-my-bucket.my-table").
-            file_path: Local path to the CSV file.
+            file_path: Local path to the CSV file (``.csv`` or ``.csv.gz``).
             incremental: If True, append rows; if False (default), full load.
             delimiter: CSV column delimiter (default ",").
             enclosure: CSV value enclosure character (default '"').
             branch_id: If set, target a specific dev branch.
+            wait: If False, return as soon as the import job is queued. The
+                cloud upload itself is always awaited.
+            max_wait: Import wait budget in seconds (``None`` =
+                ``IMPORT_JOB_MAX_WAIT``).
+            on_progress: Called with ``(bytes_sent, total_bytes)`` during the
+                cloud upload.
 
         Returns:
-            Import results dict with importedRowsCount, warnings, etc.
+            :class:`TableUploadOutcome` -- the Storage file ID and the import job.
+
+        Raises:
+            KeboolaApiError: Any failure after the cloud upload carries
+                ``details["file_id"]`` so the file can be imported without
+                re-uploading. The message carries no recovery sentence: the
+                caller adds its own (see ``services._storage_jobs.with_import_hint``).
         """
         p = Path(file_path)
         size_bytes = p.stat().st_size
         upload_info = self.prepare_file_upload(name=p.name, size_bytes=size_bytes)
         file_id = upload_info["id"]
-        self._upload_to_cloud(upload_info, file_path)
-        job = self.import_table_async(
-            table_id=table_id,
-            file_id=file_id,
-            incremental=incremental,
-            delimiter=delimiter,
-            enclosure=enclosure,
-            branch_id=branch_id,
-        )
-        return job.get("results", {})
+        self._upload_to_cloud(upload_info, file_path, on_progress=on_progress)
+        try:
+            job = self.import_table_async(
+                table_id=table_id,
+                file_id=file_id,
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+                wait=False,
+            )
+        except KeboolaApiError as exc:
+            if exc.details.get("import_may_be_running"):
+                # Already names the file; "import it from there" would be
+                # the wrong advice while an import may be running.
+                raise
+            # The file id goes into details only, never a recovery sentence:
+            # each caller words its own (the service names the full
+            # option-preserving `load-file` command, the SDK facade the file
+            # id), so the user never reads two instructions for one failure.
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details={**exc.details, "file_id": file_id},
+            ) from exc
+        if wait:
+            job = self._wait_for_import_job(job, file_id=file_id, max_wait=max_wait)
+        return TableUploadOutcome(file_id=file_id, job=job)
 
     def delete_table(
         self,

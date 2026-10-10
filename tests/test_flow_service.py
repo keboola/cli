@@ -579,6 +579,38 @@ def test_remove_flow_schedule_service_failure_warns_but_deletes_config():
     client.delete_config.assert_called_once()
 
 
+def _two_flow_schedules() -> list[dict]:
+    target = {"target": {"componentId": "keboola.flow", "configurationId": "5"}}
+    return [{"id": "77", "configuration": target}, {"id": "78", "configuration": target}]
+
+
+def test_remove_flow_schedule_reports_a_failed_delete_next_to_a_deleted_one():
+    """One of two deletes fails: the failure is in errors[], not dropped (#745)."""
+    client = MagicMock()
+    client.list_component_configs.return_value = _two_flow_schedules()
+    client.delete_config.side_effect = [
+        None,
+        KeboolaApiError(message="boom", status_code=500, error_code="API_ERROR", retryable=True),
+    ]
+    svc = _make_flow_service(client, scheduler_client=_make_scheduler_client())
+    result = svc.remove_flow_schedule(alias="prod", config_id="5")
+    assert result["deleted_schedule_ids"] == ["77"]
+    assert result["errors"] == [{"schedule_id": "78", "error": "boom"}]
+
+
+def test_remove_flow_schedule_raises_when_every_delete_failed():
+    client = MagicMock()
+    client.list_component_configs.return_value = _two_flow_schedules()
+    client.delete_config.side_effect = KeboolaApiError(
+        message="boom", status_code=500, error_code="API_ERROR", retryable=True
+    )
+    svc = _make_flow_service(client, scheduler_client=_make_scheduler_client())
+    with pytest.raises(KeboolaApiError) as exc_info:
+        svc.remove_flow_schedule(alias="prod", config_id="5")
+    assert exc_info.value.error_code == ErrorCode.SCHEDULE_DELETE_FAILED
+    assert exc_info.value.message == "Failed to delete schedules: 77: boom; 78: boom"
+
+
 class TestGetFlowTriggers:
     """`flow triggers` must report BOTH mechanisms, and admit what it skipped (#714)."""
 

@@ -283,6 +283,37 @@ FILE_UPLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
 # bloating the DEBUG log or the error-code regex scan.
 CLOUD_UPLOAD_ERROR_BODY_LIMIT: int = 1500
 
+# --- S3 multipart upload (AWS federation-token uploads, client/_s3_multipart.py) ---
+# A single S3 PutObject is capped at 5 GiB and kbagent's single PUT holds the
+# whole file in RAM, so anything above the threshold goes through multipart
+# upload instead. The threshold equals the default part size: a file of at
+# most one part gains nothing from the three-call multipart protocol.
+S3_MULTIPART_THRESHOLD: int = 64 * 1024 * 1024
+# Default part size. 64 MiB x 10,000 parts covers 625 GiB before the part
+# size has to grow; a 200 GB file is ~3,000 parts. Peak memory is roughly
+# S3_MULTIPART_CONCURRENCY x part size of in-flight payload buffers (256 MiB
+# at the defaults) plus httpx overhead -- independent of the file size.
+S3_MULTIPART_PART_SIZE: int = 64 * 1024 * 1024
+# S3 hard limits: at most 10,000 parts; every part but the last is between
+# 5 MiB and 5 GiB. A file needing parts above the max (> ~48.8 TiB) is
+# refused before any request is sent.
+S3_MULTIPART_MAX_PARTS: int = 10_000
+S3_MULTIPART_MIN_PART_SIZE: int = 5 * 1024 * 1024
+S3_MULTIPART_MAX_PART_SIZE: int = 5 * 1024 * 1024 * 1024
+# Part sizes are rounded up to this granularity (whole MiB keeps them readable
+# in logs and S3 listings).
+S3_MULTIPART_PART_ALIGNMENT: int = 1024 * 1024
+# Parts uploaded in parallel. Four saturates a typical uplink without
+# multiplying the memory ceiling above; never more parts than this are read
+# into memory at once.
+S3_MULTIPART_CONCURRENCY: int = 4
+# Attempts per multipart step -- Create, every part, and Complete (total, like
+# MAX_RETRIES). Higher than the general budget because any one of those steps
+# failing aborts the whole upload: with exponential backoff
+# (1+2+4+8+16 s) a step rides out a ~30 s network blip instead of throwing
+# away hours of a 200 GB upload.
+S3_MULTIPART_PART_ATTEMPTS: int = 6
+
 # --- File Download Timeout ---
 FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
     connect=30.0, read=3600.0, write=10.0, pool=30.0
@@ -293,6 +324,16 @@ FILE_DOWNLOAD_TIMEOUT: httpx.Timeout = httpx.Timeout(
 # for multi-GB tables (see GitHub issue #187: 200MB parquet slices OOM'd on 2GB RAM
 # hosts when loaded whole-body via response.content).
 FILE_DOWNLOAD_CHUNK_SIZE: int = 1024 * 1024  # 1 MiB
+
+# --- Transfer progress (`--progress` on storage upload/download commands) ---
+# Without a terminal (CI logs, an AI agent capturing stderr) `--progress` prints
+# one plain line per interval instead of redrawing a bar.
+PROGRESS_LOG_INTERVAL_SECONDS: float = 10.0
+# Speed (and so the ETA) is measured over this trailing window, not since the
+# start: S3 multipart reports once per finished part, so an instantaneous rate
+# jumps between zero and a burst, while the all-time average lags a speed change
+# for hours on a 200 GB upload. The final line reports the overall average.
+PROGRESS_RATE_WINDOW_SECONDS: float = 30.0
 
 # --- Export Job ---
 EXPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table export jobs (large tables)
