@@ -19,9 +19,11 @@ from packaging.version import InvalidVersion, Version
 
 from .. import __version__
 from ..constants import (
+    APP_NAME,
     ENV_UPDATE_TIMEOUT,
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
+    LEGACY_APP_NAME,
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
@@ -309,6 +311,40 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
     source = f"keboola-cli{extras} @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
     return _render_command(
         ("uv", "tool", "install", "--force", "--reinstall", *_uv_link_mode_args(), source)
+    )
+
+
+def summarize_install_failure(output: str | None) -> str:
+    """Return the last non-empty line of an installer transcript, or "".
+
+    uv and pip print their actionable line last (for example
+    ``error: Executable already exists: kbagent (use `--force` to overwrite)``),
+    so this is the cause to show in a one-line failure message.
+    """
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def legacy_install_advice(recovery_command: str | None) -> str | None:
+    """Return the steps that move a legacy-named install to ``keboola-cli``.
+
+    Returns ``None`` for every other install, so only an install made under
+    the pre-0.63 distribution name sees it (issue #771). The order is
+    load-bearing: ``uv tool uninstall`` removes the ``kbagent`` executable even
+    when a newer ``keboola-cli`` entry has taken it over, so the install must
+    come second.
+
+    Args:
+        recovery_command: The install command that recreates the tool
+            environment under the current name.
+    """
+    if APP_NAME != LEGACY_APP_NAME or recovery_command is None:
+        return None
+    return (
+        f"This install uses the old package name {LEGACY_APP_NAME}. "
+        "To move it to keboola-cli, run these two commands in this order:\n"
+        f"  uv tool uninstall {LEGACY_APP_NAME}\n"
+        f"  {recovery_command}"
     )
 
 
@@ -634,8 +670,7 @@ class VersionService:
         surface only that tail in the one-line summary -- the full transcript
         stays in the result's ``output`` for ``--json`` / ``--verbose``.
         """
-        lines = [ln.strip() for ln in (message or "").splitlines() if ln.strip()]
-        return lines[-1] if lines else "update failed"
+        return summarize_install_failure(message) or "update failed"
 
     @classmethod
     def _compose_update_summary(cls, kbagent_result: dict[str, Any]) -> str:

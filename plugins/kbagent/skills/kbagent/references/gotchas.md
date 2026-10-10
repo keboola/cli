@@ -6057,3 +6057,14 @@ appeared in human mode on a terminal.
 On older versions `--progress` does not exist and the command fails with a
 usage error (exit 2) -- check `kbagent version` before passing it.
 
+## An install under the old package name `keboola-agent-cli` does not update to `keboola-cli`
+
+*(since vNEXT, #771)*
+
+The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli` from 0.63.0. Both install the `kbagent` executable, so uv treats an update to `keboola-cli` as a new tool. If a user reports a kbagent that never updates, run `uv tool list` and look for a `keboola-agent-cli` entry.
+
+- **kbagent 0.59.x and older cannot update itself.** Every command prints `Auto-update failed; continuing with current version.` with no cause. Without the `[server]` extras the uv error is ``error: Executable already exists: kbagent (use `--force` to overwrite)``. The update code runs from the old install, so no release changes this.
+- **Do not tell the user to run `kbagent update` or the `upgrade_command` from that old `kbagent version --json`.** Both run the same failing command.
+- **Move the user with two commands, in this order:** `uv tool uninstall keboola-agent-cli`, then the install one-liner from the README. The configuration folder keeps the name `keboola-agent-cli` and is not touched.
+- **The order is load-bearing.** kbagent 0.63.1 and newer updates by installing a second tool, `keboola-cli`, that takes over the `kbagent` executable. `uv tool uninstall keboola-agent-cli` after that also deletes the executable, and the shell reports `command not found`. Reinstall with `uv tool install --force --reinstall "keboola-cli[server] @ <release wheel URL>"`.
+- **Failure banner.** A failed startup update now prints a `Cause:` line with the last line of the uv output, then `Recover with: <command>`, on stderr. Before, it printed only `Auto-update failed; continuing with current version.` and the recovery command. On an install that runs under the old name, the banner replaces `Recover with:` by the two commands above. `kbagent update` is unchanged: its `update FAILED:` summary already ends with the last uv line.

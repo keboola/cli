@@ -17,8 +17,10 @@ from keboola_agent_cli.services.version_service import (
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
     get_update_timeout,
+    legacy_install_advice,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
+    summarize_install_failure,
 )
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
@@ -911,6 +913,45 @@ class TestComposeUpdateSummary:
         assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
         assert VersionService._summarize_failure_tail("") == "update failed"
         assert VersionService._summarize_failure_tail(None) == "update failed"
+
+
+class TestSummarizeInstallFailure:
+    """The cause shown in a failure message is the installer's last line (#771)."""
+
+    def test_returns_the_last_non_empty_line(self) -> None:
+        output = (
+            "Resolved 1 package in 3ms\n"
+            "error: Executable already exists: kbagent (use `--force` to overwrite)\n\n"
+        )
+        assert summarize_install_failure(output) == (
+            "error: Executable already exists: kbagent (use `--force` to overwrite)"
+        )
+
+    @pytest.mark.parametrize("output", [None, "", "  \n\n"])
+    def test_returns_empty_string_without_output(self, output: str | None) -> None:
+        assert summarize_install_failure(output) == ""
+
+
+class TestLegacyInstallAdvice:
+    """Only an install under the old package name is told to move (#771)."""
+
+    RECOVERY = "uv tool install --force --reinstall 'keboola-cli @ https://example.test/k.whl'"
+
+    def test_legacy_install_gets_uninstall_before_install(self) -> None:
+        with patch(f"{VS}.APP_NAME", "keboola-agent-cli"):
+            advice = legacy_install_advice(self.RECOVERY)
+
+        assert advice is not None
+        assert advice.index("uv tool uninstall keboola-agent-cli") < advice.index(self.RECOVERY)
+
+    def test_current_install_gets_no_advice(self) -> None:
+        with patch(f"{VS}.APP_NAME", "keboola-cli"):
+            assert legacy_install_advice(self.RECOVERY) is None
+
+    def test_no_recovery_command_means_no_advice(self) -> None:
+        # An uninstall without the install after it would delete `kbagent`.
+        with patch(f"{VS}.APP_NAME", "keboola-agent-cli"):
+            assert legacy_install_advice(None) is None
 
 
 class TestSummaryDistinguishesNotYetFromFailed:

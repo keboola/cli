@@ -25,6 +25,7 @@ import httpx
 # config_store.py -- it must not move with the distribution name or existing
 # users would lose their config location.
 APP_NAME_CANDIDATES: tuple[str, ...] = ("keboola-cli", "keboola-agent-cli")
+LEGACY_APP_NAME: str = APP_NAME_CANDIDATES[1]
 
 
 def _resolve_app_name() -> str:
