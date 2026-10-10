@@ -463,7 +463,7 @@ a session-backed project from the web UI at all:
   schedule; it cannot be revoked from this CLI afterwards.
 
 For a project you would rather not expose this way, register it with a static
-Storage token (`kbagent project add --token`) — that path has neither property.
+Storage token (`kbagent project add --token-stdin`) — that path has neither property.
 
 ### `/auth/*` — three read/audit endpoints, three deliberate gaps
 

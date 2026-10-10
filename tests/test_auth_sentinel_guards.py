@@ -99,7 +99,7 @@ class TestRemedyText:
     def test_default_remedy_leads_with_project_edit(self) -> None:
         exc = SessionAuthUnsupportedError("The Keboola AI Service")
 
-        assert "project edit --project <alias> --token <token>" in exc.message
+        assert "project edit --project <alias> --token-stdin" in exc.message
         # `project add` is still mentioned, but scoped to the case it works for.
         assert "project add --project <new-alias>" in exc.message
         assert "rejects one that already exists" in exc.message

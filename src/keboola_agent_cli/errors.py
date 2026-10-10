@@ -320,9 +320,9 @@ class SessionAuthUnsupportedError(ConfigError):
         else:
             message = (
                 f"{message} Point the project at a static Storage token instead: "
-                "`kbagent project edit --project <alias> --token <token>` converts the "
+                "`kbagent project edit --project <alias> --token-stdin` converts the "
                 "alias you are already using, replacing its session credential. Use "
-                "`kbagent project add --project <new-alias> --url <stack> --token <token>` "
+                "`kbagent project add --project <new-alias> --url <stack> --token-stdin` "
                 "only for a genuinely new alias -- `project add` rejects one that already exists."
             )
         super().__init__(message)

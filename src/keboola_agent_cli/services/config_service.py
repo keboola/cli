@@ -2407,7 +2407,7 @@ class ConfigService(BaseService):
                         f"master token, so it cannot mint the short-lived "
                         f"component-scoped child token the OAuth wizard expects. "
                         f"Either re-add the project with a master token "
-                        f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                        f"(`kbagent project edit --project {alias} --token-stdin`) "
                         f"or open the OAuth flow via the Keboola UI."
                     ),
                 )

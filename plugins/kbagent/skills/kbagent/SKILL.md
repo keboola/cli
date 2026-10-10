@@ -565,8 +565,9 @@ KBC_LOGIN_EMAIL=... KBC_LOGIN_PASSWORD=... KBC_LOGIN_TOTP_SECRET=... \
 credentials:
 
 ```bash
-# Single project
-kbagent --json project add --project prod --url https://connection.keboola.com --token YOUR_TOKEN
+# Single project. The token goes in on stdin, never as a --token value (that lands in the
+# shell history). The person runs it and types the token at the hidden prompt; a script pipes it in:
+printf '%s' "$KBC_TOKEN" | kbagent --json project add --project prod --url https://connection.keboola.com --token-stdin
 
 # Or bulk-onboard from organization (org admin)
 # Manage token: interactive prompt by default; for CI add --allow-env-manage-token

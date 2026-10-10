@@ -711,7 +711,7 @@ Versioning convention:
   #599) — exactly the shape `org setup` / `project refresh` mint. Since v0.89.0
   `token create` pre-flights `isMasterToken` and fails fast with
   `MISSING_MASTER_TOKEN` (exit 3) naming the fix (`kbagent project edit
-  --project ALIAS --token <MASTER>`).
+  --project ALIAS --token-stdin`).
 - **That defect is CREATE-ONLY — `refresh` / `list` / `delete` are NOT
   master-guarded.** `RefreshTokenVoter` lets any token rotate **itself** and a
   `canManageTokens` token rotate another, so rotating a leaked device token
@@ -723,7 +723,7 @@ Versioning convention:
 - **`token refresh` does not write the new secret back to `config.json`.** The
   value is printed once, exactly like `create`. Rotating the very token an
   alias uses therefore leaves that alias holding a dead value — follow it with
-  `kbagent project edit --project ALIAS --token <NEW>` or the next command
+  `kbagent project edit --project ALIAS --token-stdin` or the next command
   fails on auth.
 - **The secret is a ONE-TIME reveal.** `create` / `refresh` print the token value
   once (human mode: inside a Rich panel; `--json`: the `token` field). It is never
@@ -2113,7 +2113,7 @@ config, the retry fires, and the retry destroys it for good.
   `lineage build`.
 - Combined invocations are atomic in the obvious order: `--new-alias` is
   applied first, then `--url` / `--token` mutations target the new alias key.
-  So `kbagent project edit --project foo --new-alias bar --token NEW` does
+  So `kbagent project edit --project foo --new-alias bar --token-stdin` does
   the rename, then writes the new token under `bar`. If `--new-alias` is
   identical to the current alias, it's a no-op (matches "rename to same name"
   idempotency).
@@ -3006,7 +3006,7 @@ type inventory and examples.
 ## Token handling
 
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
-- Token can be passed via `--token`, `KBC_TOKEN` env var, or interactive prompt
+- Token can be passed via `--token-stdin` (preferred), `--token-file`, `--token-env` (all three since vNEXT), `--token`, `KBC_TOKEN` env var (`project add` only), or interactive prompt (`project add` only)
 - Manage API token (since v0.29.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.29.0)` entry at the top of this file.
 - Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
@@ -3814,7 +3814,7 @@ requires a **master (admin) token** — `canManageTokens` alone is not enough
   guard the Storage API returns a vague 500 "Application error" that misleads
   operators into thinking the OAuth wizard is broken.
 - Fix path: re-add the project with a master token
-  (`kbagent project edit --project <ALIAS> --token <MASTER_TOKEN>`) or open
+  (`kbagent project edit --project <ALIAS> --token-stdin`) or open
   the OAuth flow via the Keboola UI instead.
 - AI agents creating the project token via `kbagent project add` /
   `kbagent project refresh` get a non-master token by default — they must

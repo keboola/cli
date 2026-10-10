@@ -345,7 +345,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     the alias and cascades the rename through config.json and the nested sync
     directory at <cwd>/<old-alias>/. Lineage cache embeds the alias in FQNs
     and is NOT auto-updated; rebuild via `kbagent lineage build` after rename.
-    Passing --token for a browser-login (session) project is allowed and
+    Passing a new token for a browser-login (session) project is allowed and
     converts it to a static-token project, but it emits a warning: once
     converted, `auth logout --remove-projects` no longer cleans that alias up
     (use `project remove`). In --json mode the warning is carried in an
@@ -362,7 +362,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
-    use `project edit --token` for a deliberate one-project conversion.
+    use `project edit --token-stdin` for a deliberate one-project conversion.
 
   kbagent project description-get --project NAME
     Read the Keboola dashboard project description (markdown). Backed by

@@ -153,6 +153,25 @@ def _read_token_file(path: Path) -> str:
     return token
 
 
+def _require_single_line(token: str, param_hint: str) -> str:
+    """Refuse a token that holds a line break or another control character.
+
+    A Storage token is one printable line. When the value is several lines --
+    a whole file or ``.env`` piped in by mistake -- the HTTP layer fails with
+    an error that quotes the entire header value ("Illegal header value b'...'"),
+    and nothing catches it, so the traceback would print the token and
+    everything piped in with it. Refusing here keeps the value out of that
+    message: the error names the flag, never the value.
+    """
+    if not token.isprintable():
+        raise typer.BadParameter(
+            "The token contains a line break or another control character. "
+            "Pass the token alone, on one line.",
+            param_hint=param_hint,
+        )
+    return token
+
+
 # Shared declarations for the token-input flags. `project add` and `project
 # edit` offer the same set, and one definition keeps their help text from
 # drifting apart -- `project.py` is already over its soft size ceiling.
@@ -259,8 +278,9 @@ def resolve_storage_token_input(
 
     Raises:
         typer.BadParameter: More than one explicit source, an unreadable or
-            empty file, an unset or empty named variable, or
-            ``--keep-token-file`` without ``--token-file``.
+            empty file, an unset or empty named variable, a value with a line
+            break or another control character, or ``--keep-token-file``
+            without ``--token-file``.
         typer.Exit: ``required`` is True and there is nothing to read
             (exit code 2).
     """
@@ -287,10 +307,12 @@ def resolve_storage_token_input(
         )
 
     if token_stdin:
-        return read_password_stdin(label="Storage API token: ")
+        return _require_single_line(
+            read_password_stdin(label="Storage API token: "), "--token-stdin"
+        )
 
     if token_file is not None:
-        return _read_token_file(token_file)
+        return _require_single_line(_read_token_file(token_file), "--token-file")
 
     if token_env is not None:
         value = os.environ.get(token_env, "")
@@ -299,9 +321,10 @@ def resolve_storage_token_input(
                 f"Environment variable {token_env} is unset or empty.",
                 param_hint="--token-env",
             )
-        return value
+        return _require_single_line(value, "--token-env")
 
     if token:
+        _require_single_line(token, "--token")
         if token_from_cli and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             typer.echo(
                 "Warning: the token you passed with --token is now in your shell "

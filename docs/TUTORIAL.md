@@ -41,14 +41,25 @@ Nothing else is needed.
 ```bash
 kbagent project add --project prod \
   --url https://connection.keboola.com \
-  --token YOUR_STORAGE_API_TOKEN
+  --token-stdin
 ```
+
+`--token-stdin` shows a hidden prompt on a terminal: paste the token and press
+Enter. In a script, pipe the token in instead:
+
+```bash
+printf '%s' "$KBC_TOKEN" | kbagent project add --project prod \
+  --url https://connection.keboola.com --token-stdin
+```
+
+Do not pass the token as `--token VALUE`. It works, but it writes the token
+into your shell history and into a process listing.
 
 Aliases are arbitrary; pick names that make sense in your head
 (`prod`, `dev`, `client-a`, `my-project`). The CLI uses them on every
 subsequent command (`--project prod`).
 
-Alternative ways to pass the token (same effect, safer for shell history):
+Other ways to pass the token (also safe for shell history):
 
 ```bash
 # Env var
@@ -824,10 +835,10 @@ The simplest path: a public git repo, no auth gate, three commands from
 zero to a running container.
 
 ```bash
-# Register the project once (Storage API token from the UI).
+# Register the project once (Storage API token from the UI, typed at a hidden prompt).
 kbagent project add --project prod \
   --url https://connection.keboola.com \
-  --token YOUR_STORAGE_TOKEN
+  --token-stdin
 
 # Create the deployment shell + Storage config in one shot.
 kbagent --json data-app create \
