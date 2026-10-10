@@ -146,6 +146,36 @@ class TestCreateTableClientBody:
         assert "clustering" not in body
         client.close()
 
+    def test_forwards_budget_to_the_poller(self, httpx_mock) -> None:
+        """create_table passes max_wait through to _wait_for_storage_job (issue #713).
+
+        Asserted on the kwarg, not on elapsed time: an httpx mock never sees
+        the budget, so dropping the argument would leave every wire test green
+        while a --source-table-id copy silently fell back to the 60s metadata
+        default.
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/buckets/in.c-main/tables-definition",
+            method="POST",
+            json={"id": 1, "status": "waiting"},
+            status_code=200,
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+        with patch.object(
+            KeboolaClient,
+            "_wait_for_storage_job",
+            return_value={"id": 1, "status": "success", "results": {}},
+        ) as poller:
+            client.create_table(
+                bucket_id="in.c-main",
+                name="events_repart",
+                source={"tableId": "in.c-main.events"},
+                max_wait=900.0,
+            )
+        client.close()
+
+        assert poller.call_args.kwargs["max_wait"] == 900.0
+
 
 # ---------------------------------------------------------------------------
 # Service layer -- validation
