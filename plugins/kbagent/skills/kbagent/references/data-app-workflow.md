@@ -362,9 +362,12 @@ workspace grant, and that grant is gated on `parameters.dataApp.git` being
 present in Storage config, independent of `managedGitRepoId`. Step 4 above now
 backfills that block automatically before the first deploy, so this flow needs
 no extra manual step. **Push to the backfilled branch:** the block sets
-`branch` from `data-app deploy --git-branch` (default `main`; since vNEXT),
-because the managed repo's `git-repo` lookup returns no branch to read. The
-deploy result reports the branch it wrote (`git_branch`). `--git-branch` has
+`branch` from `data-app deploy --git-branch` (since vNEXT), because the
+managed repo's `git-repo` lookup returns no branch to read. Without the flag,
+deploy writes `main` for an app with no runs. An app that has runs deployed
+before from the repo's own default branch, so deploy fails with
+`VALIDATION_ERROR` before any write; pass `--git-branch` with the branch the
+code is on. The deploy result reports the branch it wrote (`git_branch`). `--git-branch` has
 no effect on a deploy that does not backfill. Code pushed only to another
 branch is never deployed. On an older kbagent version, the tell for the
 unpatched gap is `data-app detail` showing `Git: {}` (empty) on a `running`

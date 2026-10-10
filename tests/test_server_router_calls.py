@@ -1197,11 +1197,11 @@ def test_data_app_create_passes_use_managed_git_repo(tmp_path: Path) -> None:
     assert kwargs.get("git_repo") == ""
 
 
-@pytest.mark.parametrize(("query", "branch"), [({"git_branch": "dev"}, "dev"), ({}, "main")])
+@pytest.mark.parametrize(("query", "branch"), [({"git_branch": "dev"}, "dev"), ({}, None)])
 def test_data_app_deploy_passes_git_branch(
-    tmp_path: Path, query: dict[str, str], branch: str
+    tmp_path: Path, query: dict[str, str], branch: str | None
 ) -> None:
-    """POST /data-apps/{p}/{app}/deploy forwards git_branch (default main)."""
+    """POST /data-apps/{p}/{app}/deploy forwards git_branch; not given is None."""
     data_app_svc = MagicMock()
     data_app_svc.deploy_data_app.return_value = {"app_id": APP_ID}
     registry = _mock_registry(data_app=data_app_svc)

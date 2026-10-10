@@ -1448,10 +1448,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     injects the clone credentials at deploy time, so no credential wiring is
     needed. Deploy writes the git block itself (vNEXT+, CLI-15): for a managed
     app with no parameters.dataApp.git it backfills repository URL + branch
-    (deploy --git-branch, default `main`) into the Storage config, then pins
-    the new version. The platform provisions the workspace only when that
-    block exists. The result has git_backfilled: true, git_branch and a
-    warnings[] entry; code on any other branch is not deployed.
+    into the Storage config, then pins the new version. The branch is
+    deploy --git-branch; without it, `main` for an app with no runs, and a
+    VALIDATION_ERROR before any write for an app that has runs (its branch
+    is unknown -- pass --git-branch with the branch the code is on). The
+    platform provisions the workspace only when that block exists. The result
+    has git_backfilled: true, git_branch and a warnings[] entry; code on any
+    other branch is not deployed.
     --workspace (0.87.0+, DEFAULT ON) writes runtime.workspace.enabled=true --
     the single switch that makes the platform provision the ephemeral workspace
     and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
@@ -1478,8 +1481,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback) and
-    skips the git-block backfill. --git-branch (default main) only sets
-    the branch of that backfill; it has no effect otherwise.
+    skips the git-block backfill. --git-branch only sets the branch of
+    that backfill; it has no effect otherwise.
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
     together -- HTTP 422 otherwise.
 

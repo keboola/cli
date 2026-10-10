@@ -962,12 +962,13 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   backfills parameters.dataApp.git from the managed repo's URL, then pins the resulting version
 #   (CLI-15) -- omitting configVersion alone does NOT provision the app's workspace;
 #   grant provisioning is gated on that block's presence, not on configVersion. The deploy result
-#   reports it (`git_backfilled`, `git_branch`, `warnings[]`). The branch written is `--git-branch`
-#   (default `main`); it has no effect on a deploy that does not backfill. Push the managed repo's
-#   code to that branch.
+#   reports it (`git_backfilled`, `git_branch`, `warnings[]`). The branch written is `--git-branch`;
+#   without it, `main` for an app with no runs, and a VALIDATION_ERROR before any write for an app
+#   with runs (branch unknown: pass `--git-branch` with the branch the code is on). It has no effect
+#   on a deploy that does not backfill. Push the managed repo's code to that branch.
 #   Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines). Use `data-app runs`
 #   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
-kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch main] [--copy] [--reveal]
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH] [--copy] [--reveal]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]

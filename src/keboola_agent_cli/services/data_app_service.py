@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any
 
 from ..client import KeboolaClient
-from ..constants import DEFAULT_GIT_BRANCH, DEFAULT_JOB_RUN_TIMEOUT
+from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..data_science_client import DataScienceClient
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
@@ -571,7 +571,7 @@ class DataAppService(BaseService):
         wait: bool = False,
         timeout_seconds: float = DEFAULT_JOB_RUN_TIMEOUT,
         branch_id: int | None = None,
-        git_branch: str = DEFAULT_GIT_BRANCH,
+        git_branch: str | None = None,
     ) -> dict[str, Any]:
         """Encapsulate the §9 redeploy contract.
 
@@ -582,7 +582,10 @@ class DataAppService(BaseService):
 
         ``git_branch`` is the branch written into ``parameters.dataApp.git``
         when deploy backfills a pure managed repo; it has no effect otherwise.
+        ``None`` (not given) means ``main`` for a never-deployed app and a
+        VALIDATION_ERROR before any write for an app with run history.
         """
+        # None (not given) is skipped: _check_text_field ignores non-strings.
         _check_text_field("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False, required=True)
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -603,13 +606,14 @@ class DataAppService(BaseService):
             # An explicit --config-version always wins as an escape hatch; see
             # resolve_effective_version's docstring for the resolution rules.
             effective_version: str | None = config_version
-            git_backfilled = False
+            backfilled_branch: str | None = None
             if config_version is None:
                 storage_client = self._client_factory(project.stack_url, project.token)
                 resolved = resolve_effective_version(
                     ds_client, storage_client, app, app_id, config_id, branch_id, git_branch
                 )
-                effective_version, git_backfilled = resolved.version, resolved.git_backfilled
+                # git_branch is None unless the backfill wrote the git block.
+                effective_version, backfilled_branch = resolved.version, resolved.git_branch
 
             deployed = ds_client.patch_app(
                 app_id,
@@ -633,10 +637,10 @@ class DataAppService(BaseService):
                 poll_result=poll_result,
                 config_version=effective_version or "",
             )
-            if git_backfilled:
+            if backfilled_branch is not None:
                 result["git_backfilled"] = True
-                result["git_branch"] = git_branch
-                result["warnings"] = [git_backfill_warning(git_branch)]
+                result["git_branch"] = backfilled_branch
+                result["warnings"] = [git_backfill_warning(backfilled_branch)]
             return result
         finally:
             ds_client.close()

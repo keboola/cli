@@ -316,7 +316,7 @@ class ManagedGitBackfillTarget:
     config_id: str
     branch_id: int | None
     latest_version: str
-    git_branch: str = DEFAULT_GIT_BRANCH
+    git_branch: str
 
 
 def backfill_managed_git(
@@ -376,6 +376,35 @@ def backfill_managed_git(
     return new_version
 
 
+def _backfill_branch(ds_client: Any, app_id: str, git_branch: str | None) -> str:
+    """Choose the branch to write into a backfilled managed-repo git block.
+
+    An explicit ``--git-branch`` always wins. No API returns the managed
+    repo's default branch (``get_git_repo`` has no branch field). Before
+    vNEXT a pure managed repo deployed from ``managedGitRepoId`` on the
+    repo's own default branch, so an app with any run history may serve code
+    from a branch other than ``main``. Writing ``main`` for it would repoint
+    it for good. So ``main`` is used only for an app with no runs; otherwise
+    deploy stops before any write and asks for ``--git-branch``.
+    """
+    if git_branch is not None:
+        return git_branch
+    if ds_client.list_app_runs(app_id, limit=1):
+        raise KeboolaApiError(
+            message=(
+                f"Data app {app_id} uses a managed git repository and was deployed "
+                "before, but its configuration has no git block. Deploy must write "
+                "the branch into the configuration, and the branch of the managed "
+                "repository is unknown. Pass --git-branch BRANCH (the branch your "
+                "code is on). Nothing was changed."
+            ),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    return DEFAULT_GIT_BRANCH
+
+
 def resolve_effective_version(
     ds_client: Any,
     storage_client: Any,
@@ -383,13 +412,15 @@ def resolve_effective_version(
     app_id: str,
     config_id: str,
     branch_id: int | None,
-    git_branch: str = DEFAULT_GIT_BRANCH,
+    git_branch: str | None = None,
 ) -> EffectiveVersion:
     """Resolve the Storage ``configVersion`` for ``deploy_data_app`` to pin.
 
     ``git_backfilled`` in the result is True when the git block was written
     into the Storage config; ``git_branch`` then names the branch it wrote.
     ``git_branch`` is used only for that backfill and ignored otherwise.
+    ``None`` means the caller did not pass ``--git-branch``: see
+    :func:`_backfill_branch` for how the branch is then chosen.
 
     configVersion resolution depends on where the app's *source* lives:
 
@@ -414,9 +445,10 @@ def resolve_effective_version(
     is_managed = bool(app.get("hasManagedGitRepo"))
     has_git_block = bool(data_app_cfg.get("git"))
     if is_managed and not has_git_block:
-        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version, git_branch)
+        branch = _backfill_branch(ds_client, app_id, git_branch)
+        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version, branch)
         version = backfill_managed_git(ds_client, storage_client, configuration, ctx)
-        return EffectiveVersion(version=version, git_backfilled=True, git_branch=git_branch)
+        return EffectiveVersion(version=version, git_backfilled=True, git_branch=branch)
     if not latest_version:
         raise KeboolaApiError(
             message=(

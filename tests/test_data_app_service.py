@@ -64,7 +64,10 @@ def _make_service(
     storage_mock: MagicMock | None = None,
     encrypt_mock: MagicMock | None = None,
 ) -> tuple[DataAppService, MagicMock, MagicMock, MagicMock]:
-    ds_mock = ds_mock or MagicMock()
+    if ds_mock is None:
+        ds_mock = MagicMock()
+        # No run history: a never-deployed app (a bare MagicMock would be truthy).
+        ds_mock.list_app_runs.return_value = []
     storage_mock = storage_mock or MagicMock()
     if encrypt_mock is None:
         encrypt_mock = MagicMock()
@@ -1266,9 +1269,54 @@ class TestDataAppDeploy:
 
         result = service.deploy_data_app(alias="prod", app_id="42")
 
+        ds_mock.list_app_runs.assert_called_once_with("42", limit=1)
         written = storage_mock.update_config.call_args.kwargs["configuration"]
         assert written["parameters"]["dataApp"]["git"]["branch"] == "main"
         assert result["git_branch"] == "main"
+
+    def test_deploy_backfill_without_git_branch_fails_for_deployed_app(
+        self, tmp_path: Path
+    ) -> None:
+        """An app with run history deployed before from the managed repo's own
+        default branch, which no API returns. Writing main could repoint it for
+        good, so deploy stops before any write and asks for --git-branch."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.list_app_runs.return_value = [{"state": "running"}]
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.deploy_data_app(alias="prod", app_id="42")
+
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "--git-branch BRANCH" in exc.value.message
+        ds_mock.get_git_repo.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+        ds_mock.patch_app.assert_not_called()
+
+    def test_deploy_backfill_explicit_git_branch_skips_run_check(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.list_app_runs.return_value = [{"state": "running"}]
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch="master")
+
+        ds_mock.list_app_runs.assert_not_called()
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == "master"
+        assert result["git_branch"] == "master"
 
     def test_deploy_git_branch_is_ignored_without_backfill(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

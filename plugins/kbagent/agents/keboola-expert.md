@@ -393,7 +393,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `deploy` on a pure `--use-managed-git-repo` app wrote no
   `parameters.dataApp.git`, and the workspace grant is gated on that block --
   `data-app detail` shows `Git: {}`. vNEXT+ backfills it on deploy (managed repo
-  must be pushed to the `deploy --git-branch` branch, default `main`); older: merge the block by hand, then redeploy.
+  must be pushed to the `deploy --git-branch` branch; without the flag `main`
+  for an app with no runs, and an error before any write for an app with runs --
+  pass `--git-branch` with the branch the code is on); older: merge the block by hand, then redeploy.
 - **`data-app password` keeps the password out of the chat (0.96.1+)**: it
   never prints it without `--reveal`; the user copies it with `c` in their own
   terminal, or you run `--copy`. Project token only -- no Manage token. Below

@@ -4205,8 +4205,13 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   present in Storage config, independent of `managedGitRepoId`/
   `hasManagedGitRepo`/`configVersion`. Fixed since vNEXT: `data-app deploy` now
   resolves the managed repo's URL and backfills that git block (repository URL,
-  branch from `--git-branch`, default `main`) *before* pinning a version, for
-  any pure managed repo -- no manual `config update --merge` step needed.
+  branch from `--git-branch`) *before* pinning a version, for any pure managed
+  repo -- no manual `config update --merge` step needed. No API returns the
+  managed repo's default branch. So without `--git-branch`, deploy writes
+  `main` only for an app with no runs (`data-app runs` empty). An app with
+  runs deployed before from the repo's own default branch, which may not be
+  `main`: deploy fails with `VALIDATION_ERROR` before any write and asks for
+  `--git-branch` with the branch the code is on.
   `--git-branch` has no effect on a deploy that does not backfill. The deploy
   result reports it with `git_backfilled: true`, `git_branch` and a `warnings[]`
   entry. Push your code to that branch of the managed repo. `data-app detail`'s `Git: {}` (empty) on a `running` app is the tell

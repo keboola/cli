@@ -538,9 +538,9 @@ class TestDataAppDeploy:
         assert body["data"]["config_version"] == "5"
         mock.deploy_data_app.assert_called_once()
 
-    @pytest.mark.parametrize(("extra", "branch"), [(["--git-branch", "dev"], "dev"), ([], "main")])
+    @pytest.mark.parametrize(("extra", "branch"), [(["--git-branch", "dev"], "dev"), ([], None)])
     def test_deploy_passes_git_branch_to_service(
-        self, tmp_path: Path, extra: list[str], branch: str
+        self, tmp_path: Path, extra: list[str], branch: str | None
     ) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
