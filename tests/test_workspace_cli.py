@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -880,8 +881,12 @@ class TestWorkspaceLoad:
         assert output["error"]["code"] == "INVALID_ARGUMENT"
         mock_ws.load_tables.assert_not_called()
 
-    def test_workspace_load_rejects_non_positive_timeout(self, tmp_path: Path) -> None:
-        """--timeout 0 is rejected, not silently swapped for the default."""
+    @pytest.mark.parametrize("bad", ["0", "nan", "inf"])
+    def test_workspace_load_rejects_bad_timeout(self, tmp_path: Path, bad: str) -> None:
+        """--timeout 0 is rejected, not silently swapped for the default.
+
+        NaN and infinity would make the wait never end.
+        """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
@@ -902,7 +907,7 @@ class TestWorkspaceLoad:
                     "--tables",
                     "in.c-main.orders",
                     "--timeout",
-                    "0",
+                    bad,
                 ],
             )
 

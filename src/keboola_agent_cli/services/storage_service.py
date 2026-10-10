@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..constants import STORAGE_BRANCHES_FEATURE
+from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
@@ -25,9 +25,11 @@ from ._storage_jobs import (
     ImportOptions,
     import_job_fields,
     read_csv_header,
+    resolve_wait_timeout,
     summarize_storage_job,
     validate_wait_timeout,
     with_import_hint,
+    with_job_timeout_hint,
 )
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
@@ -718,6 +720,7 @@ class StorageService(ColumnDescriptionsMixin):
         range_partitioning_end: str | None = None,
         range_partitioning_interval: str | None = None,
         clustering_fields: list[str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns, or by copying a source table.
 
@@ -765,6 +768,10 @@ class StorageService(ColumnDescriptionsMixin):
                 partitioning (all four required together). Mutually exclusive
                 with time partitioning.
             clustering_fields: BigQuery clustering columns.
+            timeout: Seconds to wait for the create job. ``None`` means
+                ``TABLE_DATA_JOB_MAX_WAIT``. A ``source_table_id`` copy moves
+                real data, so a large table needs more than the metadata-job
+                default; giving up locally never cancels the job.
 
         Returns:
             Dict with table details and ``auto_created_bucket`` flag.
@@ -777,13 +784,19 @@ class StorageService(ColumnDescriptionsMixin):
             ``schema_drift`` is ``True`` when the two diverge.
 
         Raises:
-            ValueError: Malformed column spec or ``--default`` assignment;
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``,
+                details ``job_id``, message names ``storage job-detail`` and
+                ``storage table-detail``) when the wait runs out -- the create
+                keeps running server-side.
+            ValueError: ``timeout`` is zero, negative, NaN or infinite;
+                malformed column spec or ``--default`` assignment;
                 ``--not-null`` / ``--default`` references an unknown column;
                 ``columns`` and ``source`` both/neither given;
                 ``source_branch_id`` given without ``source_table_id``;
                 incomplete or conflicting partitioning flags; or BigQuery-only
                 features requested on a non-BigQuery backend.
         """
+        max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
         not_null_set = set(not_null_columns or [])
         defaults_map = _parse_default_assignments(defaults)
 
@@ -891,6 +904,7 @@ class StorageService(ColumnDescriptionsMixin):
                     time_partitioning=time_partitioning,
                     range_partitioning=range_partitioning,
                     clustering=clustering,
+                    max_wait=max_wait,
                 )
             except KeboolaApiError as exc:
                 # IF-NOT-EXISTS: if the create failed because the table
@@ -948,7 +962,7 @@ class StorageService(ColumnDescriptionsMixin):
                             "range_partitioning": None,
                             "clustering": None,
                         }
-                raise
+                raise with_job_timeout_hint(exc, alias, target_table_id, branch_id) from exc
             legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
@@ -1559,6 +1573,7 @@ class StorageService(ColumnDescriptionsMixin):
         target_table_id: str,
         branch_id: int | None,
         dry_run: bool = False,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Swap two storage tables (branch-scoped; branch_id mandatory).
 
@@ -1580,6 +1595,11 @@ class StorageService(ColumnDescriptionsMixin):
             target_table_id: Full ID of the second table.
             branch_id: Branch ID (must not be None; any branch accepted, including the default/production branch).
             dry_run: If True, only report what would be swapped.
+            timeout: Seconds to wait for the swap job. ``None`` means
+                ``TABLE_DATA_JOB_MAX_WAIT``. A swap on a large BigQuery table
+                outlasts the metadata-job default, and giving up locally does
+                not cancel it -- the swap still lands, it is just no longer
+                being watched.
 
         Returns:
             Dict with 'project_alias', 'branch_id', 'table_id',
@@ -1587,8 +1607,14 @@ class StorageService(ColumnDescriptionsMixin):
 
         Raises:
             ConfigError: If branch_id is None.
-            KeboolaApiError: If the API call fails.
+            ValueError: ``timeout`` is zero, negative, NaN or infinite.
+            KeboolaApiError: If the API call fails. A wait timeout is
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details
+                ``job_id``, message names ``storage job-detail``): the swap
+                keeps running, and repeating it would swap the tables back.
         """
+        max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
+
         if branch_id is None:
             raise ConfigError(
                 "swap-tables requires a branch. Set one with "
@@ -1621,7 +1647,10 @@ class StorageService(ColumnDescriptionsMixin):
                 table_id=table_id,
                 target_table_id=target_table_id,
                 branch_id=branch_id,
+                max_wait=max_wait,
             )
+        except KeboolaApiError as exc:
+            raise with_job_timeout_hint(exc, alias) from exc
         finally:
             client.close()
 

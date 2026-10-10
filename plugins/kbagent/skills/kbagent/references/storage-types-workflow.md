@@ -360,3 +360,33 @@ Rules:
 - The partition/clustering flags also work on a plain `--column` create
   (same BigQuery-only rule) when you want a fresh empty table in a specific
   layout rather than a copy.
+
+### Budget both steps on a large table
+
+*(since vNEXT, #713)*
+
+Steps 1 and 2 both move real data. Until vNEXT they inherited the 60s
+`STORAGE_JOB_MAX_WAIT` meant for metadata jobs -- measured on an 800 MB table,
+create takes ~15s and the swap ~31s, so a table a few times larger reported
+`STORAGE_JOB_TIMEOUT` on a job that was still running and would succeed. Both
+now default to **300s** and accept `--timeout SECONDS`:
+
+```bash
+kbagent storage create-table --project prod --bucket-id in.c-main \
+  --name events_repart --source-table-id in.c-main.events \
+  --time-partitioning-type DAY --time-partitioning-field created_at \
+  --timeout 3600
+```
+
+**A timeout is not a failure.** kbagent stops watching; the Storage job keeps
+running server-side. The error is `STORAGE_JOB_TIMEOUT`, exit 4,
+`retryable: false`, with the job id in `details.job_id` and the follow-up
+command in the message:
+
+```bash
+kbagent storage job-detail --project prod --job-id <ID> --wait
+```
+
+Then run step 3. Never re-issue the command: repeating a swap that already
+landed swaps the tables straight back, and repeating the create starts a
+second copy.

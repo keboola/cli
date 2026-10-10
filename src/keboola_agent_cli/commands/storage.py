@@ -11,8 +11,10 @@ import typer
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..constants import TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services._storage_jobs import validate_wait_timeout
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -606,6 +608,15 @@ def storage_create_table(
             "with the same display name still surfaces the original error."
         ),
     ),
+    timeout: float = typer.Option(
+        TABLE_DATA_JOB_MAX_WAIT,
+        "--timeout",
+        help=(
+            "Seconds to wait for the create job. A --source-table-id copy moves "
+            "real data; on timeout the job KEEPS RUNNING server-side -- kbagent "
+            "stops watching, it does not cancel."
+        ),
+    ),
 ) -> None:
     """Create a new storage table with typed columns.
 
@@ -666,6 +677,7 @@ def storage_create_table(
             range_partitioning_end=range_partitioning_end,
             range_partitioning_interval=range_partitioning_interval,
             clustering_fields=clustering_field,
+            timeout=timeout,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -674,7 +686,12 @@ def storage_create_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -1424,6 +1441,14 @@ def storage_swap_tables(
         "-y",
         help="Skip confirmation prompt",
     ),
+    timeout: float = typer.Option(
+        TABLE_DATA_JOB_MAX_WAIT,
+        "--timeout",
+        help=(
+            "Seconds to wait for the storage job. On timeout the job KEEPS "
+            "RUNNING server-side -- kbagent stops watching, it does not cancel."
+        ),
+    ),
 ) -> None:
     """Swap two storage tables (any branch, including the default/production branch).
 
@@ -1452,6 +1477,14 @@ def storage_swap_tables(
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch, required=True)
 
+    try:
+        # Before the confirmation prompt: a bad budget is a usage error, and
+        # the user must not confirm a destructive swap only to be refused.
+        validate_wait_timeout(timeout)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
     if dry_run:
         try:
             result = service.swap_tables(
@@ -1460,6 +1493,7 @@ def storage_swap_tables(
                 target_table_id=target_table_id,
                 branch_id=effective_branch,
                 dry_run=True,
+                timeout=timeout,
             )
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1491,6 +1525,7 @@ def storage_swap_tables(
             target_table_id=target_table_id,
             branch_id=effective_branch,
             dry_run=False,
+            timeout=timeout,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1502,6 +1537,7 @@ def storage_swap_tables(
             error_code=exc.error_code,
             project=project,
             retryable=exc.retryable,
+            details=exc.details,
         )
         raise typer.Exit(code=exit_code) from None
 

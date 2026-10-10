@@ -18,6 +18,7 @@ from ..constants import (
     FILE_UPLOAD_TIMEOUT,
     IMPORT_JOB_MAX_WAIT,
     S3_MULTIPART_THRESHOLD,
+    STORAGE_JOB_MAX_WAIT,
 )
 from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
@@ -573,6 +574,7 @@ class _StorageTablesMixin(_CoreClient):
         time_partitioning: dict[str, Any] | None = None,
         range_partitioning: dict[str, Any] | None = None,
         clustering: dict[str, Any] | None = None,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Create a new table with typed columns (async, waits for completion).
 
@@ -598,9 +600,18 @@ class _StorageTablesMixin(_CoreClient):
             range_partitioning: Optional ``{"field": str, "range": {"start": str,
                     "end": str, "interval": str}}`` (BigQuery).
             clustering: Optional ``{"fields": list[str]}`` (BigQuery).
+            max_wait: Seconds to wait for the create job. ``None`` defers to
+                ``_wait_for_storage_job``'s own default. A ``source`` copy
+                moves real data and can far outlast the metadata-job default,
+                so callers doing one pass their own budget.
 
         Returns:
             Completed storage job results dict.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``,
+                details ``job_id``) when the wait budget runs out -- the
+                create keeps running server-side.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(bucket_id, safe="")
@@ -621,7 +632,17 @@ class _StorageTablesMixin(_CoreClient):
         if clustering is not None:
             body["clustering"] = clustering
         response = self._request("POST", f"{prefix}/buckets/{safe_id}/tables-definition", json=body)
-        job = self._wait_for_storage_job(response.json())
+        job = self._wait_keeps_running(
+            response.json(),
+            budget=STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait,
+            operation="create-table",
+            warning=(
+                ". Re-running the command starts a second copy of the source table"
+                if source is not None
+                else ". Re-running the command starts a second create job"
+            )
+            + " -- check the job before retrying.",
+        )
         return job.get("results", {})
 
     def prepare_file_upload(
@@ -908,29 +929,73 @@ class _StorageTablesMixin(_CoreClient):
         """
         budget = IMPORT_JOB_MAX_WAIT if max_wait is None else max_wait
         try:
+            return self._wait_keeps_running(
+                job,
+                budget=budget,
+                operation="import",
+                warning=(
+                    f" (source: Storage file {file_id}). Re-running an incremental "
+                    "upload can duplicate rows -- check the job before retrying."
+                ),
+                details={"file_id": file_id},
+            )
+        except KeboolaApiError as exc:
+            if exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT:
+                raise
+            raise KeboolaApiError(
+                message=exc.message,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                retryable=exc.retryable,
+                details={"job_id": job.get("id"), **exc.details, "file_id": file_id},
+            ) from exc
+
+    def _wait_keeps_running(
+        self,
+        job: dict[str, Any],
+        *,
+        budget: float,
+        operation: str,
+        warning: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Poll a job whose wait timeout must not be retried.
+
+        Giving up locally does not stop a Storage job. For an operation that
+        is not safe to repeat (an import, a create-from-source copy, a swap)
+        a retry would run it a second time next to the first, so the timeout
+        is re-raised NOT retryable, with ``job_id`` in the details. A caller
+        that knows the project alias appends the ``storage job-detail``
+        command (``services._storage_jobs``).
+
+        Args:
+            job: Initial job response from the enqueue request.
+            budget: Seconds to wait.
+            operation: What the job does, named in the message.
+            warning: Text that follows "keeps running server-side" in the
+                message: what a repeat of the operation would do.
+            details: Extra keys for the timeout's ``details``.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``) when
+                the budget runs out; any other wait failure unchanged.
+        """
+        try:
             return self._wait_for_storage_job(job, max_wait=budget)
         except KeboolaApiError as exc:
-            job_id = exc.details.get("job_id", job.get("id"))
-            details = {**exc.details, "job_id": job_id, "file_id": file_id}
             if exc.error_code != ErrorCode.STORAGE_JOB_TIMEOUT:
-                raise KeboolaApiError(
-                    message=exc.message,
-                    status_code=exc.status_code,
-                    error_code=exc.error_code,
-                    retryable=exc.retryable,
-                    details=details,
-                ) from exc
+                raise
+            job_id = exc.details.get("job_id", job.get("id"))
             raise KeboolaApiError(
                 message=(
-                    f"Storage import job {job_id} did not finish within {budget:g}s. "
-                    "Waiting stopped locally; the import keeps running server-side "
-                    f"(source: Storage file {file_id}). Re-running an incremental "
-                    "upload can duplicate rows -- check the job before retrying."
+                    f"Storage {operation} job {job_id} did not finish within {budget:g}s. "
+                    f"Waiting stopped locally; the {operation} keeps running server-side"
+                    f"{warning}"
                 ),
                 status_code=exc.status_code,
                 error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
                 retryable=False,
-                details=details,
+                details={**exc.details, "job_id": job_id, **(details or {})},
             ) from exc
 
     def upload_table(
@@ -1140,6 +1205,7 @@ class _StorageTablesMixin(_CoreClient):
         table_id: str,
         target_table_id: str,
         branch_id: int,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Swap two storage tables (async, waits for completion; branch-scoped).
 
@@ -1160,15 +1226,32 @@ class _StorageTablesMixin(_CoreClient):
             table_id: Full ID of the first table (e.g. "in.c-bucket.table").
             target_table_id: Full ID of the second table to swap with.
             branch_id: Development branch ID. Required by the API.
+            max_wait: Seconds to wait for the swap job. ``None`` defers to
+                ``_wait_for_storage_job``'s own default. A swap rewrites
+                table metadata but is measurably slower than the copy that
+                produced the replacement, so callers pass their own budget.
 
         Returns:
             Completed storage job dict.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``,
+                details ``job_id``) when the wait budget runs out -- the swap
+                keeps running server-side.
         """
         prefix = f"/v2/storage/branch/{branch_id}"
         safe_id = quote(table_id, safe="")
         body = {"targetTableId": target_table_id}
         response = self._request("POST", f"{prefix}/tables/{safe_id}/swap", json=body)
-        return self._wait_for_storage_job(response.json())
+        return self._wait_keeps_running(
+            response.json(),
+            budget=STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait,
+            operation="swap-tables",
+            warning=(
+                ". Re-running the command after the swap lands swaps the tables "
+                "back -- check the job before retrying."
+            ),
+        )
 
     def pull_table(self, table_id: str, branch_id: int) -> dict[str, Any]:
         """Pull (clone) a table from the default branch into a dev branch.

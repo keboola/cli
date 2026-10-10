@@ -19,6 +19,7 @@ from ..constants import (
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_query_results, format_workspaces_table
+from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
 from ._helpers import (
     check_cli_permission,
@@ -425,14 +426,13 @@ def workspace_load(
         )
         raise typer.Exit(code=2)
 
-    if timeout <= 0:
+    try:
         # Falling back to the default here would silently ignore what the
         # caller asked for; a zero budget cannot mean "wait forever" either.
-        formatter.error(
-            error_code=ErrorCode.INVALID_ARGUMENT,
-            message=f"Invalid --timeout {timeout}. Must be greater than 0.",
-        )
-        raise typer.Exit(code=2)
+        validate_wait_timeout(timeout)
+    except ValueError as exc:
+        formatter.error(error_code=ErrorCode.INVALID_ARGUMENT, message=str(exc))
+        raise typer.Exit(code=2) from None
 
     # No prompt in --json mode: there is nobody to answer it, and a machine
     # caller must get the structured refusal instead of a silent large COPY.

@@ -2146,6 +2146,34 @@ config, the retry fires, and the retry destroys it for good.
   branch and run the real build + swap in the production (default) branch.
   Full procedure: `typify-table-workflow.md`.
 
+## A `STORAGE_JOB_TIMEOUT` is not a failure -- the job is still running
+
+*(since vNEXT, #713)*
+
+- `storage create-table` and `storage swap-tables` -- the two halves of the
+  BigQuery repartition path -- both move real data, yet both used to inherit
+  the **60s** `STORAGE_JOB_MAX_WAIT` budget meant for metadata jobs. Measured
+  on an 800 MB BigQuery table: create ~15s, swap ~31s. A table a few times
+  larger blew the budget, so a healthy operation was reported as
+  `STORAGE_JOB_TIMEOUT`.
+- **Since vNEXT both default to 300s and accept `--timeout SECONDS`.** The
+  REST routes (`POST /storage/tables/{p}`, `POST /storage/tables/{p}/{tid}/swap`)
+  take an optional `timeout` field; a zero, negative, NaN or infinite value
+  is a 422. On the CLI the same value is a usage error: exit 2,
+  `INVALID_ARGUMENT`, before `swap-tables` asks for confirmation -- the
+  same as `upload-table`, `load-file` and `workspace load`.
+- **Never read the timeout as "nothing happened".** kbagent only stops
+  *watching*; the Storage job keeps running server-side (and keeps consuming
+  backend resources). It usually lands. The error is **exit 4** with
+  `retryable: false` and `details.job_id`, the same contract as an
+  `upload-table` import timeout (0.98.0).
+- **Do not re-issue the command on a timeout.** Follow the job with
+  `kbagent storage job-detail --project P --job-id ID --wait` (the error
+  message gives the full command), then check the physical result with
+  `storage table-detail --json` -> `.definition`. Re-running a swap that
+  succeeded swaps the tables *back*; re-running a `--source-table-id` create
+  starts a second copy.
+
 ## `storage clone-table` materializes a prod table into a dev branch
 
 - `kbagent storage clone-table --project P --table-id T --branch <ID>`
