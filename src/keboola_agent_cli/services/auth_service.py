@@ -34,6 +34,7 @@ from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
 from ..auth.totp import compute_totp_code
 from ..config_store import ConfigStore, validate_alias_format
+from ..constants import AUTH_CALLBACK_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from ._auth_registration import (
@@ -275,7 +276,7 @@ class AuthService:
             tokens = None
             if method == "pkce":
                 try:
-                    tokens = self._perform_pkce(client)
+                    tokens = self._perform_pkce(client, notice)
                 except PkceStateMismatch as exc:
                     raise KeboolaApiError(
                         str(exc), error_code=ErrorCode.AUTH_STATE_MISMATCH, retryable=False
@@ -672,7 +673,7 @@ class AuthService:
 
         return _prompt
 
-    def _perform_pkce(self, client: AuthClient) -> CliTokenResponse:
+    def _perform_pkce(self, client: AuthClient, notice: Callable[[str], None]) -> CliTokenResponse:
         """Run one PKCE attempt: authorize URL -> browser -> loopback -> exchange.
 
         Raises `PkceSetupError` / `PkceCallbackTimeout` (fallback-eligible,
@@ -680,6 +681,12 @@ class AuthService:
         (terminal), or returns the exchanged `CliTokenResponse`. An exchange
         failure after a successful callback propagates as-is (terminal, no
         fallback -- the caller does not catch it as a `PkceSetupError`).
+
+        ``notice`` reports the wait before it starts. The authorize URL is
+        never printed, so without it the terminal shows nothing until the wait
+        ends. The platform can lose the return step after a fresh sign-in
+        (issue #780): the browser then shows the project list and this process
+        waits for a callback that does not come.
         """
         challenge = generate_pkce_challenge()
         with PkceCallbackServer(expected_state=challenge.state) as server:
@@ -690,6 +697,13 @@ class AuthService:
                 state=challenge.state,
             )
             self._browser_opener(authorize_url)
+            notice(
+                f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s for the browser sign-in to "
+                "return here. If the browser shows the project list and not "
+                '"Login complete", this sign-in cannot return. When the wait ends, '
+                "the CLI starts the device-code login. To start it now, press Ctrl+C "
+                "and run `kbagent auth login --device-code`."
+            )
             callback = server.wait()
         return client.exchange_pkce_code(
             code=callback.code,
