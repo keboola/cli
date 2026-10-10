@@ -281,8 +281,9 @@ def resolve_storage_token_input(
 
     Raises:
         typer.BadParameter: More than one explicit source, an unreadable or
-            empty file, an unset or empty named variable, a value with a line
-            break or another control character, or ``--keep-token-file``
+            empty file, an unset or empty named variable, an empty or blank
+            value from any source (``--token ""`` included), a value with a
+            line break or another control character, or ``--keep-token-file``
             without ``--token-file``.
         typer.Exit: ``required`` is True and there is nothing to read
             (exit code 2).
@@ -326,7 +327,7 @@ def resolve_storage_token_input(
             )
         return _require_single_line(value, "--token-env")
 
-    if token:
+    if token is not None:
         _require_single_line(token, "--token")
         if token_from_cli and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             typer.echo(
