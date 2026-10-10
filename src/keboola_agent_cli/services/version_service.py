@@ -312,6 +312,17 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
     )
 
 
+def summarize_install_failure(output: str | None) -> str:
+    """Return the last non-empty line of an installer transcript, or "".
+
+    uv and pip print their actionable line last (for example
+    ``error: Executable already exists: kbagent (use `--force` to overwrite)``),
+    so this is the cause to show in a one-line failure message.
+    """
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
 def _fetch_kbagent_latest_version(
     timeout: float = VERSION_CHECK_TIMEOUT, *, include_prerelease: bool = False
 ) -> str | None:
@@ -634,8 +645,7 @@ class VersionService:
         surface only that tail in the one-line summary -- the full transcript
         stays in the result's ``output`` for ``--json`` / ``--verbose``.
         """
-        lines = [ln.strip() for ln in (message or "").splitlines() if ln.strip()]
-        return lines[-1] if lines else "update failed"
+        return summarize_install_failure(message) or "update failed"
 
     @classmethod
     def _compose_update_summary(cls, kbagent_result: dict[str, Any]) -> str:

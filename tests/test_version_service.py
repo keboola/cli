@@ -19,6 +19,7 @@ from keboola_agent_cli.services.version_service import (
     get_update_timeout,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
+    summarize_install_failure,
 )
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
@@ -911,6 +912,23 @@ class TestComposeUpdateSummary:
         assert VersionService._summarize_failure_tail(msg) == "error: the real reason"
         assert VersionService._summarize_failure_tail("") == "update failed"
         assert VersionService._summarize_failure_tail(None) == "update failed"
+
+
+class TestSummarizeInstallFailure:
+    """The cause shown in a failure message is the installer's last line (#771)."""
+
+    def test_returns_the_last_non_empty_line(self) -> None:
+        output = (
+            "Resolved 1 package in 3ms\n"
+            "error: Executable already exists: kbagent (use `--force` to overwrite)\n\n"
+        )
+        assert summarize_install_failure(output) == (
+            "error: Executable already exists: kbagent (use `--force` to overwrite)"
+        )
+
+    @pytest.mark.parametrize("output", [None, "", "  \n\n"])
+    def test_returns_empty_string_without_output(self, output: str | None) -> None:
+        assert summarize_install_failure(output) == ""
 
 
 class TestSummaryDistinguishesNotYetFromFailed:
