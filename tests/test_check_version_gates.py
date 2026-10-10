@@ -414,6 +414,42 @@ class TestHeadingPlaceholders:
         f = _write(tmp_path, "g.md", "#vNEXT (since vNEXT)\n")
         assert headings([f]) == []
 
+    def test_fenced_comment_line_is_not_a_heading(self, tmp_path: Path) -> None:
+        """The CLAUDE.md shape: a ``#`` gate comment inside the command fence.
+
+        A fenced ``#`` line renders as content and has no anchor slug, so the
+        slug-breakage rationale does not apply -- and feature PRs are REQUIRED
+        to write exactly this shape (coding convention #17). The residue scan
+        must still see it: a fenced gate is a live gate.
+        """
+        f = _write(
+            tmp_path,
+            "commands.md",
+            "```\n# component detail (since vNEXT, #684): resolves the pin\n```\n",
+        )
+        assert headings([f]) == []
+        assert len(residue([f])) == 1
+
+    def test_heading_after_a_closed_fence_is_flagged(self, tmp_path: Path) -> None:
+        """Closing the fence re-arms the check -- the toggle must not stick."""
+        f = _write(
+            tmp_path,
+            "g.md",
+            "```\n# fenced (since vNEXT)\n```\n\n## Real heading (since vNEXT)\n",
+        )
+        found = headings([f])
+        assert len(found) == 1
+        assert found[0].line == 5
+
+    def test_tilde_line_does_not_close_a_backtick_fence(self, tmp_path: Path) -> None:
+        """CommonMark: a closing fence must repeat the opening character."""
+        f = _write(
+            tmp_path,
+            "g.md",
+            "```\n~~~\n# still fenced (since vNEXT)\n```\n",
+        )
+        assert headings([f]) == []
+
     def test_live_repository_has_no_placeholder_headings(self) -> None:
         """The real tree must stay clean -- this is the check's whole point."""
         assert headings(check_version_gates.resolve_paths()) == []

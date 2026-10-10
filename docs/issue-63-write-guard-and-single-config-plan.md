@@ -63,6 +63,7 @@ class WriteGuard:
     def _challenge_passphrase(self, alias, protection, operation):
         """Read passphrase from /dev/tty (not stdin). Agent can't pipe to this."""
         import getpass
+
         try:
             tty = open("/dev/tty", "r")
             passphrase = getpass.getpass(
@@ -192,12 +193,13 @@ Currently duplicated in 3 places:
 ```python
 # In services/branch_resolver.py or services/base.py
 
+
 def resolve_effective_branch(
     *,
-    explicit_branch: int | None = None,     # --branch flag
-    project: ProjectConfig | None = None,   # active_branch_id
-    project_root: Path | None = None,       # for git-branching lookup
-    manifest: Manifest | None = None,       # for sync workspace context
+    explicit_branch: int | None = None,  # --branch flag
+    project: ProjectConfig | None = None,  # active_branch_id
+    project_root: Path | None = None,  # for git-branching lookup
+    manifest: Manifest | None = None,  # for sync workspace context
 ) -> int | None:
     """Resolve branch ID with clear priority chain.
 

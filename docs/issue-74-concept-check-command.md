@@ -407,7 +407,10 @@ Schedule daily at 7:00:
 ### C) Keboola component (Python transformation)
 ```python
 import subprocess, json
-result = subprocess.run(["kbagent", "--json", "check", "run", "--all"], capture_output=True, text=True)
+
+result = subprocess.run(
+    ["kbagent", "--json", "check", "run", "--all"], capture_output=True, text=True
+)
 data = json.loads(result.stdout)
 if data["data"]["failed"] > 0:
     # write briefings to output table for downstream notification

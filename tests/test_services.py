@@ -3357,6 +3357,49 @@ class TestJobServiceGetJobDetail:
         assert exc_info.value.error_code == "NOT_FOUND"
         mock_client.close.assert_called_once()
 
+    def _service_with_job(self, tmp_config_dir: Path, detail: dict) -> JobService:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ),
+        )
+        mock_client = MagicMock()
+        mock_client.get_job_detail.return_value = detail
+        return JobService(config_store=store, client_factory=lambda url, token: mock_client)
+
+    def test_flow_job_carries_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """A flow run with no matching cron may be trigger-started -- say where to look (#714)."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.flow", "config": "500"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "kbagent flow triggers --project prod --flow-id 500" in result["trigger_hint"]
+
+    def test_legacy_orchestrator_job_carries_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """Legacy orchestrations are trigger targets too (the API's own example)."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.orchestrator", "config": "77"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "--flow-id 77" in result["trigger_hint"]
+
+    def test_non_flow_job_has_no_trigger_hint(self, tmp_config_dir: Path) -> None:
+        """An extractor job cannot be flow-trigger-started; no noise on its detail."""
+        service = self._service_with_job(
+            tmp_config_dir, {"id": "1", "component": "keboola.ex-db-snowflake", "config": "9"}
+        )
+
+        result = service.get_job_detail(alias="prod", job_id="1")
+
+        assert "trigger_hint" not in result
+
     def test_get_job_detail_client_closed_on_error(self, tmp_config_dir: Path) -> None:
         """get_job_detail closes the client even when API call fails."""
         store = ConfigStore(config_dir=tmp_config_dir)
@@ -3737,8 +3780,9 @@ class TestJobServiceQueuePollingParity:
         assert len(result["logTail"]) == 100
         assert result["logTail"][0]["id"] == 249
         assert result["logTail"][-1]["id"] == 150
-        # runId (not raw id) must have been the query key.
-        mock_client.fetch_job_events.assert_called_once_with("702-run", limit=100)
+        mock_client.fetch_job_events.assert_called_once_with(
+            "702", limit=100
+        )  # job id wins over runId (#787)
 
     def test_run_job_zero_tail_skips_fetch(self, tmp_config_dir: Path) -> None:
         mock_client = MagicMock()
@@ -3837,8 +3881,9 @@ class TestJobServiceQueuePollingParity:
         details = exc_info.value.details
         assert details["job"]["status"] == "terminated"
         assert details["logTail"] == [{"uuid": "u1", "message": "x"}]
-        # runId from the terminated job detail used as the lookup key.
-        mock_client.fetch_job_events.assert_called_once_with("705-run", limit=200)
+        mock_client.fetch_job_events.assert_called_once_with(
+            "705", limit=200
+        )  # job id wins over runId (#787)
 
     def test_run_job_timeout_kill_fails_falls_back(self, tmp_config_dir: Path) -> None:
         """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT (retryable)."""
@@ -4012,6 +4057,46 @@ class TestSafeFetchLogTailDefensiveSort:
         tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
         assert tail[0]["uuid"] == "timestamped"
         assert tail[1]["uuid"] == "no_created"
+
+
+class TestSafeFetchLogTailNestedJobs:
+    """Issue #787: nested jobs carry a dotted Queue runId that matches zero
+    Storage events; the log tail must be fetched by the job's own id."""
+
+    def _client(self) -> MagicMock:
+        client = MagicMock()
+        client.fetch_job_events.return_value = [{"uuid": "e1", "created": "2026-09-01"}]
+        return client
+
+    def test_nested_job_uses_id_not_dotted_run_id(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        job = {"id": "56453151", "runId": "56452146.56453149.56453151"}
+        tail = _safe_fetch_log_tail(client, job, limit=50)
+        client.fetch_job_events.assert_called_once_with("56453151", limit=50)
+        assert tail == [{"uuid": "e1", "created": "2026-09-01"}]
+
+    def test_only_dotted_run_id_uses_last_segment(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        _safe_fetch_log_tail(client, {"runId": "56452146.56453149.56453151"}, limit=5)
+        client.fetch_job_events.assert_called_once_with("56453151", limit=5)
+
+    def test_top_level_job_unchanged(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        _safe_fetch_log_tail(client, {"id": 123, "runId": "123"}, limit=5)
+        client.fetch_job_events.assert_called_once_with("123", limit=5)
+
+    def test_neither_id_nor_run_id_returns_empty_without_call(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        assert _safe_fetch_log_tail(client, {"status": "error"}, limit=5) == []
+        client.fetch_job_events.assert_not_called()
 
 
 class TestJobServiceVariableValuesResolution:

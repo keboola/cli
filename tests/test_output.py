@@ -445,6 +445,28 @@ class TestFormatJobDetail:
         assert "success" in output
         assert "2m 0s" in output
 
+    def test_job_detail_renders_creator_token_and_trigger_hint(self) -> None:
+        """Provenance + the #714 guided next step must both surface in human mode."""
+        console = Console(file=StringIO(), no_color=True, force_terminal=False)
+        data = {
+            "id": "4001",
+            "status": "success",
+            "component": "keboola.flow",
+            "config": "500",
+            "token": {"id": "6610681", "description": "petr@keboola.com"},
+            "trigger_hint": (
+                "If no cron schedule explains this run, check `kbagent flow triggers "
+                "--project prod --flow-id 500`."
+            ),
+            "project_alias": "prod",
+        }
+
+        format_job_detail(console, data)
+        output = cast(StringIO, console.file).getvalue()
+
+        assert "petr@keboola.com" in output
+        assert "flow triggers" in output
+
     def test_job_detail_minimal_data(self) -> None:
         """format_job_detail handles minimal job data without crashing."""
         console = Console(file=StringIO(), no_color=True, force_terminal=False)

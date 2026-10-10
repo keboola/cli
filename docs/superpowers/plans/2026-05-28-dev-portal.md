@@ -215,8 +215,10 @@ class TestRequireRandomCodeConfirmation:
             "keboola_agent_cli.commands._helpers.secrets.token_hex",
             lambda n: "deadbeef",
         )
+
         def raise_eof():
             raise EOFError
+
         monkeypatch.setattr("builtins.input", raise_eof)
         with pytest.raises(typer.Exit) as exc:
             require_random_code_confirmation("patch app")
@@ -316,7 +318,7 @@ from ._helpers import require_random_code_confirmation
 Change each to:
 
 ```python
-    require_random_code_confirmation("update permission policy")   # raises on failure
+require_random_code_confirmation("update permission policy")  # raises on failure
 ```
 
 (Same shape for `permissions_reset` with `"remove permission policy"`.)
@@ -365,13 +367,15 @@ class TestDeveloperPortalIdentity:
     def test_rejects_non_https_portal_url(self):
         with pytest.raises(ValueError, match="https"):
             DeveloperPortalIdentity(
-                username="u", password="p",
+                username="u",
+                password="p",
                 portal_url="http://apps-api.keboola.com",
             )
 
     def test_accepts_staging_https_portal_url(self):
         ident = DeveloperPortalIdentity(
-            username="u", password="p",
+            username="u",
+            password="p",
             portal_url="https://apps-api.staging.keboola.dev",
         )
         assert ident.portal_url == "https://apps-api.staging.keboola.dev"
@@ -413,9 +417,7 @@ class DeveloperPortalIdentity(BaseModel):
     KB Storage tokens; the bearer is never written to disk.
     """
 
-    username: str = Field(
-        description="Email or service-account id used as the login subject"
-    )
+    username: str = Field(description="Email or service-account id used as the login subject")
     password: str = Field(description="DP password — same protection as KB tokens")
     role_hint: str = Field(
         default="vendor",
@@ -441,9 +443,7 @@ class DeveloperPortalIdentity(BaseModel):
     @classmethod
     def validate_portal_url(cls, v: str) -> str:
         if not v.startswith("https://"):
-            raise ValueError(
-                f"Portal URL must use https:// scheme, got: {v!r}"
-            )
+            raise ValueError(f"Portal URL must use https:// scheme, got: {v!r}")
         return v
 ```
 
@@ -577,79 +577,73 @@ Expected: `AttributeError: 'ConfigStore' object has no attribute 'add_dev_portal
 In `src/keboola_agent_cli/config_store.py`, after `rename_project()`, add:
 
 ```python
-    def add_dev_portal_identity(
-        self, alias: str, identity: "DeveloperPortalIdentity"
-    ) -> None:
-        """Add a Developer Portal identity to the configuration.
+def add_dev_portal_identity(self, alias: str, identity: "DeveloperPortalIdentity") -> None:
+    """Add a Developer Portal identity to the configuration.
 
-        Sets it as default if no default identity is set.
+    Sets it as default if no default identity is set.
 
-        Raises:
-            ConfigError: If the alias already exists.
-        """
-        config = self.load()
-        if alias in config.dev_portal_identities:
-            raise ConfigError(
-                f"Developer Portal identity '{alias}' already exists. "
-                "Use 'dev-portal identity edit' to modify it."
-            )
-        config.dev_portal_identities[alias] = identity
-        if not config.default_dev_portal_identity:
-            config.default_dev_portal_identity = alias
-        self.save(config)
-
-    def remove_dev_portal_identity(self, alias: str) -> None:
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
-        del config.dev_portal_identities[alias]
-        if config.default_dev_portal_identity == alias:
-            config.default_dev_portal_identity = next(
-                iter(config.dev_portal_identities), ""
-            )
-        self.save(config)
-
-    def get_dev_portal_identity(
-        self, alias: str
-    ) -> "DeveloperPortalIdentity | None":
-        config = self.load()
-        return config.dev_portal_identities.get(alias)
-
-    def edit_dev_portal_identity(
-        self, alias: str, **kwargs: str | None
-    ) -> None:
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
-        ident = config.dev_portal_identities[alias]
-        for key, value in kwargs.items():
-            if hasattr(ident, key) and value is not None:
-                setattr(ident, key, value)
-        config.dev_portal_identities[alias] = ident
-        self.save(config)
-
-    def rename_dev_portal_identity(self, old_alias: str, new_alias: str) -> None:
-        config = self.load()
-        if old_alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{old_alias}' not found.")
-        if new_alias in config.dev_portal_identities:
-            raise ConfigError(
-                f"Cannot rename '{old_alias}' to '{new_alias}': "
-                f"alias '{new_alias}' is already in use."
-            )
-        config.dev_portal_identities[new_alias] = (
-            config.dev_portal_identities.pop(old_alias)
+    Raises:
+        ConfigError: If the alias already exists.
+    """
+    config = self.load()
+    if alias in config.dev_portal_identities:
+        raise ConfigError(
+            f"Developer Portal identity '{alias}' already exists. "
+            "Use 'dev-portal identity edit' to modify it."
         )
-        if config.default_dev_portal_identity == old_alias:
-            config.default_dev_portal_identity = new_alias
-        self.save(config)
-
-    def set_default_dev_portal_identity(self, alias: str) -> None:
-        config = self.load()
-        if alias not in config.dev_portal_identities:
-            raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+    config.dev_portal_identities[alias] = identity
+    if not config.default_dev_portal_identity:
         config.default_dev_portal_identity = alias
-        self.save(config)
+    self.save(config)
+
+
+def remove_dev_portal_identity(self, alias: str) -> None:
+    config = self.load()
+    if alias not in config.dev_portal_identities:
+        raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+    del config.dev_portal_identities[alias]
+    if config.default_dev_portal_identity == alias:
+        config.default_dev_portal_identity = next(iter(config.dev_portal_identities), "")
+    self.save(config)
+
+
+def get_dev_portal_identity(self, alias: str) -> "DeveloperPortalIdentity | None":
+    config = self.load()
+    return config.dev_portal_identities.get(alias)
+
+
+def edit_dev_portal_identity(self, alias: str, **kwargs: str | None) -> None:
+    config = self.load()
+    if alias not in config.dev_portal_identities:
+        raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+    ident = config.dev_portal_identities[alias]
+    for key, value in kwargs.items():
+        if hasattr(ident, key) and value is not None:
+            setattr(ident, key, value)
+    config.dev_portal_identities[alias] = ident
+    self.save(config)
+
+
+def rename_dev_portal_identity(self, old_alias: str, new_alias: str) -> None:
+    config = self.load()
+    if old_alias not in config.dev_portal_identities:
+        raise ConfigError(f"Developer Portal identity '{old_alias}' not found.")
+    if new_alias in config.dev_portal_identities:
+        raise ConfigError(
+            f"Cannot rename '{old_alias}' to '{new_alias}': alias '{new_alias}' is already in use."
+        )
+    config.dev_portal_identities[new_alias] = config.dev_portal_identities.pop(old_alias)
+    if config.default_dev_portal_identity == old_alias:
+        config.default_dev_portal_identity = new_alias
+    self.save(config)
+
+
+def set_default_dev_portal_identity(self, alias: str) -> None:
+    config = self.load()
+    if alias not in config.dev_portal_identities:
+        raise ConfigError(f"Developer Portal identity '{alias}' not found.")
+    config.default_dev_portal_identity = alias
+    self.save(config)
 ```
 
 Also at the top of the file, add:
@@ -1046,7 +1040,8 @@ class TestPortalReads:
 class TestPortalWrites:
     def test_create_app(self, httpx_mock):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1055,12 +1050,15 @@ class TestPortalWrites:
             json={"id": "ex-foo", "name": "Foo"},
         )
         with DeveloperPortalClient(_identity()) as client:
-            resp = client.create_app("keboola", {"id": "ex-foo", "name": "Foo", "type": "extractor"})
+            resp = client.create_app(
+                "keboola", {"id": "ex-foo", "name": "Foo", "type": "extractor"}
+            )
             assert resp["id"] == "ex-foo"
 
     def test_patch_app(self, httpx_mock):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1074,7 +1072,8 @@ class TestPortalWrites:
 
     def test_publish_app(self, httpx_mock):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1087,7 +1086,8 @@ class TestPortalWrites:
 
     def test_deprecate_app(self, httpx_mock):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1109,101 +1109,94 @@ Expected: `AttributeError: 'DeveloperPortalClient' object has no attribute 'list
 Append to the `DeveloperPortalClient` class in `src/keboola_agent_cli/dev_portal_client.py`:
 
 ```python
-    # ----- Reads -----
+# ----- Reads -----
 
-    def list_apps(self, vendor: str) -> list[dict[str, Any]]:
-        self._ensure_authenticated()
-        resp = self._do_request("GET", f"/vendors/{vendor}/apps?limit=1000")
-        if resp.status_code != 200:
-            self._raise_dp_error(resp, action="list apps", vendor=vendor)
-        payload = resp.json()
-        if isinstance(payload, dict) and "apps" in payload:
-            return list(payload["apps"])
-        if isinstance(payload, list):
-            return payload
-        return []
 
-    def get_app(self, vendor: str, app_id: str) -> dict[str, Any]:
-        self._ensure_authenticated()
-        resp = self._do_request("GET", f"/vendors/{vendor}/apps/{app_id}")
-        if resp.status_code == 404:
-            raise KeboolaApiError(
-                message=f"Developer Portal app '{app_id}' not found in vendor '{vendor}'",
-                error_code=ErrorCode.DP_APP_NOT_FOUND,
-            )
-        if resp.status_code != 200:
-            self._raise_dp_error(resp, action="get app", vendor=vendor, app_id=app_id)
-        return resp.json()
+def list_apps(self, vendor: str) -> list[dict[str, Any]]:
+    self._ensure_authenticated()
+    resp = self._do_request("GET", f"/vendors/{vendor}/apps?limit=1000")
+    if resp.status_code != 200:
+        self._raise_dp_error(resp, action="list apps", vendor=vendor)
+    payload = resp.json()
+    if isinstance(payload, dict) and "apps" in payload:
+        return list(payload["apps"])
+    if isinstance(payload, list):
+        return payload
+    return []
 
-    # ----- Writes -----
 
-    def create_app(self, vendor: str, payload: dict[str, Any]) -> dict[str, Any]:
-        self._ensure_authenticated()
-        resp = self._do_request(
-            "POST", f"/vendors/{vendor}/apps", json=payload
-        )
-        if resp.status_code not in (200, 201):
-            self._raise_dp_error(resp, action="create app", vendor=vendor)
-        return resp.json()
-
-    def patch_app(
-        self, vendor: str, app_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        self._ensure_authenticated()
-        resp = self._do_request(
-            "PATCH", f"/vendors/{vendor}/apps/{app_id}", json=payload
-        )
-        if resp.status_code not in (200, 204):
-            self._raise_dp_error(
-                resp, action="patch app", vendor=vendor, app_id=app_id
-            )
-        return resp.json() if resp.content else {}
-
-    def publish_app(self, vendor: str, app_id: str) -> dict[str, Any]:
-        self._ensure_authenticated()
-        resp = self._do_request(
-            "POST", f"/vendors/{vendor}/apps/{app_id}/publish"
-        )
-        if resp.status_code not in (200, 202):
-            self._raise_dp_error(
-                resp, action="publish app", vendor=vendor, app_id=app_id
-            )
-        return resp.json() if resp.content else {"status": "submitted"}
-
-    def deprecate_app(self, vendor: str, app_id: str) -> dict[str, Any]:
-        self._ensure_authenticated()
-        resp = self._do_request(
-            "POST", f"/vendors/{vendor}/apps/{app_id}/deprecate"
-        )
-        if resp.status_code not in (200, 202):
-            self._raise_dp_error(
-                resp, action="deprecate app", vendor=vendor, app_id=app_id
-            )
-        return resp.json() if resp.content else {"status": "deprecated"}
-
-    # ----- Error mapping -----
-
-    def _raise_dp_error(
-        self,
-        resp: httpx.Response,
-        *,
-        action: str,
-        vendor: str | None = None,
-        app_id: str | None = None,
-    ) -> None:
-        try:
-            body = resp.json()
-        except ValueError:
-            body = resp.text
-        ctx = f"{action}"
-        if vendor:
-            ctx += f" (vendor={vendor})"
-        if app_id:
-            ctx += f" (app={app_id})"
+def get_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+    self._ensure_authenticated()
+    resp = self._do_request("GET", f"/vendors/{vendor}/apps/{app_id}")
+    if resp.status_code == 404:
         raise KeboolaApiError(
-            message=f"Developer Portal {ctx} failed (HTTP {resp.status_code}): {body}",
-            error_code=ErrorCode.API_ERROR,
+            message=f"Developer Portal app '{app_id}' not found in vendor '{vendor}'",
+            error_code=ErrorCode.DP_APP_NOT_FOUND,
         )
+    if resp.status_code != 200:
+        self._raise_dp_error(resp, action="get app", vendor=vendor, app_id=app_id)
+    return resp.json()
+
+
+# ----- Writes -----
+
+
+def create_app(self, vendor: str, payload: dict[str, Any]) -> dict[str, Any]:
+    self._ensure_authenticated()
+    resp = self._do_request("POST", f"/vendors/{vendor}/apps", json=payload)
+    if resp.status_code not in (200, 201):
+        self._raise_dp_error(resp, action="create app", vendor=vendor)
+    return resp.json()
+
+
+def patch_app(self, vendor: str, app_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    self._ensure_authenticated()
+    resp = self._do_request("PATCH", f"/vendors/{vendor}/apps/{app_id}", json=payload)
+    if resp.status_code not in (200, 204):
+        self._raise_dp_error(resp, action="patch app", vendor=vendor, app_id=app_id)
+    return resp.json() if resp.content else {}
+
+
+def publish_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+    self._ensure_authenticated()
+    resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/publish")
+    if resp.status_code not in (200, 202):
+        self._raise_dp_error(resp, action="publish app", vendor=vendor, app_id=app_id)
+    return resp.json() if resp.content else {"status": "submitted"}
+
+
+def deprecate_app(self, vendor: str, app_id: str) -> dict[str, Any]:
+    self._ensure_authenticated()
+    resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/deprecate")
+    if resp.status_code not in (200, 202):
+        self._raise_dp_error(resp, action="deprecate app", vendor=vendor, app_id=app_id)
+    return resp.json() if resp.content else {"status": "deprecated"}
+
+
+# ----- Error mapping -----
+
+
+def _raise_dp_error(
+    self,
+    resp: httpx.Response,
+    *,
+    action: str,
+    vendor: str | None = None,
+    app_id: str | None = None,
+) -> None:
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text
+    ctx = f"{action}"
+    if vendor:
+        ctx += f" (vendor={vendor})"
+    if app_id:
+        ctx += f" (app={app_id})"
+    raise KeboolaApiError(
+        message=f"Developer Portal {ctx} failed (HTTP {resp.status_code}): {body}",
+        error_code=ErrorCode.API_ERROR,
+    )
 ```
 
 - [ ] **Step 4: Run, expect pass**
@@ -1236,7 +1229,8 @@ Append to `tests/test_dev_portal_client.py`:
 class TestIconUpload:
     def test_upload_icon_two_hop(self, httpx_mock, monkeypatch):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1246,15 +1240,22 @@ class TestIconUpload:
         )
         # The S3 PUT bypasses httpx; we mock urllib.request.urlopen.
         seen = {}
+
         class _FakeResp:
             status = 200
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
         def fake_urlopen(req):
             seen["url"] = req.full_url
             seen["data"] = req.data
             seen["method"] = req.method
             return _FakeResp()
+
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
         with DeveloperPortalClient(_identity()) as client:
@@ -1265,7 +1266,8 @@ class TestIconUpload:
 
     def test_upload_icon_presign_failure(self, httpx_mock):
         httpx_mock.add_response(
-            method="POST", url="https://apps-api.keboola.com/auth/login",
+            method="POST",
+            url="https://apps-api.keboola.com/auth/login",
             json={"token": "Bearer abc"},
         )
         httpx_mock.add_response(
@@ -1290,48 +1292,45 @@ Expected: `AttributeError: ... 'upload_icon'`.
 Append to the `DeveloperPortalClient` class:
 
 ```python
-    def upload_icon(self, vendor: str, app_id: str, png_bytes: bytes) -> None:
-        """Two-hop icon upload: ask the portal for a presigned S3 URL, then PUT bytes there.
+def upload_icon(self, vendor: str, app_id: str, png_bytes: bytes) -> None:
+    """Two-hop icon upload: ask the portal for a presigned S3 URL, then PUT bytes there.
 
-        The S3 PUT does NOT use this client's httpx instance (no retry, no auth,
-        no User-Agent injection). We use urllib directly so the wire shape stays
-        exactly what S3 expects.
-        """
-        self._ensure_authenticated()
-        resp = self._do_request(
-            "POST", f"/vendors/{vendor}/apps/{app_id}/icon"
+    The S3 PUT does NOT use this client's httpx instance (no retry, no auth,
+    no User-Agent injection). We use urllib directly so the wire shape stays
+    exactly what S3 expects.
+    """
+    self._ensure_authenticated()
+    resp = self._do_request("POST", f"/vendors/{vendor}/apps/{app_id}/icon")
+    if resp.status_code != 200:
+        raise KeboolaApiError(
+            message=(f"Developer Portal failed to mint icon-upload URL (HTTP {resp.status_code})"),
+            error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
         )
-        if resp.status_code != 200:
-            raise KeboolaApiError(
-                message=(
-                    f"Developer Portal failed to mint icon-upload URL "
-                    f"(HTTP {resp.status_code})"
-                ),
-                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
-            )
-        payload = resp.json()
-        link = payload.get("link") if isinstance(payload, dict) else None
-        if not link:
-            raise KeboolaApiError(
-                message="Developer Portal icon-upload response missing 'link'",
-                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
-            )
-        req = urllib.request.Request(
-            link, data=png_bytes,
-            headers={"Content-Type": "image/png"}, method="PUT",
+    payload = resp.json()
+    link = payload.get("link") if isinstance(payload, dict) else None
+    if not link:
+        raise KeboolaApiError(
+            message="Developer Portal icon-upload response missing 'link'",
+            error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
         )
-        try:
-            with urllib.request.urlopen(req) as s3_resp:
-                if getattr(s3_resp, "status", 200) >= 300:
-                    raise KeboolaApiError(
-                        message=f"Icon S3 PUT failed (HTTP {s3_resp.status})",
-                        error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
-                    )
-        except urllib.error.HTTPError as exc:
-            raise KeboolaApiError(
-                message=f"Icon S3 PUT failed (HTTP {exc.code}): {exc.reason}",
-                error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
-            ) from exc
+    req = urllib.request.Request(
+        link,
+        data=png_bytes,
+        headers={"Content-Type": "image/png"},
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(req) as s3_resp:
+            if getattr(s3_resp, "status", 200) >= 300:
+                raise KeboolaApiError(
+                    message=f"Icon S3 PUT failed (HTTP {s3_resp.status})",
+                    error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+                )
+    except urllib.error.HTTPError as exc:
+        raise KeboolaApiError(
+            message=f"Icon S3 PUT failed (HTTP {exc.code}): {exc.reason}",
+            error_code=ErrorCode.DP_ICON_UPLOAD_FAILED,
+        ) from exc
 ```
 
 - [ ] **Step 4: Run, expect pass**
@@ -1397,7 +1396,8 @@ class TestIdentityCrud:
 
     def test_add_verify_failure_does_not_persist(self, service, fake_client, config_store):
         fake_client._ensure_authenticated.side_effect = KeboolaApiError(
-            message="bad creds", error_code=ErrorCode.DP_LOGIN_FAILED,
+            message="bad creds",
+            error_code=ErrorCode.DP_LOGIN_FAILED,
         )
         ident = DeveloperPortalIdentity(username="u", password="bad")
         with pytest.raises(KeboolaApiError) as exc:
@@ -1563,17 +1563,22 @@ class TestReadsAndPrepareApply:
         self._setup(service, fake_client)
         with pytest.raises(KeboolaApiError, match="must not contain"):
             service.prepare_create(
-                "alpha", "keboola",
+                "alpha",
+                "keboola",
                 {"id": "x", "name": "Foo extractor", "type": "extractor"},
             )
 
     def test_prepare_patch_diff(self, service, fake_client):
         self._setup(service, fake_client)
         fake_client.get_app.return_value = {
-            "id": "ex-a", "name": "Old", "shortDescription": "same",
+            "id": "ex-a",
+            "name": "Old",
+            "shortDescription": "same",
         }
         pending = service.prepare_patch(
-            "alpha", "keboola", "keboola.ex-a",
+            "alpha",
+            "keboola",
+            "keboola.ex-a",
             {"name": "New", "shortDescription": "same"},
         )
         keys = {d.key for d in pending.diff}
@@ -1585,9 +1590,7 @@ class TestReadsAndPrepareApply:
         self._setup(service, fake_client)
         fake_client.get_app.return_value = {"id": "ex-a", "name": "Old"}
         fake_client.patch_app.return_value = {"id": "ex-a", "name": "New"}
-        pending = service.prepare_patch(
-            "alpha", "keboola", "keboola.ex-a", {"name": "New"}
-        )
+        pending = service.prepare_patch("alpha", "keboola", "keboola.ex-a", {"name": "New"})
         result = service.apply(pending)
         assert result["name"] == "New"
         fake_client.patch_app.assert_called_with("keboola", "keboola.ex-a", {"name": "New"})
@@ -1595,7 +1598,9 @@ class TestReadsAndPrepareApply:
     def test_prepare_publish_missing_fields(self, service, fake_client):
         self._setup(service, fake_client)
         fake_client.get_app.return_value = {
-            "id": "ex-a", "name": "Foo", "type": "extractor",
+            "id": "ex-a",
+            "name": "Foo",
+            "type": "extractor",
             # missing icon, repository, descriptions, license, docs
         }
         with pytest.raises(KeboolaApiError) as exc:
@@ -1633,6 +1638,7 @@ class FieldDiff:
 @dataclass(frozen=True)
 class PendingWrite:
     """Base for any prepared portal write. apply() in the service dispatches on the subclass."""
+
     alias: str
     vendor: str
 
@@ -1670,154 +1676,165 @@ class PendingDeprecate(PendingWrite):
 
 _BANNED_NAME_WORDS = ("extractor", "writer")
 _REQUIRED_PUBLISH_FIELDS = (
-    "icon", "name", "type", "repository",
-    "shortDescription", "longDescription",
-    "licenseUrl", "documentationUrl",
+    "icon",
+    "name",
+    "type",
+    "repository",
+    "shortDescription",
+    "longDescription",
+    "licenseUrl",
+    "documentationUrl",
 )
 ```
 
 Append methods to `DeveloperPortalService`:
 
 ```python
-    # ----- Reads -----
+# ----- Reads -----
 
-    def list_apps(self, alias: str, vendor: str) -> list[dict[str, Any]]:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
-            return client.list_apps(vendor)
 
-    def get_app(
-        self, alias: str, vendor: str, app_id: str
-    ) -> dict[str, Any]:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
-            return client.get_app(vendor, app_id)
+def list_apps(self, alias: str, vendor: str) -> list[dict[str, Any]]:
+    ident = self._resolve_identity(alias)
+    with self._client_factory(ident) as client:
+        return client.list_apps(vendor)
 
-    # ----- Prepare (no portal write yet) -----
 
-    def prepare_create(
-        self, alias: str, vendor: str, payload: dict[str, Any]
-    ) -> PendingCreate:
-        for required in ("id", "name", "type"):
-            if required not in payload:
-                raise KeboolaApiError(
-                    message=f"create payload must include '{required}'",
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                )
-        name_lower = str(payload["name"]).lower()
-        for banned in _BANNED_NAME_WORDS:
-            if banned in name_lower:
-                raise KeboolaApiError(
-                    message=(
-                        f"App name must not contain {_BANNED_NAME_WORDS!r}; "
-                        f"got {payload['name']!r}"
-                    ),
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                )
-        # Confirm identity exists; defer login until apply().
-        self._resolve_identity(alias)
-        return PendingCreate(alias=alias, vendor=vendor, payload=payload)
+def get_app(self, alias: str, vendor: str, app_id: str) -> dict[str, Any]:
+    ident = self._resolve_identity(alias)
+    with self._client_factory(ident) as client:
+        return client.get_app(vendor, app_id)
 
-    def prepare_patch(
-        self,
-        alias: str,
-        vendor: str,
-        app_id: str,
-        payload: dict[str, Any],
-    ) -> PendingPatch:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
-            current = client.get_app(vendor, app_id)
-        diff = [
-            FieldDiff(key=k, current=current.get(k), new=v)
-            for k, v in payload.items()
-            if current.get(k) != v
-        ]
-        return PendingPatch(
-            alias=alias, vendor=vendor, app_id=app_id,
-            payload=payload, current=current, diff=diff,
-        )
 
-    def prepare_upload_icon(
-        self, alias: str, vendor: str, app_id: str, path: str | Path
-    ) -> PendingIconUpload:
-        p = Path(path)
-        if not p.is_file():
+# ----- Prepare (no portal write yet) -----
+
+
+def prepare_create(self, alias: str, vendor: str, payload: dict[str, Any]) -> PendingCreate:
+    for required in ("id", "name", "type"):
+        if required not in payload:
             raise KeboolaApiError(
-                message=f"Icon file not found: {p}",
-                error_code=ErrorCode.FILE_NOT_FOUND,
-            )
-        data = p.read_bytes()
-        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise KeboolaApiError(
-                message=f"Icon file is not a PNG: {p}",
+                message=f"create payload must include '{required}'",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
-        # Soft dimension check via PNG IHDR (bytes 16-24 of a valid PNG).
-        if len(data) >= 24:
-            import struct
-            width, height = struct.unpack(">II", data[16:24])
-            if (width, height) != (128, 128):
-                # Soft warning only — apps-api will reject if it's strict.
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Icon is %dx%d, not 128x128 — portal may reject it.",
-                    width, height,
-                )
-        self._resolve_identity(alias)
-        return PendingIconUpload(
-            alias=alias, vendor=vendor, app_id=app_id, png_path=p, png_bytes=data,
-        )
-
-    def prepare_publish(
-        self, alias: str, vendor: str, app_id: str
-    ) -> PendingPublish:
-        ident = self._resolve_identity(alias)
-        with self._client_factory(ident) as client:
-            current = client.get_app(vendor, app_id)
-        missing = [f for f in _REQUIRED_PUBLISH_FIELDS if not current.get(f)]
-        if missing:
+    name_lower = str(payload["name"]).lower()
+    for banned in _BANNED_NAME_WORDS:
+        if banned in name_lower:
             raise KeboolaApiError(
                 message=(
-                    f"Cannot publish {app_id}: missing required fields "
-                    f"{missing}. Fix them via `kbagent dev-portal patch` first."
+                    f"App name must not contain {_BANNED_NAME_WORDS!r}; got {payload['name']!r}"
                 ),
-                error_code=ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING,
+                error_code=ErrorCode.VALIDATION_ERROR,
             )
-        return PendingPublish(
-            alias=alias, vendor=vendor, app_id=app_id, current=current
-        )
+    # Confirm identity exists; defer login until apply().
+    self._resolve_identity(alias)
+    return PendingCreate(alias=alias, vendor=vendor, payload=payload)
 
-    def prepare_deprecate(
-        self, alias: str, vendor: str, app_id: str
-    ) -> PendingDeprecate:
-        self._resolve_identity(alias)
-        return PendingDeprecate(alias=alias, vendor=vendor, app_id=app_id)
 
-    # ----- Apply (calls the portal write) -----
+def prepare_patch(
+    self,
+    alias: str,
+    vendor: str,
+    app_id: str,
+    payload: dict[str, Any],
+) -> PendingPatch:
+    ident = self._resolve_identity(alias)
+    with self._client_factory(ident) as client:
+        current = client.get_app(vendor, app_id)
+    diff = [
+        FieldDiff(key=k, current=current.get(k), new=v)
+        for k, v in payload.items()
+        if current.get(k) != v
+    ]
+    return PendingPatch(
+        alias=alias,
+        vendor=vendor,
+        app_id=app_id,
+        payload=payload,
+        current=current,
+        diff=diff,
+    )
 
-    def apply(self, pending: PendingWrite) -> dict[str, Any]:
-        ident = self._resolve_identity(pending.alias)
-        with self._client_factory(ident) as client:
-            if isinstance(pending, PendingCreate):
-                return client.create_app(pending.vendor, pending.payload)
-            if isinstance(pending, PendingPatch):
-                return client.patch_app(
-                    pending.vendor, pending.app_id, pending.payload
-                )
-            if isinstance(pending, PendingIconUpload):
-                client.upload_icon(
-                    pending.vendor, pending.app_id, pending.png_bytes
-                )
-                return {"status": "uploaded", "app": pending.app_id}
-            if isinstance(pending, PendingPublish):
-                return client.publish_app(pending.vendor, pending.app_id)
-            if isinstance(pending, PendingDeprecate):
-                return client.deprecate_app(pending.vendor, pending.app_id)
+
+def prepare_upload_icon(
+    self, alias: str, vendor: str, app_id: str, path: str | Path
+) -> PendingIconUpload:
+    p = Path(path)
+    if not p.is_file():
         raise KeboolaApiError(
-            message=f"Unknown pending write type: {type(pending).__name__}",
-            error_code=ErrorCode.INTERNAL_ERROR,
+            message=f"Icon file not found: {p}",
+            error_code=ErrorCode.FILE_NOT_FOUND,
         )
+    data = p.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise KeboolaApiError(
+            message=f"Icon file is not a PNG: {p}",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+    # Soft dimension check via PNG IHDR (bytes 16-24 of a valid PNG).
+    if len(data) >= 24:
+        import struct
+
+        width, height = struct.unpack(">II", data[16:24])
+        if (width, height) != (128, 128):
+            # Soft warning only — apps-api will reject if it's strict.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Icon is %dx%d, not 128x128 — portal may reject it.",
+                width,
+                height,
+            )
+    self._resolve_identity(alias)
+    return PendingIconUpload(
+        alias=alias,
+        vendor=vendor,
+        app_id=app_id,
+        png_path=p,
+        png_bytes=data,
+    )
+
+
+def prepare_publish(self, alias: str, vendor: str, app_id: str) -> PendingPublish:
+    ident = self._resolve_identity(alias)
+    with self._client_factory(ident) as client:
+        current = client.get_app(vendor, app_id)
+    missing = [f for f in _REQUIRED_PUBLISH_FIELDS if not current.get(f)]
+    if missing:
+        raise KeboolaApiError(
+            message=(
+                f"Cannot publish {app_id}: missing required fields "
+                f"{missing}. Fix them via `kbagent dev-portal patch` first."
+            ),
+            error_code=ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING,
+        )
+    return PendingPublish(alias=alias, vendor=vendor, app_id=app_id, current=current)
+
+
+def prepare_deprecate(self, alias: str, vendor: str, app_id: str) -> PendingDeprecate:
+    self._resolve_identity(alias)
+    return PendingDeprecate(alias=alias, vendor=vendor, app_id=app_id)
+
+
+# ----- Apply (calls the portal write) -----
+
+
+def apply(self, pending: PendingWrite) -> dict[str, Any]:
+    ident = self._resolve_identity(pending.alias)
+    with self._client_factory(ident) as client:
+        if isinstance(pending, PendingCreate):
+            return client.create_app(pending.vendor, pending.payload)
+        if isinstance(pending, PendingPatch):
+            return client.patch_app(pending.vendor, pending.app_id, pending.payload)
+        if isinstance(pending, PendingIconUpload):
+            client.upload_icon(pending.vendor, pending.app_id, pending.png_bytes)
+            return {"status": "uploaded", "app": pending.app_id}
+        if isinstance(pending, PendingPublish):
+            return client.publish_app(pending.vendor, pending.app_id)
+        if isinstance(pending, PendingDeprecate):
+            return client.deprecate_app(pending.vendor, pending.app_id)
+    raise KeboolaApiError(
+        message=f"Unknown pending write type: {type(pending).__name__}",
+        error_code=ErrorCode.INTERNAL_ERROR,
+    )
 ```
 
 - [ ] **Step 4: Run, expect pass**
@@ -1867,6 +1884,7 @@ class TestDevPortalPermissions:
 
     def test_registry_contains_all_dev_portal_ops(self):
         from keboola_agent_cli.permissions import OPERATION_REGISTRY
+
         for op, expected_cat in self.DP_OPS.items():
             assert OPERATION_REGISTRY.get(op) == expected_cat, op
 ```
@@ -1987,11 +2005,18 @@ class TestIdentityCommands:
             r = runner.invoke(
                 app,
                 [
-                    "--config-dir", str(tmp_config_dir),
-                    "--json", "dev-portal", "identity", "add",
-                    "--alias", "alpha",
-                    "--username", "service.keboola.x",
-                    "--password", "p",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "--json",
+                    "dev-portal",
+                    "identity",
+                    "add",
+                    "--alias",
+                    "alpha",
+                    "--username",
+                    "service.keboola.x",
+                    "--password",
+                    "p",
                 ],
             )
         assert r.exit_code == 0, r.output
@@ -1999,6 +2024,7 @@ class TestIdentityCommands:
 
     def test_identity_use_sets_default(self, tmp_config_dir, config_store):
         from keboola_agent_cli.models import DeveloperPortalIdentity
+
         config_store.add_dev_portal_identity(
             "alpha", DeveloperPortalIdentity(username="u", password="p")
         )
@@ -2008,8 +2034,12 @@ class TestIdentityCommands:
         r = runner.invoke(
             app,
             [
-                "--config-dir", str(tmp_config_dir),
-                "dev-portal", "identity", "use", "beta",
+                "--config-dir",
+                str(tmp_config_dir),
+                "dev-portal",
+                "identity",
+                "use",
+                "beta",
             ],
         )
         assert r.exit_code == 0, r.output
@@ -2019,6 +2049,7 @@ class TestIdentityCommands:
 class TestReadCommands:
     def test_list_apps_json(self, tmp_config_dir, config_store):
         from keboola_agent_cli.models import DeveloperPortalIdentity
+
         config_store.add_dev_portal_identity(
             "alpha", DeveloperPortalIdentity(username="u", password="p", vendor="keboola")
         )
@@ -2029,8 +2060,13 @@ class TestReadCommands:
             r = runner.invoke(
                 app,
                 [
-                    "--config-dir", str(tmp_config_dir),
-                    "--json", "dev-portal", "list", "--vendor", "keboola",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "--json",
+                    "dev-portal",
+                    "list",
+                    "--vendor",
+                    "keboola",
                 ],
             )
         assert r.exit_code == 0, r.output
@@ -2091,6 +2127,7 @@ def _split_app(app: str) -> tuple[str, str]:
 
 # ----- Identity subcommands -----
 
+
 @identity_app.command("add")
 def identity_add(
     ctx: typer.Context,
@@ -2098,18 +2135,21 @@ def identity_add(
     username: str = typer.Option(..., "--username"),
     password: str | None = typer.Option(None, "--password"),
     password_stdin: bool = typer.Option(
-        False, "--password-stdin",
+        False,
+        "--password-stdin",
         help="Read password from stdin (paste from a secrets manager).",
     ),
     role_hint: str = typer.Option("vendor", "--role-hint"),
     vendor: str | None = typer.Option(None, "--vendor"),
     portal_url: str = typer.Option(
-        "https://apps-api.keboola.com", "--portal-url",
+        "https://apps-api.keboola.com",
+        "--portal-url",
     ),
 ) -> None:
     formatter = get_formatter(ctx)
     if password_stdin:
         import sys as _sys
+
         password = _sys.stdin.read().strip()
     if not password:
         raise typer.BadParameter("Pass --password or --password-stdin.")
@@ -2124,8 +2164,12 @@ def identity_add(
     try:
         svc.add_identity(alias, identity)
     except (ConfigError, KeboolaApiError) as exc:
-        formatter.error(message=str(exc), error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR))
-        raise typer.Exit(code=map_error_to_exit_code(exc) if isinstance(exc, KeboolaApiError) else 5) from None
+        formatter.error(
+            message=str(exc), error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
+        raise typer.Exit(
+            code=map_error_to_exit_code(exc) if isinstance(exc, KeboolaApiError) else 5
+        ) from None
     formatter.output({"status": "ok", "alias": alias, "username": username})
 
 
@@ -2179,6 +2223,7 @@ def identity_edit(
     svc = get_dev_portal_service(ctx)
     if password_stdin:
         import sys as _sys
+
         password = _sys.stdin.read().strip()
     try:
         if new_alias:
@@ -2236,6 +2281,7 @@ def identity_verify(
 
 
 # ----- Read commands -----
+
 
 @dev_portal_app.command("list")
 def list_apps(
@@ -2320,8 +2366,10 @@ class TestWriteCommands:
 
     def _seed_identity(self, config_store):
         from keboola_agent_cli.models import DeveloperPortalIdentity
+
         config_store.add_dev_portal_identity(
-            "alpha", DeveloperPortalIdentity(username="u", password="p", vendor="keboola"),
+            "alpha",
+            DeveloperPortalIdentity(username="u", password="p", vendor="keboola"),
         )
 
     def test_patch_non_tty_exits_6(self, tmp_config_dir, config_store):
@@ -2331,9 +2379,13 @@ class TestWriteCommands:
             "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.prepare_patch"
         ) as prep:
             from keboola_agent_cli.services.dev_portal_service import PendingPatch, FieldDiff
+
             prep.return_value = PendingPatch(
-                alias="alpha", vendor="keboola", app_id="keboola.ex-a",
-                payload={"name": "New"}, current={"name": "Old"},
+                alias="alpha",
+                vendor="keboola",
+                app_id="keboola.ex-a",
+                payload={"name": "New"},
+                current={"name": "Old"},
                 diff=[FieldDiff(key="name", current="Old", new="New")],
             )
             with patch(
@@ -2343,10 +2395,14 @@ class TestWriteCommands:
                 r = runner.invoke(
                     app,
                     [
-                        "--config-dir", str(tmp_config_dir),
-                        "dev-portal", "patch",
-                        "--app", "keboola.ex-a",
-                        "--data", "/tmp/does-not-matter.json",
+                        "--config-dir",
+                        str(tmp_config_dir),
+                        "dev-portal",
+                        "patch",
+                        "--app",
+                        "keboola.ex-a",
+                        "--data",
+                        "/tmp/does-not-matter.json",
                     ],
                     input="",
                 )
@@ -2362,9 +2418,13 @@ class TestWriteCommands:
             "keboola_agent_cli.services.dev_portal_service.DeveloperPortalService.prepare_patch"
         ) as prep:
             from keboola_agent_cli.services.dev_portal_service import PendingPatch, FieldDiff
+
             prep.return_value = PendingPatch(
-                alias="alpha", vendor="keboola", app_id="keboola.ex-a",
-                payload={"name": "New"}, current={"name": "Old"},
+                alias="alpha",
+                vendor="keboola",
+                app_id="keboola.ex-a",
+                payload={"name": "New"},
+                current={"name": "Old"},
                 diff=[FieldDiff(key="name", current="Old", new="New")],
             )
             with patch(
@@ -2373,10 +2433,15 @@ class TestWriteCommands:
                 r = runner.invoke(
                     app,
                     [
-                        "--config-dir", str(tmp_config_dir),
-                        "--json", "dev-portal", "patch",
-                        "--app", "keboola.ex-a",
-                        "--data", str(data_file),
+                        "--config-dir",
+                        str(tmp_config_dir),
+                        "--json",
+                        "dev-portal",
+                        "patch",
+                        "--app",
+                        "keboola.ex-a",
+                        "--data",
+                        str(data_file),
                         "--dry-run",
                     ],
                 )
@@ -2407,6 +2472,7 @@ def _load_payload(data: str | None) -> dict:
         raise typer.BadParameter("--data is required")
     if data == "-":
         import sys as _sys
+
         return json.loads(_sys.stdin.read())
     return json.loads(Path(data).read_text())
 
@@ -2414,9 +2480,13 @@ def _load_payload(data: str | None) -> dict:
 def _render_pending(formatter, pending) -> None:
     """Write a stderr-only preview of the pending write."""
     from ..services.dev_portal_service import (
-        PendingCreate, PendingPatch, PendingIconUpload,
-        PendingPublish, PendingDeprecate,
+        PendingCreate,
+        PendingPatch,
+        PendingIconUpload,
+        PendingPublish,
+        PendingDeprecate,
     )
+
     err = formatter.err_console
     if isinstance(pending, PendingPatch):
         err.print(f"[bold]PATCH[/bold] /vendors/{pending.vendor}/apps/{pending.app_id}")
@@ -2447,6 +2517,7 @@ def _render_pending(formatter, pending) -> None:
 def _pending_as_json(pending) -> dict:
     """Serialise a pending write for --json --dry-run output."""
     from dataclasses import asdict
+
     raw = asdict(pending)
     if "png_bytes" in raw:
         raw["png_bytes"] = f"<{len(raw['png_bytes'])} bytes>"
@@ -2532,11 +2603,13 @@ def patch_cmd(
     except KeboolaApiError as exc:
         formatter.error(message=str(exc), error_code=exc.error_code)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-    formatter.output({
-        "status": "ok",
-        "app": app,
-        "patched_keys": [d.key for d in pending.diff],
-    })
+    formatter.output(
+        {
+            "status": "ok",
+            "app": app,
+            "patched_keys": [d.key for d in pending.diff],
+        }
+    )
 
 
 @dev_portal_app.command("upload-icon")
@@ -2674,18 +2747,33 @@ class TestDevPortalE2E:
     )
     def test_list_apps_against_real_portal(self, e2e_runner, tmp_path):
         """Optional: list apps for vendor 'keboola' if creds supplied."""
-        result = e2e_runner.invoke([
-            "dev-portal", "identity", "add",
-            "--alias", "e2e",
-            "--username", os.environ["E2E_DP_USERNAME"],
-            "--password", os.environ["E2E_DP_PASSWORD"],
-            "--vendor", "keboola",
-        ])
+        result = e2e_runner.invoke(
+            [
+                "dev-portal",
+                "identity",
+                "add",
+                "--alias",
+                "e2e",
+                "--username",
+                os.environ["E2E_DP_USERNAME"],
+                "--password",
+                os.environ["E2E_DP_PASSWORD"],
+                "--vendor",
+                "keboola",
+            ]
+        )
         assert result.exit_code == 0, result.output
-        result = e2e_runner.invoke([
-            "--json", "dev-portal", "list",
-            "--vendor", "keboola", "--identity", "e2e",
-        ])
+        result = e2e_runner.invoke(
+            [
+                "--json",
+                "dev-portal",
+                "list",
+                "--vendor",
+                "keboola",
+                "--identity",
+                "e2e",
+            ]
+        )
         assert result.exit_code == 0, result.output
 ```
 

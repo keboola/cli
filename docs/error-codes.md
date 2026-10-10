@@ -19,8 +19,9 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `INVALID_TOKEN` | Storage API token is invalid or expired |
 | `ACCESS_DENIED` | Token lacks the required permission for this API call |
 | `PERMISSION_DENIED` | Operation blocked by the active kbagent permission policy |
-| `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `token create`, `config oauth-url` pre-flight); maps to exit 3 |
+| `MISSING_MASTER_TOKEN` | Operation requires a master (admin) Storage token (e.g. `token create`, `config oauth-url` pre-flight, and every `semantic-layer` command -- the Metastore's opaque 401 `Failed to create project scope` is its master-token gate and is reclassified to this code); maps to exit 3 |
 | `UNAUTHORIZED` | `kbagent serve` rejected the request's Bearer token |
+| `AUTH_REJECTED` | Upstream answered HTTP 401 but its own error text did not blame the credential. Same exit 3 as `INVALID_TOKEN`; rotating the token is not the fix. (The Metastore's `Failed to create project scope` 401 has a known cause and lands on `MISSING_MASTER_TOKEN` instead) |
 
 ### Network / transport
 
@@ -54,6 +55,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `CONFIG_ERROR` | kbagent config problem (e.g. unknown project alias) |
 | `NOT_INITIALIZED` | `.keboola/manifest.json` not found; run `sync init` first |
 | `INIT_ERROR` | Error during `sync init` auto-init path |
+| `FEATURE_NOT_ENABLED` | A client-side pre-flight found the project lacks a required feature flag (e.g. `branches-merge-requests` for `merge-request` writes); the server would answer an opaque 403/404 |
 
 ### Jobs
 
@@ -129,6 +131,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 |---|---|
 | `PARENT_CONFIG_NOT_TRACKED` | Row operation references a parent config not in the manifest |
 | `VARIABLE_LINK_UNRESOLVED` | `sync push` could not resolve a transformation's variables link to a tracked config |
+| `LINK_UNRESOLVED` | `sync push` could not re-point a shared-code row id or a task `configRowIds` entry to a row created in the same push; the id keeps its old value |
 | `SYNC_CONFLICT` | `sync pull --force` aborted: local and remote both changed since the last pull (`details.conflicts` lists them) |
 | `SYNC_LEGACY_BOUNDARY` | `sync push` refused one config: the working tree predates statement-boundary tracking, so pushing it would merge separate SQL statements into one. Run `sync pull` first |
 
@@ -185,3 +188,10 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Code | Description |
 |---|---|
 | `PAYG_NOT_AVAILABLE` | The project does not have the `pay-as-you-go` feature, so it has no credit balance; the billing host may not even resolve on this stack |
+
+### Merge requests
+
+| Code | Description |
+|---|---|
+| `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
+| `MR_MERGE_CONFLICT` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |

@@ -96,11 +96,20 @@ a clean slate per task.
   equivalent`): subagent would refuse; politely decline and point the
   user at the `kbagent serve` REST API for programmatic integrations.
 - User asks to log in / set up auth via a browser (`kbagent auth
-  login`): browser login needs a human at a browser, so no agent --
-  main context or subagent -- can complete it. Hand the exact command
-  back to the user and wait. For an unattended context, the answer is
-  NOT automatically a static Storage token: if the user has account
-  credentials for this purpose, `kbagent auth login-password`
+  login`): the human part is APPROVING in the browser, not driving the
+  command. In an ATTENDED session whose harness has a background
+  shell, the main context SHOULD complete it: run `kbagent auth login
+  --device-code --stack <URL> --register-projects` in a **background**
+  shell capturing stdout+stderr (human mode, not `--json` -- there the
+  URL and code go to stderr), relay the verification URL and user code
+  to the user, then confirm with `kbagent --json auth status` (exit 0
+  = signed in, exit 3 = not yet). Never in a foreground tool shell
+  (its ~120 s timeout kills the flow mid-flight) and never blind-retry
+  -- check `auth status` first. With no background shell available,
+  hand the plain command back to the user and wait. For an UNATTENDED
+  context `auth login` is out entirely (nobody can approve), and the
+  answer is NOT automatically a static Storage token: if the user has
+  account credentials for this purpose, `kbagent auth login-password`
   (0.84.0+) is the CI-safe, headless alternative and an agent MAY run
   it directly; fall back to a static Storage token only when no such
   credentials exist.

@@ -20,6 +20,7 @@ from ..constants import (
     JOB_TERMINATE_GRACE_SECONDS,
     JOB_TERMINATE_POLL_INTERVAL,
     KILLABLE_JOB_STATUSES,
+    ORCHESTRATION_JOB_COMPONENTS,
     VALID_JOB_MODES,
     VALID_POLL_STRATEGIES,
 )
@@ -131,14 +132,33 @@ def _job_sort_key(job: dict[str, Any], sort_by: str, sort_order: str) -> tuple[i
     return (0, _DescStr(text) if desc else text, alias, id_tiebreak)
 
 
+def resolve_events_run_id(job: dict[str, Any]) -> str:
+    """Return the key to query Storage Events with for this job's log tail.
+
+    The job's own ``id`` wins. For a top-level Queue job ``runId == id``, so
+    this is unchanged there. For a NESTED job (a job inside a flow, or a
+    child row job of a row-based component) the Queue ``runId`` is dotted --
+    ``<parent>.<child>.<job id>`` -- and ``GET /v2/storage/events?runId=``
+    with that dotted value returns ZERO events, while the plain job id
+    returns the job's events (issue #787). When ``id`` is absent we fall
+    back to the last segment of a dotted ``runId``, which is the job's own
+    id. Returns ``""`` when neither key is present.
+    """
+    job_id = job.get("id")
+    if job_id is not None and str(job_id):
+        return str(job_id)
+    run_id = str(job.get("runId") or "")
+    return run_id.rsplit(".", 1)[-1]
+
+
 def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     """Fetch the last ``limit`` events for a job; never raises.
 
-    Resolves ``runId`` from the job dict (falls back to ``id`` on legacy
-    records where Queue v2 makes them equal). Storage Events API returns
-    newest -> oldest, which we keep as-is: a "tail" display wants the
-    most recent events first, and callers can reverse for chronology if
-    they prefer.
+    The events key comes from :func:`resolve_events_run_id` (job ``id``
+    first, never a dotted nested ``runId``, which returns zero events).
+    Storage Events API returns newest -> oldest, which we keep as-is: a
+    "tail" display wants the most recent events first, and callers can
+    reverse for chronology if they prefer.
 
     Log-tail capture is a convenience surface; failing the whole command
     because the events endpoint blipped would obscure the real underlying
@@ -147,7 +167,7 @@ def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[d
     """
     if limit <= 0:
         return []
-    run_id = str(job.get("runId") or job.get("id") or "")
+    run_id = resolve_events_run_id(job)
     if not run_id:
         # Defensive: malformed job dict with neither runId nor id. Log so
         # a real API regression doesn't get masked by the silent return.
@@ -461,6 +481,17 @@ class JobService(BaseService):
             client.close()
 
         detail["project_alias"] = alias
+        if detail.get("component") in ORCHESTRATION_JOB_COMPONENTS:
+            # A flow run with no matching cron schedule is not necessarily
+            # manual -- table triggers and cross-project triggers also start
+            # flows and neither appears in `schedule list`. That dead-end is
+            # how issue #714's false "this flow has no trigger" happened, so
+            # point the investigation at the command that answers it.
+            detail["trigger_hint"] = (
+                "If no cron schedule explains this run, check `kbagent flow triggers "
+                f"--project {alias} --flow-id {detail.get('config', '')}` -- table "
+                "triggers and cross-project triggers never appear in `schedule list`."
+            )
         return detail
 
     def run_job(
@@ -725,7 +756,7 @@ class JobService(BaseService):
             "run_job: unhandled wait error code=%s; bubbling up unchanged",
             code,
         )
-        raise
+        raise exc
 
     @staticmethod
     def resolve_variable_values_id(

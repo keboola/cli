@@ -1818,9 +1818,12 @@ class TestCreateFromTransformation:
         assert "2 table(s) loaded" in result["message"]
         assert "Save the private key" in result["message"]
 
+        # Production: the config is read from the default branch the
+        # workspace is created in (#807).
         mock_client.get_config_detail.assert_called_once_with(
             "keboola.snowflake-transformation",
             "456",
+            branch_id=100,
         )
         mock_client.create_config_workspace.assert_called_once_with(
             branch_id=100,
@@ -1835,6 +1838,65 @@ class TestCreateFromTransformation:
         mock_client.load_workspace_tables.assert_called_once()
         # close() called twice: once in _resolve_branch_id, once in create_from_transformation
         assert mock_client.close.call_count == 2
+
+    def test_create_from_transformation_reads_config_from_active_branch(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """With an active dev branch, the config is read from that branch (#807).
+
+        Reading it from production 404s on a branch-only transformation and
+        loads production's input mapping for a transformation changed in the
+        branch -- while the workspace itself is created in the branch.
+        """
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {
+            "id": "456",
+            "configuration": {
+                "storage": {
+                    "input": {
+                        "tables": [{"source": "in.c-main.orders", "destination": "orders"}],
+                    },
+                },
+            },
+        }
+        mock_client.create_config_workspace.return_value = {
+            "id": 55,
+            "connection": {"backend": "snowflake", "password": "p"},
+        }
+        mock_client.load_workspace_tables.return_value = {"id": 888, "status": "success"}
+
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-xxx",
+                project_name="Production",
+                project_id=258,
+                active_branch_id=200,
+            ),
+        )
+        svc = WorkspaceService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_from_transformation(
+            alias="prod",
+            component_id="keboola.snowflake-transformation",
+            config_id="456",
+            backend="snowflake",
+        )
+
+        assert result["branch_id"] == 200
+        mock_client.get_config_detail.assert_called_once_with(
+            "keboola.snowflake-transformation",
+            "456",
+            branch_id=200,
+        )
+        assert mock_client.create_config_workspace.call_args.kwargs["branch_id"] == 200
+        assert mock_client.load_workspace_tables.call_args.kwargs["branch_id"] == 200
+        mock_client.list_dev_branches.assert_not_called()
 
     def test_create_from_transformation_with_row_id(self, tmp_config_dir: Path) -> None:
         """create_from_transformation extracts input tables from specific row."""

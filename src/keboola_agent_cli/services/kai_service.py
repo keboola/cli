@@ -12,7 +12,7 @@ from kai_client import KaiClient, KaiError
 
 from ..auth.sentinel import require_static_token
 from ..constants import KAI_FEATURE_FLAG, KAI_REQUEST_TIMEOUT, KAI_STREAM_TIMEOUT
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,10 @@ class KaiService(BaseService):
     def resolve_alias(self, alias: str | None) -> str:
         """Resolve a project alias, falling back to the default project.
 
+        Delegates to the shared cascade (explicit > KBAGENT_PROJECT env >
+        ``project use`` pin > sole project), so an omitted alias honors the
+        pinned default instead of the first registered project (issue #684).
+
         Args:
             alias: Explicit alias, or None for default.
 
@@ -39,17 +43,10 @@ class KaiService(BaseService):
             Resolved alias string.
 
         Raises:
-            ConfigError: If no projects configured or alias not found.
+            ConfigError: If the alias is unknown, or none can be resolved.
         """
-        if alias:
-            # Validate it exists
-            self.resolve_projects([alias])
-            return alias
-        # Fall back to default (first project)
-        projects = self.resolve_projects()
-        if not projects:
-            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
-        return next(iter(projects))
+        resolved, _source = self.resolve_pinned_alias(explicit=alias)
+        return resolved
 
     # ------------------------------------------------------------------
     # Feature detection

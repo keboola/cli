@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from ..constants import GLOBAL_SEARCH_FEATURE
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService, sanitize_unexpected_error
 from .config_service import ConfigService
@@ -202,7 +202,7 @@ class SearchService(BaseService):
                     alias,
                     {
                         "project_alias": alias,
-                        "error_code": "FEATURE_NOT_ENABLED",
+                        "error_code": str(ErrorCode.FEATURE_NOT_ENABLED),
                         "message": (
                             f"Project does not have the '{GLOBAL_SEARCH_FEATURE}' feature "
                             "enabled. Use --search-type config-based for body scanning, or "

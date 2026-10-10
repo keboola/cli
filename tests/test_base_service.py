@@ -34,8 +34,6 @@ from keboola_agent_cli.services.base import (
 class _TestService(BaseService):
     """Concrete subclass of BaseService used exclusively for testing."""
 
-    pass
-
 
 def _setup_three_projects(tmp_config_dir: Path) -> ConfigStore:
     """Create a ConfigStore with three projects (prod, dev, staging) configured."""

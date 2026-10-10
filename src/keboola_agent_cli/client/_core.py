@@ -73,6 +73,7 @@ class _CoreClient(BaseHttpClient):
         self._sync_actions_client: httpx.Client | None = None
         self._billing_client: httpx.Client | None = None
         self._notification_client: httpx.Client | None = None
+        self._editor_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -107,6 +108,10 @@ class _CoreClient(BaseHttpClient):
     def _notification_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "notification")
 
+    @property
+    def _editor_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "editor")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -122,13 +127,15 @@ class _CoreClient(BaseHttpClient):
             self._billing_client.close()
         if self._notification_client is not None:
             self._notification_client.close()
+        if self._editor_client is not None:
+            self._editor_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def _request(
@@ -184,8 +191,14 @@ class _CoreClient(BaseHttpClient):
 
     def _encrypt_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Execute an Encryption API request with retry."""
+        # Start from the main client's headers so User-Agent (and X-Conversation-ID)
+        # reach the encryption service too -- passing a bare {"Content-Type": ...}
+        # here used to REPLACE them, leaving this the one Keboola endpoint the
+        # central User-Agent never signed.
+        headers = dict(self._client._headers)
+        headers["Content-Type"] = "application/json"
         client = self._get_or_create_sub_client(
-            "_encrypt_client", self._encrypt_base_url, headers={"Content-Type": "application/json"}
+            "_encrypt_client", self._encrypt_base_url, headers=headers
         )
         return self._do_request(
             method, path, client=client, base_url=self._encrypt_base_url, **kwargs
@@ -221,6 +234,20 @@ class _CoreClient(BaseHttpClient):
         client = self._get_or_create_sub_client("_notification_client", self._notification_base_url)
         return self._do_request(
             method, path, client=client, base_url=self._notification_base_url, **kwargs
+        )
+
+    def _editor_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute an Editor Service (SQL editor sessions) request with retry.
+
+        The editor service is a sibling host derived from the stack URL
+        (``editor.{stack-suffix}``, the ``editor`` entry of ``GET /v2/storage``);
+        the sub-client inherits the main client's headers, so the
+        ``X-StorageApi-Token`` auth carries over. The service also accepts a
+        bearer token, which ``_get_or_create_sub_client`` passes on.
+        """
+        client = self._get_or_create_sub_client("_editor_client", self._editor_base_url)
+        return self._do_request(
+            method, path, client=client, base_url=self._editor_base_url, **kwargs
         )
 
     def _billing_get(self, path: str, **kwargs: Any) -> httpx.Response:

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn audit skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -67,6 +67,9 @@ format-check: ## Check code formatting (no changes)
 
 typecheck: ## Run ty type-checker (Astral). Fails on any error.
 	uv run ty check
+
+audit: ## Audit locked dependencies (all groups + extras) for known vulnerabilities via OSV
+	uv audit --frozen
 
 typecheck-warn: ## Run ty in warning-only mode (always exits 0; used by hooks)
 	@uv run ty check || true

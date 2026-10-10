@@ -80,6 +80,10 @@ class ProjectConfig(BaseModel):
         default=None,
         description="Active development branch ID (None = main/production branch)",
     )
+    active_branch_name: str | None = Field(
+        default=None,
+        description="Name of the active branch when it was set (shown next to its ID)",
+    )
     org_id: int | None = Field(
         default=None,
         description="Organization ID (populated via `org setup` or when verify_token returns it)",
@@ -279,6 +283,18 @@ class TokenVerifyResponse(BaseModel):
         default=None,
         description="Organization name parsed from owner.organization (when present)",
     )
+    admin_id: int | None = Field(
+        default=None,
+        description=(
+            "Admin (user) ID behind the token, from the verify response's top-level "
+            "`admin` block. Present only for admin tokens; scoped tokens have no admin "
+            "identity. Used for viewer-relative merge-request derivations (DMD-1899)."
+        ),
+    )
+    admin_name: str | None = Field(
+        default=None,
+        description="Admin (user) display name, when the `admin` block is present",
+    )
 
 
 class ComponentDetail(BaseModel):
@@ -372,6 +388,9 @@ class SuccessResponse(BaseModel):
     """Structured success response for JSON output mode."""
 
     status: str = Field(default="ok", description="Always 'ok' for success responses")
+    targets: list[dict[str, Any]] | None = Field(
+        default=None, description="Projects and branches the command used (issue #766)"
+    )
     data: Any = Field(default=None, description="Response payload")
 
 

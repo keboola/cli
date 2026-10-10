@@ -219,8 +219,11 @@ Row diff is the same 3-way engine as parent configs, just keyed by row id:
 | no | no | `conflict` (manual resolve) |
 
 Added rows (filesystem-only) show as `added`; removed rows (manifest-only
-after file deletion) show as `deleted` -- push DELETEs them via
-`_push_delete_row`.
+after file deletion) show as `deleted` -- `push --force` DELETEs them via
+`_push_delete_row`, a plain push lists them under `skipped_deletions`
+*(since 0.96.0, #792)*. A row deleted on the remote since the last pull shows
+as `remote_deleted`; push never re-creates it. `sync pull` deletes its
+directory, or keeps an edited one and reports it as `skipped`.
 
 Human-mode diff output prints row-level changes with the same `+`/`~`/`-`/`=`
 prefixes as parent configs, e.g.:

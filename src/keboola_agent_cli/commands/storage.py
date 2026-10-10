@@ -11,6 +11,7 @@ from rich.markup import escape
 
 from ..config_store import ConfigStore
 from ..constants import TABLE_DATA_JOB_MAX_WAIT
+from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
@@ -18,7 +19,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 from ._storage_table_detail import (
     format_range_partitioning,
@@ -99,9 +99,9 @@ def storage_buckets(
     # buckets, which for a freshly created dev branch is an empty set.
     # Explicit --branch still wins.
     effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(
-            config_store, formatter, project[0], None, ignore_active_branch=True
+    if project and len(project) == 1:
+        effective_branch = resolve_branch(
+            config_store, project[0], branch, ignore_active_branch=True
         )
 
     try:
@@ -186,9 +186,7 @@ def storage_bucket_detail(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     # Read command: ignore implicit active dev branch (empty listing trap).
-    _, effective_branch = resolve_branch(
-        config_store, formatter, project, branch, ignore_active_branch=True
-    )
+    effective_branch = resolve_branch(config_store, project, branch, ignore_active_branch=True)
 
     try:
         result = service.get_bucket_detail(
@@ -320,9 +318,9 @@ def storage_tables(
     # Storage API branch endpoint only returns locally modified tables, so
     # auto-scoping to the active branch traps users into an empty listing.
     effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(
-            config_store, formatter, project[0], None, ignore_active_branch=True
+    if project and len(project) == 1:
+        effective_branch = resolve_branch(
+            config_store, project[0], branch, ignore_active_branch=True
         )
 
     try:
@@ -382,9 +380,7 @@ def storage_table_detail(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     # Read command: ignore implicit active dev branch (empty listing trap).
-    _, effective_branch = resolve_branch(
-        config_store, formatter, project, branch, ignore_active_branch=True
-    )
+    effective_branch = resolve_branch(config_store, project, branch, ignore_active_branch=True)
 
     try:
         result = service.get_table_detail(
@@ -454,7 +450,7 @@ def storage_create_bucket(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.create_bucket(
@@ -648,7 +644,9 @@ def storage_create_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
+    if source_table_id and source_branch_id:
+        record_branch(config_store, project, source_branch_id, "explicit", role="source")
 
     try:
         result = service.create_table(
@@ -787,7 +785,7 @@ def storage_upload_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     p = Path(file)
     if not p.is_file():
@@ -927,7 +925,7 @@ def storage_download_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not formatter.json_mode:
         msg = f"Exporting [cyan]{table_id}[/cyan]"
@@ -1025,7 +1023,7 @@ def storage_delete_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if dry_run:
         try:
@@ -1129,7 +1127,7 @@ def storage_truncate_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if dry_run:
         try:
@@ -1234,7 +1232,7 @@ def storage_add_column(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.add_column(
@@ -1313,7 +1311,7 @@ def storage_delete_column(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if dry_run:
         try:
@@ -1446,7 +1444,7 @@ def storage_swap_tables(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch, required=True)
 
     if dry_run:
         try:
@@ -1566,7 +1564,9 @@ def storage_clone_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch, required=True)
+    if effective_branch is not None:  # the table is pulled from production into it
+        record_branch(config_store, project, None, "production", fixed=True, role="source")
 
     try:
         result = service.clone_table(
@@ -1651,7 +1651,7 @@ def storage_delete_bucket(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.delete_buckets(
@@ -1746,9 +1746,7 @@ def storage_file_list(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     # Read command: ignore implicit active dev branch (empty listing trap).
-    _, effective_branch = resolve_branch(
-        config_store, formatter, project, branch, ignore_active_branch=True
-    )
+    effective_branch = resolve_branch(config_store, project, branch, ignore_active_branch=True)
 
     try:
         result = service.list_files(
@@ -1889,7 +1887,7 @@ def storage_file_upload(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     p = Path(file)
     if not p.is_file():
@@ -2179,7 +2177,7 @@ def storage_load_file(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not formatter.json_mode:
         formatter.console.print(
@@ -2300,7 +2298,7 @@ def storage_unload_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not formatter.json_mode:
         msg = f"Exporting [cyan]{table_id}[/cyan] to Storage File"

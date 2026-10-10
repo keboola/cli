@@ -4,7 +4,12 @@ The Keboola semantic layer (aka **metastore**) is a project-scoped catalogue
 of datasets, metrics, relationships, constraints, and glossary terms. It is
 served from a separate API at `metastore.<stack>` (derived from
 `connection.<stack>` by string-substitution; cloud/region-agnostic). Auth is
-the same `X-StorageApi-Token` as Storage.
+the same `X-StorageApi-Token` as Storage, **with one extra requirement: it
+must be a MASTER (project admin) token**. The metastore's auth gate rejects
+every valid non-master token with an opaque 401 `Failed to create project
+scope`, which kbagent reclassifies to `MISSING_MASTER_TOKEN` with the remedy
+(since 0.92.0, #711). Pre-flight: `kbagent --json project info --project P`
+-> `is_master_token`.
 
 `kbagent semantic-layer ...` (alias `kbagent sl ...`, hidden) wraps the
 metastore so AI agents and CI scripts don't roll their own `urllib` loops.
@@ -87,6 +92,12 @@ filter your jq with these exact values:
   Snowflake STRING column (error).
 - `DEEP_FETCH_FAILED` (`--deep` only) -- couldn't fetch the Snowflake
   schema for a dataset; deep checks for that dataset are skipped (warning).
+- `FQN_MISMATCH` (`--deep` only, since 0.95.0) -- a dataset's stored `fqn`
+  is not the table's Storage location (`storage table-detail` ->
+  `sql_path`). Every model built before 0.95.0 hits this: its fqns name a
+  `"KEBOOLA"` database that exists in no project. Repair recipe in
+  [gotchas.md](gotchas.md) (warning -- an fqn set on purpose with
+  `add dataset --fqn` may point elsewhere).
 
 ---
 
@@ -373,7 +384,8 @@ kbagent semantic-layer add relationship \
 the kbagent AI Service client has no JSON-generation endpoint as of
 v0.41.0. The heuristic synthesises:
 
-- One dataset per `--tables` entry, with FQN derived and `fields[]`
+- One dataset per `--tables` entry, with FQN read from the table's
+  Storage location (bucket `backendPath`) and `fields[]`
   role-classified (PK_/FK_->key, *_DATE/*_DT->timestamp,
   numeric amount/value/rate->measure, else dimension).
 - One `COUNT(*)` metric per dataset.

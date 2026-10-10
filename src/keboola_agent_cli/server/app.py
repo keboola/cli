@@ -17,21 +17,31 @@ import asyncio
 import contextlib
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
+from typing import Any
+from urllib.parse import parse_qs
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Mount
 
-from .. import __version__
+from .. import __version__, telemetry
 from ..config_store import ConfigStore, resolve_config_dir
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..permissions import PermissionEngine, apply_firewall_flags
+from ._serve_command_map import SERVE_COMMAND_MAP
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
-from .dependencies import ServiceRegistry, install_permission_engine, install_registry
+from .dependencies import (
+    ServiceRegistry,
+    install_permission_engine,
+    install_registry,
+    translate_project_refs,
+)
 from .routers import (
     agents,
     ai_chat,
@@ -51,6 +61,7 @@ from .routers import (
     kai,
     lineage,
     members,
+    merge_requests,
     notifications,
     org,
     projects,
@@ -264,7 +275,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "data-apps",
         "description": (
             "**Execution.** "
-            "Streamlit / R / Python data apps -- create, deploy, "
+            "Python/JS (default), Streamlit and R data apps -- create, deploy, "
             "start/stop, manage secrets. "
             "Mirrors `kbagent data-app *`."
         ),
@@ -295,6 +306,18 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Dev branch lifecycle (create / use / reset / delete / "
             "merge) and branch metadata. "
             "Mirrors `kbagent branch *`."
+        ),
+    },
+    {
+        "name": "merge-requests",
+        "description": (
+            "**Development.** "
+            "Merge requests (Branches 2.0, non-SOX): list / detail / create / "
+            "update / review transitions / merge, plus conflict inspection and "
+            "resolution. Every route enforces the permission policy; `merge` and "
+            "any operation that arms or completes an auto-merge are destructive. "
+            "`POST .../merge` is synchronous and may block up to 600 s. "
+            "Mirrors `kbagent merge-request *`."
         ),
     },
     {
@@ -474,7 +497,11 @@ def _build_custom_openapi(app: FastAPI):
 
 
 def _format_error(
-    message: str, error_code: ErrorCode | str, *, http_status: int = 400
+    message: str,
+    error_code: ErrorCode | str,
+    *,
+    http_status: int = 400,
+    details: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """Render a kbagent-style error envelope at the given HTTP status.
 
@@ -484,16 +511,11 @@ def _format_error(
     code is not yet in the enum). The :class:`ErrorCode` mixes in ``str``, so
     both shapes serialise as plain strings in the JSON body.
     """
-    return JSONResponse(
-        status_code=http_status,
-        content={
-            "status": "error",
-            "error": {
-                "code": str(error_code),
-                "message": message,
-            },
-        },
-    )
+    error: dict[str, Any] = {"code": str(error_code), "message": message}
+    if details:
+        # Only when non-empty, matching the CLI envelope's presence contract.
+        error["details"] = details
+    return JSONResponse(status_code=http_status, content={"status": "error", "error": error})
 
 
 # A browser-login session backing a session-registered project is USER-scoped
@@ -516,6 +538,15 @@ _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESS
 # of -- a call reaching an upstream API, so none of them is a gateway fault.
 _CALLER_REFUSAL_CODES = frozenset(
     {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
+)
+
+# The merge-request merge 409s: a statement about the merge request's state
+# (conflicts / lock / another merge running), not about the gateway -- and the
+# conflict list in `details.api_error_params` is the whole point of the
+# remapping, so it must survive into the REST envelope. 502 would drop it and
+# invite a retry of a request that cannot succeed until the conflicts clear.
+_MERGE_REQUEST_CONFLICT_CODES = frozenset(
+    {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
 )
 
 _SESSION_REMEDY_ON_HOST = (
@@ -604,6 +635,127 @@ def _default_permission_engine(
     )
 
 
+# serve posts a usage event only for these methods. A read (GET) is skipped: one
+# event per request would flood the project's event log from UI refresh polling.
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# How long serve shutdown waits for in-flight telemetry POSTs to finish before it
+# cancels them. A blocked endpoint must not hold shutdown open, so the wait is
+# bounded and the leftovers are cancelled.
+_TELEMETRY_DRAIN_TIMEOUT = 5.0
+
+
+class _UsageTelemetryMiddleware:
+    """Post one best-effort usage event per serve operation (``ext.keboola.cli.serve``).
+
+    Pure ASGI (not ``BaseHTTPMiddleware``) so it never buffers the response body
+    -- SSE / streaming routes keep working. It posts nothing for non-HTTP scopes,
+    CORS preflights, unmatched (static / UI) requests, or infra paths; the blocking
+    event POST runs on a worker thread so the event loop is never stalled.
+    """
+
+    def __init__(self, app: Any, config_store: ConfigStore, tasks: set[Any]) -> None:
+        self.app = app
+        self._config_store = config_store
+        # Detached event tasks, drained at serve shutdown so a POST still in flight
+        # is awaited (not lost) before the process exits.
+        self._tasks = tasks
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start = time.monotonic()
+        status = {"code": 200}
+
+        async def _send(message: Any) -> None:
+            if message.get("type") == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception:
+            # An unhandled error is turned into a 500 above this middleware, so
+            # `_send` never sees the response start -- record 500, not the default
+            # 200, or the one request telemetry most wants to catch reads as success.
+            status["code"] = 500
+            raise
+        finally:
+            # Never awaited inline: the POST must not add its latency to the request
+            # it instruments. Detach it, and track it so serve shutdown can drain it.
+            task = asyncio.create_task(
+                self._emit_safe(scope, status["code"], time.monotonic() - start)
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _emit_safe(self, scope: Any, status_code: int, duration_s: float) -> None:
+        # telemetry must never affect the response; this runs off the request path.
+        with contextlib.suppress(Exception):
+            await self._emit(scope, status_code, duration_s)
+
+    async def _emit(self, scope: Any, status_code: int, duration_s: float) -> None:
+        method = scope.get("method", "")
+        if method not in _MUTATING_METHODS:
+            return
+        route = scope.get("route")
+        path = scope.get("path", "")
+        if route is None or isinstance(route, Mount):
+            return
+        # Schema-excluded routes are UI / static (the SPA shell, deep-link fallback),
+        # not operations -- they have no CLI counterpart and must not post an event.
+        if not getattr(route, "include_in_schema", True):
+            return
+        if path in telemetry.SERVE_SKIP_PATHS or path.startswith("/health"):
+            return
+
+        # command == the equivalent CLI command so serve and CLI telemetry share one
+        # `command` (only `interface` differs). The map is exhaustive (enforced by a
+        # test); an empty value marks a route with no CLI counterpart -- still logged,
+        # under a route-derived label.
+        #
+        # Key on `path_format` (the OpenAPI shape the map was generated from), NOT
+        # `route.path`, which keeps a `{...:path}` converter suffix the map lacks --
+        # reading `route.path` misses every such route and falls back to the function
+        # name (issue: serve and CLI then diverge for the same operation).
+        template = getattr(route, "path_format", None) or getattr(route, "path", "")
+        command = SERVE_COMMAND_MAP.get((method, template)) or (
+            getattr(route, "name", "") or ""
+        ).replace("_", " ")
+        if not command:
+            return
+
+        # Most serve routes carry the project in the path (/jobs/{project}/run);
+        # a few take it as ?project=. Fall back to the server's default project.
+        project_alias = (scope.get("path_params") or {}).get("project")
+        if not project_alias:
+            values = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("project")
+            project_alias = values[0] if values else None
+
+        # The caller's X-Conversation-ID (set by kbagent's own clients) rides into
+        # params.cliContext so the telemetry reader tells an agent request from a
+        # human one; a web-UI request sends no such header and stays unmarked (CLI-12).
+        conversation_id: str | None = None
+        for key, value in scope.get("headers") or []:
+            if key == b"x-conversation-id":
+                conversation_id = value.decode("latin-1") or None
+                break
+
+        await asyncio.to_thread(
+            telemetry.send_serve_event,
+            self._config_store,
+            method=method,
+            path=path,
+            operation=command,
+            status_code=status_code,
+            duration_s=duration_s,
+            project_alias=project_alias,
+            conversation_id=conversation_id,
+        )
+
+
 def create_app(
     *,
     config_dir: str | None = None,
@@ -664,6 +816,8 @@ def create_app(
         Configured FastAPI app ready for uvicorn.
     """
     resolved_token = auth_token or secrets.token_urlsafe(32)
+    # Detached usage-event tasks (see _UsageTelemetryMiddleware); drained on shutdown.
+    telemetry_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def _lifespan(app_: FastAPI):
@@ -684,9 +838,19 @@ def create_app(
                 scheduler_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await scheduler_task
+            # Drain in-flight usage events so a POST mid-flight is not dropped, then
+            # let go: a blocked endpoint must never hold shutdown open indefinitely.
+            if telemetry_tasks:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait(set(telemetry_tasks), timeout=_TELEMETRY_DRAIN_TIMEOUT)
+            for task in list(telemetry_tasks):
+                task.cancel()
+            telemetry.close_shared_clients()
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
+        dependencies=[Depends(translate_project_refs("project"))],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,
@@ -729,6 +893,10 @@ def create_app(
     )
     install_registry(app, registry)
 
+    # Outermost middleware: posts a best-effort per-request usage event
+    # (ext.keboola.cli.serve) after the response, off the event loop.
+    app.add_middleware(_UsageTelemetryMiddleware, config_store=config_store, tasks=telemetry_tasks)
+
     # The engine lives on app.state, NOT on the registry: server tests routinely
     # override `get_registry` with a hand-built mock, and an engine reachable
     # only through the registry would be silently dropped by every such test --
@@ -768,6 +936,8 @@ def create_app(
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
         if code in _CALLER_REFUSAL_CODES:
             return _format_error(msg, code, http_status=400)
+        if code in _MERGE_REQUEST_CONFLICT_CODES:
+            return _format_error(msg, code, http_status=409, details=getattr(exc, "details", None))
         if code == ErrorCode.NOT_FOUND:
             # An upstream 404 is a statement about the requested resource, not
             # about the gateway: reporting it as 502 made callers retry (and
@@ -807,6 +977,7 @@ def create_app(
     app.include_router(token.router)
     app.include_router(jobs.router)
     app.include_router(branches.router)
+    app.include_router(merge_requests.router)
     app.include_router(workspaces.router)
     app.include_router(flows.router)
     app.include_router(schedules.router)

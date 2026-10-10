@@ -583,6 +583,13 @@ class DoctorService:
         goes through the user's in-session ``/plugin`` commands, which a
         background CLI cannot invoke. The most we can do is surface the
         gap and show the exact commands to run.
+
+        This check recognizes only Claude Code's on-disk cache layout
+        (``~/.claude/plugins/cache/...``); it cannot see plugin installs
+        made by other clients of the same marketplace, e.g. Cursor. The
+        plugin itself is optional -- ``kbagent context`` is the
+        client-agnostic substitute that teaches any agent the full CLI
+        surface without a plugin install at all.
         """
         claude_home = Path.home() / ".claude"
         if not claude_home.is_dir():
@@ -592,7 +599,11 @@ class DoctorService:
                 "status": "skip",
                 "message": (
                     "Claude Code not detected (~/.claude/ absent). "
-                    "Install instructions: https://github.com/keboola/cli#claude-code-plugin"
+                    "Install instructions: https://github.com/keboola/cli#claude-code-plugin "
+                    "This check only covers Claude Code -- other clients (e.g. Cursor) install "
+                    "the same marketplace plugin elsewhere and are not detectable here. The "
+                    "plugin is optional: `kbagent context` teaches any agent the full CLI "
+                    "surface without it."
                 ),
             }
 
@@ -636,7 +647,11 @@ class DoctorService:
                     "  /plugin marketplace add keboola/ai-kit\n"
                     "  /plugin install kbagent@keboola-claude-kit\n"
                     "This enables the /keboola slash command and the "
-                    "keboola-expert specialist subagent."
+                    "keboola-expert specialist subagent. "
+                    "This check only covers Claude Code -- if you installed the plugin "
+                    "from another client (e.g. Cursor) that install is not detectable here. "
+                    "The plugin is optional: `kbagent context` teaches any agent the full "
+                    "CLI surface without it."
                 ),
             }
 

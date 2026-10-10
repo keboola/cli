@@ -7,9 +7,15 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ..dependencies import ServiceRegistry, get_registry, translate_project_refs
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+# `{alias}` / `?alias=` name an existing project here, so a project ID works
+# too (CLI-22). The new alias of `POST /projects` is in the body, untouched.
+router = APIRouter(
+    prefix="/projects",
+    tags=["projects"],
+    dependencies=[Depends(translate_project_refs("alias"))],
+)
 
 
 class ProjectCreate(BaseModel):

@@ -9,11 +9,11 @@ response into the CLI's snake_case output contract.
 import logging
 from typing import Any
 
+from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
-from ..errors import ConfigError
 from ..models import DocsAnswer
-from .base import BaseService, ClientFactory
-from .component_service import AiClientFactory, default_ai_client_factory
+from .base import BaseService, ClientFactory, make_session_aware_client_factory
+from .component_service import AiClientFactory
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +32,17 @@ class DocsService(BaseService):
         ai_client_factory: AiClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
-        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
 
     def ask_docs(self, alias: str | None, query: str) -> dict[str, Any]:
         """Ask the Keboola documentation a natural language question.
 
         Args:
             alias: Project alias used to derive the stack URL and token.
-                None means the first configured project.
+                None resolves via the shared default-project cascade
+                (KBAGENT_PROJECT env > ``project use`` pin > sole project).
             query: Natural language question about the Keboola platform.
 
         Returns:
@@ -50,14 +53,12 @@ class DocsService(BaseService):
                   is grounded in
 
         Raises:
-            ConfigError: If no projects are configured or the alias is unknown.
+            ConfigError: If the alias is unknown, or no default project can
+                be resolved.
             KeboolaApiError: If the AI Service call fails.
         """
-        projects = self.resolve_projects([alias] if alias else None)
-        if not projects:
-            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
-        first_alias = next(iter(projects))
-        project = projects[first_alias]
+        resolved_alias, _source = self.resolve_pinned_alias(explicit=alias)
+        project = self.resolve_projects([resolved_alias])[resolved_alias]
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:

@@ -5,19 +5,25 @@ instead of a pasted Storage API token. The result is a **programmatic
 session**: a short-lived access token (`kbc_at_*`) plus a rotating refresh
 token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 
-> **Read this first: `auth login` needs a human at a browser.**
+> **Read this first: `auth login` needs a human at a browser to approve.**
 >
-> There is **no headless or unattended path for `auth login`**. It opens a
-> browser window, or prints a code you type into a page on another device. An
-> AI agent must never run it on its own initiative — if asked to "set up
-> kbagent auth", hand the command back to the person and wait for them to
-> finish.
+> A person has to open the browser (or device-code page) and click approve
+> — that part is inherent to `auth login` and cannot be scripted away. But
+> *driving* the command is not the human's part: in an attended session (a
+> human present in the chat), an AI agent with a background shell should run
+> `auth login --device-code --stack URL --register-projects` there, relay
+> the printed verification URL + code into the chat for the human to
+> approve, and confirm success with `auth status`. What an agent must never
+> do is run `auth login` in a **foreground** tool shell (a ~120s timeout
+> kills the flow mid-flight and tells you nothing) or from an **unattended**
+> task (nobody is there to approve). With no background shell available,
+> hand the plain command to the user's own terminal instead.
 >
 > For CI, containers, cron, or any other unattended context, you have two
 > options: a **static Storage token** (`kbagent project add --token ...`, or
 > the token-only `KBAGENT_PROJECT_FROM_ENV=1` + `KBC_TOKEN` +
 > `KBC_STORAGE_API_URL` path -- unaffected by anything on this page), or
-> **`kbagent auth login-password`** (since v0.81.0) if you specifically need a
+> **`kbagent auth login-password`** (since v0.84.0) if you specifically need a
 > full USER-scoped session rather than a single project's token -- see
 > [section 2b](#2b-auth-login-password-the-unattended-exception) below. It is
 > the one deliberate exception to "no unattended path": it needs an account's
@@ -26,6 +32,10 @@ token (`kbc_rt_*`) that kbagent renews for you (since v0.80.0).
 ## TL;DR
 
 ```bash
+# 0. No Keboola account at all? Create a project from nothing, then hand the
+#    printed confirmation link to a human to take ownership of it.
+kbagent project create --url https://connection.keboola.com
+
 # 1. Sign in to a stack (a browser opens; finish the login there)
 kbagent auth login --stack https://connection.keboola.com
 
@@ -84,6 +94,70 @@ The reverse direction *is* possible, because it is an explicit request — see
 ---
 
 ## 2. The commands
+
+### `project create` -- starting from nothing
+
+*(since 0.95.0)*
+
+```bash
+kbagent project create --url URL [--project ALIAS] [--name NAME] \
+                       [--backend snowflake|bigquery] [--sync-backend-init]
+```
+
+Everything else on this page assumes you already have a Keboola account.
+`kbagent project create` is the one command that does not: it provisions a
+**brand-new project** on a stack where you have no identity at all, and hands
+back a working session for it. It lives in the `project` group but is an auth
+flow, which is why it is documented here.
+
+What one call does:
+
+1. `POST /manage/programmatic-projects` -- unauthenticated by design; the
+   request itself is the credential. Gated by the `agent-provisioning` stack
+   feature.
+2. Stores the returned session (a **project-pinned, Manage-less** access +
+   refresh token pair) in `auth.json`, exactly like `auth login` would.
+3. Registers the new project in `config.json` under the `kbc-session://`
+   sentinel, becoming the default project if nothing else was registered.
+
+**The project it creates is owned by nobody.** The result's `confirm_url` is a
+single-use link, valid for a few days, that a human opens and signs in at to
+take ownership. Until then the project exists, is billable, and has only a
+synthetic admin as a member. The link is the only path to ownership, so:
+
+- Copy it out of the output, or re-read it later from `kbagent auth status`
+  (`agent_confirm_url` under `--json`), which keeps printing it while the
+  claim is outstanding.
+- **Confirming revokes the session `project create` gave you.** That is the
+  design: the synthetic agent identity is retired when a real one takes over.
+  Afterwards, run `kbagent auth login --stack URL` to sign in as yourself. The
+  registered alias survives the switch untouched -- the sentinel keys on
+  project id + stack, never on a session id.
+
+Other behaviour worth knowing:
+
+- **One session per stack.** The command refuses (exit 5, `CONFIG_ERROR`) when
+  `auth.json` already holds a session for that stack: provisioning would
+  replace a real login, and anyone who has one has an account and can create a
+  project in the Keboola UI.
+- **`--url` is required and never inferred.** On a fresh machine there is no
+  default project to infer it from, and provisioning a billable project on a
+  guessed stack is not a mistake worth being able to make.
+- **The command is always available; the capability is not.** It is gated by
+  the `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
+  off on most stacks, so `kbagent project create --help` says nothing about
+  whether this stack will accept it. Without the feature the stack answers 404,
+  surfaced as `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the
+  missing feature, the flag an operator flips, and how to connect an existing
+  project instead -- not a routing bug and not a credential problem.
+- **The call is never retried automatically**, on any status. It is not
+  idempotent: each success creates an organization, a project and a credit
+  grant. A 503 is stack-wide provisioning contention and means nothing was
+  created; retry it yourself if you want to.
+- **`--backend` omitted keeps the stack maintainer's own default.**
+  `--sync-backend-init` waits for backend initialization; without it the stack
+  finishes in the background and the result warns that the first Storage
+  command may fail until it lands.
 
 ### `auth login`
 
@@ -280,19 +354,20 @@ looks odd, and every path that would spend it as a credential refuses to.
 |---|---|
 | Storage API — `storage`, `config`, `job`, `flow` (read/list), `branch`, `workspace`, `search`, `sync`, `transformation` | Works, over bearer auth, including refresh rotation and a single 401 retry |
 | Manage API — `project` (members, invitations), `org`, `feature`, `sharing` (project-token path) | Works |
-| `kbagent serve` (REST API + Web UI) | Works, for the Storage and Manage paths — with the accepted risks in [section 5](#5-session-projects-in-kbagent-serve) |
+| `kbagent serve` (REST API + Web UI) | Works — the REST API inherits the CLI's session behaviour, bearer support and fail-fast guards alike, with the accepted risks in [section 5](#5-session-projects-in-kbagent-serve) |
 | `kai` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `semantic-layer` (Metastore Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `data-app` (Data Science Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `stream` (Data Streams Service) | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| AI Service paths — `docs query`, `config examples`, `config new`, `component detail`, `component list --query`, `flow new` / `update` / `validate --project` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| Scheduler Service paths — `flow schedule`, `flow schedule-remove` | `AUTH_NOT_SUPPORTED_ON_STACK` |
-| `sharing`, when it needs a master token | `AUTH_NOT_SUPPORTED_ON_STACK` unless a master token is in the environment |
+| `semantic-layer` (Metastore Service) | Works, over bearer auth — except `semantic-layer token --encrypt`, which still needs a static token (`AUTH_NOT_SUPPORTED_ON_STACK`) |
+| `data-app` (Data Science Service) | Works, over bearer auth |
+| `stream` (Data Streams Service) | Works, over bearer auth |
+| AI Service paths — `docs query`, `config examples`, `config new`, `component detail`, `component list --query`, `flow new` / `update` / `validate --project` | Works, over bearer auth |
+| Scheduler Service paths — `flow schedule`, `flow schedule-remove` | Works, over bearer auth |
+| Storage bucket sharing — `sharing share`, `sharing unshare` | Works, over bearer auth — the Storage API enforces the master privilege |
 | The importable SDK (`keboola_agent_cli.Client`) | `AUTH_NOT_SUPPORTED_ON_STACK` — construct it with a static token ([Python SDK](sdk.md)) |
 
-`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
-in-code version of this list. `auth login` and `auth register-projects` print it
-once they have registered something, and carry it as
+The rows above that still report `AUTH_NOT_SUPPORTED_ON_STACK` are
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`. `auth login`
+and `auth register-projects` print that list once they have registered
+something, and carry it as
 `session_unsupported_features` in `--json`, so you learn the restrictions up
 front rather than at first use. `auth status` does not carry that field.
 
@@ -301,21 +376,15 @@ Notes worth knowing before you hit them:
 - **`dev-portal` is unaffected.** It authenticates with its own Developer
   Portal identity (`dev-portal identity add`), not with a project token, so a
   session project changes nothing there.
-- **`flow` splits.** `flow list` / `flow detail` are plain Storage calls and
-  work. `flow new` / `flow update` / `flow validate --project` fetch the live
-  schema from the AI Service, so on a session project they fail rather than
-  falling back to the semantic-only validation they use when the schema fetch
-  merely errors.
-- **`config` mostly works; `config new` depends on its flags.** `config list`,
-  `detail`, `search`, `update`, the row and metadata subcommands and
-  `variables-*` are pure Storage calls. `config new` builds its scaffold from the
-  component schema fetched from the AI Service, and the scaffold is only skipped
-  for `--push --no-files` (`commands/config.py:1335`) — so the default
-  scaffold-writing form fails on a session project no matter what
-  `--no-validate` says. `config new --push --no-files` stays on the Storage path
-  as long as validation does not fire: pass `--no-validate`, or omit an explicit
-  `--configuration` body, which auto-skips it. Otherwise write the config with
-  `config update` (or `sync push`).
+- **`flow` works on a session.** `flow list` / `flow detail` are plain Storage
+  calls. `flow new` / `flow update` / `flow validate --project` fetch the live
+  schema from the AI Service, and `flow schedule` / `flow schedule-remove` reach
+  the Scheduler. Both backends now accept a session's bearer token.
+- **`config` works, including `config new`.** `config list`, `detail`,
+  `search`, `update`, the row and metadata subcommands and `variables-*` are
+  pure Storage calls. `config new` builds the new configuration from the
+  component schema fetched from the AI Service, which now accepts a session's
+  bearer token, so it runs normally on a session project.
 - **The failure is immediate and typed**, not an opaque 401 from the service:
   the guard fires before the client is even constructed and names the feature
   it refused.

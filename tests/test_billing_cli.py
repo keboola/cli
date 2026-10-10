@@ -109,13 +109,15 @@ class TestBillingCreditsCli:
         mock_service.get_credits.assert_called_once_with(aliases=None)
 
     def test_per_project_errors_surface_as_warnings_exit_0(self, tmp_path: Path) -> None:
-        store = _setup_config(tmp_path / "cfg", {"a": {}, "b": {}})
+        # Distinct multi-letter aliases: a single-letter alias would match
+        # almost any output and prove nothing.
+        store = _setup_config(tmp_path / "cfg", {"alpha": {}, "beta": {}})
         mock_service = MagicMock()
         mock_service.get_credits.return_value = {
-            "credits": [_credit_row("a")],
+            "credits": [_credit_row("alpha")],
             "errors": [
                 {
-                    "project_alias": "b",
+                    "project_alias": "beta",
                     "error_code": "PAYG_NOT_AVAILABLE",
                     "message": "Project does not have the 'pay-as-you-go' feature enabled.",
                 }
@@ -123,8 +125,12 @@ class TestBillingCreditsCli:
         }
         result = _run(["billing", "credits"], store, mock_service)
         assert result.exit_code == 0, result.output
-        assert "b" in result.output
-        assert "PAYG_NOT_AVAILABLE" in result.output or "pay-as-you-go" in result.output
+        # Rich may wrap the warning line; compare on collapsed whitespace.
+        flat = " ".join(result.output.split())
+        assert "Warning: Project 'beta': Project does not have the 'pay-as-you-go'" in flat
+        # The healthy project still renders despite the other one failing.
+        assert "alpha" in flat
+        assert "25.50" in flat
 
     def test_empty_result_prints_no_payg_projects_line(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

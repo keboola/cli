@@ -8,12 +8,16 @@ lives in `_auth_picker.py` (terminal I/O only, same reasoning).
 
 Two ways to sign in, stored the same way in `auth.json`: `login` (PKCE
 authorization-code, or a device-code flow for headless/remote machines)
-requires a human at a browser -- an AI agent must not attempt it on its own
-initiative. `login-password` (email + password + TOTP) is the deliberate
-unattended exception, built for CI: it never opens a browser and is safe to
-run from a secret-backed workflow step. The resulting session tokens are
-never printed or retrievable via the CLI; every result below is built from
-a dataclass with no token field, so `--json` output is safe by construction.
+needs a human at a browser to APPROVE -- in an attended session (a human in
+the chat) an agent with a background shell should drive it, relaying the
+verification URL/code and confirming via `auth status`; it must never run
+in a foreground shell (the flow gets killed mid-flight) or from an
+unattended task. `login-password` (email + password + TOTP) is the
+deliberate unattended exception, built for CI: it never opens a browser and
+is safe to run from a secret-backed workflow step. The resulting session
+tokens are never printed or retrievable via the CLI; every result below is
+built from a dataclass with no token field, so `--json` output is safe by
+construction.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_password_stdin,
 )
+from ._url_copy import CopyableUrlWait
 
 auth_app = typer.Typer(
     help="Programmatic browser login (PKCE / device code) -- user-scoped sessions"
@@ -129,9 +134,9 @@ def _render_session_restrictions(console: Console, features: Sequence[str]) -> N
     """Disclose what a session-backed project cannot do, right after registering it.
 
     Printed at registration time (rather than left to `docs/auth.md`) so the
-    v1 scope -- Storage and Manage only -- is known before the first refusal
-    instead of being discovered one failed command at a time. The same list
-    ships as `session_unsupported_features` in `--json`.
+    current session restrictions are known before the first refusal instead of
+    being discovered one failed command at a time. The same list ships as
+    `session_unsupported_features` in `--json`.
     """
     if not features:
         return
@@ -224,6 +229,28 @@ def _format_status_result(console: Console, result: AuthStatusResult) -> None:
         )
     console.print(Panel("\n".join(lines), title="Keboola auth status", expand=False))
 
+    if result.agent_confirm_url:
+        # This session came from `kbagent project create`. Whether the project
+        # is still unclaimed can only be asserted while the session is ALIVE:
+        # claiming it revokes the session, so an expired one most often means
+        # the claim already succeeded -- saying "not claimed yet" there would
+        # assert the opposite of what just happened. On a degraded (offline)
+        # read nothing was verified either. Both get the neutral wording.
+        if result.status in ("live", "refreshed"):
+            console.print(
+                "\n[bold yellow]This session's project has not been claimed yet.[/bold yellow] "
+                "Open this link in a browser and sign in to take ownership:\n"
+            )
+        else:
+            console.print(
+                "\n[bold]Claim link stored for this session's project[/bold] (a revoked or "
+                "expired session usually means it has already been claimed):\n"
+            )
+        # markup=False, not escape(): the URL comes from the stack, so its
+        # markup must not be interpreted -- but escaping would add backslashes
+        # to a string the user has to copy-paste verbatim.
+        console.print(result.agent_confirm_url, markup=False, highlight=False, soft_wrap=True)
+
     _render_accessible_projects_table(console, result.accessible_projects)
 
 
@@ -268,6 +295,41 @@ def _format_register_projects_result(console: Console, result: RegisterProjectsR
         _render_session_restrictions(console, result.session_unsupported_features)
 
 
+def _device_login_panel(authorization: DeviceAuthorization) -> Panel:
+    """Build the device-login panel (the mandatory URL + code display).
+
+    Pulled out of ``auth_login._on_prompt`` so the copy-preview demo can render
+    exactly what the command renders, with no risk of the two drifting.
+    """
+    complete = authorization.verification_uri_complete
+    # Lead with the pre-filled link -- the primary path, click and go -- in cyan,
+    # which is also the URL 'press c' copies; the copy hint under the panel
+    # reuses cyan, so the hint and the copied link read as one thing. The manual
+    # URL + code is the fallback (approving on a second device, or a stack that
+    # sends no pre-filled link at all).
+    if complete:
+        lines = [
+            "Open this link to finish signing in (code already filled in):",
+            "",
+            f"[bold cyan]{escape(complete)}[/bold cyan]",
+            "",
+            "Or enter the code by hand at this URL:",
+            "",
+            f"[bold]{escape(authorization.verification_uri)}[/bold]",
+            "",
+            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
+        ]
+    else:
+        lines = [
+            "Open this URL and enter the code to finish signing in:",
+            "",
+            f"[bold cyan]{escape(authorization.verification_uri)}[/bold cyan]",
+            "",
+            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
+        ]
+    return Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
+
+
 # ── Commands ──────────────────────────────────────────────────────────
 
 
@@ -290,9 +352,12 @@ def auth_login(
 ) -> None:
     """Sign in to a Keboola stack via browser login (PKCE) or device code.
 
-    Requires a human at a browser -- an AI agent must not attempt this
-    headlessly. The verification URL and code are always printed (to stderr
-    in --json mode); session tokens themselves are never printed.
+    A human must approve in a browser. In an attended session an AI agent
+    should drive `--device-code` from a BACKGROUND shell -- never a
+    foreground one, and never unattended -- relaying the verification URL
+    and code, then confirming with `auth status`. The verification URL and
+    code are always printed (to stderr in --json mode); session tokens
+    themselves are never printed.
 
     When `--register-projects` is NOT passed and the session can see at
     least one project, a post-login hook offers to run the interactive
@@ -303,17 +368,16 @@ def auth_login(
     service: AuthService = get_service(ctx, "auth_service")
     target_console = formatter.err_console if formatter.json_mode else formatter.console
 
+    # 'press c to copy' for the verification link. Disabled (and silent) in
+    # --json mode, off a TTY, or with no clipboard tool -- see CopyableUrlWait.
+    copy_wait = None if formatter.json_mode else CopyableUrlWait(formatter.console)
+
     def _on_prompt(authorization: DeviceAuthorization) -> None:
-        lines = [
-            "Open this URL and enter the code to finish signing in:",
-            "",
-            f"[bold]{escape(authorization.verification_uri)}[/bold]",
-            "",
-            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
-        ]
-        target_console.print(
-            Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
-        )
+        target_console.print(_device_login_panel(authorization))
+        if copy_wait is not None:
+            copy_wait.on_prompt(
+                authorization.verification_uri_complete or authorization.verification_uri
+            )
 
     def _on_notice(message: str) -> None:
         target_console.print(f"[dim]{escape(message)}[/dim]")
@@ -325,9 +389,13 @@ def auth_login(
             register_projects=register_projects,
             on_device_prompt=_on_prompt,
             on_notice=_on_notice,
+            device_wait=copy_wait.wait if copy_wait is not None else None,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
+    finally:
+        if copy_wait is not None:
+            copy_wait.restore()
     formatter.output(result, _format_login_result)
 
     if not register_projects and result.accessible_projects:

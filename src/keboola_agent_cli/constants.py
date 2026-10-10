@@ -76,6 +76,51 @@ DEFAULT_TIMEOUT: httpx.Timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.
 # --- API Error Handling ---
 MAX_API_ERROR_LENGTH: int = 500
 
+# Substrings that mark an HTTP 401 body as genuinely describing a bad or
+# expired credential ("Invalid access token", "Access token expired",
+# "Authentication failed", ...). Matched case-insensitively against the
+# server's own error text.
+#
+# A 401 is NOT automatically a token problem. Keboola Metastore answers
+# `{"exception": "Failed to create project scope"}` with a 401 when its
+# internal project-scope resolution fails, for a token the Storage API
+# accepts on the very same stack (issue #711). Labelling that "Invalid or
+# expired token" sends the operator off checking expiry and master-token
+# status for a fault that is entirely server-side. When none of these markers
+# appear, kbagent reports the upstream rejection verbatim under
+# `ErrorCode.AUTH_REJECTED` instead of asserting the credential is bad.
+# Error texts that carry no information at all -- an empty body, or the
+# json.dumps() of an empty container that `_raise_api_error` falls back to.
+# A 401 that says NOTHING is the textbook "your credential was rejected",
+# so these keep the long-standing INVALID_TOKEN mapping: only a server that
+# actually said something else earns AUTH_REJECTED.
+UNINFORMATIVE_ERROR_MESSAGES: frozenset[str] = frozenset({"", "{}", "[]", "null", "none"})
+
+TOKEN_VALIDITY_ERROR_MARKERS: tuple[str, ...] = (
+    "token",
+    "credential",
+    "authenticat",
+    "unauthorized",
+    "unauthorised",
+    "not authorized",
+    "not authorised",
+    "expired",
+    "log in",
+    "login",
+    "sign in",
+)
+
+# Ceiling for the server-supplied `params` context copied into
+# KeboolaApiError.details["api_error_params"] (serialized JSON length).
+# The message above is capped, so this structured sibling must be too --
+# a merge 409's params.errors carries one entry per conflicting config and
+# an agent-consumed --json envelope must not grow unbounded with it. When
+# over the cap, top-level lists are truncated to
+# MAX_API_ERROR_PARAMS_LIST_ITEMS entries; if still over, params is dropped
+# (details carries api_error_params_truncated: true either way).
+MAX_API_ERROR_PARAMS_LENGTH: int = 8192
+MAX_API_ERROR_PARAMS_LIST_ITEMS: int = 20
+
 # --- Developer Portal MFA ---
 # Challenge type sent on the second `/auth/login` step (after the first call
 # returns a `session` token). The apiary spec documents `SOFTWARE_TOKEN_MFA`
@@ -160,6 +205,11 @@ STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
+# Server-side caps on merge-request fields (MergeRequestRejectRequest::REASON_MAX_LENGTH,
+# Assert\Length(max: 255) on externalId in the create/update DTOs). Validated ONCE, in
+# MergeRequestService, so the CLI and the serve router cannot drift on the number.
+MERGE_REQUEST_REASON_MAX_LENGTH = 1000
+MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH = 255
 
 # A create-table-from-source (BigQuery repartition copy) and the swap that
 # puts it in place both move real data, yet both used to inherit the 60s
@@ -292,6 +342,25 @@ ENV_KBC_LOGIN_PASSWORD: str = "KBC_LOGIN_PASSWORD"
 ENV_KBC_LOGIN_TOTP_SECRET: str = "KBC_LOGIN_TOTP_SECRET"
 ENV_CONVERSATION_ID: str = "KBAGENT_CONVERSATION_ID"
 
+# --- Command telemetry (since 0.93.0) ---
+# Per-invocation usage event posted best-effort to the project's own Storage
+# events (POST /v2/storage/events), the same mechanism the kbc CLI uses. It is
+# NOT the audit trail: mutations are recorded server-side by Connection
+# regardless of this event (see docs). Default ON; either env var (any truthy
+# value) turns it off. DO_NOT_TRACK is the cross-tool console-telemetry
+# convention (https://consoledonottrack.com/); KBAGENT_DISABLE_TELEMETRY is the
+# kbagent-specific kill switch.
+ENV_DISABLE_TELEMETRY: str = "KBAGENT_DISABLE_TELEMETRY"
+ENV_DO_NOT_TRACK: str = "DO_NOT_TRACK"
+# componentId sent in the event; Connection stores it as `ext.<component>.<configId>`.
+# CLI invocations send no configId -> `ext.keboola.cli.`; serve sends `serve` ->
+# `ext.keboola.cli.serve`, so the two interfaces are separable in telemetry.
+TELEMETRY_COMPONENT_ID: str = "keboola.cli"
+TELEMETRY_SERVE_CONFIG_ID: str = "serve"
+# Short per-request timeout (seconds) for the fire-and-forget event POST, so a
+# slow or firewall-blocked events endpoint never stalls the actual command.
+TELEMETRY_TIMEOUT: float = 3.0
+
 # --- Serve subprocess context (since v0.7.x) ---
 # Injected by `kbagent serve` into scheduled-agent subprocess env so AI CLIs
 # (claude / codex / gemini) and plain `kbagent` invocations can talk to the
@@ -396,6 +465,13 @@ DEFERRED_UPDATE_MAX_WAIT_SECONDS: int = 900
 # A marker older than this whose helper never wrote an exit file is treated as
 # lost (helper killed, machine rebooted mid-wait) and reported once.
 DEFERRED_UPDATE_STALE_SECONDS: int = 86400
+# Text in uv's error chain when a hardlink failed and uv did not fall back
+# ("Caused by: failed to hardlink file from ... (os error 396)", issue #786,
+# OneDrive / cloud-synced volume). The helper retries the install once in copy
+# link mode only when a failed install printed this. Matched case-sensitively:
+# uv's warning "Failed to hardlink files; falling back to full copy" means the
+# fallback worked, so it must not trigger a retry.
+DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT: str = "failed to hardlink file"
 
 # --- Native (frozen / PyInstaller) distribution ---
 # kbagent also ships as a self-contained PyInstaller binary with NO Python
@@ -491,12 +567,23 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3
 # (client/merge_requests.py) does no feature check itself -- a missing
-# feature is a 403 identical to a role denial -- so the Part 2 service layer
-# must call has_feature() with this constant before writes and word the error. It
-# also doubles as the SOX fence: server-side, `protected-default-branch`
-# passes the same gate, so checking for this flag specifically keeps SOX
-# projects out of a flow whose approvals semantics kbagent does not cover.
-FEATURE_BRANCHES_MERGE_REQUESTS: str = "branches-merge-requests"
+# feature is a 403 identical to a role denial -- so the service layer calls
+# has_feature() with this constant before writes and words the error. It
+# also doubles as the SOX fence: server-side, the six MR writes accept
+# `protected-default-branch` OR `branches-merge-requests` (only /rebase
+# requires this flag specifically), so checking for this flag keeps SOX
+# projects out of a flow whose approvals semantics kbagent does not cover --
+# but the fence holds ONLY as long as a SOX project never also carries
+# `branches-merge-requests`. The pre-flight is thus deliberately stricter
+# than the server for a project with only `protected-default-branch`.
+BRANCHES_MERGE_REQUESTS_FEATURE: str = "branches-merge-requests"
+
+# The SOX flavour of protected branches. kbagent does NOT support its
+# approvals flow; the constant exists so the merge-request pre-flight can
+# tell "this is a SOX project (unsupported)" from "merge requests are simply
+# not enabled" when wording its refusal -- the features cache is already
+# loaded at that point, so the distinction is free.
+PROTECTED_DEFAULT_BRANCH_FEATURE: str = "protected-default-branch"
 
 # --- Global Search ---
 # Feature flag that gates the Storage API ``GET /v2/storage/global-search``
@@ -535,11 +622,13 @@ MINUTES_PER_CREDIT: int = 60
 PAYG_FEATURE: str = "pay-as-you-go"
 
 # --- Changelog rendering ---
-# `kbagent changelog` shows a one-line summary per version by default (--full
-# expands). A summary is the note's first sentence, capped at this many chars
+# `kbagent changelog` shows headlines by default (--full expands): every
+# BREAKING note of a version, plus its first other notes until at least
+# CHANGELOG_SUMMARY_NOTES show. A headline is the note's first sentence, capped at this many chars
 # (cut on a word boundary) so a verbose release note collapses to a scannable
 # headline instead of a wall of text.
 CHANGELOG_HEADLINE_MAX_CHARS: int = 160
+CHANGELOG_SUMMARY_NOTES: int = 2
 
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
@@ -632,6 +721,14 @@ QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
 QUERY_RESULTS_DEFAULT_LIMIT: int = 500  # default --limit for `workspace query` fast path
 QUERY_RESULTS_PAGE_SIZE: int = 500  # rows per /results page (API requires 100..100000)
 
+# --- Data Science API (data apps) ---
+# GET /apps is paginated (default page = 100 items) and mixes workspace
+# deployments with data apps, so list_apps() pages with limit/offset until a
+# short page (#798). MAX_PAGES only guards against a server that ignores
+# ``offset`` (500 * 200 = 100k deployments, far beyond any real project).
+DATA_SCIENCE_APPS_PAGE_SIZE: int = 500  # items per GET /apps page
+DATA_SCIENCE_APPS_MAX_PAGES: int = 200  # safety cap on pages fetched by list_apps()
+
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
 
@@ -682,7 +779,7 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
 # A project may extend this set per working tree via the manifest's
-# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
+# ``ignoredComponents`` field -- see ``_sync_workspace.effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile
@@ -780,6 +877,28 @@ AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
 # which only ever has a session id on hand, never that session's refresh
 # token -- see plan review B-1/B-2).
 AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
+
+# Agent provisioning (DMD-1940): create a brand-new Keboola project from a
+# machine with no Keboola identity at all. Unauthenticated POST -- the request
+# itself is the credential -- answering a project-pinned, Manage-less
+# programmatic session (the same AT/RT pair every other flow here produces)
+# plus a single-use `confirmUrl` a human opens to take ownership. Gated by the
+# stack feature `agent-provisioning`; a stack without it answers 404.
+#
+# Lives under /manage, not /v1/auth, because the public surface is named
+# "programmatic projects" while the internal feature kept the shipped
+# `agent-provisioning` name (keboola/connection#8081).
+AGENT_PROVISIONING_PATH: str = "/manage/programmatic-projects"
+
+# `--sync-backend-init` holds the provisioning request open until the stack has
+# finished initializing the storage backend, which routinely outlasts the
+# client default read timeout (30 s). Timing out there is the WORST outcome
+# this command has -- the project was created, the response was lost, and the
+# confirm link with it -- so the synchronous variant gets its own budget.
+# Connect/write/pool stay short: only the wait for the body is long.
+AGENT_PROVISIONING_SYNC_TIMEOUT: httpx.Timeout = httpx.Timeout(
+    connect=10.0, read=300.0, write=10.0, pool=5.0
+)
 
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down
@@ -918,5 +1037,18 @@ ROOT_LEVEL_CONFIG_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.flow",
         "keboola.orchestrator",  # legacy flows; kbagent cannot write them, but reads share this path
+    }
+)
+
+# --- Components whose runs can be started by triggers invisible to `schedule list` ---
+# A flow/orchestration run with no matching cron schedule is NOT necessarily
+# manual: table triggers (Storage `/v2/storage/triggers`) and cross-project
+# trigger-queue configs also start them, and neither is a `keboola.scheduler`
+# config (issue #714). `job detail` uses this set to attach a trigger_hint
+# pointing at `flow triggers` instead of letting the investigation dead-end.
+ORCHESTRATION_JOB_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "keboola.flow",
+        "keboola.orchestrator",
     }
 )
