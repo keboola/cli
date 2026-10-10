@@ -49,9 +49,9 @@ class CreateTable(BaseModel):
     range_partitioning_end: str | None = None
     range_partitioning_interval: str | None = None
     clustering_fields: list[str] | None = None
-    # `gt=0` mirrors the CLI guard so a bad budget is a 422 at the boundary
-    # rather than an INVALID_ARGUMENT raised from the service.
-    timeout: float | None = Field(default=None, gt=0)
+    # `gt=0` + `allow_inf_nan=False` mirror the CLI guard, so a bad budget is
+    # a 422 at the boundary rather than a ValueError raised from the service.
+    timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _columns_xor_source(self) -> CreateTable:
@@ -119,9 +119,9 @@ class LoadFileToTable(BaseModel):
 class SwapTables(BaseModel):
     target_table_id: str
     branch_id: int
-    # `gt=0` mirrors the CLI guard so a bad budget is a 422 at the boundary
-    # rather than an INVALID_ARGUMENT raised from the service.
-    timeout: float | None = Field(default=None, gt=0)
+    # `gt=0` + `allow_inf_nan=False` mirror the CLI guard, so a bad budget is
+    # a 422 at the boundary rather than a ValueError raised from the service.
+    timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class CloneTable(BaseModel):

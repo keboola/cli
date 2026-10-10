@@ -64,6 +64,19 @@ def validate_wait_timeout(timeout: float | None) -> None:
         raise ValueError(f"--timeout must be a positive number of seconds, got {timeout}.")
 
 
+def resolve_wait_timeout(timeout: float | None, default: float) -> float:
+    """Validate a wait budget, then resolve ``None`` to ``default``.
+
+    Branches on ``is None`` -- NOT ``timeout or default``, which would turn
+    a falsy-but-invalid ``0.0`` into the default instead of rejecting it.
+
+    Raises:
+        ValueError: ``timeout`` is zero, negative, NaN or infinite.
+    """
+    validate_wait_timeout(timeout)
+    return default if timeout is None else timeout
+
+
 def import_job_fields(job: dict[str, Any], file_id: Any) -> dict[str, Any]:
     """The keys an import result adds for its job (upload-table, load-file).
 

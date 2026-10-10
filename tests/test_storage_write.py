@@ -2542,14 +2542,18 @@ class TestCreateTableJobTimeout:
 
         assert mock_client.create_table.call_args.kwargs["max_wait"] == 1800.0
 
-    @pytest.mark.parametrize("bad", [0.0, -5.0])
-    def test_rejects_non_positive_timeout(self, tmp_path: Path, bad: float) -> None:
-        """0.0 is rejected rather than silently promoted to the default."""
+    @pytest.mark.parametrize("bad", [0.0, -5.0, float("nan"), float("inf")])
+    def test_rejects_bad_timeout(self, tmp_path: Path, bad: float) -> None:
+        """0.0 is rejected rather than silently promoted to the default.
+
+        The ValueError is the same one upload-table and load-file raise, so
+        every storage command reports a bad --timeout the same way.
+        """
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
-        with pytest.raises(KeboolaApiError) as exc_info:
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
             service.create_table(
                 alias="test",
                 bucket_id="in.c-b",
@@ -2558,8 +2562,39 @@ class TestCreateTableJobTimeout:
                 timeout=bad,
             )
 
-        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock_client.create_table.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["0", "nan"])
+    def test_cli_bad_timeout_is_usage_error(self, tmp_path: Path, bad: str) -> None:
+        """A bad --timeout exits 2 with INVALID_ARGUMENT, like upload-table.
+
+        Runs the real service: the exit code depends on which exception type
+        the service raises, and a mocked service would hide a mismatch.
+        """
+        store = _make_store(tmp_path)
+
+        with patch("keboola_agent_cli.cli.ConfigStore", return_value=store):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "id:INTEGER",
+                    "--timeout",
+                    bad,
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == ErrorCode.INVALID_ARGUMENT
 
     def test_cli_forwards_timeout(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

@@ -2158,8 +2158,10 @@ config, the retry fires, and the retry destroys it for good.
   `STORAGE_JOB_TIMEOUT`.
 - **Since vNEXT both default to 300s and accept `--timeout SECONDS`.** The
   REST routes (`POST /storage/tables/{p}`, `POST /storage/tables/{p}/{tid}/swap`)
-  take an optional `timeout` field; a non-positive value is a 422 at the
-  boundary and `INVALID_ARGUMENT` from the service.
+  take an optional `timeout` field; a zero, negative, NaN or infinite value
+  is a 422. On the CLI the same value is a usage error: exit 2,
+  `INVALID_ARGUMENT`, before `swap-tables` asks for confirmation -- the
+  same as `upload-table`, `load-file` and `workspace load`.
 - **Never read the timeout as "nothing happened".** kbagent only stops
   *watching*; the Storage job keeps running server-side (and keeps consuming
   backend resources). It usually lands. The error is **exit 4** with

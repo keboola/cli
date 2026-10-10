@@ -1262,25 +1262,23 @@ class TestLoadTables:
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
 
-        with pytest.raises(KeboolaApiError) as exc_info:
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
             svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=0.0)
-
-        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock_client.load_workspace_tables.assert_not_called()
 
-    def test_load_tables_timeout_negative_rejected(self, tmp_config_dir: Path) -> None:
-        """A negative timeout is rejected the same way as zero."""
+    @pytest.mark.parametrize("bad", [-5.0, float("nan"), float("inf")])
+    def test_load_tables_timeout_negative_or_non_finite_rejected(
+        self, tmp_config_dir: Path, bad: float
+    ) -> None:
+        """A negative or non-finite timeout is rejected the same way as zero."""
         mock_client = _make_load_client()
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
 
-        with pytest.raises(KeboolaApiError) as exc_info:
-            svc.load_tables(
-                alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=-5.0
-            )
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
+            svc.load_tables(alias="prod", workspace_id=42, tables=["in.c-main.orders"], timeout=bad)
 
-        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock_client.load_workspace_tables.assert_not_called()
 
     def test_load_tables_timeout_explicit_positive_passthrough(self, tmp_config_dir: Path) -> None:

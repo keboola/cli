@@ -520,8 +520,8 @@ class TestSwapTablesTimeout:
 
         assert mock_client.swap_tables.call_args.kwargs["max_wait"] == 900.0
 
-    @pytest.mark.parametrize("bad", [0.0, -1.0])
-    def test_service_rejects_non_positive_timeout(self, tmp_path: Path, bad: float) -> None:
+    @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+    def test_service_rejects_bad_timeout(self, tmp_path: Path, bad: float) -> None:
         """0.0 must be rejected, not silently promoted to the default.
 
         ``timeout or DEFAULT`` would treat a falsy-but-real 0 as "unset";
@@ -531,7 +531,7 @@ class TestSwapTablesTimeout:
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
-        with pytest.raises(KeboolaApiError) as exc_info:
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
             service.swap_tables(
                 alias="test",
                 table_id="in.c-foo.a",
@@ -540,7 +540,6 @@ class TestSwapTablesTimeout:
                 timeout=bad,
             )
 
-        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock_client.swap_tables.assert_not_called()
 
     def test_service_rejects_non_positive_timeout_on_dry_run(self, tmp_path: Path) -> None:
@@ -549,7 +548,7 @@ class TestSwapTablesTimeout:
         mock_client = MagicMock()
         service = _make_service(store, mock_client)
 
-        with pytest.raises(KeboolaApiError):
+        with pytest.raises(ValueError):
             service.swap_tables(
                 alias="test",
                 table_id="in.c-foo.a",
@@ -685,6 +684,50 @@ class TestSwapTablesTimeout:
         assert error["code"] == ErrorCode.STORAGE_JOB_TIMEOUT
         assert error["retryable"] is False
         assert error["details"]["job_id"] == 777
+
+    @pytest.mark.parametrize("json_mode", [True, False])
+    @pytest.mark.parametrize("bad", ["0", "nan"])
+    def test_cli_bad_timeout_is_usage_error_before_prompt(
+        self, tmp_path: Path, bad: str, json_mode: bool
+    ) -> None:
+        """A bad --timeout exits 2 with INVALID_ARGUMENT before the confirmation.
+
+        No --yes: the user must not confirm a destructive swap and only then
+        learn that the budget is invalid.
+        """
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app,
+                [
+                    *(["--json"] if json_mode else []),
+                    "storage",
+                    "swap-tables",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-foo.a",
+                    "--target-table-id",
+                    "in.c-foo.b",
+                    "--branch",
+                    "42",
+                    "--timeout",
+                    bad,
+                ],
+                input="y\n",
+            )
+
+        assert result.exit_code == 2, result.output
+        assert "Swap 'in.c-foo.a'" not in result.output
+        assert "--timeout must be a positive number" in result.output
+        if json_mode:
+            assert json.loads(result.output)["error"]["code"] == ErrorCode.INVALID_ARGUMENT
+        MockSvc.return_value.swap_tables.assert_not_called()
 
     def test_cli_forwards_timeout(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

@@ -5,7 +5,6 @@ scaffold used by ConfigService, JobService, ProjectService, and LineageService.
 """
 
 import logging
-import math
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,7 +24,7 @@ from ..constants import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
 )
-from ..errors import ErrorCode, KeboolaApiError
+from ..errors import ErrorCode
 from ..models import ProjectConfig
 from ..project_ref import resolve_project_ref
 
@@ -88,37 +87,6 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
     if len(raw) > UNEXPECTED_ERROR_MAX_MESSAGE_LEN:
         return raw[:UNEXPECTED_ERROR_MAX_MESSAGE_LEN] + "..."
     return raw
-
-
-def normalize_job_timeout(timeout: float | None, default: float) -> float:
-    """Resolve an async-job wait budget, rejecting a non-positive override.
-
-    ``None`` is the documented "use the default" sentinel and branches
-    explicitly -- deliberately NOT ``timeout or default``, which would
-    silently promote a falsy-but-real ``0.0`` to the default instead of
-    rejecting it. Every CLI command already constrains its own ``--timeout``,
-    but a direct service or SDK caller goes through neither guard, so the
-    check belongs here rather than in each command.
-
-    Args:
-        timeout: Caller-supplied budget in seconds, or ``None`` for ``default``.
-        default: Budget to use when ``timeout`` is ``None``.
-
-    Returns:
-        The resolved budget in seconds.
-
-    Raises:
-        KeboolaApiError: ``INVALID_ARGUMENT`` when ``timeout`` is <= 0, NaN or infinite.
-    """
-    if timeout is None:
-        return default
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise KeboolaApiError(
-            message=f"Invalid timeout {timeout}. Must be a finite number greater than 0.",
-            status_code=0,
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-    return timeout
 
 
 def project_error_entry(

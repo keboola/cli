@@ -25,6 +25,7 @@ from ._storage_jobs import (
     ImportOptions,
     import_job_fields,
     read_csv_header,
+    resolve_wait_timeout,
     summarize_storage_job,
     validate_wait_timeout,
     with_import_hint,
@@ -32,7 +33,6 @@ from ._storage_jobs import (
 )
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
-from .base import normalize_job_timeout
 from .table_usage import collect_table_usage, fetch_usage_components
 
 logger = logging.getLogger(__name__)
@@ -784,18 +784,19 @@ class StorageService(ColumnDescriptionsMixin):
             ``schema_drift`` is ``True`` when the two diverge.
 
         Raises:
-            KeboolaApiError: ``INVALID_ARGUMENT`` for a non-positive ``timeout``;
-                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details ``job_id``,
-                message names ``storage job-detail`` and ``storage table-detail``)
-                when the wait runs out -- the create keeps running server-side.
-            ValueError: Malformed column spec or ``--default`` assignment;
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``,
+                details ``job_id``, message names ``storage job-detail`` and
+                ``storage table-detail``) when the wait runs out -- the create
+                keeps running server-side.
+            ValueError: ``timeout`` is zero, negative, NaN or infinite;
+                malformed column spec or ``--default`` assignment;
                 ``--not-null`` / ``--default`` references an unknown column;
                 ``columns`` and ``source`` both/neither given;
                 ``source_branch_id`` given without ``source_table_id``;
                 incomplete or conflicting partitioning flags; or BigQuery-only
                 features requested on a non-BigQuery backend.
         """
-        max_wait = normalize_job_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
+        max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
         not_null_set = set(not_null_columns or [])
         defaults_map = _parse_default_assignments(defaults)
 
@@ -1606,13 +1607,13 @@ class StorageService(ColumnDescriptionsMixin):
 
         Raises:
             ConfigError: If branch_id is None.
-            KeboolaApiError: ``INVALID_ARGUMENT`` for a non-positive
-                ``timeout``, or if the API call fails. A wait timeout is
+            ValueError: ``timeout`` is zero, negative, NaN or infinite.
+            KeboolaApiError: If the API call fails. A wait timeout is
                 ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details
                 ``job_id``, message names ``storage job-detail``): the swap
                 keeps running, and repeating it would swap the tables back.
         """
-        max_wait = normalize_job_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
+        max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
 
         if branch_id is None:
             raise ConfigError(

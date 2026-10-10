@@ -14,6 +14,7 @@ from ..config_store import ConfigStore
 from ..constants import TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services._storage_jobs import validate_wait_timeout
 from ._helpers import (
     check_cli_permission,
     emit_project_warnings,
@@ -1476,6 +1477,14 @@ def storage_swap_tables(
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch, required=True)
 
+    try:
+        # Before the confirmation prompt: a bad budget is a usage error, and
+        # the user must not confirm a destructive swap only to be refused.
+        validate_wait_timeout(timeout)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
     if dry_run:
         try:
             result = service.swap_tables(
@@ -1489,14 +1498,6 @@ def storage_swap_tables(
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
-        except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                project=project,
-                retryable=exc.retryable,
-            )
-            raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if formatter.json_mode:
             formatter.output(result)

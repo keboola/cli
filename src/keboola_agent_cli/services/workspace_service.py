@@ -31,6 +31,7 @@ from ..constants import (
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from ._storage_jobs import resolve_wait_timeout
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
     LOAD_TYPE_COPY,
@@ -39,7 +40,7 @@ from ._workspace_load_plan import (
     coerce_data_size_bytes,
     plan_auto_load_type,
 )
-from .base import BaseService, find_default_branch_id, normalize_job_timeout
+from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -856,7 +857,8 @@ class WorkspaceService(BaseService):
                 or None for the auto decision.
             force: Skip the large-COPY size guard.
             timeout: Seconds to wait for the load job. ``None`` defaults to
-                WORKSPACE_LOAD_JOB_MAX_WAIT; any other value must be > 0.
+                WORKSPACE_LOAD_JOB_MAX_WAIT; any other value must be a finite
+                number > 0.
             on_copy_guard: Called with the oversized COPY plans; return True to
                 proceed, False to refuse. None means "refuse without asking".
 
@@ -864,12 +866,13 @@ class WorkspaceService(BaseService):
             Dict with load job results, including a per-table ``tables`` list.
 
         Raises:
-            KeboolaApiError: INVALID_ARGUMENT for an unknown load_type or a
-                non-positive timeout; WORKSPACE_LOAD_COPY_TOO_LARGE when the
-                size guard trips and is neither forced nor approved.
+            ValueError: ``timeout`` is zero, negative, NaN or infinite.
+            KeboolaApiError: INVALID_ARGUMENT for an unknown load_type;
+                WORKSPACE_LOAD_COPY_TOO_LARGE when the size guard trips and is
+                neither forced nor approved.
         """
         requested = self._normalize_load_type(load_type)
-        max_wait = normalize_job_timeout(timeout, WORKSPACE_LOAD_JOB_MAX_WAIT)
+        max_wait = resolve_wait_timeout(timeout, WORKSPACE_LOAD_JOB_MAX_WAIT)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]

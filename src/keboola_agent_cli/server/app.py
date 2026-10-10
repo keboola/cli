@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -549,6 +552,12 @@ _MERGE_REQUEST_CONFLICT_CODES = frozenset(
     {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
 )
 
+
+def _finite_or_text(value: float) -> float | str:
+    """``value`` unchanged when finite, else its text (``"inf"``, ``"nan"``)."""
+    return value if math.isfinite(value) else str(value)
+
+
 _SESSION_REMEDY_ON_HOST = (
     "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "
     "cannot open a browser login for a remote caller."
@@ -952,6 +961,15 @@ def create_app(
         # Same `PERMISSION_DENIED` code the CLI prints for the same denial, so
         # a caller can branch on one value across both surfaces.
         return _format_error(exc.message, ErrorCode.PERMISSION_DENIED, http_status=403)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(_request, exc: RequestValidationError):
+        # FastAPI's own handler, except for one case: a JSON body may carry
+        # Infinity or NaN (Python's json accepts both), the error echoes it as
+        # `input`, and JSONResponse cannot encode a non-finite float -- so the
+        # 422 crashed into a 500. Same body shape, the bad float as text.
+        detail = jsonable_encoder(exc.errors(), custom_encoder={float: _finite_or_text})
+        return JSONResponse(status_code=422, content={"detail": detail})
 
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(_request, exc: StarletteHTTPException):
