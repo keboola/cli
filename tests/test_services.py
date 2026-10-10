@@ -3780,8 +3780,9 @@ class TestJobServiceQueuePollingParity:
         assert len(result["logTail"]) == 100
         assert result["logTail"][0]["id"] == 249
         assert result["logTail"][-1]["id"] == 150
-        # runId (not raw id) must have been the query key.
-        mock_client.fetch_job_events.assert_called_once_with("702-run", limit=100)
+        mock_client.fetch_job_events.assert_called_once_with(
+            "702", limit=100
+        )  # job id wins over runId (#787)
 
     def test_run_job_zero_tail_skips_fetch(self, tmp_config_dir: Path) -> None:
         mock_client = MagicMock()
@@ -3880,8 +3881,9 @@ class TestJobServiceQueuePollingParity:
         details = exc_info.value.details
         assert details["job"]["status"] == "terminated"
         assert details["logTail"] == [{"uuid": "u1", "message": "x"}]
-        # runId from the terminated job detail used as the lookup key.
-        mock_client.fetch_job_events.assert_called_once_with("705-run", limit=200)
+        mock_client.fetch_job_events.assert_called_once_with(
+            "705", limit=200
+        )  # job id wins over runId (#787)
 
     def test_run_job_timeout_kill_fails_falls_back(self, tmp_config_dir: Path) -> None:
         """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT (retryable)."""
@@ -4055,6 +4057,46 @@ class TestSafeFetchLogTailDefensiveSort:
         tail = _safe_fetch_log_tail(mock_client, {"id": "x", "runId": "x"}, limit=10)
         assert tail[0]["uuid"] == "timestamped"
         assert tail[1]["uuid"] == "no_created"
+
+
+class TestSafeFetchLogTailNestedJobs:
+    """Issue #787: nested jobs carry a dotted Queue runId that matches zero
+    Storage events; the log tail must be fetched by the job's own id."""
+
+    def _client(self) -> MagicMock:
+        client = MagicMock()
+        client.fetch_job_events.return_value = [{"uuid": "e1", "created": "2026-09-01"}]
+        return client
+
+    def test_nested_job_uses_id_not_dotted_run_id(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        job = {"id": "56453151", "runId": "56452146.56453149.56453151"}
+        tail = _safe_fetch_log_tail(client, job, limit=50)
+        client.fetch_job_events.assert_called_once_with("56453151", limit=50)
+        assert tail == [{"uuid": "e1", "created": "2026-09-01"}]
+
+    def test_only_dotted_run_id_uses_last_segment(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        _safe_fetch_log_tail(client, {"runId": "56452146.56453149.56453151"}, limit=5)
+        client.fetch_job_events.assert_called_once_with("56453151", limit=5)
+
+    def test_top_level_job_unchanged(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        _safe_fetch_log_tail(client, {"id": 123, "runId": "123"}, limit=5)
+        client.fetch_job_events.assert_called_once_with("123", limit=5)
+
+    def test_neither_id_nor_run_id_returns_empty_without_call(self) -> None:
+        from keboola_agent_cli.services.job_service import _safe_fetch_log_tail
+
+        client = self._client()
+        assert _safe_fetch_log_tail(client, {"status": "error"}, limit=5) == []
+        client.fetch_job_events.assert_not_called()
 
 
 class TestJobServiceVariableValuesResolution:

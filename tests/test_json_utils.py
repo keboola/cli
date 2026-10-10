@@ -4,6 +4,7 @@ import pytest
 
 from keboola_agent_cli.json_utils import (
     compute_diff,
+    compute_diff_entries,
     deep_merge,
     get_nested_value,
     set_nested_value,
@@ -177,3 +178,67 @@ class TestComputeDiff:
         changes = compute_diff(old, new)
         assert len(changes) == 1
         assert "db.host:" in changes[0]
+
+
+class TestComputeDiffEntries:
+    """Tests for compute_diff_entries() -- the structured walk under compute_diff()."""
+
+    def test_identical_dicts_yield_no_entries(self) -> None:
+        d = {"a": 1, "nested": {"b": 2}}
+        assert compute_diff_entries(d, d) == []
+
+    def test_value_change_carries_both_sides(self) -> None:
+        entries = compute_diff_entries({"host": "old"}, {"host": "new"})
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.path == "host"
+        assert entry.old == "old"
+        assert entry.new == "new"
+        assert entry.old_present and entry.new_present
+
+    def test_added_key_is_absent_on_old_side(self) -> None:
+        entries = compute_diff_entries({"a": 1}, {"a": 1, "b": 2})
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.path == "b"
+        assert not entry.old_present
+        assert entry.new_present
+        assert entry.new == 2
+
+    def test_removed_key_is_absent_on_new_side(self) -> None:
+        entries = compute_diff_entries({"a": 1, "b": 2}, {"a": 1})
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.path == "b"
+        assert entry.old_present
+        assert not entry.new_present
+
+    def test_explicit_none_is_present_not_absent(self) -> None:
+        # None is a legal JSON value -- it must not be conflated with absence.
+        entries = compute_diff_entries({"a": None}, {"a": 1})
+        assert len(entries) == 1
+        assert entries[0].old_present
+        assert entries[0].old is None
+
+    def test_nested_paths_are_dotted(self) -> None:
+        entries = compute_diff_entries(
+            {"db": {"host": "old", "port": 5432}}, {"db": {"host": "new", "port": 5432}}
+        )
+        assert [e.path for e in entries] == ["db.host"]
+
+    def test_dict_vs_scalar_is_one_whole_path_entry(self) -> None:
+        entries = compute_diff_entries({"a": {"x": 1}}, {"a": 2})
+        assert len(entries) == 1
+        assert entries[0].path == "a"
+        assert entries[0].old == {"x": 1}
+        assert entries[0].new == 2
+
+    def test_compute_diff_formats_entries_identically(self) -> None:
+        # compute_diff is now a formatter over compute_diff_entries; its
+        # output format is pinned by TestComputeDiff above -- this pins the
+        # delegation (same paths, same order).
+        old = {"a": 1, "b": {"c": 2}, "gone": 3}
+        new = {"a": 9, "b": {"c": 2, "d": 4}}
+        strings = compute_diff(old, new)
+        entries = compute_diff_entries(old, new)
+        assert [s.split(":")[0] for s in strings] == [e.path for e in entries]

@@ -191,8 +191,11 @@ class _QueueMixin(_CoreClient):
         a chronological "tail" should reverse the slice).
 
         Args:
-            run_id: The job's ``runId`` (``job["runId"]``; falls back to
-                ``job["id"]`` on legacy records where they match).
+            run_id: The value sent as the ``runId`` filter. Pass the job's own
+                ``id`` (see ``services.job_service.resolve_events_run_id``):
+                a nested job's dotted Queue ``runId`` (``a.b.<id>``) matches
+                zero events, while the plain job id matches the job's events
+                (issue #787). For top-level jobs ``runId == id``.
             limit: Optional server-side event cap. Storage API default is
                 about 100; pass an explicit value to cover long runs.
 

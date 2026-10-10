@@ -70,26 +70,26 @@ def _make_app_with_registry(tmp_path: Path, registry: ServiceRegistry) -> Any:
 
 
 def _status_result(**overrides: Any) -> AuthStatusResult:
-    base: dict[str, Any] = dict(
-        status="live",
-        stack_url=STACK,
-        session_id="sess-1",
-        user_email="user@example.com",
-        user_name="Test User",
-        access_expires_at="2026-08-24T00:00:00+00:00",
-        refresh_expires_at="2026-09-23T00:00:00+00:00",
-        accessible_projects=[{"id": 123, "name": "Prod", "role": "admin"}],
-        orphaned_session_ids=[],
-        detail="",
-    )
+    base: dict[str, Any] = {
+        "status": "live",
+        "stack_url": STACK,
+        "session_id": "sess-1",
+        "user_email": "user@example.com",
+        "user_name": "Test User",
+        "access_expires_at": "2026-08-24T00:00:00+00:00",
+        "refresh_expires_at": "2026-09-23T00:00:00+00:00",
+        "accessible_projects": [{"id": 123, "name": "Prod", "role": "admin"}],
+        "orphaned_session_ids": [],
+        "detail": "",
+    }
     base.update(overrides)
     return AuthStatusResult(**base)
 
 
 def _candidates_result(**overrides: Any) -> ProjectCandidatesResult:
-    base: dict[str, Any] = dict(
-        stack_url=STACK,
-        candidates=[
+    base: dict[str, Any] = {
+        "stack_url": STACK,
+        "candidates": [
             ProjectCandidate(
                 project_id=123,
                 project_name="Prod",
@@ -99,16 +99,16 @@ def _candidates_result(**overrides: Any) -> ProjectCandidatesResult:
                 registered=False,
             )
         ],
-    )
+    }
     base.update(overrides)
     return ProjectCandidatesResult(**base)
 
 
 def _register_result(**overrides: Any) -> RegisterProjectsResult:
-    base: dict[str, Any] = dict(
-        status="ok",
-        stack_url=STACK,
-        registered_projects=[
+    base: dict[str, Any] = {
+        "status": "ok",
+        "stack_url": STACK,
+        "registered_projects": [
             RegisteredProject(
                 alias="prod-123",
                 project_id=123,
@@ -116,8 +116,8 @@ def _register_result(**overrides: Any) -> RegisterProjectsResult:
                 status="registered",
             )
         ],
-        warnings=[],
-    )
+        "warnings": [],
+    }
     base.update(overrides)
     return RegisterProjectsResult(**base)
 

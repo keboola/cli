@@ -33,7 +33,7 @@ _MODEL_TYPE: SemanticType = "semantic-model"
 
 def _strip_semantic_prefix(wire_type: str) -> str:
     """``"semantic-dataset"`` -> ``"dataset"`` for the CLI surface."""
-    return wire_type[len("semantic-") :] if wire_type.startswith("semantic-") else wire_type
+    return wire_type.removeprefix("semantic-")
 
 
 def _matches_any_pattern(name: str, patterns: list[str]) -> bool:

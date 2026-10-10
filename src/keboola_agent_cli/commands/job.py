@@ -25,6 +25,7 @@ from ..constants import (
     MAX_LOG_TAIL_LINES,
     VALID_STATUSES,
 )
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ._helpers import (
@@ -33,7 +34,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
     validate_branch_requires_project,
 )
 
@@ -396,7 +396,7 @@ def job_run(
     _validate_log_tail_lines(formatter, log_tail_lines)
 
     validate_branch_requires_project(formatter, branch, project)
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     if not formatter.json_mode:
         msg = f"Running [cyan]{component_id}[/cyan] / [cyan]{config_id}[/cyan]"
@@ -600,7 +600,6 @@ def job_terminate(
         raise typer.Exit(code=2)
 
     validate_branch_requires_project(formatter, branch, project)
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
 
     # Resolve job IDs
     resolved_ids: list[str]
@@ -608,6 +607,8 @@ def job_terminate(
     if job_id:
         resolved_ids = list(job_id)
     else:
+        # The branch only narrows the --status filter; --job-id kills by ID.
+        effective_branch = resolve_branch(config_store, project, branch)
         # "any" means: list without status filter, then keep only killable states client-side
         list_status = None if status == "any" else status
         try:

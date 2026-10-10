@@ -55,13 +55,14 @@ def storage_create_bucket(ctx, project, stage, name):
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result) if formatter.json_mode else ...
 
+
 # BAD -- business logic leaked into command
 @storage_app.command("create-bucket")
 def storage_create_bucket(ctx, project, stage, name):
     if stage not in ("in", "out"):  # This belongs in service!
         ...
-    client = KeboolaClient(...)     # This belongs in service!
-    client.create_bucket(...)       # Commands don't call clients!
+    client = KeboolaClient(...)  # This belongs in service!
+    client.create_bucket(...)  # Commands don't call clients!
 ```
 
 ### Validate at system boundaries
@@ -128,10 +129,11 @@ caught immediately.
 
 ```python
 # BAD -- caller has to remember positional meaning
-def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]:
-    ...
+def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]: ...
+
 
 resolved_alias, project = resolve_project(alias)  # which is which?
+
 
 # GOOD -- self-documenting at every call site
 @dataclass(frozen=True)
@@ -139,8 +141,9 @@ class ResolvedProject:
     alias: str
     config: ProjectConfig
 
-def resolve_project(alias: str | None) -> ResolvedProject:
-    ...
+
+def resolve_project(alias: str | None) -> ResolvedProject: ...
+
 
 resolved = resolve_project(alias)
 resolved.alias, resolved.config  # unambiguous
@@ -159,6 +162,7 @@ formatter.error(message="Bucket not found", error_code=ErrorCode.NOT_FOUND)
 # GOOD -- category first, then the variable part
 formatter.error(error_code=ErrorCode.NOT_FOUND, message="Bucket not found")
 
+
 def log_failure(error_code: ErrorCode, message: str) -> None: ...
 def raise_api_error(error_code: ErrorCode, *, message: str, status: int) -> None: ...
 ```
@@ -175,6 +179,7 @@ raise KeboolaApiError(message="...", error_code="not_found")
 
 # GOOD
 from .errors import ErrorCode
+
 raise KeboolaApiError(error_code=ErrorCode.NOT_FOUND, message="...")
 ```
 
@@ -245,9 +250,11 @@ Single-expression `sort` keys and `filter` predicates are fine as lambdas. Anyth
 parse_row = lambda r: {"id": r[0], "name": r[1], "active": r[2] == "Y"}
 rows = [parse_row(r) for r in raw]
 
+
 # GOOD
 def _parse_storage_row(raw: tuple[str, str, str]) -> dict[str, Any]:
     return {"id": raw[0], "name": raw[1], "active": raw[2] == "Y"}
+
 
 rows = [_parse_storage_row(r) for r in raw]
 
@@ -346,6 +353,8 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
+- [ ] **Branch choice** through `resolve_branch()` in `effective_branch.py` when the command takes `--branch` or uses the active branch -- never read `ProjectConfig.active_branch_id` directly. The function reports the branch (`Target:` line, `targets` in `--json`); `tests/test_effective_branch.py` fails on a new direct read.
+- [ ] **`--project` naming a NEW alias** -- every `--project` option also takes a project ID, translated to the alias before the command runs (`commands/_project_ref.py`, CLI-22). A command whose `--project` is not a registry lookup (a new alias like `project add`, an offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like `config clone --target-project`) to `ALIAS_OPTIONS`. `tests/test_project_ref.py` fails on a new option whose flag contains `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the test's `NOT_AN_ALIAS` list (with a reason); an option with any other name needs this decision by hand.
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 - [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
 
@@ -394,6 +403,8 @@ before the PR is mergeable.
 - [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
 
   > **Running locally without exporting a token:** if the target project is already registered in a kbagent `config.json`, use config-dir mode -- `make test-e2e-local CONFIG_DIR=/path/to/.kbagent ALIAS=my-proj`. The harness reads the token from `config.json` at import time and promotes it into `E2E_API_TOKEN` / `E2E_URL`; an explicit `E2E_API_TOKEN` still wins.
+
+- [ ] **API call-count test for hot read paths** -- a new or changed list/detail command that users and agents run often (the `project`/`config`/`job`/`storage`/`flow` read commands and their peers) adds or updates a case in `tests/test_api_call_counts.py`. It pins the exact calls via `helpers.assert_api_calls`, which compares the method and path and, where the test pins them, the parsed query (`include_query=True`) and the token (`include_token=True`, for multi-project cases). List commands also run with 1 and 10 items and expect the same calls at both sizes: this catches a call made once per item, but not a call made once per batch or page of more than 10 items. Fixtures must look like real API payloads (several component types, a transformation with rows and storage mappings, Queue jobs with `runId`, alias and shared tables), because a per-item call that depends on a field the fixture lacks is not caught. The expected lists are a ratchet: raising one is a deliberate, reviewed change -- say why in the PR
 
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
 - [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
@@ -624,7 +635,7 @@ silent-drift risks summarized in the
    Those merged PRs are **exactly** the scope of the release: the changelog
    entry and the release notes must cover each of them, and nothing else.
 2. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it. This is the release PR's defining change -- if you are doing this in a feature PR, stop and read the section intro above.
-3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob. The first sentence is also **capped at 160 characters**, enforced by `tests/test_changelog_render.py::TestLiveChangelogHeadlines::test_newest_release_notes_are_not_truncated` (so `make check` in step 12 catches it) -- past the cap the default view and the release page show it cut mid-clause. Write a short self-contained first sentence and put the detail in the sentences after it; 2 of 0.90.0's 13 bullets needed exactly this rewrite.
+3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only first sentences by default: of every `BREAKING` bullet of a version, plus of the first other bullets until at least two show (the rest is revealed by `--full`). The `What's new` notice after an update shows the first sentence of every bullet. So a buried headline or a single wall-of-text bullet reads as an unscannable blob. The first sentence is also **capped at 160 characters**, enforced by `tests/test_changelog_render.py::TestLiveChangelogHeadlines::test_newest_release_notes_are_not_truncated` (so `make check` in step 12 catches it) -- past the cap the default view and the release page show it cut mid-clause. Write a short self-contained first sentence and put the detail in the sentences after it; 2 of 0.90.0's 13 bullets needed exactly this rewrite.
 4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released. Do it mechanically -- never by hand, and never with a repo-wide `sed`:
    ```bash
    make vnext-resolve VERSION=X.Y.Z
@@ -849,6 +860,7 @@ make check              # CI parity: lint + format + typecheck + skill + version
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
+make audit              # Audit locked dependencies for known vulnerabilities (uv audit, OSV)
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
@@ -882,7 +894,31 @@ Two GitHub Actions workflows guard the repo:
   (`-m "not integration"`; `e2e` self-skips without credentials). Coverage is
   printed (`--cov ... --cov-report=term-missing`) but **informational** --
   there is no `--cov-fail-under` threshold, so coverage never blocks a merge.
+- **`audit` job** (one run, Python 3.12): `uv audit --frozen` against the OSV
+  advisory database. Deliberately separate and **not** a required check -- its
+  result depends on advisories published over time, not on the diff, so a
+  finding shows red here for visibility but never blocks a merge. Run it locally
+  with `make audit`. See **Fixing an audit finding** below.
 - **`build-windows` job**: real `uv build` wheel checks (issue #320).
+
+**Fixing an audit finding.** Dependabot is the named fix channel, but it
+cannot run here. Its bundled uv is 0.12.7, and that uv must satisfy
+`[tool.uv] required-version`. A bound above 0.12.7 makes every Dependabot
+dependency PR fail with `tool_version_not_supported`. Until Dependabot
+bundles a newer uv, fix each finding by hand:
+
+- **Transitive dependency** (not in `[project.dependencies]` or a dependency
+  group): update it in the lockfile only. Run
+  `uv lock --upgrade-package NAME==FIXED_VERSION`. Do not add it to
+  `pyproject.toml` as a direct dependency. We do not own it, and a pin there
+  is debt that someone must maintain. A transitive dependency has no upper
+  bound, so the resolver keeps the new minimum version on its own. A later
+  `uv lock` keeps it.
+- **Direct dependency**: raise the constraint in `pyproject.toml` instead.
+
+Then verify two things. `uv audit --frozen` reports no vulnerabilities, and
+`uv lock --check` passes. Commit only `uv.lock`. For a direct dependency,
+also commit `pyproject.toml`.
 
 `make check` runs the same gates as the `check` + `test` CI jobs locally and is
 slightly *stricter*: its `test` target uses `-m "not e2e"`, so it also runs the

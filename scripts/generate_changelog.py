@@ -47,7 +47,7 @@ def _extract_summary(body: str) -> list[str]:
     lines = []
     for line in body.split("\n"):
         stripped = line.strip()
-        if stripped.startswith("## ") or stripped.startswith("### "):
+        if stripped.startswith(("## ", "### ")):
             heading = stripped.lstrip("#").strip()
             # Skip generic headings
             if heading.lower() in (

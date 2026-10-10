@@ -121,6 +121,7 @@ class TestCli:
         return subprocess.run(
             [sys.executable, str(_SCRIPT_PATH), *args],
             capture_output=True,
+            check=False,
             text=True,
         )
 

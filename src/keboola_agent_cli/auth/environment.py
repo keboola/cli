@@ -168,7 +168,7 @@ def detect_browser_environment() -> BrowserEnvironment:
     return BrowserEnvironment(loopback_browser_usable=True, reason="", opener=opener)
 
 
-def open_browser(url: str) -> bool:
+def open_browser(url: str, *, wait_seconds: float = 0.0) -> bool:
     """Best-effort `webbrowser.open` on a daemon thread.
 
     Never raises and never logs ``url`` -- it carries the PKCE code
@@ -177,13 +177,21 @@ def open_browser(url: str) -> bool:
     before spawning the thread) and True once the open has been dispatched;
     a True return does not guarantee a browser window actually appeared, only
     that a handler accepted the request.
+
+    ``wait_seconds`` joins the thread for up to that long. A caller that exits
+    right after the call (``data-app password --open``) passes it, because a
+    daemon thread dies with the process -- possibly before the opener starts.
+    The login flow keeps polling afterwards, so it leaves the default 0.
     """
     try:
         webbrowser.get()
     except webbrowser.Error:
         return False
 
-    threading.Thread(target=_open_silently, args=(url,), daemon=True).start()
+    thread = threading.Thread(target=_open_silently, args=(url,), daemon=True)
+    thread.start()
+    if wait_seconds > 0:
+        thread.join(timeout=wait_seconds)
     return True
 
 

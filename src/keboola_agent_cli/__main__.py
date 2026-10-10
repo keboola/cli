@@ -1,5 +1,5 @@
 """Allow running as `python -m keboola_agent_cli`."""
 
-from .cli import app
+from .cli import run
 
-app()
+run()

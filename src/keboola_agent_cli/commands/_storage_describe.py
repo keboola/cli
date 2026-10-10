@@ -18,12 +18,12 @@ import typer
 from rich.markup import escape
 
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 _DESCRIBE = "Descriptions"
@@ -74,7 +74,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         from ._metadata_input import resolve_text_input
 
@@ -146,7 +146,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         from ._metadata_input import resolve_text_input
 
@@ -224,7 +224,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         parsed: dict[str, str] = {}
         for entry in column:
@@ -327,7 +327,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         # In human mode, show a live progress indicator so that large batches
         # (100+ items) do not look frozen. JSON mode must remain silent on stderr
@@ -480,7 +480,7 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
         config_store: ConfigStore = ctx.obj["config_store"]
-        _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+        effective_branch = resolve_branch(config_store, project, branch)
 
         if table_id and bucket_id:
             formatter.error(

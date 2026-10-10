@@ -81,6 +81,23 @@ class TestPushIsolation:
         parsed = _parse_yaml(gen_push(pipelines, main_branch="main"))
         assert all(job["environment"] == "prod" for job in parsed["jobs"].values())
 
+    def test_push_and_validate_pass_force_so_source_deletions_propagate(self) -> None:
+        """Without --force `sync push` deletes nothing (#792 G): both steps pass it."""
+        pipelines = [_pipeline()]
+        push_runs = [
+            step["run"]
+            for job in _parse_yaml(gen_push(pipelines, main_branch="main"))["jobs"].values()
+            for step in job["steps"]
+            if "sync push" in step.get("run", "")
+        ]
+        validate_runs = [
+            step["run"]
+            for step in _parse_yaml(gen_validate(pipelines))["jobs"]["validate"]["steps"]
+            if "sync push" in step.get("run", "")
+        ]
+        assert push_runs and all("sync push --force " in run for run in push_runs)
+        assert validate_runs and all("--dry-run --force " in run for run in validate_runs)
+
     def test_jobs_have_no_needs_dependency_so_one_failure_does_not_block_others(self) -> None:
         pipelines = [_pipeline("SALESFORCE", "salesforce"), _pipeline("GA4", "ga4")]
         parsed = _parse_yaml(gen_push(pipelines, main_branch="main"))

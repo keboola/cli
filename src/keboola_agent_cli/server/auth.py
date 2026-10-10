@@ -57,7 +57,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
+        if path in PUBLIC_PATHS or path.startswith(("/docs", "/redoc")):
             return await call_next(request)
 
         # Single-process UI mode (`kbagent serve --ui`): the SPA shell

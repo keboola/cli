@@ -363,6 +363,7 @@ class TestForceIncludeNoDuplicate:
             ["uv", "build", "--wheel", "-o", str(tmp_path / "out")],
             cwd=project,
             capture_output=True,
+            check=False,
             text=True,
             timeout=300,
         )

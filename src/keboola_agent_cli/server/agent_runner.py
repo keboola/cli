@@ -442,8 +442,7 @@ def clean_sql_helper_response(text: str) -> str:
         nl = text.find("\n")
         if nl != -1:
             text = text[nl + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removesuffix("```")
         text = text.strip()
     # Step 3: strip a preamble like "Here's the SQL:\n\n..." on the first line.
     lines = text.split("\n", 1)
@@ -559,8 +558,7 @@ def clean_prompt_helper_response(text: str) -> str:
         nl = text.find("\n")
         if nl != -1:
             text = text[nl + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removesuffix("```")
         text = text.strip()
     # Step 3: strip a preamble like "Here is the prompt:\n\n..." on the first line.
     lines = text.split("\n", 1)
@@ -1278,8 +1276,8 @@ async def scheduler_loop(store: AgentStore, registry: Any, *, tick_seconds: int 
                 fut = asyncio.create_task(_safe_run(task, registry, store))
                 in_flight.add(fut)
                 fut.add_done_callback(in_flight.discard)
-        except Exception as exc:
-            logger.exception("Scheduler tick error: %s", exc)
+        except Exception:
+            logger.exception("Scheduler tick error")
         try:
             await asyncio.sleep(tick_seconds)
         except asyncio.CancelledError:
