@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..config_store import ConfigStore
+from ..config_store import ConfigStore, project_not_registered_error
 from ..errors import ConfigError
 from ..manage_client import ManageClient
 from ..models import Feature
@@ -243,9 +243,7 @@ class FeatureService:
         """Resolve ``alias`` to its stack URL + numeric project_id for project ops."""
         project = self._config_store.get_project(alias)
         if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
+            raise project_not_registered_error(alias)
         if project.project_id is None:
             raise ConfigError(
                 f"Project alias '{alias}' has no numeric project_id; "
@@ -262,7 +260,5 @@ class FeatureService:
         """
         project = self._config_store.get_project(alias)
         if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
+            raise project_not_registered_error(alias)
         return project.stack_url

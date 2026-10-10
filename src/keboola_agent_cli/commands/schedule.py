@@ -18,16 +18,29 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    resolve_branch,
 )
 
 logger = logging.getLogger(__name__)
+
+# This group only ever sees `keboola.scheduler` configs. A flow can also be
+# started by a table trigger (a separate Storage API resource) or by a
+# trigger-queue config in ANOTHER project -- neither of which is a schedule, so
+# neither appears here. Saying "no schedules found" invited the reading "this
+# flow has no trigger", which is a false negative with real consequences: a
+# flow that was already live via a table trigger got reported as still needing
+# manual scheduling (issue #714). Name the mechanism, and name what was not
+# checked.
+_NOT_CHECKED = (
+    "Table triggers and cross-project triggers were NOT checked -- see `kbagent flow triggers`."
+)
+_NO_CRON_SCHEDULES = f"No cron schedules found. {_NOT_CHECKED}"
 
 schedule_app = typer.Typer(
     help="Discover and audit cron schedules across projects (keboola.scheduler)"
@@ -137,7 +150,6 @@ def schedule_list(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
-    config_store = ctx.obj["config_store"]
 
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
@@ -146,15 +158,11 @@ def schedule_list(
         )
         raise typer.Exit(code=2) from None
 
-    effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
-
     try:
         result = service.list_schedules(
             aliases=project,
             enabled_only=enabled_only,
-            branch_id=effective_branch,
+            branch_id=branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -166,7 +174,7 @@ def schedule_list(
 
     schedules = result.get("schedules", [])
     if not schedules:
-        formatter.console.print("[dim]No schedules found.[/dim]")
+        formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
     else:
         _format_schedule_table(formatter, schedules)
     _emit_errors(formatter, result.get("errors", []))
@@ -194,7 +202,7 @@ def schedule_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
     config_store = ctx.obj["config_store"]
-    _, effective_branch = resolve_branch(config_store, formatter, project, branch)
+    effective_branch = resolve_branch(config_store, project, branch)
 
     try:
         result = service.get_schedule_detail(
@@ -299,7 +307,6 @@ def schedule_find(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "schedule_service")
-    config_store = ctx.obj["config_store"]
 
     if branch is not None and (not project or len(project) != 1):
         formatter.error(
@@ -308,16 +315,12 @@ def schedule_find(
         )
         raise typer.Exit(code=2) from None
 
-    effective_branch: int | None = branch
-    if branch is None and project and len(project) == 1:
-        _, effective_branch = resolve_branch(config_store, formatter, project[0], None)
-
     try:
         result = service.find_schedules(
             aliases=project,
             cron_window=cron_window,
             not_run_since_days=not_run_since,
-            branch_id=effective_branch,
+            branch_id=branch,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -329,7 +332,7 @@ def schedule_find(
 
     schedules = result.get("schedules", [])
     if not schedules:
-        formatter.console.print("[dim]No schedules match the filters.[/dim]")
+        formatter.console.print(f"[dim]No cron schedules match the filters. {_NOT_CHECKED}[/dim]")
     else:
         extras: list[str] = []
         if cron_window is not None:

@@ -21,11 +21,15 @@ from .constants import (
     BACKOFF_BASE,
     ENV_CONVERSATION_ID,
     MAX_API_ERROR_LENGTH,
+    MAX_API_ERROR_PARAMS_LENGTH,
+    MAX_API_ERROR_PARAMS_LIST_ITEMS,
     MAX_EXCEPTION_ID_LENGTH,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
     RETRY_SAFE_METHODS,
     RETRYABLE_STATUS_CODES,
+    TOKEN_VALIDITY_ERROR_MARKERS,
+    UNINFORMATIVE_ERROR_MESSAGES,
 )
 from .errors import ErrorCode, KeboolaApiError, mask_token
 
@@ -36,6 +40,32 @@ logger = logging.getLogger(__name__)
 # extra log line (CWE-117), control characters -- is dropped before the id is
 # interpolated into an error message.
 _EXCEPTION_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9._:-]+")
+
+
+def _bound_error_params(params: dict) -> tuple[dict | None, bool]:
+    """Cap the server-supplied ``params`` context like the message is capped.
+
+    Returns ``(bounded_params_or_None, truncated)``. Small payloads pass
+    through untouched. Over MAX_API_ERROR_PARAMS_LENGTH (serialized), every
+    top-level list is truncated to MAX_API_ERROR_PARAMS_LIST_ITEMS entries
+    (a merge 409's ``params.errors`` keeps its first N conflicting configs);
+    if the result still exceeds the cap, params is dropped entirely and only
+    the truncation marker survives.
+    """
+    try:
+        if len(json.dumps(params, default=str)) <= MAX_API_ERROR_PARAMS_LENGTH:
+            return params, False
+        slimmed = {
+            key: value[:MAX_API_ERROR_PARAMS_LIST_ITEMS] if isinstance(value, list) else value
+            for key, value in params.items()
+        }
+        if len(json.dumps(slimmed, default=str)) <= MAX_API_ERROR_PARAMS_LENGTH:
+            return slimmed, True
+        return None, True
+    except (TypeError, ValueError):
+        # Unserializable server payload -- drop it rather than crash the
+        # error path itself.
+        return None, True
 
 
 def build_user_agent() -> str:
@@ -85,6 +115,13 @@ class BaseHttpClient:
     # guarded. Set it and the sentinel can no longer reach the wire through a
     # constructor whose caller forgot to guard it.
     SESSION_AUTH_FEATURE: str | None = None
+
+    # Whether a bearer (session) 401 should trigger a token refresh + one retry.
+    # True for every client whose 401 means "the access token expired". A client
+    # whose backend answers a VALID token with 401 for a non-credential reason
+    # sets this False, so ``make_session_aware_client_factory`` builds a
+    # ``BearerAuth`` that does not refresh-and-retry -- see ``MetastoreClient``.
+    BEARER_REFRESH_ON_401: bool = True
 
     def __init__(
         self,
@@ -143,7 +180,7 @@ class BaseHttpClient:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def _do_request(
@@ -154,12 +191,13 @@ class BaseHttpClient:
         client: httpx.Client | None = None,
         base_url: str | None = None,
         retry_safe: bool | None = None,
+        max_attempts: int | None = None,
         **kwargs: Any,
     ) -> httpx.Response:
         """Execute an HTTP request with retry and exponential backoff.
 
-        Retries on status codes 429, 500, 502, 503, 504 up to MAX_RETRIES times
-        with exponential backoff (1s, 2s, 4s).
+        Retries on status codes 429, 500, 502, 503, 504 up to ``max_attempts``
+        times (default ``MAX_RETRIES``) with exponential backoff (1s, 2s, 4s).
 
         A 5xx (and a read/write timeout) is only repeated on an idempotent
         method -- see ``RETRY_SAFE_METHODS``. Repeating a failed POST/PATCH can
@@ -180,6 +218,10 @@ class BaseHttpClient:
                 canonical case is ``DELETE`` on a component configuration,
                 where a repeat lands on the now-trashed config and purges it
                 permanently. ``None`` (default) keeps the method-based rule.
+            max_attempts: Total attempt budget for this request. ``None``
+                (default) uses ``MAX_RETRIES``. Best-effort callers pass ``1``
+                so a blocked endpoint fails in one bounded attempt with no
+                retry+backoff behind it.
             **kwargs: Additional arguments passed to httpx.Client.request().
 
         Returns:
@@ -194,12 +236,16 @@ class BaseHttpClient:
         # An explicit override wins: RETRY_SAFE_METHODS reasons about the METHOD,
         # but idempotency is a property of the endpoint. See the `retry_safe` arg.
         retry_safe = method.upper() in RETRY_SAFE_METHODS if retry_safe is None else retry_safe
+        # A caller can cap the attempt count. Best-effort telemetry passes 1 so a
+        # blocked or unreachable events endpoint fails in one bounded attempt --
+        # never the ~12s retry+backoff that would stall the command behind it.
+        attempts = MAX_RETRIES if max_attempts is None else max_attempts
         # Counted separately from `attempt`: a 429 burns an attempt without
         # being a server error, so using the attempt index would report "the
         # same 5xx came back on N attempts" after seeing exactly one.
         server_error_attempts = 0
 
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(attempts):
             try:
                 response = http_client.request(method, path, **kwargs)
 
@@ -213,7 +259,7 @@ class BaseHttpClient:
                 if (
                     response.status_code in RETRYABLE_STATUS_CODES
                     and may_repeat
-                    and attempt < MAX_RETRIES - 1
+                    and attempt < attempts - 1
                 ):
                     if response.status_code == 429:
                         retry_after = response.headers.get("Retry-After")
@@ -229,7 +275,7 @@ class BaseHttpClient:
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (status %d), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         response.status_code,
@@ -257,12 +303,12 @@ class BaseHttpClient:
                 timeout_repeatable = retry_safe or isinstance(
                     exc, httpx.ConnectTimeout | httpx.PoolTimeout
                 )
-                if timeout_repeatable and attempt < MAX_RETRIES - 1:
+                if timeout_repeatable and attempt < attempts - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (timeout), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         delay,
@@ -281,12 +327,12 @@ class BaseHttpClient:
                 ) from exc
 
             except httpx.ConnectError as exc:
-                if attempt < MAX_RETRIES - 1:
+                if attempt < attempts - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
                         "Retry attempt %d/%d for %s %s (connection error), delay %.1fs",
                         attempt + 1,
-                        MAX_RETRIES,
+                        attempts,
                         method,
                         path,
                         delay,
@@ -310,7 +356,7 @@ class BaseHttpClient:
             )
 
         raise KeboolaApiError(
-            message=f"Request failed after {MAX_RETRIES} retries to {url_label} (token: {self._masked_token})",
+            message=f"Request failed after {attempts} retries to {url_label} (token: {self._masked_token})",
             status_code=0,
             error_code=ErrorCode.RETRY_EXHAUSTED,
             retryable=True,
@@ -331,6 +377,32 @@ class BaseHttpClient:
         if not isinstance(raw, str):
             return ""
         return _EXCEPTION_ID_DISALLOWED.sub("", raw)[:MAX_EXCEPTION_ID_LENGTH]
+
+    @staticmethod
+    def _is_token_validity_401(api_message: str) -> bool:
+        """Should this HTTP 401 keep the long-standing INVALID_TOKEN mapping?
+
+        True in two cases:
+
+        * The body describes a bad or expired credential, the way Keboola's
+          own 401s do ("Invalid access token", "Access token expired").
+        * The body says nothing at all. A 401 with no detail is the textbook
+          rejected-credential response, and claiming "the API did not report
+          the token as invalid" would be over-reading silence.
+
+        False only when the server said something substantive that blames
+        something else -- Metastore's `"Failed to create project scope"`, an
+        internal project-scope resolution failure for a token the Storage API
+        accepts on the very same stack (issue #711).
+
+        Deliberately permissive in the True direction: an unrecognised message
+        that DOES mention a token keeps the historical mapping, so the new
+        code appears only where the server demonstrably blamed something else.
+        """
+        lowered = api_message.strip().lower()
+        if lowered in UNINFORMATIVE_ERROR_MESSAGES:
+            return True
+        return any(marker in lowered for marker in TOKEN_VALIDITY_ERROR_MARKERS)
 
     @staticmethod
     def _non_idempotent_note(method: str) -> str:
@@ -409,6 +481,7 @@ class BaseHttpClient:
         url_label = base_url or self._base_url
 
         exception_id = ""
+        details: dict = {}
         try:
             body = response.json()
             # Keboola answers a 5xx with a generic `error` ("Application
@@ -417,6 +490,31 @@ class BaseHttpClient:
             # left the operator with nothing to escalate (issue #599).
             if isinstance(body, dict):
                 exception_id = self._safe_exception_id(body.get("exceptionId"))
+                # Keboola user errors also carry a machine-readable string
+                # `code` (e.g. `storage.mergeRequests.notReadyToMerge`).
+                # Surface it in details so a service can branch on it -- the
+                # message alone holds only the human `error` text (DMD-1899;
+                # the merge 409's two shapes differ exactly by this field).
+                api_error_code = body.get("code")
+                if isinstance(api_error_code, str) and api_error_code:
+                    details["api_error_code"] = api_error_code
+                # A Package HttpException additionally serializes its context
+                # as `params` (ExceptionConverter) -- e.g. the merge-conflict
+                # 409 carries the conflicting configurations in
+                # `params.errors`. Surface it so a caller does not have to
+                # re-fetch data the error already delivered -- BOUNDED, like
+                # the message below: this rides every 4xx/5xx from every
+                # BaseHttpClient subclass into agent-consumed --json output.
+                # Passed through UNMASKED by decision: it is server-authored
+                # error context (ids, names, version identifiers), not
+                # credentials -- the same trust the error message text gets.
+                api_error_params = body.get("params")
+                if isinstance(api_error_params, dict) and api_error_params:
+                    bounded, truncated = _bound_error_params(api_error_params)
+                    if bounded is not None:
+                        details["api_error_params"] = bounded
+                    if truncated:
+                        details["api_error_params_truncated"] = True
             # Real Keboola APIs answer with one of these keys in priority
             # order. Two caveats:
             #   1. Keboola Metastore puts the HTTP status code into `error`
@@ -448,28 +546,62 @@ class BaseHttpClient:
         if isinstance(api_message, str) and len(api_message) > MAX_API_ERROR_LENGTH:
             api_message = api_message[:MAX_API_ERROR_LENGTH] + "..."
 
+        # The exceptionId belongs on EVERY error, not just the 5xx family.
+        # These three branches used to raise before it was appended, so the
+        # one handle Keboola support traces an incident by was dropped on
+        # exactly the responses -- a 401 from Metastore -- where the fault was
+        # server-side and the operator most needed to escalate (issue #711;
+        # the 5xx half of this was fixed in #599). Bounded by
+        # `_safe_exception_id`, same as below.
+        id_suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
+
         if status == 401:
+            # A 401 is not automatically a credential problem. When the
+            # server's own text does not describe one, say what it actually
+            # said instead of asserting the token is bad -- see
+            # TOKEN_VALIDITY_ERROR_MARKERS.
+            if self._is_token_validity_401(api_message):
+                raise KeboolaApiError(
+                    message=(
+                        f"Invalid or expired token (token: {self._masked_token}): "
+                        f"{api_message}{id_suffix}"
+                    ),
+                    status_code=status,
+                    error_code=ErrorCode.INVALID_TOKEN,
+                    retryable=False,
+                    details=details,
+                )
             raise KeboolaApiError(
-                message=f"Invalid or expired token (token: {self._masked_token}): {api_message}",
+                message=(
+                    f"Authentication rejected by {url_label} with HTTP 401, but the API did "
+                    f"not report the token as invalid or expired (token: "
+                    f"{self._masked_token}): {api_message}{id_suffix}. Rotating the token is "
+                    "unlikely to help -- verify it against another endpoint on the same stack "
+                    "(`kbagent project status`), then escalate to Keboola support quoting the "
+                    "exceptionId above."
+                ),
                 status_code=status,
-                error_code=ErrorCode.INVALID_TOKEN,
+                error_code=ErrorCode.AUTH_REJECTED,
                 retryable=False,
+                details=details,
             )
 
         if status == 403:
             raise KeboolaApiError(
-                message=f"Access denied (token: {self._masked_token}): {api_message}",
+                message=(f"Access denied (token: {self._masked_token}): {api_message}{id_suffix}"),
                 status_code=status,
                 error_code=ErrorCode.ACCESS_DENIED,
                 retryable=False,
+                details=details,
             )
 
         if status == 404:
             raise KeboolaApiError(
-                message=f"Resource not found: {api_message}",
+                message=f"Resource not found: {api_message}{id_suffix}",
                 status_code=status,
                 error_code=ErrorCode.NOT_FOUND,
                 retryable=False,
+                details=details,
             )
 
         # Appended AFTER the truncation above so they always survive into the
@@ -478,7 +610,7 @@ class BaseHttpClient:
         # the id went through `_safe_exception_id`. Never append raw
         # server-supplied text here -- the truncation is what keeps the
         # console (Rich, markup enabled) from rendering it as markup.
-        suffix = f" [exceptionId: {exception_id}]" if exception_id else ""
+        suffix = id_suffix
         if hint:
             suffix += f" {hint}"
         raise KeboolaApiError(
@@ -489,4 +621,5 @@ class BaseHttpClient:
             status_code=status,
             error_code=ErrorCode.API_ERROR,
             retryable=status in RETRYABLE_STATUS_CODES if retryable is None else retryable,
+            details=details,
         )

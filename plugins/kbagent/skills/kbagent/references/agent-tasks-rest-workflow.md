@@ -66,7 +66,7 @@ Every task has an `action` block with `type` + `params`:
 `cli` accepts `claude`, `codex`, or `gemini`. The chosen CLI must be on
 the server's `PATH`.
 
-**`extra_args` are ignored unless the serve operator opts in (since v0.60.2).**
+**`extra_args` are ignored unless the serve operator opts in.**
 They are forwarded verbatim to the AI CLI and can disable its safety rails, so
 `kbagent serve` drops them with a warning unless it was started with a truthy
 `KBAGENT_ALLOW_AI_EXTRA_ARGS`. The `["--print"]` above takes effect only when

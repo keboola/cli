@@ -3,6 +3,7 @@
 Tests use tmp_path for filesystem operations and MagicMock for API client.
 """
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -537,10 +538,14 @@ class TestPull:
         )
         result2 = svc2.pull(alias="prod", project_root=project_root, force=True)
 
-        # Verify transformation was detected as removed
+        # Verify transformation was detected as removed. The extractor's row is
+        # gone from the remote too (SAMPLE_COMPONENTS_NO_ROWS), so pull removes
+        # its directory as well (#792 H) -- reported with a rows/ path.
         removed = [d for d in result2["details"] if d["action"] == "removed"]
-        assert len(removed) == 1
-        assert removed[0]["component_id"] == "keboola.snowflake-transformation"
+        removed_configs = [d for d in removed if "/rows/" not in d["path"]]
+        assert len(removed_configs) == 1
+        assert removed_configs[0]["component_id"] == "keboola.snowflake-transformation"
+        assert [d["component_id"] for d in removed if "/rows/" in d["path"]] == ["keboola.ex-http"]
 
         # Verify the orphan directory no longer exists on disk
         assert not orphan_dir.exists(), "Orphaned config directory should be deleted"
@@ -1185,7 +1190,7 @@ class TestPushRows:
     def test_push_row_delete_calls_delete_config_row(
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
-        """Removing a row YAML file triggers client.delete_config_row + manifest pruning."""
+        """With --force, removing a row YAML file triggers client.delete_config_row + manifest pruning."""
         project_root = tmp_path / "project"
         project_root.mkdir()
         store, _ = self._init_and_pull(tmp_config_dir, project_root)
@@ -1205,7 +1210,7 @@ class TestPushRows:
             client_factory=lambda url, token: push_client,
         )
 
-        result = push_svc.push(alias="prod", project_root=project_root)
+        result = push_svc.push(alias="prod", project_root=project_root, force=True)
 
         assert result["status"] == "pushed"
         assert result["deleted"] == 1
@@ -1219,6 +1224,142 @@ class TestPushRows:
         manifest = load_manifest(project_root)
         parent = next(c for c in manifest.configurations if c.id == "cfg-001")
         assert all(r.id != "row-001" for r in parent.rows)
+
+    def test_push_row_delete_without_force_is_skipped_and_listed(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Without --force a removed row YAML deletes nothing; push lists it (#792 G, D5)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        row_file.unlink()
+
+        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_svc = SyncService(config_store=store, client_factory=lambda url, token: push_client)
+
+        dry = push_svc.push(alias="prod", project_root=project_root, dry_run=True)
+        result = push_svc.push(alias="prod", project_root=project_root)
+
+        push_client.delete_config_row.assert_not_called()
+        for res in (dry, result):
+            assert res["status"] == "no_changes"
+            (held,) = res["skipped_deletions"]
+            assert (held["config_id"], held["parent_config_id"], held["is_row"]) == (
+                "row-001",
+                "cfg-001",
+                True,
+            )
+            assert "--force" in res["skipped_deletions_reason"]
+        manifest = load_manifest(project_root)
+        parent = next(c for c in manifest.configurations if c.id == "cfg-001")
+        assert any(r.id == "row-001" for r in parent.rows)
+
+    def test_push_does_not_recreate_config_or_rows_deleted_remotely(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A config deleted on the remote since pull is not re-created, nor are its rows,
+        not even a row added locally under it -- also with --force (#792 H)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        new_row = row_file.parent.parent / "new-row"
+        new_row.mkdir()
+        (new_row / CONFIG_FILENAME).write_text("name: New Row\nparameters: {}\n")
+
+        remaining = [c for c in SAMPLE_COMPONENTS if c["id"] != "keboola.ex-http"]
+        push_client = _make_sync_mock_client(components_response=remaining)
+        push_svc = SyncService(config_store=store, client_factory=lambda url, token: push_client)
+
+        diff = push_svc.diff(alias="prod", project_root=project_root)
+        result = push_svc.push(alias="prod", project_root=project_root)
+        forced = push_svc.push(alias="prod", project_root=project_root, force=True)
+
+        assert sorted((c["change_type"], c["config_name"]) for c in diff["changes"]) == [
+            ("remote_deleted", "My HTTP Extractor"),
+            ("remote_deleted", "New Row"),
+            ("remote_deleted", "Users Endpoint"),
+        ]
+        assert diff["summary"]["remote_deleted"] == 3
+        assert diff["summary"]["unchanged"] == 1  # cfg-002; rows are not counted
+        push_client.create_config.assert_not_called()
+        push_client.create_config_row.assert_not_called()
+        push_client.delete_config.assert_not_called()
+        push_client.delete_config_row.assert_not_called()
+        for res in (result, forced):
+            assert (res["status"], res["skipped"]) == ("no_changes", 3)
+
+    def _without_row_001(self) -> list[dict[str, Any]]:
+        """SAMPLE_COMPONENTS with row-001 deleted on the remote; cfg-001 stays."""
+        components: list[dict[str, Any]] = copy.deepcopy(SAMPLE_COMPONENTS)
+        components[0]["configurations"][0]["rows"] = []
+        return components
+
+    def test_row_deleted_remotely_is_removed_by_pull_and_not_recreated(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Remote row delete -> diff, pull, diff, push: the row is never created again (#792 H)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        client = _make_sync_mock_client(components_response=self._without_row_001())
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+        before = svc.diff(alias="prod", project_root=project_root)
+        pulled = svc.pull(alias="prod", project_root=project_root)
+        after = svc.diff(alias="prod", project_root=project_root)
+        pushed = svc.push(alias="prod", project_root=project_root)
+
+        assert [(c["change_type"], c["config_id"]) for c in before["changes"]] == [
+            ("remote_deleted", "row-001")
+        ]
+        assert not row_file.exists()
+        assert any(d["action"] == "removed" and "rows" in d["path"] for d in pulled["details"])
+        assert after["changes"] == []
+        assert pushed["status"] == "no_changes"
+        client.create_config_row.assert_not_called()
+
+    def test_edited_row_deleted_remotely_is_kept_by_pull_and_not_recreated(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """An edited row whose remote is gone stays tracked as remote_deleted (#792 H)."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store, _ = self._init_and_pull(tmp_config_dir, project_root)
+        (row_file,) = (
+            f
+            for f in project_root.rglob(CONFIG_FILENAME)
+            if "rows" in f.relative_to(project_root).parts
+        )
+        row_file.write_text(row_file.read_text().replace("/users", "/members"))
+        client = _make_sync_mock_client(components_response=self._without_row_001())
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+        pulled = svc.pull(alias="prod", project_root=project_root)
+        after = svc.diff(alias="prod", project_root=project_root)
+        pushed = svc.push(alias="prod", project_root=project_root)
+
+        assert row_file.exists()
+        assert any(d["action"] == "skipped" and "rows" in d["path"] for d in pulled["details"])
+        assert [(c["change_type"], c["config_id"]) for c in after["changes"]] == [
+            ("remote_deleted", "row-001")
+        ]
+        assert pushed["status"] == "no_changes"
+        client.create_config_row.assert_not_called()
 
     def test_push_row_encrypts_hash_secrets_before_api_call(
         self, tmp_config_dir: Path, tmp_path: Path
@@ -2718,12 +2859,13 @@ class TestIssue267Regressions:
         (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
 
         manifest = load_manifest(project_root)
-        project = store.get_project("prod")
         with patch(
             "keboola_agent_cli.sync.git_utils.get_current_branch",
             return_value="main",
         ):
-            resolved = SyncService._resolve_branch_id(project, manifest, project_root)
+            resolved = SyncService(config_store=store)._resolve_branch_id(
+                "prod", manifest, project_root
+            )
         assert resolved is None
 
     def test_resolve_branch_id_dev_branch_without_mapping_still_errors(
@@ -2739,7 +2881,6 @@ class TestIssue267Regressions:
         (project_root / KEBOOLA_DIR_NAME / BRANCH_MAPPING_FILENAME).unlink()
 
         manifest = load_manifest(project_root)
-        project = store.get_project("prod")
         with (
             patch(
                 "keboola_agent_cli.sync.git_utils.get_current_branch",
@@ -2747,7 +2888,7 @@ class TestIssue267Regressions:
             ),
             pytest.raises(ConfigError, match="not linked"),
         ):
-            SyncService._resolve_branch_id(project, manifest, project_root)
+            SyncService(config_store=store)._resolve_branch_id("prod", manifest, project_root)
 
 
 # ===================================================================
@@ -3540,6 +3681,32 @@ class TestFreshCreateVariableBinding:
         client.create_config.side_effect = fake_create_config
         client.create_config_row.return_value = {"id": "VALS-9"}
         client.update_config.return_value = {"id": "TX-9"}
+
+        # ``sync push`` reads each written config/row back to stamp an
+        # API-derived manifest baseline (issue #686). The mutation responses
+        # above are id-only, so serve the read-back from the post-push remote.
+        remote = self._remote_after_create()
+
+        def fake_detail(component_id: str, config_id: str, branch_id: Any = None) -> dict[str, Any]:
+            for component in remote:
+                if component["id"] != component_id:
+                    continue
+                for config in component["configurations"]:
+                    if config["id"] == config_id:
+                        return dict(config)
+            raise KeyError(config_id)
+
+        def fake_row(
+            component_id: str, config_id: str, row_id: str, branch_id: Any = None
+        ) -> dict[str, Any]:
+            parent = fake_detail(component_id, config_id)
+            for row in parent.get("rows", []):
+                if row["id"] == row_id:
+                    return dict(row)
+            raise KeyError(row_id)
+
+        client.get_config_detail.side_effect = fake_detail
+        client.get_config_row.side_effect = fake_row
         return client
 
     def _remote_after_create(self) -> list[dict[str, Any]]:
@@ -3792,15 +3959,16 @@ class TestBranchOverrideAndNameDriftFlag:
     """Cover the `--branch` override (push / pull / diff) and the
     `--no-name-drift-warnings` opt-out at the service boundary."""
 
-    def test_resolve_branch_id_override_wins(self, tmp_path: Path) -> None:
+    def test_resolve_branch_id_override_wins(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         from keboola_agent_cli.sync.manifest import (
             ManifestBranch,
             ManifestNaming,
             ManifestProject,
         )
 
-        project = MagicMock()
-        project.active_branch_id = 12345
+        store = setup_single_project(tmp_config_dir)
+        store.set_project_branch("prod", 12345)
+        service = SyncService(config_store=store)
         manifest = Manifest.model_construct(
             project=ManifestProject(id=1, apiHost="connection.keboola.com"),
             naming=ManifestNaming(),
@@ -3808,14 +3976,10 @@ class TestBranchOverrideAndNameDriftFlag:
         )
 
         # Without override -> falls back to active_branch_id (priority 2).
-        assert (
-            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=None)
-            == 12345
-        )
+        assert service._resolve_branch_id("prod", manifest, tmp_path, branch_override=None) == 12345
         # Override wins (priority 0).
         assert (
-            SyncService._resolve_branch_id(project, manifest, tmp_path, branch_override=388071)
-            == 388071
+            service._resolve_branch_id("prod", manifest, tmp_path, branch_override=388071) == 388071
         )
 
     def test_push_branch_override_reaches_client(
@@ -4377,3 +4541,341 @@ class TestIssue649ProductionDiffAfterBranchPull:
         push_result = svc.push(alias="prod", project_root=project_root, branch_override=99999)
         client.create_config.assert_not_called()
         assert push_result["created"] == 0
+
+
+# ===================================================================
+# Issue #689: ignored components (hardcoded + manifest-declared)
+# ===================================================================
+
+# Component id used as the "user adds this to ignoredComponents" subject. It is
+# deliberately NOT in ALWAYS_IGNORED_COMPONENTS, so every assertion below about
+# it proves the manifest field is honored rather than the hardcoded set.
+IGNORED_CANDIDATE = "custom.ignore-me"
+
+MCP_TOOL_COMPONENT: dict[str, Any] = {
+    "id": "keboola.mcp-server-tool",
+    "type": "application",
+    "configurations": [
+        {
+            "id": "mcp-001",
+            "name": "MCP Server Tool",
+            "description": "",
+            "configuration": {},
+            "rows": [],
+        }
+    ],
+}
+
+
+def _candidate_component(base_url: str = "https://api.example.com") -> dict[str, Any]:
+    """A normal, syncable component -- until the manifest says otherwise."""
+    return {
+        "id": IGNORED_CANDIDATE,
+        "type": "extractor",
+        "configurations": [
+            {
+                "id": "cfg-777",
+                "name": "Ignore Me",
+                "description": "",
+                "configuration": {"parameters": {"baseUrl": base_url}},
+                "rows": [],
+            }
+        ],
+    }
+
+
+def _set_manifest_ignored(project_root: Path, component_ids: list[str]) -> None:
+    """Write ``ignoredComponents`` straight into the manifest on disk."""
+    manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["ignoredComponents"] = component_ids
+    manifest_path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+_STALE_ENTRY_PATH = "application/keboola.mcp-server-tool/mcp-server-tool"
+
+
+def _inject_stale_entry(project_root: Path) -> None:
+    """Recreate what a pre-#689 kbagent left in a synced tree.
+
+    Manifest entry AND materialized directory for a component that today's
+    fetch filters out. Hand-built on purpose: no current code path can produce
+    it, which is exactly why it must be tested -- every tree pulled before the
+    fix carries one per project.
+    """
+    manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    branch_id = data["branches"][0]["id"]
+    data["configurations"].append(
+        {
+            "branchId": branch_id,
+            "componentId": MCP_TOOL_COMPONENT["id"],
+            "id": "mcp-001",
+            "path": _STALE_ENTRY_PATH,
+            "metadata": {},
+            "rows": [],
+        }
+    )
+    manifest_path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    config_dir = project_root / data["branches"][0]["path"] / _STALE_ENTRY_PATH
+    config_dir.mkdir(parents=True)
+    (config_dir / CONFIG_FILENAME).write_text(
+        yaml.dump(
+            {
+                "name": "MCP Server Tool",
+                "_keboola": {
+                    "component_id": MCP_TOOL_COMPONENT["id"],
+                    "config_id": "mcp-001",
+                },
+                "parameters": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+class TestIssue689IgnoredComponents:
+    """Regression coverage for issue #689.
+
+    Two gaps, one shared failure mode. ``keboola.mcp-server-tool`` workspace
+    records were pulled into every tree as noise, and the manifest's
+    ``ignoredComponents`` field -- declared in the schema since v3 -- was read
+    by nothing. Both leave the local and remote sides of ``diff`` disagreeing
+    about what exists: a manifest entry whose remote counterpart is filtered
+    out classifies as ``added`` while keeping its live config id, and
+    ``sync push`` then creates a duplicate of that live production
+    configuration -- once per push.
+    """
+
+    def _init(self, tmp_config_dir: Path, project_root: Path) -> ConfigStore:
+        init_client = _make_sync_mock_client(
+            verify_token_response=SAMPLE_VERIFY_TOKEN,
+            branches_response=SAMPLE_BRANCHES,
+        )
+        store = setup_single_project(tmp_config_dir)
+        SyncService(
+            config_store=store,
+            client_factory=lambda url, token: init_client,
+        ).init_sync(alias="prod", project_root=project_root)
+        return store
+
+    def _svc_with_client(
+        self, store: ConfigStore, components: list
+    ) -> tuple[SyncService, MagicMock]:
+        """Build a service plus the mock client tests assert write-calls on."""
+        client = _make_sync_mock_client(components_response=components)
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        return svc, client
+
+    def _svc(self, store: ConfigStore, components: list) -> SyncService:
+        svc, _ = self._svc_with_client(store, components)
+        return svc
+
+    def _tracked_candidate(
+        self,
+        tmp_config_dir: Path,
+        project_root: Path,
+    ) -> ConfigStore:
+        """init + pull with the candidate still syncable, then ignore it."""
+        store = self._init(tmp_config_dir, project_root)
+        components = [*SAMPLE_COMPONENTS_NO_ROWS, _candidate_component()]
+        self._svc(store, components).pull(alias="prod", project_root=project_root)
+
+        manifest = load_manifest(project_root)
+        assert IGNORED_CANDIDATE in {cfg.component_id for cfg in manifest.configurations}
+
+        _set_manifest_ignored(project_root, [IGNORED_CANDIDATE])
+        return store
+
+    # -- pull ---------------------------------------------------------
+
+    def test_pull_skips_mcp_server_tool(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """The MCP server's workspace record is never materialized or tracked."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+
+        result = self._svc(store, [*SAMPLE_COMPONENTS_NO_ROWS, MCP_TOOL_COMPONENT]).pull(
+            alias="prod", project_root=project_root
+        )
+
+        assert result["configs_pulled"] == 1
+        manifest = load_manifest(project_root)
+        assert {cfg.component_id for cfg in manifest.configurations} == {"keboola.ex-http"}
+        assert not list(project_root.rglob("*mcp-server-tool*"))
+
+    def test_pull_honors_manifest_ignored_components(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A component named in ``ignoredComponents`` is skipped like a hardcoded one."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        _set_manifest_ignored(project_root, [IGNORED_CANDIDATE])
+
+        result = self._svc(store, [*SAMPLE_COMPONENTS_NO_ROWS, _candidate_component()]).pull(
+            alias="prod", project_root=project_root
+        )
+
+        assert result["configs_pulled"] == 1
+        manifest = load_manifest(project_root)
+        assert {cfg.component_id for cfg in manifest.configurations} == {"keboola.ex-http"}
+        assert manifest.ignored_components == [IGNORED_CANDIDATE]
+
+    def test_pull_reports_newly_ignored_entry_as_ignored_not_removed(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A tracked entry dropped because its component became ignored is
+        reported as ``ignored`` -- ``removed`` would claim the remote deleted a
+        config that is still very much there."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._tracked_candidate(tmp_config_dir, project_root)
+        tracked_path = next(
+            cfg.path
+            for cfg in load_manifest(project_root).configurations
+            if cfg.component_id == IGNORED_CANDIDATE
+        )
+        assert (project_root / "main" / tracked_path).is_dir()
+
+        result = self._svc(store, [*SAMPLE_COMPONENTS_NO_ROWS, _candidate_component()]).pull(
+            alias="prod", project_root=project_root
+        )
+
+        actions = {d["action"] for d in result["details"] if d["component_id"] == IGNORED_CANDIDATE}
+        assert actions == {"ignored"}
+        assert not [d for d in result["details"] if d["action"] == "removed"]
+        # Manifest entry gone and the directory cleaned up, exactly as for a
+        # genuine removal -- git keeps the deletion reviewable.
+        manifest = load_manifest(project_root)
+        assert IGNORED_CANDIDATE not in {cfg.component_id for cfg in manifest.configurations}
+        assert not (project_root / "main" / tracked_path).exists()
+
+    def test_force_pull_conflict_guard_skips_ignored(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A locally-modified ignored config whose remote also changed is not a
+        conflict: ``--force`` must not abort over a config nobody syncs."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._tracked_candidate(tmp_config_dir, project_root)
+
+        tracked_path = next(
+            cfg.path
+            for cfg in load_manifest(project_root).configurations
+            if cfg.component_id == IGNORED_CANDIDATE
+        )
+        config_file = project_root / "main" / tracked_path / CONFIG_FILENAME
+        local_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        local_data["parameters"]["baseUrl"] = "https://local-edit.example.com"
+        config_file.write_text(yaml.dump(local_data, default_flow_style=False), encoding="utf-8")
+
+        # Remote changed too -> a 3-way conflict, were the component synced.
+        remote = [*SAMPLE_COMPONENTS_NO_ROWS, _candidate_component("https://remote-edit.example")]
+        result = self._svc(store, remote).pull(alias="prod", project_root=project_root, force=True)
+
+        assert result["status"] == "pulled"
+
+    # -- diff / push --------------------------------------------------
+
+    def test_diff_excludes_stale_ignored_entry(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """A stale manifest entry for an ignored component contributes nothing
+        to the changeset and is not reported as an orphan.
+
+        This is the dangerous half of #689: the entry is left behind by an
+        older kbagent that still pulled the component, so the LOCAL side knows
+        it while the REMOTE side now filters it out. The diff engine flags a
+        local entry with no remote counterpart as ``added`` -- with its
+        existing config id -- and push then CREATES a duplicate of a live
+        config, once per push.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).pull(alias="prod", project_root=project_root)
+        _inject_stale_entry(project_root)
+
+        diff_result = self._svc(store, [*SAMPLE_COMPONENTS_NO_ROWS, MCP_TOOL_COMPONENT]).diff(
+            alias="prod", project_root=project_root
+        )
+
+        assert diff_result["summary"]["added"] == 0
+        assert diff_result["summary"]["deleted"] == 0
+        assert diff_result["summary"]["orphaned"] == 0
+        assert diff_result["orphaned"] == []
+        assert all(c["component_id"] != MCP_TOOL_COMPONENT["id"] for c in diff_result["changes"])
+
+    def test_diff_excludes_remote_side_of_ignored_component(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """Remote configs of an ignored component are not reported as
+        ``remote_only`` -- ``sync diff`` must not nag the user to pull configs
+        that ``sync pull`` is contractually going to skip."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        _set_manifest_ignored(project_root, [IGNORED_CANDIDATE])
+        # Pull a remote that carries only the syncable component, so nothing
+        # local can account for the ignored ones on the next diff.
+        self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).pull(alias="prod", project_root=project_root)
+
+        diff_result = self._svc(
+            store, [*SAMPLE_COMPONENTS_NO_ROWS, _candidate_component(), MCP_TOOL_COMPONENT]
+        ).diff(alias="prod", project_root=project_root)
+
+        assert diff_result["summary"]["added"] == 0
+        assert diff_result["summary"]["remote_only"] == 0
+        assert diff_result["remote_only"] == []
+
+    def test_push_touches_nothing_for_stale_ignored_entry(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """push builds its changeset from diff, so a stale ignored entry
+        reaches neither ``create_config`` nor ``delete_config``."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).pull(alias="prod", project_root=project_root)
+        _inject_stale_entry(project_root)
+
+        svc, client = self._svc_with_client(store, [*SAMPLE_COMPONENTS_NO_ROWS, MCP_TOOL_COMPONENT])
+        push_result = svc.push(alias="prod", project_root=project_root, force=True)
+
+        assert push_result["status"] == "no_changes"
+        assert push_result["deleted"] == 0
+        assert push_result["created"] == 0
+        client.create_config.assert_not_called()
+        client.delete_config.assert_not_called()
+
+    def test_diff_ignores_leftover_untracked_directory(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """A directory left on disk for an ignored component (no manifest entry)
+        must not be planned as a create -- push would re-add what pull refuses
+        to fetch."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init(tmp_config_dir, project_root)
+        _set_manifest_ignored(project_root, [IGNORED_CANDIDATE])
+        self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).pull(alias="prod", project_root=project_root)
+
+        leftover = project_root / "main" / "extractor" / "custom.ignore-me" / "ignore-me"
+        leftover.mkdir(parents=True)
+        (leftover / CONFIG_FILENAME).write_text(
+            yaml.dump(
+                {
+                    "name": "Ignore Me",
+                    "_keboola": {"component_id": IGNORED_CANDIDATE, "config_id": ""},
+                    "parameters": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        diff_result = self._svc(store, SAMPLE_COMPONENTS_NO_ROWS).diff(
+            alias="prod", project_root=project_root
+        )
+
+        assert diff_result["summary"]["added"] == 0
+        assert all(c["component_id"] != IGNORED_CANDIDATE for c in diff_result["changes"])

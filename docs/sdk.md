@@ -21,10 +21,10 @@ import os
 from keboola_agent_cli import Client
 
 with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
-    rows = kbc.query(workspace_id, "SELECT id, name FROM customers")   # list[dict]
+    rows = kbc.query(workspace_id, "SELECT id, name FROM customers")  # list[dict]
     meta = kbc.files.upload(b"hello", name="greeting.txt", tags=["demo"])
-    data = kbc.files.read_bytes(meta.id)                                # bytes
-    job  = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)   # JobResult
+    data = kbc.files.read_bytes(meta.id)  # bytes
+    job = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)  # JobResult
 ```
 
 **It is:**
@@ -86,7 +86,7 @@ To scope every call to a dev branch, pass `branch_id`:
 
 ```python
 with Client(url=URL, token=TOKEN, branch_id=1234) as kbc:
-    rows = kbc.query(ws_id, "SELECT 1")   # runs on branch 1234
+    rows = kbc.query(ws_id, "SELECT 1")  # runs on branch 1234
 ```
 
 `branch_id=None` (the default) targets **production**: Storage Files use the production scope and `query()` resolves the project's *default* branch on first use.
@@ -122,7 +122,7 @@ Same execution as `query`, but returns the full typed [`QueryResult`](#5-typed-r
 res = kbc.query_result(ws_id, "SELECT * FROM big_table", limit=500)
 if res.truncated:
     print(f"showing {res.row_count} of {res.total_rows} rows")
-print(res.columns)   # ["ID", "NAME", "CREATED_AT"]
+print(res.columns)  # ["ID", "NAME", "CREATED_AT"]
 ```
 
 ### `run_job(component_id, config_id, *, wait=False, timeout=300.0, ...) -> JobResult`
@@ -144,8 +144,9 @@ from keboola_agent_cli import JobIdempotencyStore
 
 store = JobIdempotencyStore(path="/my/app/checkpoints/jobs.json")
 with Client(url=URL, token=TOKEN, idempotency_store=store) as kbc:
-    job = kbc.run_job("keboola.ex-db-snowflake", "12345",
-                      wait=True, idempotency_key="nightly-2026-06-17")
+    job = kbc.run_job(
+        "keboola.ex-db-snowflake", "12345", wait=True, idempotency_key="nightly-2026-06-17"
+    )
     if job.idempotent_replay:
         print("a prior run for this key was returned — no new side effect")
 ```
@@ -189,7 +190,7 @@ tok = kbc.create_scoped_token(
     bucket_permissions={"in.c-otlp-my-source": "write"},
     expires_in=3600,
 )
-device_secret = tok.token   # ONE-TIME reveal — see the gotcha below
+device_secret = tok.token  # ONE-TIME reveal — see the gotcha below
 ```
 
 **Stream (OTLP Data Streams) sources** — provision, read, list, delete:
@@ -202,17 +203,17 @@ device_secret = tok.token   # ONE-TIME reveal — see the gotcha below
 **The two-call enrollment example** — provision the endpoint, then mint the device's token scoped to exactly the sink bucket:
 
 ```python
-with Client(url=URL, token=TOKEN) as kbc:   # TOKEN must be a master token for create
-    src = kbc.create_stream_source("my-source")     # StreamSourceResult
+with Client(url=URL, token=TOKEN) as kbc:  # TOKEN must be a master token for create
+    src = kbc.create_stream_source("my-source")  # StreamSourceResult
     # hand the device its ingest endpoint:
-    print(src.otlp_url)          # carries the ingest secret in the path — UNMASKED
+    print(src.otlp_url)  # carries the ingest secret in the path — UNMASKED
     # mint the narrowly-scoped token the device uploads Files with:
     tok = kbc.create_scoped_token(
         description="device-42",
         bucket_permissions={src.sink_bucket_id: "write"},
         expires_in=3600,
     )
-    print(tok.id, tok.token)     # persist tok.id + tok.expires; tok.token is one-time
+    print(tok.id, tok.token)  # persist tok.id + tok.expires; tok.token is one-time
 ```
 
 Four gotchas that bite:
@@ -246,8 +247,8 @@ Two design rules every model follows (`_ApiResultModel` base):
 
   ```python
   job = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)
-  job.status          # named field — committed contract
-  job.model_extra     # {"branchId": ..., "durationSeconds": ..., "runId": ...} — preserved, not typed
+  job.status  # named field — committed contract
+  job.model_extra  # {"branchId": ..., "durationSeconds": ..., "runId": ...} — preserved, not typed
   ```
 
 - **`populate_by_name=True` — alias-tolerant.** Each model accepts both the snake_case field name and the raw API key (declared via `AliasChoices`), so `Model.model_validate(service_dict)` works directly on a service-layer dict without renaming. `JobResult` reads `isFinished`/`is_finished`, `componentId`/`component`/`component_id`, etc.
@@ -297,10 +298,10 @@ The facade is intentionally small. For any endpoint it omits — listing buckets
 
 ```python
 with Client(url=URL, token=TOKEN) as kbc:
-    buckets = kbc.raw.list_buckets()                                  # list[dict]
-    tables  = kbc.raw.list_tables(bucket_id="in.c-crm")               # list[dict]
-    detail  = kbc.raw.get_table_detail("in.c-crm.customers")          # dict
-    csv     = kbc.raw.get_table_data_preview("in.c-crm.customers", limit=20)  # CSV str
+    buckets = kbc.raw.list_buckets()  # list[dict]
+    tables = kbc.raw.list_tables(bucket_id="in.c-crm")  # list[dict]
+    detail = kbc.raw.get_table_detail("in.c-crm.customers")  # dict
+    csv = kbc.raw.get_table_data_preview("in.c-crm.customers", limit=20)  # CSV str
 ```
 
 `raw` returns `dict`/`list[dict]`/`str` straight from the API — **not** the typed models. It is the lower-level, less-stable surface: useful, but you own the parsing. The [storage TUI demo](../examples/storage_tui/) is built almost entirely on these four `raw` methods.

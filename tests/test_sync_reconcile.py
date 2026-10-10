@@ -18,6 +18,7 @@ Fixture style mirrors tests/test_sync_force_pull_baseline.py.
 
 import shutil
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import yaml
@@ -87,9 +88,27 @@ def _make_mock_client(
         client.verify_token.return_value = verify_token_response
     if components_response is not None:
         client.list_components_with_configs.return_value = components_response
+        # ``sync push`` reads the config back to stamp an API-derived manifest
+        # baseline (issue #686); serve it from the same remote fixture.
+        client.get_config_detail.side_effect = _detail_from(components_response)
     if branches_response is not None:
         client.list_dev_branches.return_value = branches_response
     return client
+
+
+def _detail_from(components: list) -> Any:
+    """Build a ``get_config_detail`` side effect backed by *components*."""
+
+    def _detail(component_id: str, config_id: str, branch_id: int | None = None) -> dict:
+        for component in components:
+            if component.get("id") != component_id:
+                continue
+            for config in component.get("configurations", []):
+                if str(config.get("id")) == str(config_id):
+                    return dict(config)
+        raise KeyError(f"{component_id}/{config_id}")
+
+    return _detail
 
 
 def _svc(store: ConfigStore, components: list | None = None) -> SyncService:

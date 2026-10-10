@@ -140,6 +140,7 @@ class _WorkspacesMixin(_CoreClient):
         tables: list[dict[str, Any]],
         branch_id: int | None = None,
         preserve: bool = False,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Load tables into a workspace (async operation).
 
@@ -148,9 +149,16 @@ class _WorkspacesMixin(_CoreClient):
             tables: List of table load definitions, each with at minimum:
                 - source: table ID (e.g. "in.c-bucket.table")
                 - destination: target table name in workspace
+                Optionally also ``loadType`` ("COPY" / "CLONE" / "VIEW" --
+                uppercase; the request validator matches the uppercase enum).
+                Omitting it means COPY. Items are forwarded verbatim.
             branch_id: Branch ID. Required for workspaces on dev branches.
             preserve: If True, keep existing tables in the workspace. Default is False
                 (workspace is cleared before loading).
+            max_wait: Seconds to poll the load job before giving up. ``None``
+                falls back to the shared STORAGE_JOB_MAX_WAIT; the service
+                layer passes WORKSPACE_LOAD_JOB_MAX_WAIT, because a real COPY
+                routinely outlives the 60s default.
 
         Returns:
             Completed storage job dict (polls until done).
@@ -165,4 +173,4 @@ class _WorkspacesMixin(_CoreClient):
             f"{prefix}/workspaces/{workspace_id}/load",
             json=body,
         )
-        return self._wait_for_storage_job(response.json())
+        return self._wait_for_storage_job(response.json(), max_wait=max_wait)

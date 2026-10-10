@@ -25,10 +25,16 @@ from typing import Any
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
 from ..scheduler_client import SchedulerClient
-from .base import BaseService, ClientFactory, project_error_entry
+from .base import (
+    BaseService,
+    ClientFactory,
+    make_session_aware_client_factory,
+    project_error_entry,
+)
 from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
 logger = logging.getLogger(__name__)
@@ -132,24 +138,6 @@ class FlowSchemaFetch:
     reason: str | None
 
 
-def default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Default factory: build an ``AiServiceClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return AiServiceClient(stack_url=stack_url, token=token)
-
-
-def default_scheduler_client_factory(stack_url: str, token: str) -> SchedulerClient:
-    """Default factory: build a ``SchedulerClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return SchedulerClient(stack_url=stack_url, token=token)
-
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -178,6 +166,28 @@ def _schedules_targeting_flow(
         ) == str(config_id):
             matching.append(sched)
     return matching
+
+
+def _triggers_targeting_config(
+    raw_triggers: list[dict[str, Any]], config_id: str
+) -> list[dict[str, Any]]:
+    """Keep only the triggers that really target ``config_id``.
+
+    The Storage API is *sent* ``?configurationId=`` and does apply it
+    (``TriggerRepository::findAllByFilter``, exact match) -- but this codebase
+    has been burned by an accepted-then-ignored query filter before (the
+    Notification Service and ``?event=``, issue #600), so the result is
+    narrowed again here as defense in depth. It costs one pass over a list
+    that is single-digit long in practice.
+
+    Compared as strings: trigger ids are strings in the response but flow ids
+    are numeric on some stacks.
+    """
+    return [
+        trigger
+        for trigger in raw_triggers
+        if isinstance(trigger, dict) and str(trigger.get("configurationId", "")) == str(config_id)
+    ]
 
 
 def _collect_schedules_by_parent(
@@ -253,9 +263,12 @@ class FlowService(BaseService):
         scheduler_client_factory: SchedulerClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
-        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
         self._scheduler_client_factory = (
-            scheduler_client_factory or default_scheduler_client_factory
+            scheduler_client_factory
+            or make_session_aware_client_factory(config_store, SchedulerClient)
         )
 
     # ── schema fetch ─────────────────────────────────────────────────
@@ -347,8 +360,8 @@ class FlowService(BaseService):
         projects = self.resolve_projects(aliases)
 
         def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+            effective_branch = resolve_branch(self._config_store, alias, branch_id)
             client = self._client_factory(project.stack_url, project.token)
-            effective_branch = branch_id or project.active_branch_id
             try:
                 flows: list[dict[str, Any]] = []
                 try:
@@ -422,7 +435,12 @@ class FlowService(BaseService):
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Return full flow detail including phases, tasks, and schedule info.
+        """Return flow configuration detail including parsed phases and tasks.
+
+        The result is the raw config detail enriched with ``phases``, ``tasks``,
+        ``phase_count``, ``task_count``, ``component_id``, ``branch_id`` and
+        ``project_alias``. Schedule info is NOT included -- schedules live in a
+        separate scheduler config (see ``list_flows(with_schedules=True)``).
 
         Raises:
             ConfigError: If alias is not found.
@@ -430,7 +448,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -483,7 +501,7 @@ class FlowService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         fetch = self._fetch_flow_schema(project)
         warnings: list[str] = []
@@ -548,7 +566,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         warnings: list[str] = []
         client = self._client_factory(project.stack_url, project.token)
@@ -618,7 +636,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -653,7 +671,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -687,6 +705,82 @@ class FlowService(BaseService):
             "component_id": FLOW_COMPONENT_ID,
             "config_id": config_id,
             "schedules": schedules,
+        }
+
+    def get_flow_triggers(
+        self,
+        alias: str,
+        config_id: str,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Report every trigger kbagent can see for one flow -- and say what it cannot.
+
+        A flow is started automatically by at least three mechanisms, and
+        ``schedule list`` only ever saw one of them (issue #714):
+
+        * **cron schedules** -- ``keboola.scheduler`` configs; covered here.
+        * **table triggers** -- a separate Storage API resource, not a
+          component config at all; covered here, and previously invisible to
+          every kbagent command.
+        * **cross-project triggers** -- a trigger-queue app config living in a
+          DIFFERENT project; **not** covered. Detecting them means scanning
+          every connected project and resolving each candidate's parameters
+          back to this project + flow, which is not implemented.
+
+        That third bullet is why the result carries
+        ``cross_project_triggers_checked: False`` rather than an empty list. A
+        flow with no cron schedule and no table trigger is "no trigger *that
+        kbagent checked*", never "no trigger" -- reporting the latter is the
+        exact false negative this method exists to prevent.
+
+        Table triggers are **production-only**: the Storage route has no
+        branch-scoped variant, so ``branch_id`` narrows the cron-schedule half
+        only and ``table_triggers_branch_scoped`` is always ``False``.
+        """
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
+
+        schedules = self.list_flow_schedules(alias, config_id, branch_id=branch_id)["schedules"]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            raw_triggers = client.list_triggers(configuration_id=str(config_id))
+        except KeboolaApiError as exc:
+            if exc.error_code == ErrorCode.NOT_FOUND:
+                raw_triggers = []
+            else:
+                raise
+        finally:
+            client.close()
+
+        table_triggers = [
+            {
+                "trigger_id": str(trigger.get("id", "")),
+                "component_id": trigger.get("component", ""),
+                "tables": [
+                    t.get("tableId", "")
+                    for t in (trigger.get("tables") or [])
+                    if isinstance(t, dict)
+                ],
+                "cool_down_period_minutes": trigger.get("coolDownPeriodMinutes"),
+                "last_run": trigger.get("lastRun"),
+                "run_with_token_id": trigger.get("runWithTokenId"),
+            }
+            for trigger in _triggers_targeting_config(raw_triggers, config_id)
+        ]
+
+        return {
+            "project_alias": alias,
+            "component_id": FLOW_COMPONENT_ID,
+            "config_id": config_id,
+            "branch_id": effective_branch,
+            "cron_schedules": schedules,
+            "table_triggers": table_triggers,
+            # Deliberately not an empty list: an empty list reads as "checked,
+            # found none", which is the false negative #714 is about.
+            "cross_project_triggers_checked": False,
+            "table_triggers_branch_scoped": False,
         }
 
     def set_flow_schedule(
@@ -723,7 +817,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -850,7 +944,7 @@ class FlowService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:

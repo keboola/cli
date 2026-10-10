@@ -22,13 +22,13 @@ import pytest
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.services._semantic_layer_fqn import derive_dataset_fqn
 from keboola_agent_cli.services.semantic_layer_service import (
     CONSTRAINT_NAME_RE,
     CONSTRAINT_SEVERITIES,
     CONSTRAINT_TYPES,
     SemanticLayerService,
     _classify_field_role,
-    _derive_fqn,
 )
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -125,16 +125,48 @@ def _child_item(
 # ---------------------------------------------------------------------------
 
 
-class TestDeriveFqn:
-    def test_simple_two_segment_table_id(self) -> None:
-        assert _derive_fqn("out.c-gold.FACT_X") == '"KEBOOLA"."out.c-gold"."FACT_X"'
+class TestDeriveDatasetFqn:
+    """The fqn is the table-detail ``sql_path``."""
 
-    def test_three_segment_table_id(self) -> None:
-        assert _derive_fqn("in.c-raw.users") == '"KEBOOLA"."in.c-raw"."users"'
+    def test_uses_storage_sql_path(self) -> None:
+        detail = {
+            "name": "FACT_X",
+            "backend": "snowflake",
+            "backend_path": ["KBC_USE4_5725", "out.c-gold"],
+            "sql_path": '"KBC_USE4_5725"."out.c-gold"."FACT_X"',
+        }
+        assert derive_dataset_fqn("out.c-gold.FACT_X", detail) == (
+            '"KBC_USE4_5725"."out.c-gold"."FACT_X"'
+        )
 
-    def test_invalid_single_segment_raises(self) -> None:
+    def test_missing_location_raises_and_points_at_fqn_flag(self) -> None:
+        detail = {"name": "t", "backend": "snowflake", "backend_path": [], "sql_path": None}
         with pytest.raises(KeboolaApiError) as excinfo:
-            _derive_fqn("nodots")
+            derive_dataset_fqn("in.c-raw.t", detail)
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "add dataset --fqn" in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        "backend, backend_path, name",
+        [
+            ("snowflake", ['KBC"X', "in.c-raw"], "t"),
+            ("snowflake", ["KBC_X", "in.c-raw"], 't"; DROP'),
+            ("bigquery", ["ds`x"], "t"),
+        ],
+    )
+    def test_quote_in_storage_location_rejected(
+        self, backend: str, backend_path: list[str], name: str
+    ) -> None:
+        from keboola_agent_cli.services._table_detail import build_table_detail
+
+        raw_table = {
+            "id": "in.c-raw.t",
+            "name": name,
+            "bucket": {"id": "in.c-raw", "backend": backend, "backendPath": backend_path},
+        }
+        detail = build_table_detail("prod", "in.c-raw.t", raw_table)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            derive_dataset_fqn("in.c-raw.t", detail)
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
 
 
@@ -754,6 +786,50 @@ class TestValidateDeep:
         errors = [e for e in result["errors"] if e["type"] == "METRIC_PHANTOM"]
         assert errors
 
+    @pytest.mark.parametrize(
+        "stored_fqn, sql_path, expect_warning",
+        [
+            ('"KEBOOLA"."out.c"."t"', '"KBC_USE4_5725"."out.c"."t"', True),
+            ('"KBC_USE4_5725"."out.c"."t"', '"KBC_USE4_5725"."out.c"."t"', False),
+            # Storage reports no location: nothing to compare against.
+            ('"KEBOOLA"."out.c"."t"', None, False),
+        ],
+    )
+    def test_fqn_mismatch_warning(
+        self,
+        tmp_path: Path,
+        stored_fqn: str,
+        sql_path: str | None,
+        expect_warning: bool,
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        ds_attrs = {"name": "ds", "tableId": "out.c.t", "fqn": stored_fqn}
+
+        def _list(item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+            if item_type == "semantic-model":
+                return [_model_item("U", "m")]
+            if item_type == "semantic-dataset":
+                return [_child_item("semantic-dataset", "d1", ds_attrs)]
+            return []
+
+        mock.list_items.side_effect = _list
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "columns": [],
+                "column_details": [],
+                "sql_path": sql_path,
+            }
+            result = service.validate_model("prod", deep=True)
+        mismatches = [w for w in result["warnings"] if w["type"] == "FQN_MISMATCH"]
+        assert bool(mismatches) is expect_warning
+        assert not any(e["type"] == "FQN_MISMATCH" for e in result["errors"])
+        if expect_warning:
+            assert mismatches[0]["item"] == "ds"
+            assert sql_path in mismatches[0]["detail"]
+
     def test_agg_on_string(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
@@ -1059,15 +1135,72 @@ class TestAddDataset:
 
         mock.list_items.side_effect = _list
         mock.post_item.return_value = {"id": "d1", "attributes": {"name": "fact_x"}}
-        service.add_dataset(
-            "prod",
-            None,
-            name="fact_x",
-            table_id="out.c-gold.FACT_X",
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "name": "FACT_X",
+                "backend": "snowflake",
+                "backend_path": ["KBC_USE4_5725", "out.c-gold"],
+                "sql_path": '"KBC_USE4_5725"."out.c-gold"."FACT_X"',
+            }
+            service.add_dataset(
+                "prod",
+                None,
+                name="fact_x",
+                table_id="out.c-gold.FACT_X",
+            )
+        MockStorageCls.return_value.get_table_detail.assert_called_once_with(
+            "prod", "out.c-gold.FACT_X"
         )
         _, kwargs = mock.post_item.call_args
-        assert kwargs["data"]["fqn"] == '"KEBOOLA"."out.c-gold"."FACT_X"'
+        assert kwargs["data"]["fqn"] == '"KBC_USE4_5725"."out.c-gold"."FACT_X"'
         assert kwargs["data"]["modelUUID"] == "U"
+
+    def test_explicit_fqn_skips_storage_lookup(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = [_model_item("U", "default")]
+        mock.post_item.return_value = {"id": "d1", "attributes": {"name": "x"}}
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            service.add_dataset(
+                "prod",
+                None,
+                name="x",
+                table_id="out.c-gold.X",
+                fqn='"MY_DB"."my_schema"."X_VIEW"',
+            )
+        MockStorageCls.return_value.get_table_detail.assert_not_called()
+        _, kwargs = mock.post_item.call_args
+        assert kwargs["data"]["fqn"] == '"MY_DB"."my_schema"."X_VIEW"'
+
+    def test_blank_fqn_rejected_before_any_call(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.add_dataset("prod", None, name="x", table_id="out.c-gold.X", fqn="  ")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        mock.post_item.assert_not_called()
+
+    def test_unresolvable_location_aborts_before_post(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        mock.list_items.return_value = [_model_item("U", "default")]
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "name": "X",
+                "backend": "exasol",
+                "backend_path": [],
+                "sql_path": None,
+            }
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.add_dataset("prod", None, name="x", table_id="out.c-gold.X")
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        mock.post_item.assert_not_called()
 
     def test_deep_fields_role_heuristics(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1085,12 +1218,13 @@ class TestAddDataset:
         ) as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [
                     {"name": "PK_USER_ID", "type": "NUMBER"},
                     {"name": "ORDER_DATE", "type": "TIMESTAMP_TZ"},
                     {"name": "AMOUNT_USD", "type": "NUMBER"},
                     {"name": "USER_NAME", "type": "STRING"},
-                ]
+                ],
             }
             service.add_dataset(
                 "prod",
@@ -2155,6 +2289,7 @@ class TestBuildModel:
         ) as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "display_name": "fact_orders",
                 "column_details": [{"name": "AMOUNT", "type": "NUMBER"}],
             }
@@ -2166,7 +2301,7 @@ class TestBuildModel:
         assert len(metrics) == 2
         measure_metric = next(m for m in metrics if m["name"] != "fact_orders_row_count")
         assert measure_metric["name"] == "total_amount"
-        assert measure_metric["sql"] == 'SUM("AMOUNT") FROM "KEBOOLA"."out.c"."t"'
+        assert measure_metric["sql"] == 'SUM("AMOUNT") FROM "KBC_TEST_5725"."out.c"."t"'
         assert len(result["generated"]["glossary"]) == 1
         assert result["validated"] is True
         # Pin the warehouse → metastore type normalization: Storage hands us
@@ -2184,6 +2319,7 @@ class TestBuildModel:
         ) as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             result = service.build_model("prod", table_ids=["out.c.t"], dry_run=True)
@@ -2197,23 +2333,57 @@ class TestBuildModel:
             service.build_model("prod", table_ids=[])
         assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
 
-    def test_fqn_derived_for_each_dataset(self, tmp_path: Path) -> None:
+    def test_fqn_follows_linked_bucket_backend_path(self, tmp_path: Path) -> None:
+        """A linked bucket's dataset fqn is the source project's database and schema."""
+        from keboola_agent_cli.services._table_detail import build_table_detail
+
         store = _make_store(tmp_path)
         service, _ = _make_service(store)
+        # Raw Storage API shape of an alias table in a linked bucket (live-verified).
+        raw_table = {
+            "id": "in.c-aws-costs-raw.reports",
+            "name": "reports",
+            "isAlias": True,
+            "bucket": {
+                "id": "in.c-aws-costs-raw",
+                "backend": "snowflake",
+                "backendPath": ["KBC_USE4_337", "in.c-keboola-ex-aws-s3-01k4q3"],
+                "databaseName": "",
+            },
+            "columns": ["cost"],
+            "columnMetadata": {},
+        }
         with patch(
             "keboola_agent_cli.services.semantic_layer_service.StorageService"
         ) as MockStorageCls:
-            inst = MockStorageCls.return_value
-            inst.get_table_detail.return_value = {
+            MockStorageCls.return_value.get_table_detail.return_value = build_table_detail(
+                "prod", "in.c-aws-costs-raw.reports", raw_table
+            )
+            result = service.build_model(
+                "prod", table_ids=["in.c-aws-costs-raw.reports"], dry_run=True
+            )
+        expected = '"KBC_USE4_337"."in.c-keboola-ex-aws-s3-01k4q3"."reports"'
+        assert result["generated"]["datasets"][0]["fqn"] == expected
+        assert all(m["sql"].endswith(f"FROM {expected}") for m in result["generated"]["metrics"])
+
+    def test_unresolvable_location_fails_build(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, mock = _make_service(store)
+        with patch(
+            "keboola_agent_cli.services.semantic_layer_service.StorageService"
+        ) as MockStorageCls:
+            MockStorageCls.return_value.get_table_detail.return_value = {
+                "name": "t",
+                "backend": "snowflake",
+                "backend_path": [],
+                "sql_path": None,
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
-            result = service.build_model(
-                "prod",
-                table_ids=["out.c-bk.tab"],
-                dry_run=True,
-            )
-        ds = result["generated"]["datasets"][0]
-        assert ds["fqn"] == '"KEBOOLA"."out.c-bk"."tab"'
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.build_model("prod", table_ids=["out.c.t"])
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "out.c.t" in excinfo.value.message
+        mock.post_item.assert_not_called()
 
 
 class TestBuildModelRollback:
@@ -2246,6 +2416,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "display_name": "fact_orders",
                 "column_details": [{"name": "AMOUNT", "type": "NUMBER"}],
             }
@@ -2278,6 +2449,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             with pytest.raises(KeboolaApiError) as excinfo:
@@ -2312,6 +2484,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             with pytest.raises(KeboolaApiError) as excinfo:
@@ -2342,6 +2515,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             with pytest.raises(KeboolaApiError) as excinfo:
@@ -2375,6 +2549,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             result = service.build_model("prod", table_ids=["out.c.t"])
@@ -2411,6 +2586,7 @@ class TestBuildModelRollback:
         with self._patch_storage() as MockStorageCls:
             inst = MockStorageCls.return_value
             inst.get_table_detail.return_value = {
+                "sql_path": '"KBC_TEST_5725"."out.c"."t"',
                 "column_details": [{"name": "X", "type": "NUMBER"}],
             }
             with pytest.raises(KeboolaApiError) as excinfo:
@@ -2947,48 +3123,56 @@ class TestReferenceDataPermissions:
 class TestBuildInformationSchemaSql:
     """SQL generation for the INFORMATION_SCHEMA type-resolution query."""
 
-    def test_bigquery_dataset_derivation(self) -> None:
+    def test_bigquery_dataset_from_backend_path(self) -> None:
         from keboola_agent_cli.services._semantic_layer_internals import (
             build_information_schema_sql,
         )
 
         sql = build_information_schema_sql(
-            "bigquery", "in.c-OUT_Shop_Category_Metrics", "out_category_metrics"
+            "bigquery", ["in_c_OUT_Shop_Category_Metrics"], "out_category_metrics"
         )
         assert sql is not None
-        # bucketId `.`/`-` map to `_` for the BigQuery dataset name.
         assert "`in_c_OUT_Shop_Category_Metrics`.INFORMATION_SCHEMA.COLUMNS" in sql
         assert "table_name = 'out_category_metrics'" in sql
         assert "column_name, data_type" in sql
 
-    def test_snowflake_keeps_bucket_id_as_schema(self) -> None:
+    def test_snowflake_database_and_schema_from_backend_path(self) -> None:
+        """Database and schema come from backendPath (a linked bucket's names the source project)."""
         from keboola_agent_cli.services._semantic_layer_internals import (
             build_information_schema_sql,
         )
 
-        sql = build_information_schema_sql("snowflake", "out.c-fake-ecommerce", "orders")
+        sql = build_information_schema_sql(
+            "snowflake", ["KBC_USE4_337", "in.c-keboola-ex-aws-s3-01k4q3"], "reports"
+        )
         assert sql is not None
-        assert '"KEBOOLA".INFORMATION_SCHEMA.COLUMNS' in sql
-        assert "TABLE_SCHEMA = 'out.c-fake-ecommerce'" in sql
-        assert "TABLE_NAME = 'orders'" in sql
+        assert 'FROM "KBC_USE4_337".INFORMATION_SCHEMA.COLUMNS' in sql
+        assert "TABLE_SCHEMA = 'in.c-keboola-ex-aws-s3-01k4q3'" in sql
+        assert "TABLE_NAME = 'reports'" in sql
+        assert "KEBOOLA" not in sql
 
-    def test_unsupported_backend_returns_none(self) -> None:
+    def test_unsupported_backend_or_short_path_returns_none(self) -> None:
         from keboola_agent_cli.services._semantic_layer_internals import (
             build_information_schema_sql,
         )
 
-        assert build_information_schema_sql("redshift", "in.c-x", "t") is None
-        assert build_information_schema_sql("", "in.c-x", "t") is None
+        assert build_information_schema_sql("redshift", ["DB", "in.c-x"], "t") is None
+        assert build_information_schema_sql("", ["DB", "in.c-x"], "t") is None
+        assert build_information_schema_sql("snowflake", ["in.c-x"], "t") is None
+        assert build_information_schema_sql("snowflake", [], "t") is None
+        assert build_information_schema_sql("bigquery", [], "t") is None
 
     def test_unsafe_identifier_rejected(self) -> None:
         from keboola_agent_cli.services._semantic_layer_internals import (
             build_information_schema_sql,
         )
 
-        # A quote in the table name must not be escaped-and-passed; it is
+        # A quote in any identifier must not be escaped-and-passed; it is
         # rejected outright (defense in depth against SQL injection).
-        assert build_information_schema_sql("bigquery", "in.c-x", "t'; DROP TABLE") is None
-        assert build_information_schema_sql("bigquery", "in.c-x`", "t") is None
+        assert build_information_schema_sql("bigquery", ["in_c_x"], "t'; DROP TABLE") is None
+        assert build_information_schema_sql("bigquery", ["in_c_x`"], "t") is None
+        assert build_information_schema_sql("snowflake", ['DB"', "in.c-x"], "t") is None
+        assert build_information_schema_sql("snowflake", ["DB", "in.c-x'"], "t") is None
 
 
 class TestEnrichSchemasWithWorkspaceTypes:
@@ -3007,6 +3191,7 @@ class TestEnrichSchemasWithWorkspaceTypes:
             "in.c-linked.metrics": {
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
                 "name": "metrics",
                 "column_details": [
                     {"name": "total_revenue"},  # no type (alias table)
@@ -3041,6 +3226,7 @@ class TestEnrichSchemasWithWorkspaceTypes:
             "out.c-native.t": {
                 "backend": "snowflake",
                 "bucket_id": "out.c-native",
+                "backend_path": ["KBC_TEST_5725", "out.c-native"],
                 "name": "t",
                 "column_details": [{"name": "x", "type": "NUMERIC"}],
             }
@@ -3064,6 +3250,7 @@ class TestEnrichSchemasWithWorkspaceTypes:
             "in.c-linked.t": {
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
                 "name": "t",
                 "column_details": [{"name": "a"}],
             }
@@ -3091,6 +3278,7 @@ class TestEnrichSchemasWithWorkspaceTypes:
             "in.c-linked.t": {
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
                 "name": "t",
                 "column_details": [{"name": "a"}, {"name": "b"}],
             }
@@ -3134,6 +3322,8 @@ class TestBuildModelTypesWorkspace:
                 "display_name": "metrics",
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
+                "sql_path": "`in_c_linked`.`metrics`",
                 "name": "metrics",
                 # Alias table: columns carry no type.
                 "column_details": [{"name": "total_revenue"}],
@@ -3168,6 +3358,8 @@ class TestBuildModelTypesWorkspace:
                 "display_name": "metrics",
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
+                "sql_path": "`in_c_linked`.`metrics`",
                 "name": "metrics",
                 "column_details": [{"name": "total_revenue"}],
             }
@@ -3202,6 +3394,8 @@ class TestBuildModelTypesWorkspace:
                 "display_name": "metrics",
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
+                "sql_path": "`in_c_linked`.`metrics`",
                 "name": "metrics",
                 "column_details": [{"name": "total_revenue"}],
             }
@@ -3242,6 +3436,8 @@ class TestBuildModelTypesWorkspace:
                 "display_name": "metrics",
                 "backend": "bigquery",
                 "bucket_id": "in.c-linked",
+                "backend_path": ["in_c_linked"],
+                "sql_path": "`in_c_linked`.`metrics`",
                 "name": "metrics",
                 "column_details": [{"name": "total_revenue"}],
             }
@@ -3293,7 +3489,7 @@ class TestHeuristicMetricPerMeasure:
     """`heuristic_generate_model` emits one metric per measure + a row count."""
 
     @staticmethod
-    def _identity_fqn(tid: str) -> str:
+    def _identity_fqn(tid: str, _detail: dict[str, Any]) -> str:
         return f"FQN({tid})"
 
     @staticmethod

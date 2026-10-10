@@ -57,9 +57,9 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:
@@ -186,6 +186,32 @@ jobs:
           fi
           uv run python scripts/check_version_gates.py --release-if-newer-than "$base"
 
+      - name: Release-scope check (release PRs only)
+        # Proves the new changelog entry covers every PR the tag will CONTAIN,
+        # not just the scope collected when the release PR was opened. Those
+        # differ whenever a feature PR merges while the release PR is open --
+        # a structural window, since a release PR stays open for as long as its
+        # CI runs. It bit v0.91.0: #625 merged nine minutes before the release
+        # PR and landed inside the tag with no release note. `changelog-check`
+        # cannot see it (it proves every released VERSION has an entry, never
+        # that an entry covers every COMMIT under the tag).
+        #
+        # Armed exactly like the vNEXT gate above -- only for a PR that RAISES
+        # the version. The check needs tags and real history, which the default
+        # shallow checkout lacks, so the deepening is done ONLY when the version
+        # differs; the script fails open (warns, exits 0) if git still cannot
+        # answer, so an ordinary PR can never go red because of this.
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(git show "origin/$GITHUB_BASE_REF:pyproject.toml" 2>/dev/null \
+                 | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+          head=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          if [ -n "$base" ] && [ "$base" != "$head" ]; then
+            echo "version changed ($base -> $head); deepening checkout for the scope check"
+            git fetch --unshallow --tags --quiet 2>/dev/null || git fetch --tags --quiet || true
+          fi
+          uv run python scripts/check_release_scope.py --only-if-newer-than "$base"
+
       - name: Error-code enum check
         # Rejects raw error_code="LITERAL" string literals (must use ErrorCode).
         run: uv run python scripts/check_error_codes.py
@@ -198,6 +224,33 @@ jobs:
         # NEW oversized modules and growth of the existing ones, which review
         # reliably misses because a diff never shows the resulting file size.
         run: uv run python scripts/check_file_size.py
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Dependency vulnerability audit (uv audit, OSV). Kept OUT of the `check`
+  # job on purpose: its verdict depends on the OSV advisory database at run
+  # time, not on the diff, so a newly disclosed CVE – or an OSV outage –
+  # must never turn an unrelated PR's static-analysis gate red. It runs on its
+  # own and is NOT a required check: a finding shows red here for visibility,
+  # but does not block a merge. Dependabot remains the automated fix channel.
+  # ────────────────────────────────────────────────────────────────────────
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.15"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # `uv audit --frozen` reads uv.lock directly; no `uv sync` needed.
+      - name: Dependency audit
+        run: uv audit --frozen
 
   # ────────────────────────────────────────────────────────────────────────
   # Test suite. pyproject declares `requires-python = ">=3.12"`, so the
@@ -239,9 +292,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:
@@ -286,9 +339,9 @@ jobs:
           # directly instead of fetching the `uv.ndjson` version manifest from
           # raw.githubusercontent.com on every run -- that fetch is rate-limited
           # and flaky on shared CI egress IPs (it killed the Windows job once).
-          version: "0.11.16"
+          version: "0.12.15"
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - uses: actions/setup-python@v6
         with:

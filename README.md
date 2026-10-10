@@ -98,9 +98,12 @@ This CLI is built AI-first. Every command outputs structured JSON (`--json`), er
 **Claude Code plugin** (agent learns all 100+ commands + gets a specialist subagent for writes):
 
 ```
-/plugin marketplace add keboola/cli
-/plugin install kbagent@keboola-agent-cli
+/plugin marketplace add keboola/ai-kit
+/plugin install kbagent@keboola-claude-kit
+/kbagent:setup
 ```
+
+`/kbagent:setup` is the whole rest of the setup in one command: it installs the `kbagent` CLI if you don't have it, connects a Keboola project (browser login, so there is no token to paste; on a headless host it falls back to an account login from the environment, then to a static token), and verifies the result with `kbagent doctor`. Every step is conditional, so re-running it after a partial setup just fills the gaps.
 
 Then either let the `kbagent` skill auto-trigger from natural prompts, or delegate explicitly with `/keboola <task>` -- the slash command spawns a `kbagent:keboola-expert` subagent with fresh context, hard rules (fresh fetch, dry-run first, prefer CLI over raw REST, version gate), and a JSON verification payload. See [docs/TUTORIAL.md §6](docs/TUTORIAL.md#6-using-the-agent-and-slash-commands).
 
@@ -138,8 +141,8 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
     rows = kbc.query(workspace_id, "SELECT id, name FROM customers")  # list[dict]
 
     meta = kbc.files.upload(b"hello", name="greeting.txt", tags=["demo"])
-    data = kbc.files.read_bytes(meta.id)                              # bytes
-    files = kbc.files.list(tags=["demo"])                             # list[FileEntry]
+    data = kbc.files.read_bytes(meta.id)  # bytes
+    files = kbc.files.list(tags=["demo"])  # list[FileEntry]
 ```
 
 `query()` reads results inline and returns rows keyed by column name; `files` returns a uniform `FileEntry` shape and reads bytes straight into memory; `run_job()` / `config_detail()` / `upload_table()` return typed pydantic models. Everything exported from `keboola_agent_cli` is committed public API (semver). For lower-level endpoints, reach for `Client.raw` (the underlying `KeboolaClient`).
@@ -187,7 +190,7 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Two action flavours per task: `claude` / `codex` / `gemini` with a prompt, or a raw kbagent CLI command. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
-| **Data apps** | First-class lifecycle for Streamlit / Flask / Node deployments (`keboola.data-apps`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
+| **Data apps** | First-class lifecycle for Python/JS apps (`keboola.data-apps`; `python-js` is the default type, Streamlit via `--type streamlit`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
 | **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Semantic layer** | Define and manage a metastore semantic model per project — datasets, metrics, relationships, constraints, glossary. Validate (incl. `--deep`), export, diff two models/files, import/promote across projects, AI-assisted `build` from tables. `kbagent semantic-layer ...` (alias `sl`). |
@@ -236,12 +239,13 @@ kbagent auth login --stack https://connection.keboola.com
 kbagent auth register-projects            # interactive picker
 kbagent auth register-projects --all      # non-interactive
 ```
-> **Needs a human at a browser.** There is no headless path, so never run
-> `auth login` from an unattended AI-agent task or a CI step — use a static
-> Storage token there. Session-registered projects also do not work with every
-> command (Kai, data apps, semantic layer, streams, the Python SDK need a
-> static token). Details, capability matrix and error codes:
-> [docs/auth.md](docs/auth.md).
+> **Approval needs a human at a browser.** Never run `auth login` from an
+> unattended AI-agent task or a CI step — use `auth login-password` or a
+> static Storage token there instead. In an attended session an agent may
+> drive it from a background shell and relay the code. Session-registered
+> projects also do not work with every command (Kai, data apps, semantic
+> layer, streams, the Python SDK need a static token). Details, capability
+> matrix and error codes: [docs/auth.md](docs/auth.md).
 
 Run `kbagent doctor` to verify setup (token validity, CLI version, Claude Code plugin install).
 
@@ -316,6 +320,17 @@ kbagent             init | context | doctor | version | update | changelog
 | [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |
 | [MCP migration](docs/mcp-migration.md) | Migrating off the removed MCP passthrough (v0.85.0): the tool-to-command map, what to do with persisted `mcp_tool` agent tasks, and how to keep `keboola-mcp-server` fresh yourself. |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
+
+## Telemetry
+
+kbagent posts one best-effort usage event per invocation to the **acting project's own** Storage events (`POST /v2/storage/events`), the same mechanism the kbc CLI uses. It records the command that ran (`config list`, `storage buckets`, …), whether it succeeded, and how long it took — never argument values. It fires only when a project token and stack are resolved, is stored as `ext.keboola.cli.` (and `ext.keboola.cli.serve` for the `serve` REST API), and never changes a command's exit code. It runs as one attempt with a short timeout and no retry, so a blocked or unreachable events endpoint costs at most that one timeout. The local-only `context`, `changelog` and `version` commands do no Storage work, so they never post at all.
+
+This is usage telemetry, not an audit trail — it stays inside your own project and is voluntary. Turn it off with either:
+
+```bash
+export KBAGENT_DISABLE_TELEMETRY=1   # kbagent-specific kill switch
+export DO_NOT_TRACK=1                # honored too (the cross-tool convention)
+```
 
 ## Development
 

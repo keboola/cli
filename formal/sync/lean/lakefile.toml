@@ -1,0 +1,5 @@
+name = "SyncModel"
+defaultTargets = ["SyncModel"]
+
+[[lean_lib]]
+name = "SyncModel"

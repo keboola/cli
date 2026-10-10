@@ -212,6 +212,7 @@ class AgentStore:
             try:
                 runs.append(AgentRun.model_validate_json(line))
             except Exception:
+                logger.debug("skipping unparseable agent-run line", exc_info=True)
                 continue
             if len(runs) >= limit:
                 break

@@ -125,7 +125,11 @@ class TestScheduleListCli:
         mock_service.list_schedules.return_value = {"schedules": [], "errors": []}
         result = _run(["schedule", "list", "--project", "prod"], store, mock_service)
         assert result.exit_code == 0
-        assert "No schedules found" in result.output
+        # Names the mechanism it actually checked, and the two it did not:
+        # "No schedules found" invited the reading "no trigger of any kind",
+        # which was a false negative for a flow live via a table trigger (#714).
+        assert "No cron schedules found" in result.output
+        assert "kbagent flow triggers" in result.output
 
 
 # ---------------------------------------------------------------------------

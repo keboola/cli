@@ -1,25 +1,66 @@
 # Programmatic Auth (Browser Login and Unattended Login) workflow
 
 > Audience: a human user of kbagent (or an agent relaying instructions to
-> one) who wants to authenticate via a browser instead of pasting a static
-> Storage API token -- or, since v0.84.0, an agent running unattended with
-> real account credentials for CI. Goal: sign in once, understand what got
-> stored where, and know how to check on / tear down the session later.
-> Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`).
+> one, or -- in an attended session with a background shell -- an agent
+> driving the login itself) who wants to authenticate via a browser instead
+> of pasting a static Storage API token -- or, since v0.84.0, an agent
+> running unattended with real account credentials for CI. Goal: sign in
+> once, understand what got stored where, and know how to check on / tear
+> down the session later.
+> Since v0.80.0 (browser login), v0.84.0 (unattended `login-password`),
+> 0.95.0 (`project create` -- no Keboola account needed at all).
 > Full command reference: `commands-reference.md` > "Programmatic Auth
 > (Browser Login)". Gotchas: `gotchas.md` > "Programmatic auth (browser
-> login) is human-only; sentinel tokens; v1 scope" and > "`auth
+> login) needs a human to approve; sentinel tokens; session scope" and > "`auth
 > login-password` is the CI-safe, headless exception...".
 
 ## Read this first: `auth login` needs a human -- `auth login-password` does not
 
 `kbagent auth login` opens a real browser window (or, on the device flow,
 prints a short code you type into a page on any device). There is **no**
-headless or unattended path for *this specific command* -- an AI agent must
-never run it on its own initiative. If an agent is asked to "set up kbagent
-auth" or "log me in" and no account credentials were supplied for an
-unattended path, the correct behavior is to hand the exact command back to
-the user and wait:
+headless or unattended path for *this specific command*. Two rules are
+absolute:
+
+- **Never run it in a foreground tool shell.** It blocks until the human
+  finishes; a foreground shell timeout (typically ~120s) kills the flow
+  mid-flight.
+- **Never run it from an unattended or headless task at all** -- no CI step,
+  no scheduled agent task, no background job with nobody watching the chat.
+  Those have their own paths (`auth login-password`, or a static token).
+
+### Attended sessions: the agent drives the login
+
+When a human IS present in the conversation and a **background** shell is
+available, the agent should drive the login itself rather than handing it
+off:
+
+```bash
+# 1. start it in a BACKGROUND shell (never foreground)
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+```
+
+- `--device-code` forces the RFC 8628 flow, which is the agent-friendly one:
+  the verification URL and the short `user_code` are printed **immediately**,
+  before polling starts, and flushed. In human output mode they go to
+  stdout; under `--json` the panel goes to **stderr**, so capture `2>&1`
+  there. Human mode is the easier read.
+- **Relay the URL and the code to the user in chat.** The CLI also
+  best-effort opens the browser on the host machine, but the user may be
+  looking at a different device.
+- **Confirm completion by polling `kbagent --json auth status`** -- exit
+  code `0` means signed in (`live` / `refreshed` / `degraded`), exit code
+  `3` means not yet (`missing` / `expired`). That is the completion signal;
+  do not guess from the login process's own output, and never re-run login
+  blind -- check `auth status` first.
+- `auth.json` is written atomically on success only, so an abandoned or
+  killed attempt leaves nothing half-written.
+- `--register-projects` is fully non-interactive, so it is safe to include
+  in the backgrounded command.
+
+### Fallback: hand it to the user's terminal
+
+With no background shell available, hand the exact command back to the user
+and wait:
 
 ```
 Please run this yourself in a terminal where a browser can open:
@@ -29,12 +70,54 @@ Please run this yourself in a terminal where a browser can open:
 Then let me know once it's done and I'll continue with `kbagent auth status`.
 ```
 
-For CI, containers, or any other unattended context there are now two
-options (since v0.84.0): if the task has account email + password (+ a TOTP
-seed for MFA), use `kbagent auth login-password` -- see
-"Unattended login" below, an agent MAY run it directly. Otherwise keep using
-a static Storage token (`kbagent project add --token ...` or
-`KBAGENT_PROJECT_FROM_ENV`) -- that path is unchanged by either feature.
+### Unattended contexts
+
+For CI, containers, or any other unattended context there are two options
+(since v0.84.0): if the task has account email + password (+ a TOTP seed for
+MFA), use `kbagent auth login-password` -- see "Unattended login" below, an
+agent MAY run it directly. Otherwise keep using a static Storage token
+(`kbagent project add --token ...` or `KBAGENT_PROJECT_FROM_ENV`) -- that
+path is unchanged by either feature.
+
+## No Keboola account at all: `project create`
+
+*(since 0.95.0, DMD-1940)*
+
+Everything else in this file assumes the user already has a Keboola account.
+`kbagent project create --url URL` is the one path that does not: it
+provisions a **brand-new project** on a stack where nobody is signed in, and
+stores a working session for it. It needs the `agent-provisioning` stack
+feature; without it the stack answers 404 and the command exits 1 with
+`AUTH_NOT_SUPPORTED_ON_STACK`, naming the browser alternatives.
+
+An agent MAY run it directly -- unlike `auth login` there is no browser and
+nothing to approve *at the time of the call*. But the flow is not finished
+when the command exits:
+
+1. Run it, e.g.
+   `kbagent --json project create --url https://connection.keboola.com`.
+   The project is created, `auth.json` holds its session, and `config.json`
+   holds the alias (the default project, if nothing was registered before).
+2. **Relay `confirm_url` from the result to the human, verbatim.** The
+   project is owned by NOBODY until they open that link and sign in. It is
+   single-use and expires in days; an unclaimed project is a billable orphan.
+   Do not report the task as done at this step -- say plainly that a human
+   has to click.
+3. After they confirm, the agent session is **revoked** (by design: the
+   synthetic identity retires when a real one takes over). Tell them to run
+   `kbagent auth login --stack URL`. The alias registered in step 1 keeps
+   working across the switch -- the sentinel keys on project id + stack, not
+   on the session.
+
+If the terminal output is lost, `kbagent auth status` re-prints the pending
+link (`agent_confirm_url` under `--json`) for as long as the claim is
+outstanding. If commands suddenly start failing with a session error shortly
+after you handed over a confirm link, that is step 3 having happened -- check
+`auth status`, do not blind-retry.
+
+The command refuses (exit 5, `CONFIG_ERROR`) when a session for that stack
+already exists: `auth.json` holds one session per stack, and whoever has one
+has an account and should create the project in the Keboola UI instead.
 
 ## What `login` actually does
 
@@ -103,7 +186,7 @@ kbagent auth login-password --email E (--password-stdin | --password P)
 - Everything after the token exchange -- session persistence, best-effort
   revoke of the session it replaces, introspection, `--register-projects` --
   is identical to `login` above; the result is stored in `auth.json` the
-  same way and follows the same v1 scope restrictions.
+  same way and follows the same session restrictions.
 - **Security note.** Storing an account's password (and TOTP seed) as CI
   secrets is a bigger blast radius than a single scoped Storage token --
   whoever holds them can do anything that account can do, not just what one
@@ -138,8 +221,9 @@ Exactly one selection method applies:
 | Neither | The interactive picker -- but only on a TTY without `--json`. |
 
 `--all` and `--project-id` are the non-interactive forms, so this one
-command is safe for an agent to run *after* a human has logged in. The login
-itself still needs the human.
+command is safe for an agent to run *after* the session exists -- including
+right after an agent-driven backgrounded login, once `auth status` reports
+exit 0. The browser step itself still needs the human.
 
 ### The picker
 
@@ -195,6 +279,12 @@ that alias rather than offered a second, colliding suggestion.
 # 1. Sign in (opens a browser; falls back to a device code if needed)
 kbagent auth login --register-projects
 
+# 1-AGENT. Attended session, agent-driven: same login in a BACKGROUND shell,
+#          device flow so the URL + code can be relayed to the user in chat.
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+#          ...then poll for completion (exit 0 = signed in, 3 = not yet):
+kbagent --json auth status
+
 # 1-CI. The unattended equivalent, given real account credentials
 #       (since v0.84.0) -- no browser, safe from a secret-backed step:
 kbagent auth login-password --email "$CI_EMAIL" --password-stdin \
@@ -230,43 +320,43 @@ kbagent auth logout --remove-projects
 | `expired` | The refresh token itself expired or was revoked -- run `auth login` again. |
 | `missing` | No session is persisted for this stack yet. |
 
-## v1 scope: what session auth does NOT cover yet
+## What session auth does NOT cover
 
-Session auth is wired through the **Storage and Manage** paths. `kbagent
-serve` reaches them too, because it delegates to the same guarded services --
-but read the caveat below before serving a session project. Every other
-surface recognizes the `kbc-session://` sentinel and refuses fast with
-`AUTH_NOT_SUPPORTED_ON_STACK` instead of silently sending the sentinel
-string as if it were a real credential:
+A session now works with the Storage and Manage clients, the Scheduler
+(`flow schedule`, `flow schedule-remove`), Data Streams (`stream`), Data
+Science (`data-app`), the `semantic-layer` group, the AI Service (`docs query`,
+`config new`, `config examples`, `component detail`, `flow new` / `update` /
+`validate`), and Storage bucket `sharing` (`sharing share`, `sharing unshare`,
+where the Storage API enforces the master privilege). `kbagent serve` reaches
+all of them too, because it delegates to the same services -- but read the
+caveat below before serving a session project.
 
-- `kai`
-- `semantic-layer` (Metastore Service)
-- `data-app` (Data Science Service)
-- `stream` (Data Streams Service)
-- `sharing`, unless a master token is set in the environment
-- the AI Service paths: `docs query`, `config examples`, `config new`,
-  `component detail` / `search`, `flow new` / `update` / `validate`
-- the Scheduler Service paths: `flow schedule`, `flow schedule-remove`
-- the importable SDK (`from keboola_agent_cli import Client`)
+Only three features still refuse the `kbc-session://` sentinel and fail fast
+with `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, instead
+of sending the sentinel string as if it were a real credential:
+
+- `kbagent kai` -- the external `kai_client` library has no bearer path.
+- `kbagent semantic-layer token --encrypt (Metastore Service)` -- it encrypts
+  the project's own token for reuse, and a sentinel is not a reusable
+  credential. The rest of the `semantic-layer` group works.
+- the importable SDK (`from keboola_agent_cli import Client`) -- stateless,
+  with no config dir or session store to hold a bearer.
 
 `SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py` is the
 in-code copy of that list. `auth login` and `auth register-projects` print it,
 and both ship it in `--json` as the additive key
 `session_unsupported_features`, so you learn the restrictions up front instead
 of at first use. (`auth status` reports session health, not this list.)
-Two surfaces are commonly assumed to be on it
-and are not: **`dev-portal`** authenticates with its own Developer Portal
-identity, never a project token, so a session changes nothing there; and
-**`flow` splits** -- `flow list` / `flow detail` are plain Storage calls that
-work, while `flow new` / `update` / `validate --project` need the AI Service
-and fail.
+`dev-portal` is commonly assumed to be on it and is not: it authenticates with
+its own Developer Portal identity, never a project token, so a session changes
+nothing there.
 
-In a multi-project command (`data-app list`, `flow list`, `storage tables`)
-that guard does not abort the whole run: the offending project gets an
-`errors[]` entry keeping the real `error_code`
-(`AUTH_NOT_SUPPORTED_ON_STACK`, not a generic `UNEXPECTED_ERROR`) while the
-other projects succeed. Branch on that code rather
-than on the message text.
+In a multi-project command (`data-app list`, `flow list`, `storage tables`) a
+per-project failure does not abort the whole run: the offending project gets an
+`errors[]` entry keeping the real `error_code` (not a generic
+`UNEXPECTED_ERROR`) while the other projects succeed. Branch on that code
+rather than on the message text. These readers now work on a session project,
+so a session no longer fails them with `AUTH_NOT_SUPPORTED_ON_STACK`.
 
 If your workflow needs one of those, register the same project again under
 a different alias with a static Storage token:

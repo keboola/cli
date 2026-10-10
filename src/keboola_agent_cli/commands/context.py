@@ -23,11 +23,20 @@ structured JSON output for programmatic consumption.
 
 ## IMPORTANT: Set Conversation ID
 
-Before running any kbagent commands, set KBAGENT_CONVERSATION_ID to a unique
-identifier for the current conversation/session. This is REQUIRED for platform
-observability -- all API requests will include the X-Conversation-ID header.
+Identify the current conversation/session with a unique id. This is REQUIRED
+for platform observability -- all API requests will include the
+X-Conversation-ID header.
 
-  export KBAGENT_CONVERSATION_ID="<unique-conversation-id>"
+Pass it as a global flag on every call:
+
+  kbagent --json --conversation-id "<unique-conversation-id>" <command>
+
+Do NOT rely on a standalone `export`. Agent harnesses do not persist shell
+state between tool calls, so the variable is gone by the next command -- and a
+command starting with `export ...` no longer matches a `Bash(kbagent ...)`
+permission allow-rule. To set it once for a whole session, put
+KBAGENT_CONVERSATION_ID in the harness's own env block (Claude Code:
+settings.json -> env). The flag takes precedence over the env var.
 
 ## Quick Start
 
@@ -60,14 +69,25 @@ Use `kbagent <command> --help` for full flag details and examples.
   authorization on SSH/containers/WSL, or with --device-code) as an
   alternative to a long-lived static Storage API token.
 
-  IMPORTANT FOR AI AGENTS: `auth login` (PKCE / device flow) REQUIRES A
-  HUMAN AT A BROWSER. There is no unattended path for THAT command, and
-  session tokens are deliberately not readable through the CLI -- do NOT
-  attempt `auth login` from an unattended agent task. `auth login-password`
-  (below) is the one deliberate, explicit exception: it is safe to run
-  unattended given the credentials it needs, and is what CI/automation
-  should use to get a full session (as opposed to a single-project static
-  Storage token via `project add --token` / `KBAGENT_PROJECT_FROM_ENV`).
+  IMPORTANT FOR AI AGENTS: `auth login` (PKCE / device flow) needs a HUMAN
+  AT A BROWSER to APPROVE, but driving the command is not the human's part.
+  In an ATTENDED session (a human is in the chat) an agent SHOULD complete
+  it when its harness has a background shell: run `auth login --device-code
+  --stack URL --register-projects` in a BACKGROUND shell capturing stdout
+  and stderr (human mode, NOT --json -- there the verification URL and user
+  code go to stderr and stdout stays empty until the flow ends), relay the
+  URL + code printed before polling starts, then confirm with `auth status`
+  (exit 0 = signed in, exit 3 = not yet). NEVER run it in a FOREGROUND tool
+  shell -- a ~120s timeout kills the flow mid-flight and the kill tells you
+  nothing. NEVER run it from an UNATTENDED task -- nobody is there to
+  approve. NEVER re-run it blind: check `auth status` first, or you orphan
+  a session. With no background shell available, hand the plain command to
+  the user's own terminal. Session tokens are deliberately not readable
+  through the CLI. `auth login-password` (below) is the unattended path: it
+  is safe to run headlessly given the credentials it needs, and is what
+  CI/automation should use to get a full session (as opposed to a
+  single-project static Storage token via `project add --token` /
+  `KBAGENT_PROJECT_FROM_ENV`).
 
   kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
     Opens the Keboola login page in a browser (or falls back to the RFC 8628
@@ -115,9 +135,11 @@ Use `kbagent <command> --help` for full flag details and examples.
     needs a real browser). Stores the resulting session in auth.json
     exactly like `auth login` does -- same downstream command support,
     same `project list` "session" auth-mode column, same
-    --register-projects contract. AN AI AGENT MAY run this command when
-    given real credentials for this purpose (unlike `auth login`), but
-    must never invent, guess, or reuse credentials from another context.
+    --register-projects contract. AN AI AGENT MAY run this command
+    UNATTENDED when given real credentials for this purpose (unlike
+    `auth login`, which always needs a human to approve in a browser),
+    but must never invent, guess, or reuse credentials from another
+    context.
     Storing an account's password (and TOTP seed) as CI secrets is a
     bigger blast radius than one scoped project token -- use a dedicated,
     least-privileged service account, never a real human's own login.
@@ -139,8 +161,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     EXISTING session, without re-running login. Fixes the usability trap
     where `login` prints an accessible-project table but nothing gets
     registered unless --register-projects was passed, and where the
-    suggested alias is slugified from the project NAME -- the numeric
-    project id (e.g. 9840) is never a valid alias on its own.
+    suggested alias is slugified from the project NAME, never the numeric
+    project id (e.g. 9840). Once registered, `--project 9840` resolves to
+    that alias too (since 0.96.0; see Tips 3).
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
     ConfigError naming it). Omitting both starts an interactive arrow-key +
@@ -173,34 +196,37 @@ Use `kbagent <command> --help` for full flag details and examples.
   already kept there (deliberate RFC 8628 deviation; see
   docs/programmatic-auth-login-plan.md section 4.2).
 
-  v1 scope: the Storage + Manage paths. `kbagent serve` reaches them too --
-  it delegates to the same already-guarded services -- so a session project
-  is usable over the REST API and web UI. Two consequences: whoever holds
-  KBAGENT_SERVE_TOKEN acts as the signed-in USER (a session is a user
-  credential, not a project one), and a session that expires while the
+  A session now works with nearly every command. `kbagent serve` reaches
+  them too -- it delegates to the same already-guarded services -- so a
+  session project is usable over the REST API and web UI. Two consequences:
+  whoever holds KBAGENT_SERVE_TOKEN acts as the signed-in USER (a session is
+  a user credential, not a project one), and a session that expires while the
   server runs answers HTTP 401 with error_code SESSION_EXPIRED, which only a
   human on the host can fix by re-running `auth login`.
 
-  These surfaces fail fast on a sentinel-token (`kbc-session://...`) project
-  with AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback -- they
-  do not (yet) understand bearer sessions. SESSION_UNSUPPORTED_FEATURES in
+  Only three features still fail fast on a sentinel-token (`kbc-session://...`)
+  project with AUTH_NOT_SUPPORTED_ON_STACK, naming the static-token fallback --
+  they do not understand bearer sessions. SESSION_UNSUPPORTED_FEATURES in
   services/_auth_registration.py is the in-code copy of this list. `auth login`
   and `auth register-projects` print it, and both ship it in --json as the
   additive key session_unsupported_features (`auth status` does NOT carry it):
     - kbagent kai
-    - kbagent semantic-layer (Metastore Service)
-    - kbagent data-app (Data Science Service)
-    - kbagent stream (Data Streams Service)
-    - kbagent sharing, unless a master token is set in the environment
-    - AI Service paths: docs query, config examples, config new,
-      component detail/search, flow new/update/validate
-    - Scheduler Service paths: flow schedule, flow schedule-remove
+    - kbagent semantic-layer token --encrypt (Metastore Service)
     - the importable SDK (keboola_agent_cli.Client)
+
+  Everything else now works on a session over bearer auth: the Scheduler
+  (flow schedule, flow schedule-remove), Data Streams (stream), Data Science
+  (data-app), the rest of semantic-layer, the AI Service (docs query,
+  config new, config examples, component detail, flow new/update/validate),
+  and Storage bucket sharing (sharing share/unshare, where the Storage API
+  enforces the master privilege).
 
   `dev-portal` is NOT on that list: it authenticates with its own Developer
   Portal identity (`dev-portal identity add`), never a project token, so a
-  session project changes nothing there. `flow` splits -- `flow list` /
-  `flow detail` are plain Storage calls and work.
+  session project changes nothing there. The whole `flow` group works on a
+  session -- `flow list` / `flow detail` are plain Storage calls, `flow new` /
+  `update` / `validate` reach the AI Service, and `flow schedule` /
+  `flow schedule-remove` reach the Scheduler.
 
   An older kbagent build has no
   sentinel-token support at all: it gets an opaque 401 on a plain
@@ -221,14 +247,46 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   In multi-project commands (`data-app list`, `flow list`, `storage tables`)
   a per-project failure keeps its real error_code in the --json `errors[]`
-  array instead of being relabelled UNEXPECTED_ERROR.
-  A session project on an unsupported surface therefore reports
-  error_code AUTH_NOT_SUPPORTED_ON_STACK per project -- branch on that code
-  to auto-remediate (register a static-token alias) rather than parsing the
-  message text. Only an exception carrying no code at all gets the fallback,
-  and its message is truncated because its content is unknown.
+  array instead of being relabelled UNEXPECTED_ERROR -- branch on that code
+  to auto-remediate rather than parsing the message text. These readers now
+  work on a session project, so a per-project AUTH_NOT_SUPPORTED_ON_STACK
+  comes only from one of the three static-only features. Only an exception
+  carrying no code at all gets the fallback, and its message is truncated
+  because its content is unknown.
 
 ### Project Management
+
+  kbagent project create --url URL [--project ALIAS] [--name NAME]
+                         [--backend snowflake|bigquery] [--sync-backend-init]
+    Create a BRAND-NEW Keboola project from a machine with no Keboola
+    identity -- no account, no token, no `auth login` first. The only command
+    here that works from nothing. Needs the `agent-provisioning` stack feature
+    (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
+    command is always registered, so its presence in --help proves nothing
+    about the stack; without the feature the stack answers 404 and the command
+    exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    flips and how to connect an existing project instead.
+    What it does in one call: provisions the project, stores the returned
+    project-pinned session in auth.json, and registers the project in
+    config.json under a session sentinel (as `auth login --register-projects`
+    would). If nothing was registered before, it also becomes the default
+    project -- so the next command needs no --project.
+    THE RESULT IS NOT FINISHED UNTIL A HUMAN CLICKS. The project it creates
+    is owned by NOBODY: `confirm_url` in the result is a single-use link a
+    human must open and sign in at to take ownership, and it expires in days.
+    Relay that URL to the user verbatim -- it is the only path to ownership,
+    and an unclaimed project is a billable orphan. `auth status` re-prints it
+    (`agent_confirm_url`) for as long as it is pending, so a lost terminal is
+    recoverable.
+    Confirmation REVOKES this session. After the human confirms, run
+    `kbagent auth login --stack URL`; the registered alias keeps working
+    because the sentinel is keyed by project id + stack, not by session.
+    Refuses (exit 5, CONFIG_ERROR) when a session for that stack already
+    exists: auth.json holds one session per stack, and anyone who has one has
+    an account already. `--backend` omitted keeps the stack's own default.
+    `--sync-backend-init` waits for backend initialization instead of letting
+    the stack finish it in the background (the async default warns that the
+    first Storage command may fail until it lands).
 
   kbagent project add --project NAME --url URL --token TOKEN
     Add a new project connection. Token verified against API.
@@ -285,7 +343,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
 
   kbagent project use ALIAS
-    Pin ALIAS as the default project. Persists to config.json.
+    Pin ALIAS as the default project. Persists to config.json. A registered
+    project ID pins that project's alias (since 0.96.0; see Tips 3).
     Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
     an explicit --project flag overrides both.
 
@@ -303,7 +362,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     KBAGENT_PROJECT override that may name an alias absent from the config),
     and the other two are write confirmations.
 
-### Project Members & Invitations (since v0.29.0)
+### Project Members & Invitations
 
   Requires KBC_MANAGE_API_TOKEN (Manage API auth). Allowed roles: admin, guest, readOnly, share.
 
@@ -314,7 +373,8 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
     Bulk invite. CSV must have a header row with columns: email, project (alias or
-    numeric ID), role (optional if --default-role is given), reason (optional).
+    numeric ID -- an alias wins, see Tips 3; since 0.96.0) or project_id (ID only),
+    role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
     `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
 
@@ -352,7 +412,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     NOT_FOUND is still raised when both sources miss.
 
   kbagent component sync-action ACTION_NAME --component-id ID --project ALIAS (--config-id ID [--row-id ID] | --config-data JSON|@file|-) [--branch ID] [--timeout N]
-    (since 0.73.0) Run a synchronous component action (testConnection, getTables,
+    Run a synchronous component action (testConnection, getTables,
     ...) on the dedicated sync-actions service. ACTION_NAME is freeform --
     valid names are component-defined (see component detail synchronous_actions).
     --row-id shallow-merges the row over the root config at TOP level only
@@ -470,7 +530,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 
   kbagent config examples --component-id ID [--project NAME] [--row]
-    (since 0.73.0) Sample root/row configurations for a component, straight from
+    Sample root/row configurations for a component, straight from
     the AI-service component detail (same data the UI shows). --row limits to
     row examples. --json emits {{component_id, root_examples, row_examples}} --
     structured dicts, ideal as a starting point before config new / row-create.
@@ -558,7 +618,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     grouped per project. Group them yourself if you need per-project blocks.
 
   kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
-    Full job detail including result message and timing.
+    Full job detail including result message and timing. A keboola.flow /
+    keboola.orchestrator job also carries trigger_hint: if no cron schedule
+    explains the run, check `kbagent flow triggers` before concluding it was
+    manual -- table triggers and cross-project triggers never appear in
+    `schedule list`. Human mode shows "Created by token" (the one factual
+    signal of HOW a run started).
 
   kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
@@ -574,7 +639,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     --mode run (default) writes to mapped output tables. --mode debug runs the component but
     redirects the output to a Storage File tagged `debug-<jobId>` instead of into destination
     buckets -- safe for dry-runs and for reproducing a failing run on a production configuration
-    without touching production data. Invalid values exit 2 via Click choice gate (since v0.43.6).
+    without touching production data. Invalid values exit 2 via Click choice gate.
     --json response shapes by exit code:
       - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
@@ -642,6 +707,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Human mode also renders a Description column in the Columns table (0.89.0+, #642), shown only
     when at least one column carries a description; long text wraps instead of truncating. On
     0.88.0 column descriptions were readable through --json column_details[].description only.
+    Also returns `backend_path` (the owning bucket's Storage backendPath, verbatim) and `sql_path`
+    (the quoted, directly queryable table path; null when Storage reports no location) (since
+    0.95.0, #761). A linked bucket's path is the SOURCE project's database + schema.
 
   kbagent storage create-bucket --project NAME --stage STAGE --name BUCKET_NAME [--description D] [--backend B] [--branch ID]
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -653,7 +721,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
     Create a typed table. --column repeatable.
-    - --if-not-exists (since 0.47.0): opt-in idempotency. On a duplicate-display-name failure,
+    - --if-not-exists: opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
       table with the same display name still surfaces the original error. Safe for parallel workers.
@@ -978,7 +1046,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     /pay-as-you-go/billing/*, which does not accept a Storage token
     (issue #594, still open). Do not imply invoices are retrievable.
 
-### Feature Flags (since v0.48.0)
+### Feature Flags
 
   Requires a SUPER-ADMIN Manage API token (same kind as `org setup`). Same
   default-deny token policy: interactive hidden prompt by default; pass
@@ -1016,7 +1084,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     since 0.73.0 -- previously an error).
 
   kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
-    (since 0.73.0) Bundled example flow configurations (vendored from
+    Bundled example flow configurations (vendored from
     keboola-mcp-server), fully offline. Default keboola.flow (conditional);
     keboola.orchestrator serves legacy examples with an informational-only
     warning (kbagent cannot create or edit orchestrator flows). --json emits
@@ -1054,6 +1122,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     surfaces a warning (exit stays 0). Re-run with a capable token to activate.
 
   kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
+  kbagent flow triggers --project NAME --flow-id ID [--branch ID]
+    # Cron schedules AND table triggers in one call. Cross-project triggers are
+    # NOT checked -- the result says so via cross_project_triggers_checked=false
+    # rather than returning an empty list. Table triggers are production-only.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.
@@ -1121,7 +1193,38 @@ remain branch-aware because modifying a dev branch is the expected intent.
     One subscription with every filter printed verbatim, including threshold
     filters like durationOvertimePercentage that have no dedicated column.
 
-  Read-only in this release; creating/deleting subscriptions is not exposed.
+  kbagent notification create --project ALIAS --event NAME
+                             --channel email|webhook --address ADDR
+                             [--component-id ID] [--config-id ID]
+                             [--branch ID] [--expires-at TS]
+    Create a subscription (since 0.91.0). --address carries the email address
+    (--channel email) or the webhook URL (--channel webhook) -- the wire shape
+    is channel-discriminated, the CLI takes one flag either way. An invalid
+    --channel is a structured INVALID_ARGUMENT, exit 2.
+    WITHOUT --branch no branch.id filter is written, unlike the UI which
+    always writes one. An absent filter does not constrain matching, so such
+    a subscription fires for jobs on EVERY branch.
+
+  kbagent notification delete --project ALIAS --subscription-id ID [--yes]
+    Delete a subscription (since 0.91.0). Confirms unless --yes or --json.
+
+  kbagent notification replace-recipient --project ALIAS
+                                        --subscription-id ID
+                                        --address NEW_ADDR
+                                        [--channel email|webhook] [--yes]
+    Swap a subscription's recipient (since 0.91.0), keeping the event, filters
+    and expiry. This is delete+recreate -- the API has NO update primitive.
+    The NEW subscription is created FIRST, then the old one deleted, so a NEW
+    subscription_id is ALWAYS minted: never cache the old id, read
+    old_subscription_id / new_subscription_id off the result. If the delete
+    fails, the old subscription survives beside the new one -- a recoverable
+    duplicate, reported as old_deleted=false plus a warning, never a lost
+    subscription. --channel defaults to the old subscription's channel.
+    Confirms unless --yes or --json.
+
+  Permission classes: notification.create and notification.replace-recipient
+  are `write`, notification.delete is `destructive`. --deny-writes blocks all
+  three; --deny-destructive blocks only delete. list/detail stay `read`.
 
 ### Development Branches
 
@@ -1132,7 +1235,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create dev branch and auto-activate it. Async, CLI waits for completion.
 
   kbagent branch use --project ALIAS --branch ID
-    Set existing branch as active for subsequent commands.
+    Set existing branch as active for subsequent commands. Every command that
+    then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
+    'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
@@ -1141,7 +1246,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete branch (async). Auto-resets to main if it was active.
 
   kbagent branch merge --project ALIAS [--branch ID]
-    Get KBC UI merge URL (does NOT merge via API). Resets active branch.
+    DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
+    resets the active branch. On a project with merge requests enabled use
+    `merge-request create` + `merge-request merge` below.
 
   kbagent branch metadata-list --project NAME [--branch ID|default]
     List all metadata entries on a branch (id, key, value, provider, timestamp).
@@ -1156,6 +1263,75 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent branch metadata-delete --project NAME --metadata-id ID [--branch ID|default]
     Delete a metadata entry by its numeric ID (from metadata-list).
 
+### Merge Requests (Branches 2.0, non-SOX)
+
+  Merge a dev branch into production with review. Hidden alias: `mr`. Every command
+  except list/create takes [--merge-request-id N | --id N] [--branch B]; omitted, the
+  target is the merge request OF the active branch (`branch use`). A branch has at most
+  one merge request, ever. Both flags at once -> exit 2. Status is the DERIVED state the
+  web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected).
+
+  kbagent merge-request list [--project A] [--state STATE]
+    List merge requests, newest first. --state filters client-side (unknown value -> exit 2).
+    Empty list on a project without the feature says so (feature_enabled: false).
+
+  kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
+    Readiness (mergeable / merge_blockers), viewer flags, allowed_actions, feature_enabled, reviewers,
+    approvals, change log (EMPTY until sent for review -- by design), live conflicts.
+
+  kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--external-id X]
+    Open a merge request from --branch (or the active branch) into production. Write.
+
+  kbagent merge-request update [--project A] [--merge-request-id N | --branch B] [--title T] [--description D] [--reviewer-id ID ...] [--external-id X]
+    Omitted fields stay; "" clears description/external-id; --reviewer-id REPLACES the set.
+    No fields -> exit 2. Write; auto-merge is NOT a field here (see auto-merge).
+
+  kbagent merge-request request-review [--project A] [--merge-request-id N | --branch B]
+    DESTRUCTIVE (moves the MR toward production): on a 0-approval project it lands directly
+    in `approved`, where an armed auto-merge fires. `merge` works without it. With no
+    reviewers selected the email goes to EVERY project member. --json needs an explicit target.
+
+  kbagent merge-request approve [--project A] [--merge-request-id N | --branch B]
+    DESTRUCTIVE (the last approval is what a merge waits for). Only from in_review -- 422 on
+    a 0-approval project (in_review is unreachable there). --json needs an explicit target.
+
+  kbagent merge-request request-changes [--project A] [--merge-request-id N | --branch B] [--reason TEXT]
+    Back to development, approvals removed. Also the closest thing to "close" (no cancel
+    endpoint; the MR stays in development). --reason max 1000 chars. Write.
+
+  kbagent merge-request auto-merge --strategy immediately|scheduled|none [--at TS] [--project A] [--merge-request-id N | --branch B] [--yes]
+    DESTRUCTIVE: immediately/scheduled ARM a backend scheduler that merges the MR into
+    production on its own once approved -- a delayed production merge, `merge` never called.
+    `none` disarms (same command, same class). Prompts in human mode when arming; --json needs
+    an explicit target. Not a flag on create/update -- arming is its own conscious step.
+
+  kbagent merge-request merge [--project A] [--merge-request-id N | --branch B] [--yes]
+    DESTRUCTIVE: merges into production and deletes the source branch. Blocks up to 10 min.
+    Under --json an explicit target (--merge-request-id or --branch) is REQUIRED.
+
+  kbagent merge-request conflicts [--project A] [--merge-request-id N | --branch B]
+    Configurations changed on both sides (live). isDeleted = the DEV branch side's flag.
+
+  kbagent merge-request diff --component-id C --config-id I [--project A] [--merge-request-id N | --branch B] [--format short|full] [--output PATH]
+    Per-path classification: both changed / only you / only production. A side deleted
+    wholesale is reported with the --take to pick. --output writes resolution_candidate
+    (your content, all five keys) to edit and hand back with `resolve --resolved @PATH`.
+
+  kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs|delete | --resolved JSON|@file|-) [--project A] [--merge-request-id N | --branch B] [--change-description TEXT]
+    DESTRUCTIVE (removes a blocker the merge waits on). Rebase one conflicting config onto
+    production's version. Rebase REPLACES: a --resolved body must carry name, description,
+    isDisabled, configuration, rows. No --all. --json needs an explicit target.
+
+  DESTRUCTIVE IS A PROPERTY OF THE COMMAND -- never of a flag or of the MR's state -- so a
+  policy is evaluated from the command name alone, before any network call. Destructive:
+  request-review, approve, resolve, merge, auto-merge (anything that moves an MR toward or
+  into production). Write: create, update, request-changes. --deny-destructive = an agent
+  that can observe and shape merge requests but never move one. Under --json every
+  destructive command requires an explicit target (--merge-request-id or --branch).
+  Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
+  on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
+  a scoped token 403s on everything but list. Every result may carry warnings[].
+
 ### Workspaces (SQL Debugging)
 
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
@@ -1163,14 +1339,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
   kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
-    List workspaces. Read command: ignores active dev branch (production endpoint) with an Info banner;
-    pass --branch to opt in. Each entry carries login_type, read_only, qs_compatible so callers can pick a
+    List workspaces. Without --branch uses each alias's active branch (`branch use`), else
+    production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
     confirmed-whitelist loginType (canonical data-app shape). --orphaned shows orphaned workspaces.
 
   kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
-    Read command: ignores active dev branch with an Info banner; pass --branch to opt in.
+    Without --branch uses the alias's active branch (`branch use`), else production.
 
   kbagent workspace delete --project ALIAS --workspace-id ID
     Delete workspace. They also expire automatically.
@@ -1179,7 +1355,13 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Reset and return new workspace password.
 
   kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [...] [--preserve]
+    [--load-type clone|copy|view] [--force] [--timeout SECONDS]
     Load storage tables into workspace. --preserve keeps existing tables.
+    Default auto-picks zero-copy CLONE per table when eligible, else COPY (JSON reports
+    clone_ineligible_reason). --load-type forces clone/copy/view for every table -- an
+    ineligible explicit choice fails loudly, it never silently degrades. A COPY over 1 GiB
+    needs interactive confirmation or --force. --timeout defaults to 300s; on timeout the
+    job keeps running server-side (exit 4, not 1). (since 0.91.0)
 
   kbagent workspace query --project ALIAS --workspace-id ID --sql "SQL" [--file F] [--transactional] [--full] [--limit N]
     Execute SQL via Query Service. No Snowflake credentials needed.
@@ -1192,9 +1374,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace gc [--project NAME] [--dry-run] [--yes]
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
 
-### Data Apps (Streamlit / Flask / Node deployments)
+### Data Apps (Python/JS by default; Streamlit via --type)
 
-Lifecycle for `keboola.data-apps`. Combines the Storage API (config body --
+Lifecycle for `keboola.data-apps`. New apps default to `--type python-js`
+(Python, Node, or both), the recommended runtime. Combines the Storage API (config body --
 git block, slug, runtime size, encrypted secrets) with the Data Science API
 (/apps -- deployment record, state, URL, configVersion). Encapsulates the
 §9 redeploy contract so callers cannot pin to the empty-shell v2.
@@ -1215,8 +1398,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS]
     [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID]
     [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run]
+    [--copy] [--reveal]
     Create + configure + deploy in one call. Default `--auth password` mints
-    a 20-char hex simpleAuth password (retrievable via `data-app password`).
+    a 20-char hex simpleAuth password during the deploy. With --wait the
+    password is delivered like `data-app password` once the app runs (see
+    there); --copy / --reveal need --wait and a deploy. --dry-run accepts
+    the same flags and adds `password_delivery` (prompt|clipboard|stdout).
     PAT input (private repo): env var (recommended) > file > pre-encrypted.
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
@@ -1243,7 +1430,14 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
-    [--wait] [--timeout SECONDS] [--branch ID]
+    [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+    With --wait on a password app (0.96.0+): the password is delivered like
+    `data-app password` (the c prompt in a terminal, which then waits for
+    Enter or 120 s; --copy / --reveal need --wait). Without a flag and
+    without the prompt (no terminal, --json) nothing is read: output as
+    before. With a flag, JSON adds only ui_url, password_delivered_to
+    (+ password with --reveal); a failed password read or a non-password
+    app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback).
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
@@ -1262,12 +1456,43 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     URL is permanently retired. Confirmation prompt unless --yes.
 
   kbagent data-app password --project NAME --app-id ID
-    Retrieve the simpleAuth password. Requires the Manage API token in
-    addition to the project's Storage token. Token is read from interactive
-    hidden prompt by default; pass top-level --allow-env-manage-token to
-    use KBC_MANAGE_API_TOKEN from env (default-deny since 0.29.0). Never
-    persisted, never logged. Password is auto-generated at create time
-    and CANNOT be rotated -- delete and recreate the app to mint a new one.
+    [--copy] [--reveal] [--open]
+    Give the user the password of a password-protected app WITHOUT printing
+    it (0.96.0+; older versions printed it and needed a Manage API token).
+    Project token only (static or session), no Manage token. In a terminal
+    (human mode, stdin + stdout a TTY, not a background job) it shows the app
+    URL and `ui_url`, then waits: `c` copies the password, Enter / Esc / q
+    finishes, 120 s timeout.
+    Without a terminal or with --json there is no prompt: only --copy copies
+    it (the clipboard tool gets it on stdin). Nothing copied -> exit 0 with
+    `password_delivered_to: null`; `ui_url` is the Keboola UI page that shows
+    the password under Open App. --reveal prints it (human + JSON,
+    `password_delivered_to: "stdout"`); --reveal + --copy = INVALID_ARGUMENT.
+    --open also opens `app_url` in the browser (`app_opened`). JSON keys:
+    project_alias, app_id, auth, app_url, ui_url, password_delivered_to,
+    app_opened, message (+ password with --reveal). VALIDATION_ERROR when the
+    app's auth is not `password` (e.g. oidc, public); NOT_FOUND when the app
+    has no password yet. The Keboola UI can reset the password.
+    BREAKING: scripts that read `.data.password` must add --reveal (without
+    it the key is absent, exit 0); REST clients pass reveal=true;
+    KBC_MANAGE_API_TOKEN / --allow-env-manage-token are no longer used here.
+    AGENT RULES -- the password must not go into the chat:
+      1. Recommend that the user runs `kbagent data-app password --project P
+         --app-id ID` in their own terminal window (not through you, not
+         through Claude Code's `!` mode) and presses c. Recommend
+         `kbagent data-app deploy --project P --app-id ID --wait` there
+         only when a deploy is needed anyway (c after the deploy); a deploy
+         restarts the app, so never redeploy just to get the password.
+      2. Offer to run it yourself with --copy (plus --wait on create /
+         deploy); say that the password then replaces the clipboard content
+         but does not go into the chat. When `password_delivered_to` is
+         null, give the user `ui_url`.
+      3. Do not pass --reveal unless the user asks for it, and warn first
+         that the password then goes into the chat history.
+      4. Never read the clipboard (pbpaste, `xclip -o`, wl-paste,
+         Get-Clipboard), never get the password another way (`kbagent http`,
+         curl, `serve` with reveal=true), never ask the user to paste it into
+         the chat, never repeat it.
 
   kbagent data-app logs --project NAME --app-id ID [--lines N] [--since ISO8601]
     Tail the container log buffer (Data Science /apps/{{id}}/logs/tail).
@@ -1358,15 +1583,30 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
         [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
     Mint a git credential for the app's MANAGED git repository. ssh_key
     requires a public key; http_token returns a ONE-TIME secret printed
-    once and never retrievable again (mirrors data-app password). Requires
+    once and never retrievable again. Requires
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
 
 ### Project Sync
 
-  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing]
+  kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
+    --with-workspaces (since 0.96.0, CLI-25) sets "syncWorkspaces": true in the manifest
+    (with --adopt-existing: turns it on in an existing one). pull/diff/push/clone then also
+    sync shared SQL workspaces: keboola.sandboxes configs with no parameters.id and
+    runtime.shared true (Python/R and legacy SQL sandboxes carry parameters.id and stay
+    skipped). Config only: push never runs a job, opens a SQL editor session or loads
+    tables; a parameters.backendSize change adds a workspace_backend_size warning (an open
+    session keeps its size). A `push --force` DELETE removes the workspace's SQL editor
+    sessions of every user in the push branch, then the config (a plain push holds it back
+    under skipped_deletions); if listing/deleting sessions fails the config stays and the
+    error is reported. push --dry-run --force lists them (warnings[] workspace_sessions:
+    session_count, session_ids). sync clone warns per workspace whose
+    input tables the target lacks (workspace_input_tables_missing). Removing the key makes
+    the next pull drop the entries as "ignored", except a locally edited workspace, which
+    pull (also --force) keeps and reports as "skipped" (only --theirs deletes it). An
+    ignoredComponents entry wins.
 
   kbagent sync pull --project ALIAS [--all-projects] [--force] [--theirs] [--dry-run] [--with-samples] [--no-storage] [--no-jobs] [--job-limit N] [--branch ID]
     Download configs as local files. Idempotent, protects local modifications.
@@ -1380,12 +1620,19 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     The supported way to reconcile a drifted tree with production (no manifest surgery).
     Since 0.72.0 plain pull also re-materializes a tracked config whose local dir is missing
     (manifest<->disk invariant), so delete-dir-then-pull refetches. Applies to rows too.
-    Config-level isDisabled round-trips (since 0.72.0) as sparse `is_disabled: true` in
+    Config-level isDisabled round-trips as sparse `is_disabled: true` in
     _config.yml -- absent key means enabled; pull writes it, diff surfaces drift, push sends it.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
-    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync push/diff.
+    --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
+    Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
+    always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.0),
+    unioned with the manifest's ignoredComponents list
+    (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
+    component newly ignored has its manifest entry dropped and local dir removed on the next
+    pull, reported with details[].action "ignored" -- distinct from "removed", which means
+    the config was genuinely deleted on the remote.
 
   kbagent sync status [--directory DIR]
     Show local changes since last pull (SHA256-based). LOCAL check only --
@@ -1398,7 +1645,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync diff --project ALIAS [--all-projects] [--directory DIR] [--branch ID]
     3-way diff: local vs pull-time snapshot vs remote. Detects conflicts.
-    --branch (since 0.47.0): per-invocation dev-branch override. Wins over
+    --branch: per-invocation dev-branch override. Wins over
     manifest.branches[0] / 'branch use' active branch / git-branching mapping.
     Requires exactly one --project.
     Branch-scoped (since v0.89.0, #649): the local side is read from exactly ONE tree --
@@ -1412,44 +1659,70 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
     non-zero summary.orphaned with `sync pull`; promote dev-only configs with
     `branch merge`, never by pushing them to production.
+    Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
+    so a stale manifest entry or leftover dir for one of them contributes nothing --
+    not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
+    for them either (closes the delete-dir-then-push trap for ignored components).
 
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
-    Fresh-CREATE behavior (since 0.47.0): if the manifest contains a placeholder entry at
+    Workspace delete (since 0.96.0, syncWorkspaces trees): a --force push that deletes a shared
+    SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
+    backend workspaces, which config restore does not bring back; check
+    `sync push --dry-run --force` (warnings[] workspace_sessions) first. --force is destructive-class (a policy denying
+    cli:destructive or --deny-destructive blocks it; plain push stays write-class).
+    Fresh-CREATE behavior: if the manifest contains a placeholder entry at
     (component_id, path), the create path updates it in place (no manifest duplication)
     and propagates any KBC.configuration.* metadata via set_config_metadata. Re-pushes
     against the now-real config id are naturally idempotent.
-    Fresh-CREATE variable binding (since 0.47.2): when a keboola.variables config + its
+    Fresh-CREATE variable binding: when a keboola.variables config + its
     values row are created alongside a transformation in the same push, the transformation's
     variables_id / variables_values_id are rebound to the assigned ULIDs (not placeholder
     dirnames), the row's values are hoisted even when the scaffold row file has no _keboola
     block, and the row's placeholder parent is remapped before POST. job run then succeeds
     without a post-push config variables-set step.
-    --branch (since 0.47.0): per-invocation dev-branch override. Same semantics as sync diff.
-    When no <branch_name>/ subtree exists on disk (since 0.47.2), the local default tree
+    --branch: per-invocation dev-branch override. Same semantics as sync diff.
+    When no <branch_name>/ subtree exists on disk, the local default tree
     (main/) is read as the source and promoted to the target branch; API writes still target
     the branch id.
-    --no-name-drift-warnings (since 0.47.0): suppress the cosmetic name_drift_warnings
+    --no-name-drift-warnings: suppress the cosmetic name_drift_warnings
     array from the result envelope.
-    Never-fetched guard (since 0.72.0): a manifest entry with an empty pull_hash and no
+    Never-fetched guard: a manifest entry with an empty pull_hash and no
     local files (pre-0.72 name-collision phantom) is NEVER planned as a remote DELETE;
     diff/push exclude it and report it under never_fetched with a warning -- run sync pull
-    to materialize it. Local deletion of a properly-pulled config still deletes on push.
-    Adopted-by-id writeback (since 0.72.0): pushing an untracked local file whose
+    to materialize it. Local deletion of a properly-pulled config deletes on push --force
+    only (#792): a plain push deletes nothing and lists the deletion under skipped_deletions,
+    also in --dry-run. A config or row deleted on the remote since the last pull is
+    remote_deleted: push never re-creates it, sync pull removes the local copy.
+    Adopted-by-id writeback: pushing an untracked local file whose
     _keboola.config_id resolves on the branch (adopt-update, #482) now also writes the
     manifest entry, so follow-up diffs are stable and a later local delete is detected.
     Branch-scoped (since v0.89.0, #649): push consumes the diff's changeset, so configs
     tracked on another branch's tree are never planned as creates -- they ride along on
     the result envelope under `orphaned` instead (see sync diff). --dry-run agrees.
 
-  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--dry-run] [--branch ID]
+  kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
-    reference->ULID. Idempotent (re-run -> no_changes); needs a fresh target.
+    reference->ULID; since 0.96.0 also shared-code links, legacy keboola.orchestrator
+    task configIds, task configRowIds and schedule targets (link_remaps counts each
+    kind; an unset link is an errors[] entry, a failed PUT is sent by the next push).
+    Idempotent (re-run -> no_changes); needs a fresh target.
+    Read warnings[] after a clone (also --dry-run, 0.96.0+): missing_task_target (a
+    flow/orchestrator task runs a config not in the tree), encrypted_values_copied
+    (KBC:: paths the target cannot decrypt; secret_keys: plaintext in _config.yml +
+    sync push, unencryptable_keys: encrypt values, oauth_keys: authorize again),
+    data_app_not_deployed (run data-app deploy), schedule_not_active (clone never
+    activates schedules; flow schedule does). Only the run that creates the configs
+    reports them -- a re-run returns warnings: [], so keep them from the first run.
     Override files must be flat {{id: scalar}} mappings (0.89.0+); a nested/list/null
     value -> CONFIG_ERROR naming the key + type.
+    Clone recreates the reference's storage buckets in the target from
+    storage/buckets.json BY DEFAULT (--no-create-buckets skips it; buckets only,
+    not tables/data). A linked (shared) bucket is linked to the same source as in
+    the reference (listed in linked_buckets; a refused link -> bucket_errors).
     Note: --dry-run still creates --target-dir on disk (copy + overrides + manifest)
     but does not push.
 
@@ -1474,11 +1747,15 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     --input accepts: inline JSON, @file.json (from file), or - (from stdin).
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 
-### Semantic Layer (Metastore) (since v0.41.0)
+### Semantic Layer (Metastore)
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
-with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage, but it MUST be a
+MASTER (project admin) token -- the metastore rejects valid non-master tokens
+with an opaque 401 "Failed to create project scope", reclassified by kbagent to
+MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
+`kbagent --json project info --project P` -> is_master_token. Alias:
 `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
   kbagent semantic-layer model list --project P
@@ -1495,12 +1772,12 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Without --type prints a per-type count summary.
 
   kbagent semantic-layer schema --project P (--type model|dataset|metric|relationship|constraint|glossary[,TYPE...] | --all)
-    (since 0.73.0) Live JSON Schema per semantic object type, fetched from the
+    Live JSON Schema per semantic object type, fetched from the
     deployed metastore (never bundled -- cannot drift). Exactly one of
     --type/--all. --json emits {{project, schemas: [{{type, schema}}]}}.
 
   kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
-    (since 0.47.0) Project-wide glob search across semantic-layer entity names.
+    Project-wide glob search across semantic-layer entity names.
     Mirrors the upstream keboola-mcp-server search_semantic_context tool so a
     downstream caller can verify the model is populated without an MCP dependency.
     Patterns are case-sensitive fnmatch, repeatable (union). Default pattern is "*".
@@ -1508,7 +1785,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Returns {{project, contexts: [{{id, type, name, description, attributes}}], total_count}}.
 
   kbagent semantic-layer get-context --project P --context-id ID
-    (since 0.47.0) Single-entry fetch by id, irrespective of type. Probes model first,
+    Single-entry fetch by id, irrespective of type. Probes model first,
     then datasets/metrics/relationships/constraints/glossary in order; raises NOT_FOUND
     if no type matches (exit 1).
 
@@ -1516,7 +1793,9 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Basic structural checks (duplicates, dangling refs, sum-on-pct,
     constraint orphans, severity-suffix). --deep adds parallel Snowflake
     column-existence checks for phantom fields, phantom column refs, and
-    AGG-on-STRING via in-process StorageService.
+    AGG-on-STRING via in-process StorageService, plus an FQN_MISMATCH warning
+    for a dataset `fqn` that is not the table's Storage location (since 0.95.0;
+    models built before 0.95.0 carry a nonexistent "KEBOOLA" database).
 
   kbagent semantic-layer export --project P [--model M] [--output PATH]
     Snapshot the model to a self-describing JSON file. Default path:
@@ -1526,7 +1805,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Three-way diff: project<->project, project<->file, file<->file. Output
     groups changes per entity type: added, removed, changed (with diff_keys).
 
-  kbagent semantic-layer reference-data list|get|set|delete ... (since 0.55.0)
+  kbagent semantic-layer reference-data list|get|set|delete ...
     Dimension-member records (semantic-reference-data): one record per
     dimension holding the full member list in a members[] array (e.g. a
     Chart of Accounts). Deliberately OUTSIDE build/export/diff/cascade.
@@ -1541,7 +1820,10 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     columns (account_code, account_name, parent_code, is_leaf, ...).
 
   kbagent semantic-layer add metric|dataset|relationship|constraint|glossary ...
-    Add one entity. Dataset auto-derives `fqn` from --table-id; --deep-fields
+    Add one entity. Dataset `fqn` is the table's warehouse location read from
+    Storage (bucket backendPath = `storage table-detail` sql_path; a linked
+    bucket points at the SOURCE project's database + schema), so the table must
+    exist; `--fqn FQN` stores a value verbatim instead. --deep-fields
     fetches the storage schema and synthesises role-classified fields
     (PK_/FK_->key, *_DATE/*_DT->timestamp, numeric amount/value/rate->measure,
     else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
@@ -1558,7 +1840,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
-    Partial-state envelope (since v0.41.10): when metric rename succeeds but
+    Partial-state envelope: when metric rename succeeds but
     one or more dependent constraints fail to repoint, the response sets
     `partial_state: true` at the top level + `recovery_hint: "<text>"`
     pointing at `semantic-layer validate` + manual `edit constraint
@@ -1588,12 +1870,12 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     Non-interactive heuristic builder. AI caveat: the ai_client has no
     arbitrary-JSON endpoint, so `build` falls back to a deterministic
     heuristic (one dataset + one COUNT(*) metric + one glossary entry per
-    table; FQN derived; fields[] role-classified). Response carries
+    table; FQN from the table's Storage location; fields[] role-classified). Response carries
     `fallback_used: "heuristic"`. Push loop iterates all 5 child types in
     dependency order (fixes the long-standing sl-build skill bug where
     semantic-constraint was silently dropped). On push failure rolls back
     every successfully-POSTed child in reverse order + deletes the model
-    if we created it (since v0.41.10); pass --keep-on-failure to preserve
+    if we created it; pass --keep-on-failure to preserve
     the partial state for forensic inspection (mirrors data-app create).
 
   kbagent semantic-layer token --encrypt --project P --component-id C
@@ -1648,7 +1930,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     --from-file for the full {{"type":..., "params":...}} JSON envelope
     when prompts/args grow large. --extra-arg on an ai_agent task is
     honored only when the kbagent process (serve, or this `agent` run)
-    has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env (since 0.60.2);
+    has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env;
     otherwise the args are dropped with a warning.
 
   kbagent agent update TASK_ID [--name N] [--description D] [--cron C]
@@ -1692,7 +1974,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     the chosen AI CLI with a meta-prompt; the final `done` event's
     `data.prompt` carries the cleaned body ready to paste into
     `agent create --prompt ...`. --extra-arg follows the same
-    KBAGENT_ALLOW_AI_EXTRA_ARGS opt-in as `agent create` (since 0.60.2).
+    KBAGENT_ALLOW_AI_EXTRA_ARGS opt-in as `agent create`.
 
   See agent-tasks-cli-workflow.md skill reference for full walkthroughs.
 
@@ -1742,7 +2024,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   kbagent kai history [--project NAME] [--limit N]
     List recent Kai chat sessions. Default limit: 10.
 
-### SQL Transformations (since v0.73.0)
+### SQL Transformations
 
   kbagent transformation create --project NAME --name NAME (--sql 'SELECT ...' | --sql-file PATH) [--created-table NAME ...] [--component-id ID] [--description D] [--branch ID] [--dry-run]
     Create a SQL transformation. Component id derived from the project
@@ -1767,7 +2049,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     mapping you want to keep. --dry-run previews the resulting tree + op
     summary without writing.
 
-### Documentation Q&A (since v0.73.0)
+### Documentation Q&A
 
   kbagent docs query "QUESTION" [--project NAME]
     Answer a natural-language question from the Keboola documentation via the
@@ -1776,7 +2058,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     `kai ask` this does NOT see project data -- it is documentation-only,
     works with any token, and is the right tool for "how do I ..." questions.
 
-### Developer Portal (since v0.49.0)
+### Developer Portal
 
   The `dev-portal` command group talks to `apps-api.keboola.com` (the Keboola
   Developer Portal) and lets component developers register and update components
@@ -1797,7 +2079,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
       --username admin@keboola.com --role-hint admin --password-stdin
     kbagent dev-portal identity use vendor-keboola
 
-  **`role_hint` is load-bearing (since v0.51.1)**: `vendor` (default) routes
+  **`role_hint` is load-bearing**: `vendor` (default) routes
   `dev-portal patch` to `PATCH /vendors/{{vendor}}/apps/{{app}}` (restricted
   schema); `admin` routes it to `PATCH /admin/apps/{{app}}` (permissive
   schema). The admin endpoint is the **only** way to set the 9 fields
@@ -1809,7 +2091,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
   "must be one of: easy, medium, hard"; that message is a known apps-api
   bug -- the field is actually `forbidden()`, not enum-validated).
 
-  **`--password-stdin` (since v0.51.1)** works on TTY (hidden line-based
+  **`--password-stdin`** works on TTY (hidden line-based
   prompt, Enter to confirm) AND on a pipe (`echo $PASS | … --password-stdin`,
   reads to EOF). Pre-0.51.1 the flag hung interactively because it always
   waited for EOF.
@@ -1866,6 +2148,15 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     subprocesses). Requires the optional 'server' extra:
     `uv pip install -e ".[server]"`.
 
+    Config directory served -- most specific wins: `serve --config-dir X`,
+    then an explicit root-level `kbagent --config-dir Y serve`, then the
+    normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
+    is not an error; the serve-level flag wins. That directory decides which
+    projects the REST surface exposes AND which persisted `permissions`
+    policy the /auth/* routes enforce. NOTE for older installs: up to 0.90.1
+    `serve` ignored the root-level flag entirely, silently serving a
+    different directory -- there, always pass --config-dir to `serve` itself.
+
     --no-banner (since 0.90.0) suppresses the web UI's "What's new" popup --
     a curated per-version highlights modal the UI shows once per version
     (dismissal persisted in localStorage `kbagent.whatsnew.seen`). The SPA
@@ -1875,7 +2166,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent doctor
     Health checks (no --fix since 0.85.0 -- it only installed the MCP server).
-    Inside a sync working tree, the sync_secrets check (since 0.55.0) warns about
+    Inside a sync working tree, the sync_secrets check warns about
     in-sync configs that still hold plaintext #-secrets (#378); skipped outside a
     sync tree. The mcp_tool_tasks check FAILs on agent tasks still using the
     removed `--type mcp_tool`; recreate them as `--type cli_command`.
@@ -1885,7 +2176,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     the latest available; flags any staleness. Since 0.85.0 it reports kbagent
     only -- keboola-mcp-server is a separate distribution kbagent no longer
     tracks, so there is no `dependencies` key in --json.
-    --beta (since 0.42.0) reports the latest pre-release (beta / rc) instead
+    --beta reports the latest pre-release (beta / rc) instead
     of the latest stable. Same env override: KBAGENT_INCLUDE_PRERELEASE=1.
 
   kbagent update [--beta]
@@ -1902,7 +2193,7 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     one. `version --json` then carries kbagent.install_channel and
     kbagent.upgrade_hint; upgrade_command is empty for a hand-unpacked
     archive.
-    --beta (since 0.42.0) opts into pre-release versions (PEP 440 betas/rc,
+    --beta opts into pre-release versions (PEP 440 betas/rc,
     e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
     /releases/latest endpoint, which excludes prereleases server-side --
     stable users never silently land on a beta. Set
@@ -1911,7 +2202,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5
-    versions, one-line summary each; --full (-v) expands every note.
+    versions, the first sentence of every BREAKING note, plus of the first other
+    notes until at least two show; --full (-v) expands every note.
 
   kbagent permissions list [--category read|write|destructive|admin]
     List all operations with risk categories and current allowed/denied status.
@@ -1929,6 +2221,12 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
     they matched is gone. A persisted policy still loads with them, but they
     match nothing, so a mode=deny policy whose only allowance was `tool:read`
     now denies everything. Rewrite such a policy with `cli:read`.
+    Since 0.91.0 (issue #688): every pattern is validated BEFORE the
+    interactive confirmation -- it must be a cli:* category, an exact
+    operation name, or a glob matching >=1 known operation, or the whole
+    call fails with VALIDATION_ERROR (exit 2, invalid patterns listed) and
+    nothing is written. `permissions show` / `kbagent doctor` likewise flag
+    ANY dead pattern already on disk, not only `tool:*`.
 
   kbagent permissions reset
     Remove all restrictions.
@@ -1948,9 +2246,35 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      Success: {{"status": "ok", "data": ...}}
      Error:   {{"status": "error", "error": {{"code": "...", "message": "...", "retryable": true/false}}}}
    Check "retryable" -- if true, retry the operation.
+   A command that picked a branch also carries "targets" (success AND error):
+   [{{"role": "target"|"source", "project_alias", "branch_id", "branch_name",
+     "branch_source": "explicit"|"active_branch"|"git_mapping"|"manifest"|"merge_request"
+       |"production",
+     "active_branch": {{"branch_id", "branch_name"}}|null}}]. Read it before you
+   trust a write target: "active_branch" means `branch use` chose the branch.
+   "source" = the branch read or merged FROM (config clone origin, a merge
+   request's branch); merge-request merge and an armed auto-merge also list
+   production as "target".
+   No "targets" key = the command chose no branch (it does NOT mean production).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
+   --project takes an alias or a registered project's numeric ID (since 0.96.0).
+   An alias wins over an ID. An ID registered under several aliases fails with
+   CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
+   exactly one is a session (browser-login) alias, which then wins. The same
+   applies to KBAGENT_PROJECT, `project use`, `config clone --target-project`,
+   `sync clone --target`, `semantic-layer promote --from-project/--to-project`,
+   `semantic-layer diff --project-a/--project-b`, `auth * --stack`, the
+   `project` column of `project invite --from-csv`, and the `kbagent serve`
+   {{project}} / {{alias}} path and ?project= / ?alias= / ?stack= query
+   parameters. serve translates path and query parameters only: a project in
+   a request body still needs the alias. Output names the resolved alias
+   (`targets`, `project_alias`). When a digits-only alias is also another
+   project's ID, the alias is used and a warning names that project on stderr
+   (in --json mode too). `project add` / `project create` take --project as a
+   NEW alias, never an ID; `lineage show --project` filters an offline graph
+   and is not translated either.
 
 4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 
@@ -1965,19 +2289,21 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
      kbagent --json project status   # test all connections
 
 7. Environment variables:
-     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header)
+     KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header).
+                              Prefer the --conversation-id global flag from an agent harness:
+                              a standalone `export` does not survive between tool calls.
      KBC_TOKEN                Storage API token (fallback for --token)
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
-     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh, data-app password).
+     KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh).
                               Default-DENY since 0.29.0: pass --allow-env-manage-token
                               to opt in, otherwise this var is ignored and a TTY prompt
                               is required. Closes AI-exfiltration via subprocess env.
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
-     KBAGENT_PROJECT          Override the pinned default project for this shell/session (beats pin, loses to --project)
+     KBAGENT_PROJECT          Override the pinned default project for this shell/session (alias or project ID; beats pin, loses to --project)
      KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
-                              reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL (since 0.50.0).
+                              reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL.
                               Headless / token-only mode: no `project add`, no config.json on disk. Use
                               `--project __env__` (or rely on it as the sole/default project). The token
                               lives in memory only -- it is NEVER persisted, even if a write op runs.
@@ -1996,6 +2322,8 @@ with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. Alias:
 
 8. Config resolution order:
      --config-dir flag > KBAGENT_CONFIG_DIR env > .kbagent/ in CWD/parents > ~/.config/keboola-agent-cli/
+     `serve` is the only subcommand with a --config-dir of its own: its flag wins over the
+     root-level one, which wins over the rest of the chain above (see `kbagent serve`).
 
 9. Historical MCP tool names: the `tool` group was removed in v0.85.0. If a
    user or an old script names a tool (get_configs, query_data, ...), map it to
@@ -2042,8 +2370,15 @@ When you receive a non-zero exit code, use --json to get structured error detail
 
 If you are using Claude Code, install the kbagent plugin for richer guidance:
 
-  /plugin marketplace add keboola/cli
-  /plugin install kbagent@keboola-agent-cli
+  /plugin marketplace add keboola/ai-kit
+  /plugin install kbagent@keboola-claude-kit
+  /kbagent:setup
+
+`/kbagent:setup` is the one-command first-run path: it installs this CLI if
+it is missing, connects a project (`auth login --register-projects`, falling
+back to `auth login-password` from the environment and then a `project add`
+static token), and verifies with `kbagent doctor`.
+Every step is conditional, so it is safe to re-run.
 
 The plugin provides a skill with detailed workflow references including:
 - SQL transformation migration (input mapping removal, Snowflake paths)

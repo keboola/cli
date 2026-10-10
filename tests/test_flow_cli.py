@@ -968,3 +968,136 @@ def test_format_flow_detail_renders_transitions_and_badges(capsys) -> None:
     assert "→" in out  # transition arrow
     assert "default" in out.lower()  # condition-less transition labeled
     assert "job" in out and "notification" in out  # task type badges
+
+
+# ---------------------------------------------------------------------------
+# flow triggers (issue #714)
+# ---------------------------------------------------------------------------
+
+
+class TestFlowTriggers:
+    """`flow triggers` must surface table triggers and name what it skipped."""
+
+    @staticmethod
+    def _result(table_triggers: list[dict] | None = None, crons: list[dict] | None = None) -> dict:
+        return {
+            "project_alias": "prod",
+            "component_id": "keboola.flow",
+            "config_id": "500",
+            "branch_id": None,
+            "cron_schedules": crons or [],
+            "table_triggers": table_triggers or [],
+            "cross_project_triggers_checked": False,
+            "table_triggers_branch_scoped": False,
+        }
+
+    def test_json_reports_table_triggers(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_triggers.return_value = self._result(
+            [
+                {
+                    "trigger_id": "3",
+                    "component_id": "orchestration",
+                    "tables": ["out.c-bucket.TABLE"],
+                    "cool_down_period_minutes": 720,
+                    "last_run": "2026-08-28T05:36:00+0200",
+                    "run_with_token_id": 123,
+                }
+            ]
+        )
+
+        result = _invoke(
+            store,
+            mock_flow,
+            ["--json", "flow", "triggers", "--project", "prod", "--flow-id", "500"],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["table_triggers"][0]["tables"] == ["out.c-bucket.TABLE"]
+        assert data["data"]["cross_project_triggers_checked"] is False
+
+    def test_human_output_names_what_was_not_checked(self, tmp_path: Path) -> None:
+        """The core of #714: silence about cross-project triggers is the bug."""
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_triggers.return_value = self._result()
+
+        result = _invoke(
+            store, mock_flow, ["flow", "triggers", "--project", "prod", "--flow-id", "500"]
+        )
+
+        assert result.exit_code == 0
+        assert "Cross-project triggers were NOT checked" in result.output
+
+    def test_never_fired_trigger_is_labelled_never_not_blank(self, tmp_path: Path) -> None:
+        """`lastRun: null` means "exists, never fired" -- not "not scheduled"."""
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_triggers.return_value = self._result(
+            [
+                {
+                    "trigger_id": "3",
+                    "component_id": "keboola.flow",
+                    "tables": ["out.c-bucket.T"],
+                    "cool_down_period_minutes": 60,
+                    "last_run": None,
+                    "run_with_token_id": 1,
+                }
+            ]
+        )
+
+        result = _invoke(
+            store, mock_flow, ["flow", "triggers", "--project", "prod", "--flow-id", "500"]
+        )
+
+        assert "never" in result.output
+
+    def test_api_error_maps_to_exit_code(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_triggers.side_effect = KeboolaApiError(
+            message="nope", status_code=401, error_code="INVALID_TOKEN"
+        )
+
+        result = _invoke(
+            store,
+            mock_flow,
+            ["--json", "flow", "triggers", "--project", "prod", "--flow-id", "500"],
+        )
+
+        assert result.exit_code == 3
+
+    def test_config_error_maps_to_exit_five(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.get_flow_triggers.side_effect = ConfigError("no such project")
+
+        result = _invoke(
+            store,
+            mock_flow,
+            ["--json", "flow", "triggers", "--project", "prod", "--flow-id", "500"],
+        )
+
+        assert result.exit_code == 5
+
+
+class TestScheduleNegativeResultWording:
+    """ "No schedules found" invited "no trigger" -- name the mechanism (#714)."""
+
+    def test_schedule_list_names_cron_and_the_gap(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_schedule = MagicMock()
+        mock_schedule.list_schedules.return_value = {"schedules": [], "errors": []}
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ScheduleService") as MockService,
+        ):
+            MockStore.return_value = store
+            MockService.return_value = mock_schedule
+            result = runner.invoke(app, ["schedule", "list"])
+
+        assert "No cron schedules found" in result.output
+        assert "kbagent flow triggers" in result.output

@@ -28,6 +28,7 @@ import socket
 import threading
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Self
 from urllib.parse import parse_qs, urlsplit
 
 from ..constants import AUTH_CALLBACK_TIMEOUT, AUTH_PKCE_STATE_BYTES, AUTH_PKCE_VERIFIER_BYTES
@@ -268,7 +269,7 @@ class PkceCallbackServer:
             f"Could not bind a loopback callback listener on 127.0.0.1 or [::1]: {last_error}"
         ) from last_error
 
-    def __enter__(self) -> PkceCallbackServer:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:

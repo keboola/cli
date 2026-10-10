@@ -70,12 +70,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The silent-drift surfaces from CONTRIBUTING.md's "Plugin synchronization map".
 # Anything an AI agent reads to decide whether a command exists belongs here.
+#
+# ``src/**/*.py`` is in scope because a version gate written in a Python
+# comment is agent-facing documentation exactly like a markdown one -- and its
+# absence is not hypothetical: ``(since vNEXT)`` in ``permissions.py`` survived
+# the 0.90.1 release precisely because nothing under ``src/`` was scanned
+# (``commands/context.py`` used to be listed alone; this glob subsumes it).
+# Its first run also surfaced a stale ``(since v0.26.1)`` in ``commands/
+# project.py`` -- a version that never shipped, left behind by a renumber.
+#
+# ``scripts/*.py`` is deliberately NOT scanned. This module has to NAME the
+# placeholder it is looking for (its ``--release`` usage line and the
+# ``VNEXT_TOKEN`` constant), so it would flag itself forever -- a self-
+# referencing failure no regex can tell apart from a real gate. Do not retry it.
 SCANNED_GLOBS: tuple[str, ...] = (
     "CLAUDE.md",
     "docs/*.md",
     "plugins/kbagent/**/*.md",
     "plugins/kbagent/.claude-plugin/CLAUDE.md",
-    "src/keboola_agent_cli/commands/context.py",
+    "src/**/*.py",
 )
 
 # ``(since v0.84.0)`` / ``(since 0.84.0)`` and ``0.73.0+`` / ``v0.73.0+``.
@@ -85,10 +98,15 @@ GATE_RE = re.compile(r"\(since v?(\d+\.\d+\.\d+)\)|(?<![\w.])v?(\d+\.\d+\.\d+)\+
 # The placeholder a feature PR writes when it cannot know its release version.
 VNEXT_TOKEN = "vNEXT"
 
-# An inline-code span. Stripping these before looking for VNEXT_TOKEN is what
-# separates a live gate from prose quoting the token (see the module docstring
-# for why this must not be applied to GATE_RE).
-INLINE_CODE_RE = re.compile(r"`[^`]*`")
+# An inline-code span, single- OR double-backtick. Stripping these before
+# looking for VNEXT_TOKEN is what separates a live gate from prose quoting the
+# token (see the module docstring for why this must not be applied to GATE_RE).
+# The double-backtick alternative must come FIRST -- regex alternation is
+# left-biased, so a single-backtick-first pattern would match the empty span
+# between the two opening backticks of ``x`` and leave the token exposed.
+# It matters because Python docstrings under ``src/`` use the RST convention:
+# a ``(since vNEXT)`` written there is prose, not a gate, exactly as in markdown.
+INLINE_CODE_RE = re.compile(r"``[^`]*``|`[^`]*`")
 
 # Fenced blocks are deliberately NOT stripped, even though the same "code means
 # quotation" argument seems to apply. Measured: CLAUDE.md's `## All CLI
@@ -121,12 +139,89 @@ def find_vnext_residue(paths: list[Path]) -> list[VnextResidue]:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()
-        for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), start=1):
+        # UTF-8 is pinned, never left to the platform default: on Windows that
+        # default is cp1252, and 73 of the files this now scans carry non-ASCII
+        # (em dashes, box-drawing rules in section comments). Decoded as cp1252
+        # their bytes turn to mojibake, which can move or destroy the backticks
+        # INLINE_CODE_RE keys on -- so a real placeholder could read as quoted
+        # prose on one OS and as residue on another.
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
             if VNEXT_TOKEN not in line:
                 continue
             if VNEXT_TOKEN in INLINE_CODE_RE.sub("", line):
                 residue.append(VnextResidue(path=rel, line=lineno, text=line.strip()))
     return residue
+
+
+# An ATX markdown heading: 1-6 hashes followed by a space (CommonMark requires
+# the space, so ``#tag`` is not a heading). Only ``.md`` files are considered --
+# ``src/**/*.py`` is scanned for gates too, but a ``#`` there opens a comment,
+# which has no anchor slug to break.
+HEADING_RE = re.compile(r"^ {0,3}#{1,6} ")
+
+# A code-fence delimiter: 3+ backticks or 3+ tildes, at most 3 spaces indented
+# (CommonMark). The heading check needs it because a ``#`` line INSIDE a fence
+# is content, not a heading -- it renders no anchor slug, so the slug-breakage
+# rationale does not apply there. CLAUDE.md's ``## All CLI Commands`` section
+# is one giant fence full of ``#`` comment lines, and feature PRs are REQUIRED
+# to tag new notes there with ``vNEXT`` (CONTRIBUTING.md, coding convention
+# #17) -- so flagging them would fail every PR that follows the process. This
+# is the same argument that already exempts ``#`` comments in ``.py`` files.
+# The residue scan is untouched: a fenced gate is still a live gate.
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def find_heading_placeholders(paths: list[Path]) -> list[VnextResidue]:
+    """Return every markdown heading carrying a live ``vNEXT`` placeholder.
+
+    Resolving the placeholder rewrites the heading, which rewrites its
+    generated anchor slug, which breaks every inbound ``#...`` link. Unlike
+    :func:`find_vnext_residue`, this is fatal on EVERY PR rather than only in
+    release mode: the rule used to be a hand-run grep at release time, and in
+    0.91.0 that grep lost a merge race (PR #697 ran it two minutes before #694
+    and #696 landed their own headings). Checking at authoring time is what
+    makes the race impossible.
+
+    Numeric versions in headings are deliberately NOT flagged: an already
+    resolved tag never changes again, so its slug is stable, and flagging the
+    dozen historical ones would be noise with no inbound link at risk.
+
+    Lines inside a code fence are skipped -- they render as content, never as
+    headings, so no anchor slug is at risk (see ``FENCE_RE``). A closing fence
+    must repeat the opening character (CommonMark): a ``~~~`` inside a backtick
+    fence is content and does not close it.
+    """
+    flagged: list[VnextResidue] = []
+    for path in paths:
+        if path.suffix != ".md":
+            continue
+        try:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        fence_open: str | None = None
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            fence = FENCE_RE.match(line)
+            if fence is not None:
+                marker = fence.group(1)
+                if fence_open is None:
+                    fence_open = marker
+                elif marker[0] == fence_open[0] and len(marker) >= len(fence_open):
+                    fence_open = None
+                continue
+            if fence_open is not None:
+                continue
+            if VNEXT_TOKEN not in line or not HEADING_RE.match(line):
+                continue
+            # Same quotation rule as the residue scan: a heading that merely
+            # names the token in backticks is prose about the placeholder.
+            if VNEXT_TOKEN in INLINE_CODE_RE.sub("", line):
+                flagged.append(VnextResidue(path=rel, line=lineno, text=line.strip()))
+    return flagged
 
 
 def collect_gates(paths: list[Path]) -> dict[str, list[tuple[str, int]]]:
@@ -143,11 +238,100 @@ def collect_gates(paths: list[Path]) -> dict[str, list[tuple[str, int]]]:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()
-        for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), start=1):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
             for match in GATE_RE.finditer(line):
                 version = match.group(1) or match.group(2)
                 gates[version].append((rel, lineno))
     return dict(gates)
+
+
+# Matches the bare placeholder token. ``vNEXT+`` needs no special case: the
+# token is replaced in place, so ``vNEXT+`` becomes ``0.91.0+`` on its own.
+VNEXT_SUB_RE = re.compile(re.escape(VNEXT_TOKEN))
+
+
+def _replace_outside_code(line: str, version: str) -> tuple[str, int]:
+    """Substitute the placeholder only in the parts of *line* outside code spans.
+
+    Rewriting whole lines is what makes a blanket ``sed`` unsafe: a line may
+    carry a quoted mention AND a live gate at once (CLAUDE.md's description of
+    the placeholder is exactly that), and only the live one may change.
+    """
+    pieces: list[str] = []
+    replaced = 0
+    pos = 0
+    for span in INLINE_CODE_RE.finditer(line):
+        chunk, count = VNEXT_SUB_RE.subn(version, line[pos : span.start()])
+        pieces.append(chunk)
+        replaced += count
+        pieces.append(span.group(0))  # the code span itself is preserved verbatim
+        pos = span.end()
+    chunk, count = VNEXT_SUB_RE.subn(version, line[pos:])
+    pieces.append(chunk)
+    replaced += count
+    return "".join(pieces), replaced
+
+
+def resolve_vnext(paths: list[Path], version: str) -> list[VnextResidue]:
+    """Rewrite every live ``vNEXT`` gate in *paths* to *version*, in place.
+
+    Returns one entry per rewritten LINE, carrying the text as it now reads.
+    Files with nothing to change are not written at all, so a release PR's
+    diff shows only the files that actually carry a gate.
+
+    This is the mechanical form of release checklist step 4. The scanner
+    already tells a live gate from prose with perfect precision; having a
+    human apply that knowledge by hand across ~54 lines only adds error.
+    """
+    try:
+        Version(version)
+    except Exception as exc:  # packaging raises InvalidVersion
+        raise ValueError(f"{version!r} is not a valid PEP 440 version") from exc
+
+    changed: list[VnextResidue] = []
+    for path in paths:
+        try:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        original = path.read_text(encoding="utf-8")
+        if VNEXT_TOKEN not in original:
+            continue
+        out_lines: list[str] = []
+        file_changed = False
+        for lineno, line in enumerate(original.splitlines(keepends=True), start=1):
+            if VNEXT_TOKEN not in line:
+                out_lines.append(line)
+                continue
+            new_line, count = _replace_outside_code(line, version)
+            out_lines.append(new_line)
+            if count:
+                file_changed = True
+                changed.append(VnextResidue(path=rel, line=lineno, text=new_line.strip()))
+        if file_changed:
+            path.write_text("".join(out_lines), encoding="utf-8")
+    return changed
+
+
+def gates_below(
+    gates: dict[str, list[tuple[str, int]]], floor: str
+) -> dict[str, list[tuple[str, int]]]:
+    """Return the gates naming a version older than *floor*, oldest version first.
+
+    A gate only earns its place while some live install predates it. kbagent
+    self-updates on startup, so for a sufficiently old version that population
+    rounds to zero -- while the gate keeps making the agent refuse a command
+    the user actually has. Raising a floor and de-tagging below it is periodic
+    maintenance; this produces the worklist.
+
+    The floor itself is NOT below the floor: it is the oldest version still
+    worth gating for.
+    """
+    limit = Version(floor)
+    below = {v: locs for v, locs in gates.items() if Version(v) < limit}
+    return {v: below[v] for v in sorted(below, key=Version)}
 
 
 def resolve_paths() -> list[Path]:
@@ -205,13 +389,86 @@ def main() -> int:
     paths = resolve_paths()
     gates = collect_gates(paths)
     residue = find_vnext_residue(paths)
+    heading_residue = find_heading_placeholders(paths)
+
+    if "--resolve" in sys.argv:
+        index = sys.argv.index("--resolve") + 1
+        if index >= len(sys.argv):
+            print("ERROR: --resolve needs a version argument (e.g. --resolve 0.91.0)")
+            return 1
+        requested = sys.argv[index].strip()
+        shipped = _pyproject_version()
+        # Cross-check against pyproject rather than trusting the format alone:
+        # `packaging` accepts `v0.91` and `0.91`, so a typo can parse cleanly
+        # and then be stamped into every gate in the tree at once.
+        if requested.lstrip("v") != shipped:
+            print(
+                f"ERROR: --resolve {requested} disagrees with pyproject.toml ({shipped}).\n\n"
+                "Resolve gates to the version this tree actually ships. Bump\n"
+                "pyproject.toml first, then re-run.\n"
+            )
+            return 1
+        try:
+            applied = resolve_vnext(paths, shipped)
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        if not applied:
+            print(f"No unresolved '{VNEXT_TOKEN}' gates to rewrite.")
+            return 0
+        print(f"Rewrote {len(applied)} '{VNEXT_TOKEN}' gate(s) to {shipped}:\n")
+        for gate in applied:
+            print(f"    {gate.path}:{gate.line}")
+        still = find_heading_placeholders(resolve_paths())
+        if still:  # pragma: no cover - defensive; headings are fatal earlier
+            print(f"\nWARNING: {len(still)} placeholder(s) remain in headings.")
+        return 0
+
+    if "--list-below" in sys.argv:
+        index = sys.argv.index("--list-below") + 1
+        if index >= len(sys.argv):
+            print("ERROR: --list-below needs a version argument (e.g. --list-below 0.80.0)")
+            return 1
+        floor = sys.argv[index].strip().lstrip("v")
+        stale = gates_below(gates, floor)
+        total = sum(len(locs) for locs in stale.values())
+        print(f"{total} gate(s) across {len(stale)} version(s) below the {floor} floor:\n")
+        for version in stale:
+            print(f"  {version}")
+            for rel, lineno in stale[version]:
+                print(f"    {rel}:{lineno}")
+        return 0
 
     if "--list" in sys.argv:
         for version in sorted(gates, key=lambda v: [int(p) for p in v.split(".")]):
             mark = " " if version in CHANGELOG else "  <-- UNKNOWN"
             print(f"{version:>10}  {len(gates[version]):>3} marker(s){mark}")
         print(f"{VNEXT_TOKEN:>10}  {len(residue):>3} marker(s)  <-- unresolved placeholder")
+        print(f"{'in headings':>10}  {len(heading_residue):>3} marker(s)  <-- always fatal")
         return 0
+
+    # Fatal in EVERY mode, unlike the plain residue below: a placeholder in a
+    # heading is never correct at any point in the release cycle, and deferring
+    # the complaint to the release PR is exactly how 0.91.0 shipped three of
+    # them (the hand-run grep in #697 raced #694 and #696).
+    if heading_residue:
+        print(
+            f"ERROR: {len(heading_residue)} '{VNEXT_TOKEN}' placeholder(s) inside a "
+            "markdown heading.\n"
+        )
+        print(
+            "Resolving the placeholder rewrites the heading, which rewrites its\n"
+            "generated anchor slug and breaks every inbound '#...' link to the\n"
+            "section. Move the tag onto the section's first body line instead:\n"
+            "\n"
+            "    ## Ignored components\n"
+            "\n"
+            f"    *(since {VNEXT_TOKEN}, #689)*\n"
+        )
+        for gate in heading_residue:
+            print(f"    {gate.path}:{gate.line}")
+            print(f"        {gate.text[:100]}")
+        return 1
 
     unknown = {v: locs for v, locs in gates.items() if v not in CHANGELOG}
     if unknown:

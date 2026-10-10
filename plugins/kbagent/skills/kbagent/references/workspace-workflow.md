@@ -18,6 +18,9 @@ kbagent --json workspace from-transformation \
 # SAVE THE PASSWORD -- it cannot be retrieved later!
 ```
 
+The transformation is read from the active branch (`branch use`), the same branch the
+workspace is created in *(since 0.96.0, #807)*; before that it was always read from production.
+
 ```bash
 # Step 2: Run the original SQL to reproduce the error
 # Default (0.59.0+): results come back inline as JSON columns+rows (fast),
@@ -60,6 +63,8 @@ Best when you want to explore data or run arbitrary queries:
 kbagent --json workspace create --project ALIAS --name "debug-ws"
 
 # Load specific tables (drops existing tables first)
+# Default auto-picks the load type per table (clone when eligible, else copy) --
+# see "Load types" below.
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id WS_ID \
@@ -73,12 +78,79 @@ kbagent --json workspace load \
   --tables in.c-bucket.table3 \
   --preserve
 
+# Force clone explicitly -- fails loudly (HTTP 400) instead of silently
+# falling back to copy if the table turns out not to be clone-eligible.
+# --force is irrelevant here: the size guard only ever applies to copy.
+kbagent --json workspace load \
+  --project ALIAS \
+  --workspace-id WS_ID \
+  --tables in.c-bucket.table1 \
+  --load-type clone
+
+# Force a real COPY of a table you know is huge and not clone-eligible --
+# --force is required (there is no prompt under --json), and a COPY really
+# moves the data so it can outrun the 300s default --timeout.
+kbagent --json workspace load \
+  --project ALIAS \
+  --workspace-id WS_ID \
+  --tables in.c-bucket.huge_table \
+  --load-type copy \
+  --force \
+  --timeout 600
+
 # Query
 kbagent --json workspace query \
   --project ALIAS \
   --workspace-id WS_ID \
   --sql "SELECT * FROM \"table1\" LIMIT 10"
 ```
+
+## Load types: clone / copy / view
+
+*(since 0.91.0, #687)* **Cheapest first**: skip the load entirely if you can
+(see "Don't load at all" below) > `clone` (zero-copy, seconds, any table
+size) > `view` (zero-storage, narrower eligibility) > `copy` (real data
+movement, size-guarded). `workspace load` supports all three as
+`--load-type`. **Default (no `--load-type`)**: kbagent decides per table,
+mirroring the server's own eligibility rules -- zero-copy `clone` when the
+table is on the same backend as the workspace with a full (unfiltered) load
+and no external-schema/Analytics-Hub source bucket, otherwise a plain
+`copy`. Check `tables[].clone_ineligible_reason` in the JSON to see why a
+given table fell back to `copy`.
+
+- **`--load-type clone`** -- zero-copy, metadata-only, finishes in seconds
+  regardless of table size. Fails loudly (server HTTP 400) if any requested
+  table is not clone-eligible -- it does not silently fall back to `copy`.
+- **`--load-type copy`** -- always a real data copy. A table over 1 GiB
+  needs interactive confirmation or `--force`. The confirmation prompt only
+  exists in human mode (no `--json`); `--json` (the default per Rule 1
+  above) never prompts, so a scripted `--json` load of a table that might
+  cross 1 GiB needs `--force` up front or it is refused outright. Check
+  `dataSizeBytes` via `storage table-detail` beforehand if you want to know
+  which one you'll need without a failed dry run.
+- **`--load-type view`** -- zero-storage, read-only view, no data movement
+  at all. BigQuery: any same-backend bucket. Snowflake: only an
+  external-schema bucket with the project feature
+  `input-mapping-read-only-storage`.
+
+**Verify what actually happened**: read `tables[].load_type` and
+`tables[].data_size_bytes` in the JSON result rather than assume -- with
+the auto-default, two requests that look identical can each take a
+different path per table.
+
+Loading a large table can take a while even as a copy job; `--timeout`
+defaults to 300s for `workspace load` (other storage-job commands keep
+60s). If it times out, the storage job **keeps running server-side** --
+the error names the job id and how to poll it
+(`GET /v2/storage/jobs/{id}`) -- and the CLI now exits 4 (retryable), not 1.
+
+**Don't load at all for read-only analytics.** If you only need to query
+production data -- no writes, no need for a workspace-local copy -- a
+project with the read-only input-mapping feature exposes it directly to
+any workspace via the `KBC_<STACK>_<PROJECT>` shared database.
+`workspace query` runs against it with zero load and zero extra storage;
+reach for `workspace load` only when the data must actually live inside
+the workspace.
 
 ## Option C: UI-visible workspace
 
@@ -99,7 +171,7 @@ kbagent --json workspace query \
   --file query.sql
 ```
 
-## Fast inline results vs `--full` -- mind the result-set volume (since v0.59.0)
+## Fast inline results vs `--full` -- mind the result-set volume
 
 `workspace query` has two ways to retrieve results. **Pick based on how many rows
 you actually need**, not by habit.
@@ -185,7 +257,7 @@ kbagent --json storage bucket-detail --project ALIAS --bucket-id in.c-shared-dat
 ```
 
 Prefer `sql_path` in agent code -- it is correctly quoted for the bucket's
-backend without you having to branch on dialect yourself. (since v0.25.3)
+backend without you having to branch on dialect yourself.
 
 **BigQuery FQN caveat**: on Keboola-managed BQ projects the Storage API
 returns `databaseName: ""`, so `bigquery_path` ends up dataset-qualified only
@@ -205,11 +277,11 @@ workspace.
 - **Quoting** (dialect-specific):
     - **Snowflake**: converts unquoted identifiers to UPPERCASE. Always double-quote database, schema, and table names -- Keboola names are typically lowercase (e.g. `"sapi_901"."in.c-main"."users"`).
     - **BigQuery**: requires backticks (`` ` ``), not double quotes; the dataset name is normalized to underscores (e.g. `` `in_c_main`.`users` ``).
-    - Easiest path: read `tables[].sql_path` from `bucket-detail` -- it is already correctly quoted for the bucket's backend (since v0.25.3).
+    - Easiest path: read `tables[].sql_path` from `bucket-detail` -- it is already correctly quoted for the bucket's backend.
 - **Query Service**: uses Storage API token for auth -- no warehouse credentials needed in the query command. Backend-agnostic: runs SELECTs against **both Snowflake and BigQuery** workspaces (BigQuery since v0.58.0; the path was always identical, the gap was classification). BigQuery workspaces carry `login_type: "default"` and are `qs_compatible: true` from v0.58.0 -- earlier versions mislabeled them `false`.
 - **Transactional mode**: add `--transactional` to wrap SQL in a transaction
 
-## Orphan detection + garbage collection (since v0.22.0)
+## Orphan detection + garbage collection
 
 Workspaces are backed by `keboola.sandboxes` configs. When a config is deleted
 out-of-band (UI cleanup, another CLI, force-delete script), the workspace

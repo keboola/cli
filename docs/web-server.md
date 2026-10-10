@@ -431,13 +431,13 @@ For a suppression flag, failing open is the wrong direction.
 Projects registered through `kbagent auth login --register-projects` carry a
 `kbc-session://<project_id>` sentinel instead of a Storage token; the live
 credential is a browser-login session in `auth.json` on the host. `serve`
-supports them for the Storage and Manage paths, because it never turns a
-project into credentials itself — every service in the registry resolves its
-own client factory, so the REST surface inherits the same bearer support the
-CLI has (`server/dependencies.py`). Everything outside those paths fails fast
-with `AUTH_NOT_SUPPORTED_ON_STACK` and names the static-token fallback, over
-REST exactly as on the CLI. The authoritative list of those surfaces is
-`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`; see
+supports them, because it never turns a project into credentials itself — every
+service in the registry resolves its own client factory, so the REST API
+inherits the same session behaviour the CLI has (`server/dependencies.py`). A
+session reaches almost every command over REST, exactly as on the CLI. The few
+features that still need a static token fail fast with
+`AUTH_NOT_SUPPORTED_ON_STACK` and name the fallback. The authoritative list is
+`SESSION_UNSUPPORTED_FEATURES` in `services/_auth_registration.py`. See
 [Browser login](auth.md) for the same list in prose.
 
 A session that expires while the server runs answers **HTTP 401** with
@@ -514,10 +514,11 @@ carried. Two consequences worth knowing before you reach for a flag:
   policy works too, but its allow list must then include `serve` (and the reads
   you want to keep), or the server will not start for the same reason as above.
 
-  Pass `--config-dir` **to `serve`**: the server resolves its own config dir
-  (`--config-dir` on the `serve` command, then `KBAGENT_CONFIG_DIR`, then the
-  local/global chain), so a root-level `kbagent --config-dir ... serve` sets the
-  directory for the CLI invocation, not for the served process.
+  Either spelling of `--config-dir` selects the served directory *(since
+  0.91.0)* — see [Which config directory `serve`
+  uses](#which-config-directory-serve-uses) below. On **0.90.1 and older**,
+  only `serve --config-dir` did: a root-level `kbagent --config-dir ... serve`
+  was ignored, so the policy above was silently not the one enforced.
 
 A missing or expired session reaches `GET /auth/projects` and `POST
 /auth/register-projects` as a **thrown error**, both funnelled through
@@ -653,6 +654,27 @@ This is what lets a midnight agent task do meaningful work: it has
 the same view of Keboola the operator does, it can call any endpoint in
 the reference, and its full response (including any tools it called)
 is captured into the run history.
+
+### Which config directory `serve` uses
+
+`serve` is the only subcommand with a `--config-dir` of its own, so there are
+two places the flag can appear. Most specific wins *(since 0.91.0)*:
+
+1. `kbagent serve --config-dir X` → serves `X`.
+2. `kbagent --config-dir Y serve` → serves `Y`.
+3. Neither → `KBAGENT_CONFIG_DIR`, then the `.kbagent` walk-up from the CWD,
+   then the global directory (`config_store.resolve_config_dir`).
+
+Giving both is not an error — the `serve`-level flag simply wins, as in rule 1.
+Only an explicit root flag is forwarded; an env-var/walk-up/global resolution is
+left to the server, which reaches the identical directory on its own.
+
+> **On 0.90.1 and older, rule 2 did not exist** (issue #679): the root-level
+> `--config-dir` was ignored by `serve` entirely, with no warning. The server
+> then exposed a different set of projects than the caller named, and — once
+> `/auth/*` began enforcing `permissions` in 0.90.1 — enforced a different
+> directory's policy. On those versions always pass `--config-dir` to `serve`
+> itself.
 
 ### State on disk
 

@@ -4,7 +4,7 @@ import pytest
 import typer
 
 from keboola_agent_cli.commands._helpers import map_error_to_exit_code, read_password_stdin
-from keboola_agent_cli.errors import KeboolaApiError, map_error_code_to_type
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError, map_error_code_to_type
 
 
 class TestReadPasswordStdin:
@@ -52,6 +52,21 @@ class TestMapErrorToExitCode:
             message="Request timed out",
             status_code=0,
             error_code="TIMEOUT",
+            retryable=True,
+        )
+        assert map_error_to_exit_code(exc) == 4
+
+    def test_map_error_to_exit_code_storage_job_timeout(self) -> None:
+        """STORAGE_JOB_TIMEOUT maps to exit 4, like the queue-job equivalent.
+
+        The Storage API has no cancel, so a timeout means the job is still
+        running server-side -- scripts must be able to tell that apart from a
+        real failure, which the previous fall-through to exit 1 prevented.
+        """
+        exc = KeboolaApiError(
+            message="Storage job 1 did not complete within 300.0s",
+            status_code=504,
+            error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,
         )
         assert map_error_to_exit_code(exc) == 4
@@ -182,231 +197,6 @@ class TestValidateBranchRequiresProject:
         formatter.err_console = MagicMock()
         # Should not raise
         validate_branch_requires_project(formatter, branch=None, project=None)
-
-
-class TestResolveBranch:
-    """Tests for resolve_branch."""
-
-    def test_resolve_branch_explicit_branch_wins(self, tmp_config_dir) -> None:
-        """Explicit --branch value is returned as-is, regardless of config."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=999,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(store, formatter, "prod", 123)
-        assert project == "prod"
-        assert branch_id == 123
-
-    def test_resolve_branch_uses_active_branch(self, tmp_config_dir) -> None:
-        """When no explicit --branch, active_branch_id from config is used."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=555,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(store, formatter, "prod", None)
-        assert project == "prod"
-        assert branch_id == 555
-        # Should print info message in human mode
-        formatter.err_console.print.assert_called_once()
-
-    def test_resolve_branch_no_branch_returns_none(self, tmp_config_dir) -> None:
-        """When no explicit --branch and no active branch, returns None."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(store, formatter, "prod", None)
-        assert project == "prod"
-        assert branch_id is None
-
-    def test_ignore_active_branch_returns_none_when_active_set(self, tmp_config_dir) -> None:
-        """With ignore_active_branch=True, implicit active_branch_id is skipped.
-
-        Used by storage read commands so users with an active dev branch
-        still see production tables/buckets by default.
-        """
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=15931,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(
-            store, formatter, "prod", None, ignore_active_branch=True
-        )
-        assert project == "prod"
-        assert branch_id is None
-        # User must be told production is being used despite active dev branch.
-        formatter.err_console.print.assert_called_once()
-        msg = formatter.err_console.print.call_args.args[0]
-        assert "production" in msg.lower()
-        assert "15931" in msg
-
-    def test_ignore_active_branch_does_not_override_explicit_branch(self, tmp_config_dir) -> None:
-        """Explicit --branch wins even when ignore_active_branch=True."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=15931,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(store, formatter, "prod", 99, ignore_active_branch=True)
-        assert project == "prod"
-        assert branch_id == 99
-
-    def test_ignore_active_branch_no_config_returns_none(self, tmp_config_dir) -> None:
-        """With ignore_active_branch=True and no active branch, still returns None."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(
-            store, formatter, "prod", None, ignore_active_branch=True
-        )
-        assert project == "prod"
-        assert branch_id is None
-        # No info message needed -- there was no active branch to ignore.
-        formatter.err_console.print.assert_not_called()
-
-    def test_ignore_active_branch_json_mode_silent(self, tmp_config_dir) -> None:
-        """In --json mode, ignore_active_branch still works but prints nothing."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=15931,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=True)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(
-            store, formatter, "prod", None, ignore_active_branch=True
-        )
-        assert project == "prod"
-        assert branch_id is None
-        formatter.err_console.print.assert_not_called()
-
-    def test_ignore_active_branch_single_project_inferred(self, tmp_config_dir) -> None:
-        """Without --project, if a single project has an active branch and
-        ignore_active_branch=True, the project is still returned but branch_id is None.
-        """
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import resolve_branch
-        from keboola_agent_cli.config_store import ConfigStore
-        from keboola_agent_cli.models import ProjectConfig
-
-        store = ConfigStore(config_dir=tmp_config_dir)
-        store.add_project(
-            "prod",
-            ProjectConfig(
-                stack_url="https://connection.keboola.com",
-                token="tok-123",
-                active_branch_id=15931,
-            ),
-        )
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        project, branch_id = resolve_branch(store, formatter, None, None, ignore_active_branch=True)
-        assert project == "prod"
-        assert branch_id is None
-        formatter.err_console.print.assert_called_once()
 
 
 class TestResolveProjectAlias:

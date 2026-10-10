@@ -2,10 +2,13 @@
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 import typer
 
+from . import telemetry
+from .commands._project_ref import ProjectRefGroup
 from .commands.agent import agent_app
 from .commands.auth import auth_app
 from .commands.billing import billing_app
@@ -26,6 +29,7 @@ from .commands.init import init_command
 from .commands.job import job_app
 from .commands.kai import kai_app
 from .commands.lineage import lineage_app
+from .commands.merge_request import merge_request_app
 from .commands.notification import notification_app
 from .commands.org import org_app
 from .commands.permissions import permissions_app
@@ -45,6 +49,7 @@ from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import EXIT_PERMISSION_DENIED
+from .effective_branch import record_targets
 from .errors import ErrorCode, PermissionDeniedError
 from .output import OutputFormatter, force_utf8_when_redirected
 
@@ -71,6 +76,7 @@ from .services.job_service import JobService
 from .services.kai_service import KaiService
 from .services.lineage_service import LineageService
 from .services.member_service import MemberService
+from .services.merge_request_service import MergeRequestService
 from .services.notification_service import NotificationService
 from .services.org_service import OrgService
 from .services.project_service import ProjectService
@@ -96,6 +102,8 @@ app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
     invoke_without_command=True,
+    # Translates a project ID given as --project to its alias (CLI-22).
+    cls=ProjectRefGroup,
 )
 
 # -- Setup & Info --
@@ -148,6 +156,8 @@ app.add_typer(notification_app, name="notification", rich_help_panel=_FLOWS)
 # -- Development --
 _DEV = "Development"
 app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
+app.add_typer(merge_request_app, name="merge-request", rich_help_panel=_DEV)
+app.add_typer(merge_request_app, name="mr", rich_help_panel=_DEV, hidden=True)
 app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
 app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
@@ -215,6 +225,17 @@ def main(
         "branch delete, etc.). Admin ops like 'project remove' and 'org setup' "
         "are NOT blocked -- use --deny-writes for the wide net.",
     ),
+    conversation_id: str | None = typer.Option(
+        None,
+        "--conversation-id",
+        help="Conversation/session ID sent as the X-Conversation-ID header on "
+        "every API request (platform observability). Equivalent to setting "
+        "KBAGENT_CONVERSATION_ID, and takes precedence over it. Exists because "
+        "agent harnesses do not persist shell state between tool calls, so a "
+        "standalone `export` cannot set it -- and prefixing every command with "
+        "`export ...` stops the command matching a `Bash(kbagent ...)` "
+        "permission allow-rule.",
+    ),
     allow_env_manage_token: bool = typer.Option(
         False,
         "--allow-env-manage-token",
@@ -225,7 +246,19 @@ def main(
     ),
 ) -> None:
     """Global options applied to all commands."""
+    import os
+
     from .auto_update import maybe_auto_update, show_post_update_changelog
+    from .constants import ENV_CONVERSATION_ID
+
+    # Published into the environment rather than threaded through the Typer
+    # context because that is where every consumer already reads it:
+    # `BaseHttpClient.__init__` stamps the header from os.environ for all
+    # seven clients, `doctor` reports on it, and scheduled-agent subprocesses
+    # inherit it for free. `serve` sets it the same way. The flag wins over an
+    # inherited env var -- it is the more specific instruction (issue #716).
+    if conversation_id is not None:
+        os.environ[ENV_CONVERSATION_ID] = conversation_id
 
     maybe_auto_update()
 
@@ -271,6 +304,11 @@ def main(
         no_color=effective_no_color,
         verbose=verbose,
     )
+    # Record the project and branch of this command for the output (#766). Not
+    # for the REPL shell (each line records on its own) nor for `serve`, whose
+    # request threads would all add to one record for the server's lifetime.
+    if ctx.invoked_subcommand not in (None, "repl", "serve"):
+        ctx.with_resource(record_targets(formatter.report_target))
 
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
@@ -285,6 +323,7 @@ def main(
     member_service = MemberService(config_store=config_store)
     feature_service = FeatureService(config_store=config_store)
     branch_service = BranchService(config_store=config_store)
+    merge_request_service = MergeRequestService(config_store=config_store)
     sharing_service = SharingService(config_store=config_store)
     search_service = SearchService(config_store=config_store)
     snapshot_service = SnapshotService(config_store=config_store)
@@ -345,6 +384,7 @@ def main(
     ctx.obj["member_service"] = member_service
     ctx.obj["feature_service"] = feature_service
     ctx.obj["branch_service"] = branch_service
+    ctx.obj["merge_request_service"] = merge_request_service
     ctx.obj["sharing_service"] = sharing_service
     ctx.obj["search_service"] = search_service
     ctx.obj["snapshot_service"] = snapshot_service
@@ -391,7 +431,7 @@ def main(
                             f"or remove {config_store.config_path.parent}/ to use global config."
                         )
         except Exception:
-            pass  # Don't let warning check crash the CLI
+            logging.getLogger(__name__).debug("startup config-warning check failed", exc_info=True)
 
     # Enforce permissions for top-level commands (sub-app commands use callbacks)
     _top_level_commands = {
@@ -426,3 +466,34 @@ def main(
             deny_destructive=deny_destructive,
         )
         raise typer.Exit()
+
+
+def run() -> None:
+    """Console-script entry point.
+
+    Wraps ``app()`` so exactly one best-effort usage event is posted per
+    invocation (see :mod:`telemetry`), carrying the command's exit code and
+    wall-clock duration. Telemetry never changes the exit code, swallows the
+    raised exception, or stalls the command.
+    """
+    telemetry.reset()
+    start = time.monotonic()
+    exit_code = 0
+    error: BaseException | None = None
+    interrupted = False
+    try:
+        app()
+    except KeyboardInterrupt:
+        interrupted = True
+        raise
+    except SystemExit as exc:
+        code = exc.code
+        exit_code = code if isinstance(code, int) else (0 if code is None else 1)
+        raise
+    except BaseException as exc:  # recorded for telemetry, then re-raised
+        exit_code = 1
+        error = exc
+        raise
+    finally:
+        if not interrupted:
+            telemetry.emit_cli_invocation(sys.argv, exit_code, error, time.monotonic() - start)

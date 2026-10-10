@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Depends, FastAPI, Request
 
@@ -18,6 +18,7 @@ from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
 from ..errors import PermissionDeniedError
 from ..permissions import PermissionEngine
+from ..project_ref import is_project_id, resolve_project_ref
 from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
@@ -36,6 +37,7 @@ from ..services.job_service import JobService
 from ..services.kai_service import KaiService
 from ..services.lineage_service import LineageService
 from ..services.member_service import MemberService
+from ..services.merge_request_service import MergeRequestService
 from ..services.notification_service import NotificationService
 from ..services.org_service import OrgService
 from ..services.project_service import ProjectService
@@ -53,9 +55,6 @@ from ..services.transformation_service import TransformationService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
 from ..services.workspace_service import WorkspaceService
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
@@ -135,6 +134,7 @@ class ServiceRegistry:
     transformation: TransformationService = field(init=False)
     billing: BillingService = field(init=False)
     auth: AuthService = field(init=False)
+    merge_request: MergeRequestService = field(init=False)
 
     def __post_init__(self) -> None:
         cs = self.config_store
@@ -146,6 +146,7 @@ class ServiceRegistry:
         self.stream = StreamService(config_store=cs)
         self.job = JobService(config_store=cs)
         self.branch = BranchService(config_store=cs)
+        self.merge_request = MergeRequestService(config_store=cs)
         self.workspace = WorkspaceService(config_store=cs)
         self.flow = FlowService(config_store=cs)
         self.schedule = ScheduleService(config_store=cs)
@@ -269,6 +270,47 @@ def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
 
     setattr(_check_permission, PERMISSION_DEPENDENCY_MARKER, operation)
     return _check_permission
+
+
+def translate_project_refs(*names: str) -> Callable[..., None]:
+    """Build a dependency that replaces a project ID in the named parameters with its alias.
+
+    The REST form of the CLI's ``--project`` translation (CLI-22): a ``names``
+    path parameter or query parameter that holds a registered project ID is
+    rewritten in the request scope. FastAPI solves this dependency before it
+    reads the route's own path and query parameters, so the handler and its
+    services only receive the alias. An ID shared by several projects raises
+    :class:`ConfigError` (HTTP 400 ``CONFIG_ERROR``). Request bodies are not
+    translated.
+    """
+
+    def _translate(request: Request, registry: ServiceRegistry = Depends(get_registry)) -> None:
+        path_params = request.scope.get("path_params") or {}
+        raw_query = request.scope.get("query_string", b"").decode("latin-1")
+        query = parse_qsl(raw_query, keep_blank_values=True)
+        refs = [path_params[name] for name in names if name in path_params]
+        refs += [value for key, value in query if key in names]
+        if not any(is_project_id(ref) for ref in refs):
+            return
+        projects = registry.config_store.load().projects
+        for name in names:
+            if name in path_params:
+                path_params[name] = resolve_project_ref(projects, path_params[name])
+        translated = [
+            (key, resolve_project_ref(projects, value) if key in names else value)
+            for key, value in query
+        ]
+        if translated != query:
+            request.scope["query_string"] = urlencode(translated).encode("latin-1")
+            # FastAPI already read the query while it solved this dependency's
+            # own parameters, and Starlette keeps that copy on the request.
+            # Drop it, so the route reads the rewritten query string. Private
+            # Starlette attribute: tests/test_server_project_ref.py::
+            # test_query_param_project_ids_reach_service_as_aliases fails if
+            # an upgrade renames it.
+            request.__dict__.pop("_query_params", None)
+
+    return _translate
 
 
 def get_manage_token(request: Request) -> str | None:

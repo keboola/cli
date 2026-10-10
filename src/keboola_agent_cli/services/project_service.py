@@ -16,6 +16,7 @@ from ..config_store import project_not_found_error, validate_alias_format
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
+from ..project_ref import resolve_project_ref
 from .base import BaseService
 
 # Credential type of a config.json project entry, surfaced as ``auth_mode`` in
@@ -900,11 +901,14 @@ class ProjectService(BaseService):
         The env override is reported even when it points at a project that is
         not (yet) registered in config.json -- callers get the true effective
         alias plus an ``env_points_to_configured_project`` flag to reason about
-        it. This avoids silently masking misconfigurations.
+        it. This avoids silently masking misconfigurations. A project ID
+        reports as its alias (CLI-22). An ID registered under several aliases
+        stays as typed, the flag is False (commands using it fail), and
+        ``env_error`` carries the message those commands fail with.
 
         Returns:
             Dict with keys: alias, source ('env' | 'pin' | 'none'), pinned,
-            env_override, env_points_to_configured_project.
+            env_override, env_points_to_configured_project, env_error.
         """
         config = self._config_store.load()
         pinned = config.default_project or None
@@ -916,12 +920,19 @@ class ProjectService(BaseService):
         env_override = env_value if env_value else None
 
         if env_override is not None:
+            alias = env_override
+            env_error: str | None = None
+            try:
+                alias = resolve_project_ref(config.projects, env_override)
+            except ConfigError as exc:
+                env_error = exc.message
             return {
-                "alias": env_override,
+                "alias": alias,
                 "source": "env",
                 "pinned": pinned,
                 "env_override": env_override,
-                "env_points_to_configured_project": env_override in config.projects,
+                "env_points_to_configured_project": alias in config.projects,
+                "env_error": env_error,
             }
 
         return {
@@ -930,6 +941,7 @@ class ProjectService(BaseService):
             "pinned": pinned,
             "env_override": None,
             "env_points_to_configured_project": None,
+            "env_error": None,
         }
 
     def get_info(self, alias: str) -> dict[str, Any]:
@@ -980,68 +992,3 @@ class ProjectService(BaseService):
             "is_master_token": raw.get("isMasterToken", False),
             "token_expires": raw.get("expires"),
         }
-
-    def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
-        """Resolve the effective project alias for a single-project operation.
-
-        Precedence (first match wins):
-        1. ``explicit`` argument (typically the CLI ``--project`` flag)
-        2. ``KBAGENT_PROJECT`` env var
-        3. Persisted ``default_project`` pin
-        4. If exactly one project is registered, fall back to it (source=sole)
-        5. Fail hard with ConfigError
-
-        This is the single-project analog of ``resolve_projects()`` (which
-        fans out to all projects). Use this from write/destructive command
-        paths where fan-out would be surprising or unsafe.
-
-        Args:
-            explicit: Explicit alias from a CLI flag, or None.
-
-        Returns:
-            Tuple of (alias, source).
-
-        Raises:
-            ConfigError: If the resolved alias is not registered, or if none
-                can be resolved.
-        """
-        config = self._config_store.load()
-
-        if explicit:
-            if explicit not in config.projects:
-                raise project_not_found_error(
-                    explicit, self._config_store.config_path, self._config_store.source
-                )
-            return explicit, "explicit"
-
-        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
-        if env_value:
-            if env_value not in config.projects:
-                raise ConfigError(
-                    f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
-                    "that is not registered. Use 'kbagent project add' or "
-                    "unset the env var."
-                )
-            return env_value, "env"
-
-        pinned = config.default_project
-        if pinned:
-            if pinned not in config.projects:
-                raise ConfigError(
-                    f"Pinned default project '{pinned}' is not registered. "
-                    "Run 'kbagent project use <alias>' to repair."
-                )
-            return pinned, "pin"
-
-        if len(config.projects) == 1:
-            (sole,) = config.projects.keys()
-            return sole, "sole"
-
-        if not config.projects:
-            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
-
-        raise ConfigError(
-            "Multiple projects configured and no default pinned. "
-            "Pass --project <alias>, set KBAGENT_PROJECT, or run "
-            "'kbagent project use <alias>'."
-        )

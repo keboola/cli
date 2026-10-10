@@ -33,8 +33,10 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 
 from fastapi.testclient import TestClient
 
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
+from keboola_agent_cli.services._data_app_password import DataAppPassword
 from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
 AUTH = {"Authorization": "Bearer test-token"}
@@ -463,54 +465,55 @@ def test_storage_file_download_passes_output_path_kwarg(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # data_apps.py  GET /{p}/{app}/password
-# Service: data_app.get_data_app_password(manage_token=...)
-# Also: omitting X-Manage-Token header returns 401.
+# Service: data_app.get_data_app_password(alias=, app_id=) -- project token only,
+# no X-Manage-Token. The password is in the response only with ?reveal=true.
 # ---------------------------------------------------------------------------
 
+_APP_PASSWORD_SENTINEL = "pw-sentinel-5f1e9a"
 
-def test_data_app_password_passes_manage_token_kwarg(tmp_path: Path) -> None:
-    """Router must pass ``manage_token=`` to DataAppService.get_data_app_password."""
+
+def _password_app(tmp_path: Path) -> tuple[Any, MagicMock]:
     data_app_svc = MagicMock()
-    data_app_svc.get_data_app_password.return_value = {"password": "s3cr3t"}
+    data_app_svc.get_data_app_password.return_value = DataAppPassword(
+        project_alias=PROJECT,
+        app_id=APP_ID,
+        auth="password",
+        app_url="https://app-1234.hub.keboola.com",
+        ui_url="https://connection.keboola.com/admin/projects/1/branch/default/data-apps/c1",
+        password=_APP_PASSWORD_SENTINEL,
+    )
     registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Override get_manage_token to provide a token
-    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+    return _make_app_with_registry(tmp_path, registry), data_app_svc
+
+
+def test_data_app_password_needs_no_manage_token_and_omits_the_password(tmp_path: Path) -> None:
+    """No X-Manage-Token header; by default the response has no password."""
+    app, data_app_svc = _password_app(tmp_path)
+
+    with TestClient(app) as client:
+        res = client.get(f"/data-apps/{PROJECT}/{APP_ID}/password", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    data_app_svc.get_data_app_password.assert_called_once_with(alias=PROJECT, app_id=APP_ID)
+    assert _APP_PASSWORD_SENTINEL not in res.text
+    payload = res.json()
+    assert payload["password_delivered_to"] is None
+    assert "password" not in payload
+    assert payload["ui_url"].endswith("/data-apps/c1")
+
+
+def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
+    app, _svc = _password_app(tmp_path)
 
     with TestClient(app) as client:
         res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,
+            f"/data-apps/{PROJECT}/{APP_ID}/password", params={"reveal": "true"}, headers=AUTH
         )
 
     assert res.status_code == 200, res.text
-    kwargs = data_app_svc.get_data_app_password.call_args.kwargs
-    assert kwargs.get("manage_token") == "mgmt-tok", (
-        f"Expected manage_token='mgmt-tok', got kwargs={kwargs}"
-    )
-
-
-def test_data_app_password_missing_manage_token_returns_401(tmp_path: Path) -> None:
-    """GET /{p}/{app}/password without X-Manage-Token must return 401."""
-    data_app_svc = MagicMock()
-    registry = _mock_registry(data_app=data_app_svc)
-    app = _make_app_with_registry(tmp_path, registry)
-    # Explicitly provide None (no token) -- this mirrors the real behaviour when
-    # the header is absent; no dependency override so the real get_manage_token runs.
-
-    with TestClient(app) as client:
-        res = client.get(
-            f"/data-apps/{PROJECT}/{APP_ID}/password",
-            headers=AUTH,  # Bearer auth present but NO X-Manage-Token
-        )
-
-    assert res.status_code == 401, f"Expected 401, got {res.status_code}: {res.text}"
-    body = res.json()
-    # The app wraps HTTPException via a global handler into
-    # {"status": "error", "error": {"code": ..., "message": ...}}.
-    msg = body.get("detail") or body.get("error", {}).get("message", "")
-    assert "X-Manage-Token" in msg, f"Expected message mentioning X-Manage-Token, got: {body}"
-    data_app_svc.get_data_app_password.assert_not_called()
+    payload = res.json()
+    assert payload["password"] == _APP_PASSWORD_SENTINEL
+    assert payload["password_delivered_to"] == "response"
 
 
 # ---------------------------------------------------------------------------
@@ -2184,6 +2187,134 @@ def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -
     )
 
 
+def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "alerts@example.com",
+                "component_id": "keboola.flow",
+                "config_id": CONFIG_ID,
+                "branch_id": 456,
+                "expires_at": "2027-01-01T00:00:00Z",
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.create_subscription.assert_called_once_with(
+        alias=PROJECT,
+        event="job-failed",
+        channel="email",
+        address="alerts@example.com",
+        component_id="keboola.flow",
+        config_id=CONFIG_ID,
+        branch_id=456,
+        expires_at="2027-01-01T00:00:00Z",
+    )
+
+
+def test_notifications_create_defaults_optional_fields(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "alerts@example.com",
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.create_subscription.assert_called_once_with(
+        alias=PROJECT,
+        event="job-failed",
+        channel="email",
+        address="alerts@example.com",
+        component_id=None,
+        config_id=None,
+        branch_id=None,
+        expires_at=None,
+    )
+
+
+def test_notifications_delete_passes_alias_and_subscription_id(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.delete_subscription.return_value = {
+        "project_alias": PROJECT,
+        "subscription_id": "1234",
+        "deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(f"/notifications/{PROJECT}/1234", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    notification_svc.delete_subscription.assert_called_once_with(
+        alias=PROJECT, subscription_id="1234"
+    )
+
+
+def test_notifications_replace_recipient_passes_address_and_channel(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.replace_subscription_recipient.return_value = {
+        "new_subscription_id": "5678",
+        "old_deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/1234/replace-recipient",
+            headers=AUTH,
+            json={"address": "new@example.com", "channel": "webhook"},
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.replace_subscription_recipient.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="1234",
+        new_address="new@example.com",
+        new_channel="webhook",
+    )
+
+
+def test_notifications_replace_recipient_defaults_channel_to_none(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.replace_subscription_recipient.return_value = {
+        "new_subscription_id": "5678",
+        "old_deleted": True,
+    }
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/1234/replace-recipient",
+            headers=AUTH,
+            json={"address": "new@example.com"},
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.replace_subscription_recipient.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="1234",
+        new_address="new@example.com",
+        new_channel=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # token.py  GET /{p}/list?with_last_used=
 # Service: token.list_tokens(alias=..., with_last_used=...)
@@ -2420,3 +2551,457 @@ def test_config_trash_list_route(tmp_path: Path) -> None:
 
     assert res.status_code == 200, res.text
     assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT
+
+
+def test_workspace_load_route_defaults(tmp_path: Path) -> None:
+    """POST .../load forwards the auto defaults and never passes a guard prompt.
+
+    An HTTP caller cannot answer a confirmation, so ``on_copy_guard`` must be
+    None -- the oversized-COPY refusal has to surface as an error, not be
+    silently approved on the caller's behalf.
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.return_value = {"job_status": "success"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID]},
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = ws_svc.load_tables.call_args.kwargs
+    assert kwargs["tables"] == [TABLE_ID]
+    assert kwargs["preserve"] is False
+    assert kwargs["load_type"] is None
+    assert kwargs["force"] is False
+    assert kwargs["timeout"] is None
+    assert kwargs["on_copy_guard"] is None
+
+
+def test_workspace_load_route_passes_load_type_force_timeout(tmp_path: Path) -> None:
+    """load_type / force / timeout reach the service verbatim."""
+    ws_svc = MagicMock()
+    ws_svc.load_tables.return_value = {"job_status": "success"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={
+                "tables": [TABLE_ID],
+                "load_type": "copy",
+                "force": True,
+                "timeout": 900,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = ws_svc.load_tables.call_args.kwargs
+    assert kwargs["load_type"] == "copy"
+    assert kwargs["force"] is True
+    assert kwargs["timeout"] == 900
+
+
+def test_workspace_load_route_rejects_non_positive_timeout(tmp_path: Path) -> None:
+    """A zero/negative budget would make every load 'time out' instantly."""
+    ws_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID], "timeout": 0},
+        )
+
+    assert res.status_code == 422, res.text
+    ws_svc.load_tables.assert_not_called()
+
+
+def test_workspace_load_copy_guard_answers_400(tmp_path: Path) -> None:
+    """The size-guard refusal is a caller-fixable 400, not the default 502.
+
+    Nothing was sent upstream, so a Bad Gateway would tell the caller to retry
+    a gateway that was never reached; the fix is `force` in the next request.
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.side_effect = KeboolaApiError(
+        message="Refusing to COPY 1 table(s) larger than 1 GB",
+        error_code=ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID]},
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "WORKSPACE_LOAD_COPY_TOO_LARGE"
+
+
+def test_workspace_load_invalid_load_type_answers_400(tmp_path: Path) -> None:
+    """An unknown load_type is a caller-fixable 400, not the default 502.
+
+    ``WorkspaceService._normalize_load_type`` raises INVALID_ARGUMENT before
+    anything is sent upstream -- the same "nothing was sent upstream" logic
+    as the COPY-too-large guard above, so it gets the same 400 treatment via
+    ``_CALLER_REFUSAL_CODES`` (issue #687 review).
+    """
+    ws_svc = MagicMock()
+    ws_svc.load_tables.side_effect = KeboolaApiError(
+        message="Invalid load_type 'banana'. Expected one of: ['clone', 'copy', 'view'].",
+        error_code=ErrorCode.INVALID_ARGUMENT,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}/42/load",
+            headers=AUTH,
+            json={"tables": [TABLE_ID], "load_type": "banana"},
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+# ---------------------------------------------------------------------------
+# merge_requests.py -- the REST mirror of `kbagent merge-request *` (DMD-1900)
+# Service: MergeRequestService.<method>(project, merge_request_id, ...)
+# ---------------------------------------------------------------------------
+
+MR_ID = 7
+
+
+def _mr_client(tmp_path: Path, svc: MagicMock, **app_kwargs: Any) -> TestClient:
+    app = create_app(config_dir=str(tmp_path), auth_token="test-token", **app_kwargs)
+    app.dependency_overrides[get_registry] = lambda: _mock_registry(merge_request=svc)
+    return TestClient(app)
+
+
+def test_merge_request_list_forwards_state_kwarg(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.list_merge_requests.return_value = {"count": 0, "merge_requests": []}
+    with _mr_client(tmp_path, svc) as client:
+        res = client.get(f"/merge-requests/{PROJECT}", params={"state": "merged"}, headers=AUTH)
+    assert res.status_code == 200, res.text
+    svc.list_merge_requests.assert_called_once_with(PROJECT, state="merged")
+
+
+def test_merge_request_list_rejects_unknown_state_with_400(tmp_path: Path) -> None:
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc) as client:
+        res = client.get(f"/merge-requests/{PROJECT}", params={"state": "develpment"}, headers=AUTH)
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == ErrorCode.INVALID_ARGUMENT
+    svc.list_merge_requests.assert_not_called()
+
+
+def test_merge_request_by_branch_is_matched_before_the_id_route(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.find_merge_request_for_branch.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        res = client.get(f"/merge-requests/{PROJECT}/by-branch/123", headers=AUTH)
+    assert res.status_code == 200, res.text
+    svc.find_merge_request_for_branch.assert_called_once_with(PROJECT, 123)
+    svc.get_merge_request.assert_not_called()
+
+
+def test_merge_request_detail_forwards_include_activity_log(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.get_merge_request.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        res = client.get(
+            f"/merge-requests/{PROJECT}/{MR_ID}", params={"activity_log": "true"}, headers=AUTH
+        )
+    assert res.status_code == 200, res.text
+    svc.get_merge_request.assert_called_once_with(PROJECT, MR_ID, include_activity_log=True)
+
+
+def test_merge_request_conflicts_and_diff_positional_parity(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.list_conflicts.return_value = {"count": 0, "conflicts": []}
+    svc.get_config_diff.return_value = {"changes": []}
+    with _mr_client(tmp_path, svc) as client:
+        assert (
+            client.get(f"/merge-requests/{PROJECT}/{MR_ID}/conflicts", headers=AUTH).status_code
+            == 200
+        )
+        res = client.get(
+            f"/merge-requests/{PROJECT}/{MR_ID}/diff/{COMPONENT}/{CONFIG_ID}", headers=AUTH
+        )
+    assert res.status_code == 200, res.text
+    svc.list_conflicts.assert_called_once_with(PROJECT, MR_ID)
+    svc.get_config_diff.assert_called_once_with(PROJECT, MR_ID, COMPONENT, CONFIG_ID)
+
+
+def test_merge_request_create_forwards_every_kwarg(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.create_merge_request.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(
+            f"/merge-requests/{PROJECT}",
+            json={"branch_from_id": 123, "title": "T", "reviewer_ids": [5], "external_id": "TCK-1"},
+            headers=AUTH,
+        )
+    assert res.status_code == 200, res.text
+    svc.create_merge_request.assert_called_once_with(
+        PROJECT,
+        branch_from_id=123,
+        title="T",
+        description=None,
+        reviewer_ids=[5],
+        external_id="TCK-1",
+    )
+
+
+def test_merge_request_update_refuses_an_empty_body(tmp_path: Path) -> None:
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc) as client:
+        res = client.put(f"/merge-requests/{PROJECT}/{MR_ID}", json={}, headers=AUTH)
+    assert res.status_code == 400, res.text
+    svc.update_merge_request.assert_not_called()
+
+
+def test_merge_request_update_forwards_kwargs(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.update_merge_request.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        res = client.put(
+            f"/merge-requests/{PROJECT}/{MR_ID}", json={"description": ""}, headers=AUTH
+        )
+    assert res.status_code == 200, res.text
+    kwargs = svc.update_merge_request.call_args.kwargs
+    assert kwargs["description"] == "" and kwargs["title"] is None
+
+
+def test_merge_request_transitions_and_merge_positional_parity(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.get_merge_request_row.return_value = {"id": MR_ID, "autoMergeStrategy": "none"}
+    for method in ("request_review", "approve", "request_changes", "merge"):
+        getattr(svc, method).return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        base = f"/merge-requests/{PROJECT}/{MR_ID}"
+        assert client.post(f"{base}/request-review", headers=AUTH).status_code == 200
+        assert client.post(f"{base}/approve", headers=AUTH).status_code == 200
+        assert (
+            client.post(f"{base}/request-changes", json={"reason": "no"}, headers=AUTH).status_code
+            == 200
+        )
+        assert client.post(f"{base}/merge", headers=AUTH).status_code == 200
+    svc.request_review.assert_called_once_with(PROJECT, MR_ID)
+    svc.approve.assert_called_once_with(PROJECT, MR_ID)
+    svc.request_changes.assert_called_once_with(PROJECT, MR_ID, reason="no")
+    svc.merge.assert_called_once_with(PROJECT, MR_ID)
+
+
+def test_merge_request_resolve_forwards_kwargs_and_validates_shape(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.get_merge_request_row.return_value = {"id": MR_ID, "autoMergeStrategy": "none"}
+    svc.resolve_conflict.return_value = {"resolution": "ours"}
+    url = f"/merge-requests/{PROJECT}/{MR_ID}/resolve/{COMPONENT}/{CONFIG_ID}"
+    with _mr_client(tmp_path, svc) as client:
+        assert client.post(url, json={}, headers=AUTH).status_code == 400  # neither
+        assert (
+            client.post(url, json={"take": "ours", "resolved": {}}, headers=AUTH).status_code == 400
+        )
+        assert client.post(url, json={"take": "mine"}, headers=AUTH).status_code == 400
+        res = client.post(url, json={"take": "ours", "change_description": "x"}, headers=AUTH)
+    assert res.status_code == 200, res.text
+    svc.resolve_conflict.assert_called_once_with(
+        PROJECT, MR_ID, COMPONENT, CONFIG_ID, take="ours", resolved=None, change_description="x"
+    )
+
+
+# -- permissions are enforced on every route, static class and escalations alike --
+
+
+def test_merge_request_merge_is_destructive_over_http(tmp_path: Path) -> None:
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        res = client.post(f"/merge-requests/{PROJECT}/{MR_ID}/merge", headers=AUTH)
+    assert res.status_code == 403, res.text
+    assert res.json()["error"]["code"] == ErrorCode.PERMISSION_DENIED
+    svc.merge.assert_not_called()
+
+
+def test_merge_request_reads_pass_under_deny_destructive(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.list_merge_requests.return_value = {"count": 0, "merge_requests": []}
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        assert client.get(f"/merge-requests/{PROJECT}", headers=AUTH).status_code == 200
+
+
+def test_merge_request_request_changes_cap_comes_from_the_service(tmp_path: Path) -> None:
+    # One constant, validated once in the service; the router only maps INVALID_ARGUMENT -> 400.
+    svc = MagicMock()
+    svc.request_changes.side_effect = KeboolaApiError(
+        message="reason is capped at 1000 characters (got 1001).",
+        status_code=400,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(
+            f"/merge-requests/{PROJECT}/{MR_ID}/request-changes",
+            json={"reason": "x" * 1001},
+            headers=AUTH,
+        )
+    assert res.status_code == 400, res.text
+    svc.request_changes.assert_called_once_with(PROJECT, MR_ID, reason="x" * 1001)
+
+
+def test_merge_request_merge_conflict_is_409_with_details_over_http(tmp_path: Path) -> None:
+    # The whole point of the MR_MERGE_CONFLICT remapping is the conflict list in
+    # details; a 502 would drop it and invite a retry that cannot succeed.
+    svc = MagicMock()
+    svc.merge.side_effect = KeboolaApiError(
+        message="conflicts",
+        status_code=409,
+        error_code=ErrorCode.MR_MERGE_CONFLICT,
+        retryable=False,
+        details={"api_error_params": {"errors": [{"componentId": "c", "configurationId": "1"}]}},
+    )
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(f"/merge-requests/{PROJECT}/{MR_ID}/merge", headers=AUTH)
+    assert res.status_code == 409, res.text
+    body = res.json()["error"]
+    assert body["code"] == ErrorCode.MR_MERGE_CONFLICT
+    assert body["details"]["api_error_params"]["errors"][0]["configurationId"] == "1"
+
+
+def test_merge_request_caller_mistakes_from_the_service_are_400_over_http(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.get_merge_request_row.return_value = {"id": MR_ID, "autoMergeStrategy": "none"}
+    svc.resolve_conflict.side_effect = KeboolaApiError(
+        message="not in the conflict set",
+        status_code=0,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
+    with _mr_client(tmp_path, svc) as client:
+        res = client.post(
+            f"/merge-requests/{PROJECT}/{MR_ID}/resolve/{COMPONENT}/{CONFIG_ID}",
+            json={"take": "ours"},
+            headers=AUTH,
+        )
+    assert res.status_code == 400, res.text
+
+
+# -- route-level escalation coverage for the shared helpers (approve / resolve / update) --
+
+
+# -- Static destructive class over HTTP: the route dependency IS the whole check --
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_method"),
+    [
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/request-review", None, "request_review"),
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/approve", None, "approve"),
+        (
+            "POST",
+            f"/merge-requests/{PROJECT}/{MR_ID}/resolve/{COMPONENT}/{CONFIG_ID}",
+            {"take": "ours"},
+            "resolve_conflict",
+        ),
+        ("POST", f"/merge-requests/{PROJECT}/{MR_ID}/merge", None, "merge"),
+        (
+            "PUT",
+            f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge",
+            {"strategy": "immediately"},
+            "update_merge_request",
+        ),
+        (
+            "PUT",
+            f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge",
+            {"strategy": "none"},
+            "update_merge_request",
+        ),
+    ],
+    ids=["request-review", "approve", "resolve", "merge", "auto-merge arm", "auto-merge disarm"],
+)
+def test_merge_request_destructive_routes_are_403_under_deny_destructive(
+    tmp_path: Path, method: str, path: str, body: dict[str, Any] | None, service_method: str
+) -> None:
+    # Statically destructive: no row GET, no body inspection -- denied before
+    # the handler body runs. The disarm rides the same class on purpose (a
+    # caller who could not arm never needs to disarm).
+    svc = MagicMock()
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        res = client.request(method, path, json=body, headers=AUTH)
+    assert res.status_code == 403, res.text
+    getattr(svc, service_method).assert_not_called()
+    svc.get_merge_request_row.assert_not_called()
+
+
+def test_merge_request_write_routes_pass_under_deny_destructive(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.create_merge_request.return_value = {"id": MR_ID}
+    svc.update_merge_request.return_value = {"id": MR_ID}
+    svc.request_changes.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc, deny_destructive=True) as client:
+        assert (
+            client.post(
+                f"/merge-requests/{PROJECT}",
+                json={"branch_from_id": 123, "title": "T"},
+                headers=AUTH,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/merge-requests/{PROJECT}/{MR_ID}", json={"title": "T2"}, headers=AUTH
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/merge-requests/{PROJECT}/{MR_ID}/request-changes", json={}, headers=AUTH
+            ).status_code
+            == 200
+        )
+
+
+def test_merge_request_auto_merge_route_forwards_and_validates(tmp_path: Path) -> None:
+    svc = MagicMock()
+    svc.update_merge_request.return_value = {"id": MR_ID, "autoMergeStrategy": "scheduled"}
+    url = f"/merge-requests/{PROJECT}/{MR_ID}/auto-merge"
+    with _mr_client(tmp_path, svc) as client:
+        assert client.put(url, json={"strategy": "sometimes"}, headers=AUTH).status_code == 400
+        assert client.put(url, json={"strategy": "scheduled"}, headers=AUTH).status_code == 400
+        res = client.put(
+            url, json={"strategy": "scheduled", "at": "2026-09-30T10:00:00Z"}, headers=AUTH
+        )
+    assert res.status_code == 200, res.text
+    svc.update_merge_request.assert_called_once_with(
+        PROJECT, MR_ID, auto_merge_strategy="scheduled", auto_merge_at="2026-09-30T10:00:00Z"
+    )
+
+
+def test_merge_request_create_and_update_bodies_have_no_auto_merge_field(tmp_path: Path) -> None:
+    # Pydantic ignores unknown fields by default -- so an old-style body must NOT
+    # silently arm anything: the service call carries no auto-merge kwargs.
+    svc = MagicMock()
+    svc.create_merge_request.return_value = {"id": MR_ID}
+    svc.update_merge_request.return_value = {"id": MR_ID}
+    with _mr_client(tmp_path, svc) as client:
+        client.post(
+            f"/merge-requests/{PROJECT}",
+            json={"branch_from_id": 123, "title": "T", "auto_merge_strategy": "immediately"},
+            headers=AUTH,
+        )
+        client.put(
+            f"/merge-requests/{PROJECT}/{MR_ID}",
+            json={"title": "T", "auto_merge_strategy": "immediately"},
+            headers=AUTH,
+        )
+    assert "auto_merge_strategy" not in svc.create_merge_request.call_args.kwargs
+    assert "auto_merge_strategy" not in svc.update_merge_request.call_args.kwargs

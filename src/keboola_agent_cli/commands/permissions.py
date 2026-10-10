@@ -19,9 +19,12 @@ from ..errors import ErrorCode
 from ..models import PermissionPolicy
 from ..permissions import (
     INERT_PATTERN_HINT,
+    INERT_PATTERN_PREFIX,
     INERT_SINCE_VERSION,
+    UNMATCHED_PATTERN_HINT,
     PermissionEngine,
     find_inert_patterns,
+    pattern_matches_known_operation,
 )
 from ._helpers import get_formatter, get_service, require_random_code_confirmation
 
@@ -202,10 +205,31 @@ def permissions_show(
         if persisted.deny:
             formatter.console.print(f"[bold]Deny:[/bold] {', '.join(persisted.deny)}")
         if inert_patterns:
+            # Generalized (issue #688): ANY pattern matching no known operation
+            # is reported here, not only the retired `tool:` namespace. The
+            # `tool:`-specific MCP-migration hint is appended only when at
+            # least one offending pattern starts with that prefix; the
+            # generic typo hint is appended whenever any other kind is
+            # present too -- both can show up together in a mixed policy.
+            has_tool_prefix = any(p.startswith(INERT_PATTERN_PREFIX) for p in inert_patterns)
+            has_other = any(not p.startswith(INERT_PATTERN_PREFIX) for p in inert_patterns)
+            since_clause = (
+                f" since v{INERT_SINCE_VERSION} (the 'tool:' namespace was removed "
+                "with the MCP passthrough)"
+                if has_tool_prefix
+                else ""
+            )
+            hints = [
+                h
+                for h, present in (
+                    (INERT_PATTERN_HINT, has_tool_prefix),
+                    (UNMATCHED_PATTERN_HINT, has_other),
+                )
+                if present
+            ]
             formatter.console.print(
-                f"[yellow]{len(inert_patterns)} inert pattern(s) since v{INERT_SINCE_VERSION} "
-                "(the 'tool:' namespace was removed with the MCP passthrough): "
-                f"{', '.join(inert_patterns)}. {INERT_PATTERN_HINT}[/yellow]"
+                f"[yellow]{len(inert_patterns)} inert pattern(s){since_clause} match no "
+                f"known operation: {', '.join(inert_patterns)}. {' '.join(hints)}[/yellow]"
             )
     else:
         formatter.console.print("[dim]No persisted permission policy (config.json is clean).[/dim]")
@@ -244,6 +268,13 @@ def permissions_set(
     Requires interactive confirmation (type a random code) to prevent
     AI agents from modifying permissions programmatically.
 
+    Every ``--allow`` / ``--deny`` pattern must be a ``cli:*`` category, an
+    exact operation name, or a glob matching at least one known operation
+    (issue #688) -- rejected up front (VALIDATION_ERROR, exit 2) BEFORE the
+    interactive confirmation, so a typo'd pattern never gets silently
+    persisted as a dead rule and no confirmation prompt is wasted on a call
+    that was going to fail anyway.
+
     Examples:
       # Block all write operations (Vojta's use case):
       kbagent permissions set --mode allow --deny "cli:write"
@@ -260,6 +291,24 @@ def permissions_set(
         formatter.error(
             message="Mode must be 'allow' or 'deny'",
             error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+
+    invalid: list[str] = []
+    for pattern in [*(allow or []), *(deny or [])]:
+        if not pattern_matches_known_operation(pattern) and pattern not in invalid:
+            invalid.append(pattern)
+    if invalid:
+        formatter.error(
+            message=(
+                "Unknown operation pattern(s): "
+                + ", ".join(invalid)
+                + ". Patterns must be a cli:* category (cli:read, cli:write, "
+                "cli:destructive, cli:admin), an exact operation name, or a glob "
+                "matching at least one operation. See `kbagent permissions list`."
+            ),
+            error_code=ErrorCode.VALIDATION_ERROR,
+            details={"invalid_patterns": invalid},
         )
         raise typer.Exit(code=2) from None
 

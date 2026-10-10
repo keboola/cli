@@ -1,10 +1,12 @@
-"""Pull-side storage-metadata, jobs, and sample writers (from sync_service.py).
+"""Storage-metadata writers (``sync pull``) + bucket re-creation (``sync clone``).
 
 Free functions that materialise a project's storage metadata (buckets/tables),
 per-config job history, and table data samples to the filesystem during
 ``sync pull``. Only :func:`fetch_jobs_per_config` needs the ``SyncService`` (for
 its ``_resolve_max_workers`` helper); the rest are pure. ``_ensure_path_within``
 (the storage-write path-traversal guard) moved here with its only callers.
+:func:`create_buckets_from_export` reads the ``buckets.json`` written on pull
+back, to recreate a clone's buckets in the target project.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,11 +29,12 @@ from ..constants import (
     STORAGE_DIR_NAME,
     STORAGE_SAMPLES_DIR_NAME,
 )
-from ..errors import ConfigError
+from ..errors import ConfigError, KeboolaApiError
 from ..sync.manifest import ManifestConfiguration
 from ..sync.naming import sanitize_path_segment
 
 if TYPE_CHECKING:
+    from ..client import KeboolaClient
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,17 @@ def _ensure_path_within(base_dir: Path, target: Path, what: str) -> None:
             f"outside '{base_resolved}'. This indicates a malformed or compromised "
             f"API response or a path-sanitization regression."
         )
+
+
+def _linked_source(bucket: dict[str, Any]) -> dict[str, Any] | None:
+    """Return ``{"bucket_id", "project_id"}`` of a linked bucket's source, else ``None``."""
+    source = bucket.get("sourceBucket")
+    if not source:
+        return None
+    return {
+        "bucket_id": source.get("id", ""),
+        "project_id": (source.get("project") or {}).get("id"),
+    }
 
 
 def write_storage_metadata(
@@ -88,6 +103,8 @@ def write_storage_metadata(
             "name": b.get("name", ""),
             "stage": b.get("stage", ""),
             "description": b.get("description", ""),
+            "backend": b.get("backend", ""),
+            "source_bucket": _linked_source(b),
             "tables_count": b.get("tablesCount") or 0,
             "data_size_bytes": b.get("dataSizeBytes") or 0,
             "metadata": b.get("metadata", []),
@@ -374,3 +391,136 @@ def mask_encrypted_columns(csv_data: str) -> str:
             writer.writerow(row)
 
     return output.getvalue()
+
+
+_LEGACY_EXPORT_ERROR = (
+    "storage/buckets.json comes from an older kbagent pull and does not record linked "
+    "buckets. No bucket was created. Pull the reference again, or use --no-create-buckets."
+)
+
+
+@dataclass
+class BucketCreateResult:
+    """Outcome of re-creating a reference tree's buckets in a clone target.
+
+    ``created`` / ``skipped`` hold the target bucket ids; ``errors`` collects a
+    ``{"bucket_id", "error"}`` record per bucket the API refused, so one bad
+    bucket never aborts the clone. ``linked`` holds a
+    ``{"bucket_id", "source_bucket_id", "source_project_id"}`` record per linked
+    (shared) bucket that was linked in the target to the reference's source.
+    """
+
+    created: list[str]
+    skipped: list[str]
+    errors: list[dict[str, str]]
+    linked: list[dict[str, Any]]
+
+
+def _parse_bucket_id(bucket_id: str) -> tuple[str, str] | None:
+    """Split a ``<stage>.c-<name>`` bucket id into ``(stage, name)``.
+
+    Returns ``None`` for anything ``create-bucket`` cannot recreate: an id with
+    no ``in`` / ``out`` stage prefix (a system bucket) or an empty name.
+    """
+    stage, _, remainder = bucket_id.partition(".")
+    if stage not in ("in", "out") or not remainder:
+        return None
+    name = remainder.removeprefix("c-")
+    return (stage, name) if name else None
+
+
+def create_buckets_from_export(
+    storage_client: KeboolaClient,
+    project_root: Path,
+    bucket_map: dict[str, str],
+) -> BucketCreateResult:
+    """Create a clone's reference buckets in the target project.
+
+    ``sync clone`` copies configs, not storage: the pulled ``storage/`` tree is
+    a read-only snapshot, so a cloned config's input/output mappings point at
+    buckets that do not exist in a fresh target. This reads the
+    ``storage/buckets.json`` export, maps each bucket id through ``bucket_map``
+    (so a created bucket matches what :func:`sync.clone.apply_bucket_map`
+    rewrote the configs to reference), and creates the ones that are missing.
+
+    Idempotent: an existing bucket is skipped, and a per-bucket API failure is
+    collected in the result, never raised. Each bucket is created on the
+    backend the export recorded. A linked bucket is linked to the same source
+    as in the reference instead: nothing in the project writes into a linked
+    bucket, so an empty bucket in its place would stay empty. The source
+    project's sharing settings decide whether the target may link it; a
+    refused link is collected like any other failure. An export from an older
+    pull (no ``source_bucket`` key) creates nothing and records one error
+    instead. Only the buckets are
+    created -- their tables and data are not in the export, so they are not
+    recreated.
+    """
+    result = BucketCreateResult(created=[], skipped=[], errors=[], linked=[])
+    buckets_file = project_root / STORAGE_DIR_NAME / STORAGE_BUCKETS_FILENAME
+    if not buckets_file.exists():
+        return result
+    try:
+        records = json.loads(buckets_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("Could not read %s; skipping bucket creation", buckets_file, exc_info=True)
+        return result
+    if not isinstance(records, list):
+        return result
+    # An older pull wrote no ``source_bucket`` key, so its linked buckets cannot
+    # be told apart. Creating them empty cannot be undone by a re-clone (the
+    # existing bucket is skipped), so create nothing.
+    if any(isinstance(r, dict) and "source_bucket" not in r for r in records):
+        result.errors.append({"bucket_id": "", "error": _LEGACY_EXPORT_ERROR})
+        return result
+
+    try:
+        existing = {str(b.get("id")) for b in storage_client.list_buckets()}
+    except KeboolaApiError as exc:
+        result.errors.append({"bucket_id": "", "error": f"Cannot list buckets: {exc.message}"})
+        return result
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        source_id = str(record.get("id") or "")
+        target_id = bucket_map.get(source_id, source_id)
+        parsed = _parse_bucket_id(target_id)
+        if parsed is None:
+            continue
+        if target_id in existing:
+            result.skipped.append(target_id)
+            continue
+        stage, name = parsed
+        source = record.get("source_bucket")
+        link: dict[str, Any] | None = (
+            {
+                "bucket_id": target_id,
+                "source_bucket_id": source.get("bucket_id", ""),
+                "source_project_id": source.get("project_id"),
+            }
+            if isinstance(source, dict)
+            else None
+        )
+        try:
+            if link:
+                storage_client.link_bucket(
+                    source_project_id=link["source_project_id"],
+                    source_bucket_id=link["source_bucket_id"],
+                    name=name,
+                    stage=stage,
+                )
+            else:
+                storage_client.create_bucket(
+                    stage=stage,
+                    name=name,
+                    description=record.get("description") or "",
+                    backend=record.get("backend") or None,
+                )
+        except KeboolaApiError as exc:
+            result.errors.append({"bucket_id": target_id, "error": exc.message})
+            continue
+        if link:
+            result.linked.append(link)
+        else:
+            result.created.append(target_id)
+        existing.add(target_id)
+    return result

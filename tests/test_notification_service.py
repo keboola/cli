@@ -1,4 +1,4 @@
-"""Unit tests for NotificationService -- issue #600.
+"""Unit tests for NotificationService -- issue #600 (read path), #690 (write path).
 
 Tests the business logic in isolation using a mocked KeboolaClient. Covers:
 
@@ -9,6 +9,12 @@ Tests the business logic in isolation using a mocked KeboolaClient. Covers:
   filters, config-name join (pair match + unique-config-id fallback), the
   project-wide exclusion counter, and error accumulation.
 - ``get_subscription_detail``: name join and tolerance of a deleted parent.
+- ``TestCreateSubscription``: recipient/filter construction, and the created
+  audit row.
+- ``TestDeleteSubscription``: the delete call and its envelope.
+- ``TestReplaceSubscriptionRecipient``: create-before-delete ordering, verbatim
+  carry-over of the old event/filters/expiresAt, and the non-raising delete
+  failure path (any exception, not just ``KeboolaApiError``).
 """
 
 from __future__ import annotations
@@ -579,3 +585,399 @@ class TestGetSubscriptionDetail:
     def test_unknown_alias_raises_config_error(self) -> None:
         with pytest.raises(ConfigError):
             _make_service(MagicMock()).get_subscription_detail("nope", "1")
+
+
+# ---------------------------------------------------------------------------
+# create_subscription / delete_subscription / replace_subscription_recipient
+# (issue #690)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSubscription:
+    def test_builds_email_recipient(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9001",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod", event="job-failed", channel="email", address="ops@example.com"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed", {"channel": "email", "address": "ops@example.com"}, None, None
+        )
+
+    def test_builds_webhook_recipient(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9002",
+            "event": "job-failed",
+            "recipient": {"channel": "webhook", "url": "https://hooks.example.com/x"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="webhook",
+            address="https://hooks.example.com/x",
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "webhook", "url": "https://hooks.example.com/x"},
+            None,
+            None,
+        )
+
+    def test_builds_filters_in_component_config_branch_order_stringified(self) -> None:
+        """Filter values must be stringified regardless of the caller's type.
+
+        ``config_id`` is declared ``str | None`` (the CLI and ``serve`` both
+        only ever pass a string), so this test passes it as ``str`` to stay
+        within the public signature. ``branch_id`` IS declared ``int | None``
+        -- it is passed as a real ``int`` here on purpose, so the assertion
+        below still exercises ``_build_filters``'s ``str(branch_id)``
+        stringification rather than a no-op string-to-string passthrough.
+        """
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9003",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            component_id="keboola.flow",
+            config_id="98765",
+            branch_id=4242,
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "ops@example.com"},
+            [
+                {"field": "job.component.id", "value": "keboola.flow"},
+                {"field": "job.configuration.id", "value": "98765"},
+                {"field": "branch.id", "value": "4242"},
+            ],
+            None,
+        )
+
+    def test_omits_filters_when_no_scope_args(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9004",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod", event="job-failed", channel="email", address="ops@example.com"
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] is None
+
+    def test_passes_expires_at(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9005",
+            "event": "job-failed",
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            expires_at="2027-01-01T00:00:00+01:00",
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "ops@example.com"},
+            None,
+            "2027-01-01T00:00:00+01:00",
+        )
+
+    def test_returns_audit_row_with_project_alias_and_config_name(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = {
+            "id": "9006",
+            "event": "job-failed",
+            "filters": [
+                {"field": "job.component.id", "value": "keboola.flow"},
+                {"field": "job.configuration.id", "value": "98765"},
+            ],
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            component_id="keboola.flow",
+            config_id="98765",
+        )
+
+        assert result["subscription_id"] == "9006"
+        assert result["project_alias"] == "prod"
+        assert result["config_name"] == "Daily ETL"
+        client.close.assert_called_once()
+
+    def test_invalid_channel_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).create_subscription(
+                "prod", event="job-failed", channel="carrier-pigeon", address="x"
+            )
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).create_subscription(
+                "nope", event="job-failed", channel="email", address="ops@example.com"
+            )
+
+
+class TestDeleteSubscription:
+    def test_calls_delete_and_returns_envelope(self) -> None:
+        client = MagicMock()
+
+        result = _make_service(client).delete_subscription("prod", "123")
+
+        client.delete_project_subscription.assert_called_once_with("123")
+        assert result == {"project_alias": "prod", "subscription_id": "123", "deleted": True}
+        client.close.assert_called_once()
+
+    def test_api_404_propagates(self) -> None:
+        """The client must still be closed even though the exception propagates.
+
+        The client is opened before the ``try``/``finally`` and the delete
+        call is what fails, so the `finally` runs on the way out -- a
+        regression that dropped it would leak the underlying connection on
+        every failed delete.
+        """
+        client = MagicMock()
+        client.delete_project_subscription.side_effect = KeboolaApiError(
+            message="Not found", error_code="NOT_FOUND", status_code=404
+        )
+
+        with pytest.raises(KeboolaApiError):
+            _make_service(client).delete_subscription("prod", "999")
+
+        client.close.assert_called_once()
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).delete_subscription("nope", "1")
+
+
+class TestReplaceSubscriptionRecipient:
+    def test_creates_new_before_deleting_old_and_keeps_old_channel(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9100",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        _wire_configs(client, [("keboola.flow", "98765", "Daily ETL")])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "new@example.com"},
+            FLOW_SUBSCRIPTION["filters"],
+            None,
+        )
+        client.delete_project_subscription.assert_called_once_with("1234")
+
+        call_names = [
+            call[0]
+            for call in client.mock_calls
+            if call[0] in ("create_project_subscription", "delete_project_subscription")
+        ]
+        assert call_names.index("create_project_subscription") < call_names.index(
+            "delete_project_subscription"
+        )
+
+        assert result["old_subscription_id"] == "1234"
+        assert result["new_subscription_id"] == "9100"
+        assert result["old_address"] == "ops@example.com"
+        assert result["old_deleted"] is True
+        assert result["warnings"] == []
+        assert result["subscription_id"] == "9100"
+        assert result["config_name"] == "Daily ETL"
+        client.close.assert_called_once()
+
+    def test_delete_failure_sets_old_deleted_false_with_warning_and_does_not_raise(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9101",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        client.delete_project_subscription.side_effect = KeboolaApiError(
+            message="boom", error_code="API_ERROR", status_code=500
+        )
+        _wire_configs(client, [])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        assert result["old_deleted"] is False
+        assert any("1234" in w for w in result["warnings"])
+        assert result["new_subscription_id"] == "9101"
+        # The client stays open across the caught delete failure -- it must
+        # still be closed once the method returns, same as the happy path.
+        client.close.assert_called_once()
+
+    def test_non_api_delete_failure_also_sets_old_deleted_false_without_raising(self) -> None:
+        """A raw transport failure on the delete must be swallowed too.
+
+        ``_do_request`` lets httpx transport errors (``ReadError``,
+        ``WriteError``, ``RemoteProtocolError``, ``ProxyError``, ...)
+        propagate as-is -- they are not wrapped into ``KeboolaApiError``. The
+        new subscription already exists by the time the delete runs, so ANY
+        exception here must degrade to ``old_deleted: False`` + a warning,
+        never escape: letting it escape would lose ``new_subscription_id``
+        from the response, and a caller's retry would then mint a THIRD
+        subscription.
+        """
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9103",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        client.delete_project_subscription.side_effect = RuntimeError("connection reset")
+        _wire_configs(client, [])
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        assert result["old_deleted"] is False
+        assert any("1234" in w for w in result["warnings"])
+        assert result["new_subscription_id"] == "9103"
+        client.close.assert_called_once()
+
+    def test_expires_at_is_forwarded_verbatim(self) -> None:
+        """The old subscription's ``expiresAt`` must ride along untouched.
+
+        Every other replace test uses ``FLOW_SUBSCRIPTION``, which has no
+        ``expiresAt`` key, so the 4th positional arg to
+        ``create_project_subscription`` was previously only ever pinned to
+        ``None`` -- never actually exercising the pass-through.
+        """
+        old_with_expiry = {**FLOW_SUBSCRIPTION, "expiresAt": "2027-01-01T00:00:00+01:00"}
+        client = MagicMock()
+        client.get_project_subscription.return_value = old_with_expiry
+        client.create_project_subscription.return_value = {
+            "id": "9104",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "expiresAt": "2027-01-01T00:00:00+01:00",
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+        _wire_configs(client, [])
+
+        _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "email", "address": "new@example.com"},
+            FLOW_SUBSCRIPTION["filters"],
+            "2027-01-01T00:00:00+01:00",
+        )
+
+    def test_new_channel_webhook_switches_recipient_key(self) -> None:
+        client = MagicMock()
+        client.get_project_subscription.return_value = FLOW_SUBSCRIPTION
+        client.create_project_subscription.return_value = {
+            "id": "9102",
+            "event": "job-failed",
+            "filters": FLOW_SUBSCRIPTION["filters"],
+            "recipient": {"channel": "webhook", "url": "https://hooks.example.com/y"},
+        }
+        _wire_configs(client, [])
+
+        _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "https://hooks.example.com/y", new_channel="webhook"
+        )
+
+        client.create_project_subscription.assert_called_once_with(
+            "job-failed",
+            {"channel": "webhook", "url": "https://hooks.example.com/y"},
+            FLOW_SUBSCRIPTION["filters"],
+            None,
+        )
+
+    def test_blank_old_channel_without_new_channel_raises_config_error(self) -> None:
+        """ConfigError raised before the replacement is created.
+
+        The client is opened before this check runs (``get_project_subscription``
+        already happened), so ``finally`` still closes it on the way out --
+        without the ``finally``, this path would leak the connection on
+        every malformed-recipient replace attempt.
+        """
+        client = MagicMock()
+        client.get_project_subscription.return_value = {
+            "id": "1234",
+            "event": "job-failed",
+            "recipient": {},
+        }
+
+        with pytest.raises(ConfigError):
+            _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_not_called()
+        client.delete_project_subscription.assert_not_called()
+        client.close.assert_called_once()
+
+    def test_non_dict_old_recipient_raises_config_error_not_attribute_error(self) -> None:
+        """A malformed ``recipient`` (not a dict) must degrade to ConfigError.
+
+        Mirrors the same guard on the read path (``_extract_subscription_fields``)
+        -- without it, ``old_recipient.get(...)`` on a non-dict value would
+        raise a raw ``AttributeError`` instead of the intended "channel is
+        unknown, pass one explicitly" error. Also confirms the client is
+        still closed on this path, same as the blank-channel one above.
+        """
+        client = MagicMock()
+        client.get_project_subscription.return_value = {
+            "id": "1234",
+            "event": "job-failed",
+            "recipient": "not-a-dict",
+        }
+
+        with pytest.raises(ConfigError):
+            _make_service(client).replace_subscription_recipient("prod", "1234", "new@example.com")
+
+        client.create_project_subscription.assert_not_called()
+        client.delete_project_subscription.assert_not_called()
+        client.close.assert_called_once()
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            _make_service(MagicMock()).replace_subscription_recipient(
+                "nope", "1", "new@example.com"
+            )

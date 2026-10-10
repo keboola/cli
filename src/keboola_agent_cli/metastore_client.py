@@ -23,12 +23,31 @@ Verified contract (probed 2026-05-14 against e2e-1143):
 """
 
 import logging
-from typing import Any, Literal
+import re
+from typing import Any, Literal, Self
+
+import httpx
 
 from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
+
+
+# The metastore's auth middleware collapses EVERY project-scope resolution
+# failure into this one opaque 401 string (go-monorepo
+# ``services/metastore/internal/middleware/auth.go``, ``resolveProjectScope``
+# -- the underlying error is logged server-side and discarded). The dominant
+# cause is its master-token gate: ``NewProjectDeps`` is called without
+# ``WithoutMasterToken()``, so unlike the Storage API the metastore accepts
+# ONLY a master (project admin) Storage token, and every valid non-master
+# token lands here (issue #711; A/B-verified live on us-east4.gcp: non-master
+# token -> this 401 on every call, master token on the same stack -> 200).
+_PROJECT_SCOPE_401_EXCEPTION = "Failed to create project scope"
+
+# Re-extracts the ``[exceptionId: ...]`` suffix `_raise_api_error` appended,
+# so the reclassified message keeps the handle Keboola support traces by.
+_EXCEPTION_ID_SUFFIX = re.compile(r" \[exceptionId: [^\]]+\]")
 
 
 SemanticType = Literal[
@@ -68,21 +87,74 @@ class MetastoreClient(BaseHttpClient):
     no in-memory caching. All such concerns live in the service layer.
     """
 
-    SESSION_AUTH_FEATURE = "The Metastore Service (semantic layer)"
+    # The metastore answers a VALID non-master token with 401 (its master-token
+    # gate, #711), so a bearer 401 here is not an expired token. Opt out of the
+    # refresh-and-retry: otherwise every non-master session call burns a
+    # refresh-token rotation and can report SESSION_EXPIRED instead of the real
+    # MISSING_MASTER_TOKEN. See ``_do_request`` below and ``BearerAuth``.
+    BEARER_REFRESH_ON_401 = False
 
-    def __init__(self, stack_url: str, token: str) -> None:
+    def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         base_url = self._derive_service_url(self._stack_url, "metastore")
-        headers = {
-            "X-StorageApi-Token": token,
-        }
-        super().__init__(base_url=base_url, token=token, headers=headers)
+        headers: dict[str, str] = {}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
+        super().__init__(base_url=base_url, token=token, headers=headers, http_auth=http_auth)
 
-    def __enter__(self) -> "MetastoreClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
+
+    def _do_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Funnel every metastore call through the project-scope-401 diagnosis.
+
+        A 401 carrying ``"Failed to create project scope"`` is the metastore's
+        master-token gate rejecting a valid non-master token (see
+        :data:`_PROJECT_SCOPE_401_EXCEPTION`), not a bad credential and not a
+        server fault to escalate -- so it is reclassified from the generic
+        401 mapping into :data:`ErrorCode.MISSING_MASTER_TOKEN` with the
+        actual remedy, mirroring the ``token create`` / ``config oauth-url``
+        pre-flight guards (#599). Kept at the request funnel (rather than one
+        try/except per verb method) so no endpoint can miss it.
+        """
+        try:
+            return super()._do_request(method, path, **kwargs)
+        except KeboolaApiError as exc:
+            if exc.status_code != 401 or _PROJECT_SCOPE_401_EXCEPTION not in exc.message:
+                raise
+            id_match = _EXCEPTION_ID_SUFFIX.search(exc.message)
+            id_suffix = id_match.group(0) if id_match else ""
+            if self._http_auth is not None:
+                # Session (browser-login) project: the token is a bearer, so the
+                # masked-token note and `project edit --token` remedy do not apply.
+                remedy = (
+                    "This browser-login session is not a project master. Register "
+                    "the project with a static MASTER Storage token "
+                    "(`kbagent project add`), or sign in as a project admin, to "
+                    "use semantic-layer commands."
+                )
+            else:
+                remedy = (
+                    f"The token ({self._masked_token}) is not a master token. Check "
+                    f"`kbagent project info` -> is_master_token, and register a "
+                    f"master token (`kbagent project edit --token ...`) to use "
+                    f"semantic-layer commands."
+                )
+            raise KeboolaApiError(
+                message=(
+                    f"The Metastore API (semantic layer) rejected the request with "
+                    f"HTTP 401 {_PROJECT_SCOPE_401_EXCEPTION!r}. Unlike the Storage "
+                    f"API, the metastore accepts only a MASTER (project admin) "
+                    f"Storage token, and this is how it answers a valid non-master "
+                    f"token. {remedy}{id_suffix}"
+                ),
+                status_code=exc.status_code,
+                error_code=ErrorCode.MISSING_MASTER_TOKEN,
+                retryable=False,
+            ) from exc
 
     # ------------------------------------------------------------------
     # Primitive verb methods

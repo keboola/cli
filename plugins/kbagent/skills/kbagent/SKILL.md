@@ -3,20 +3,23 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, workspace SQL debugging, GitOps config sync
-  (pull/push/diff/clone), bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots (backup/restore), data apps
-  (deploy/logs/secrets), flows and schedules, members and invitations,
-  feature flags, OTLP data streams, scoped Storage tokens, the semantic
-  layer (models, metrics), the Developer Portal, browser login.
+  lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
+  bucket sharing/linking, encrypting secrets,
+  Storage tables/files/snapshots, data apps,
+  flows/schedules, invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, semantic
+  layer, Developer Portal, browser login,
+  first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  data app, streamlit deploy, semantic layer, sl, dev-portal,
+  merge request,
+  data app, python-js app, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
   PAYG credits, flow notifications, alert recipients, config trash,
-  restore config, undelete config.
+  restore config, zero-copy clone, workspace load type,
+  set up keboola, setup, connect project, logout, sign out.
 ---
 
 # kbagent -- Keboola Agent CLI
@@ -33,7 +36,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 ## Rules
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
-2. **Set conversation ID**: before first kbagent call, run `export KBAGENT_CONVERSATION_ID="<unique-id>"` (e.g. session UUID). All API requests include this as `X-Conversation-ID` header for platform observability.
+2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
 3. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
@@ -75,6 +78,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
@@ -140,7 +144,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
-| Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
@@ -151,6 +154,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -222,21 +226,49 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
+| Show every trigger kbagent can see for a flow (cron + table triggers) | `kbagent flow triggers --project PROJECT --flow-id FLOW-ID` |
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find` |
 | List notification subscriptions (Flow Notifications tab) across projects | `kbagent notification list` |
 | Show one notification subscription, including its raw filter list | `kbagent notification detail --project PROJECT --subscription-id SUBSCRIPTION-ID` |
+| Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
+| Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
+| Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
 | List development branches from connected projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
+| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
 | Delete a branch metadata entry by its numeric ID | `kbagent branch metadata-delete --project PROJECT --metadata-id METADATA-ID` |
+| List the project's merge requests, newest first | `kbagent merge-request list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent mr list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent mr update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent mr merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -271,7 +303,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
@@ -304,7 +336,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent sl model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
@@ -405,6 +437,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
@@ -420,19 +453,98 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Deep column-level lineage** (`lineage build --ai`, column graph, ER + HTML output) | [lineage-deep-workflow](references/lineage-deep-workflow.md) |
 | **Session permissions firewall** (`--deny-writes` / `--deny-destructive`, persisted policies, `permissions check`) | [permissions-workflow](references/permissions-workflow.md) |
 | **Kai** (project-aware AI Q&A: ping / preflight / ask / chat / history) | [kai-workflow](references/kai-workflow.md) |
-| **Programmatic auth** (browser login: PKCE/device flow, `auth login`/`status`/`logout`; HUMAN-ONLY, never run headlessly) | [auth-workflow](references/auth-workflow.md) |
+| **Programmatic auth** (browser login: PKCE/device flow, `auth login`/`status`/`logout`; never in a foreground shell, never unattended -- attended agents drive `--device-code` in the background and relay the code) | [auth-workflow](references/auth-workflow.md) |
 | Response parsing gotchas | [gotchas](references/gotchas.md) |
 
 ## First-time setup
 
-If kbagent is not yet installed:
+**In Claude Code with this plugin installed, `/kbagent:setup` is the
+one-command path.** It installs the CLI if missing, connects a project, and
+verifies with `kbagent doctor`. Every step is conditional, so it is safe to
+re-run on a half-finished setup, and it announces each step as it goes.
+
+**In every other client there is no slash command** -- Claude Desktop has no
+slash-command surface at all, Cursor may not expose one, and a plain chat
+with a shell has none either. There you run the same flow inline: the steps
+below ARE that flow, and this skill is what the user's natural-language ask
+("set up Keboola", "connect my project", "log me out") should trigger.
+
+**The plugin is an upgrade, not a prerequisite.** kbagent is a CLI: in any
+client with a shell, `kbagent project add` plus the steps below is a complete
+setup. `kbagent context` prints the full command reference and is the manual
+substitute for this skill -- it teaches any agent the whole surface. And
+`doctor`'s `claude_plugin` check warns or skips when the plugin is absent;
+that is informational and never means setup failed.
+
+**Login is shared across clients.** The session lives in the same local
+config directory (`auth.json` next to `config.json`), so signing in once --
+in any client, or in a plain terminal -- is inherited by all of them. Always
+check the existing state before starting a login.
+
+### 1. Is the CLI installed?
 
 ```bash
-uv tool install git+https://github.com/keboola/cli
-kbagent doctor
+kbagent version
 ```
 
-Then add projects:
+If the command is not found, install it, then re-check:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
+# the installer puts kbagent on PATH for its own process only --
+# 'source $HOME/.local/bin/env' or open a new shell
+```
+
+### 2. Is a project already connected?
+
+```bash
+kbagent --json project list      # non-empty -> already connected, skip to step 4
+kbagent --json auth status       # exit 0 = a session is already signed in
+```
+
+### 3. Connect -- the login ladder
+
+Take the first rung that fits the situation.
+
+**a. Browser login, driven by the agent (attended sessions).**
+`kbagent auth login` must **never** run in a foreground tool shell -- it
+blocks until the human finishes, and a foreground shell timeout (~120s)
+kills it mid-flight -- and **never** from an unattended or headless task.
+But in an attended session, when a background shell is available, the agent
+should drive it rather than handing it off:
+
+```bash
+# run this in a BACKGROUND shell, not a foreground one
+kbagent auth login --device-code --stack https://connection.keboola.com --register-projects
+```
+
+- The verification URL and user code are printed immediately, before polling
+  starts. In human output they go to stdout; with `--json` the panel goes to
+  **stderr**, so capture `2>&1`. Prefer human mode here.
+- Relay the URL and the code to the user in chat. The CLI also best-effort
+  opens the browser on the host machine.
+- Confirm completion with `kbagent --json auth status`: exit 0 means signed
+  in (`live` / `refreshed` / `degraded`), exit 3 means not yet
+  (`missing` / `expired`). Poll that -- never re-run login blind.
+- `auth.json` is written atomically on success only, so an abandoned or
+  killed attempt corrupts nothing.
+- `--register-projects` is fully non-interactive and registers every
+  accessible project; without it, use `kbagent auth register-projects --all`
+  afterwards.
+- **No background shell available?** Then hand the exact command to the
+  user's own terminal and wait for them to confirm before continuing.
+
+**b. Unattended: `auth login-password`** -- the headless path, when the task
+was given real account credentials (a dedicated service account, never a
+human's own):
+
+```bash
+KBC_LOGIN_EMAIL=... KBC_LOGIN_PASSWORD=... KBC_LOGIN_TOTP_SECRET=... \
+  kbagent auth login-password --password-stdin --register-projects <<< "$KBC_LOGIN_PASSWORD"
+```
+
+**c. Static Storage token** -- always works, no browser and no account
+credentials:
 
 ```bash
 # Single project
@@ -446,3 +558,56 @@ KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org
 # Or onboard specific projects (any project member, uses Personal Access Token)
 KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
 ```
+
+### 4. Verify
+
+```bash
+kbagent --json doctor
+```
+
+A `claude_plugin` warn or skip is expected outside Claude Code and does not
+make the setup incomplete.
+
+### Logging out
+
+Unlike login, logout is fully agent-runnable. Check the state first, then
+revoke:
+
+```bash
+kbagent --json auth status                  # what is signed in, on which stack
+kbagent --json auth logout                  # revoke + delete the local session
+kbagent auth logout --remove-projects --yes # also drop session-registered aliases
+```
+
+Use `--json` or `--yes` so the command does not stop on the confirmation
+prompt. `--remove-projects` only removes aliases backed by this session's
+sentinel token; a static-token project is never touched -- remove those with
+`kbagent project remove --project ALIAS`. Because the session is shared, a
+logout signs the user out of every client at once.
+
+### Installing this plugin
+
+This plugin ships through Keboola's `keboola-claude-kit` marketplace, published
+from `keboola/ai-kit`. It is optional (see above) -- the CLI alone is a working
+setup. Per client:
+
+- **Claude Code:**
+
+  ```
+  /plugin marketplace add keboola/ai-kit
+  /plugin install kbagent@keboola-claude-kit
+  ```
+
+- **Cursor:** add the marketplace through the UI. It **requires the full
+  URL** -- `https://github.com/keboola/ai-kit`. The short `keboola/ai-kit`
+  form that Claude Code accepts is rejected there with an opaque
+  `[invalid_argument] Error`.
+- **Claude Desktop:** Settings (Customise) -> Plugins -> add the
+  `keboola/ai-kit` marketplace, then install `kbagent`. Claude Desktop has
+  **no slash commands**, so `/kbagent:setup` and `/keboola` are unavailable
+  there -- setup and everything else happen through this skill's
+  natural-language triggers instead.
+
+Copies installed from the older `keboola-agent-cli` marketplace (this CLI's own
+repo) still work and still update, but that entry is deprecated -- moving to
+`keboola/ai-kit` is how a user gets the maintained one.

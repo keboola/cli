@@ -26,7 +26,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
-    # Serve-only (since vNEXT): `GET /auth/projects` lists the session's
+    # Serve-only (since 0.90.1): `GET /auth/projects` lists the session's
     # registerable project candidates. It has no CLI leaf command -- the
     # terminal equivalent is the interactive picker inside
     # `auth register-projects` -- so it is exempted from the dead-key check
@@ -34,6 +34,10 @@ OPERATION_REGISTRY: dict[str, str] = {
     "auth.projects": "read",
     # Project management
     "project.add": "admin",
+    # `project create` provisions a REAL organization, project and credit
+    # grant on the stack -- the most consequential write in this group, and
+    # irreversible from the CLI. Same admin class as `project add`.
+    "project.create": "admin",
     "project.list": "read",
     "project.remove": "admin",
     "project.edit": "admin",
@@ -129,6 +133,38 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
     "branch.metadata-delete": "destructive",
+    # Merge requests (non-SOX Branches 2.0). Classification is STATIC -- a
+    # property of the command, never of a flag or of the MR's state -- so a
+    # policy can be evaluated from the command name alone, before any network
+    # call (docs/merge-requests-layer1.md, "What is destructive").
+    # Destructive = moves a merge request toward, or into, production:
+    # `merge` (deletes the source branch, rewrites production); `request-review`
+    # (on the non-SOX default of 0 approvals it lands the MR directly in
+    # `approved`, where an armed auto-merge fires); `approve` (the last approval
+    # is what an armed auto-merge waits for); `resolve` (removes the blocker a
+    # merge is waiting on); `auto-merge` (arms the backend scheduler that merges
+    # on its own -- a delayed production merge, and the disarm rides the same
+    # command). Write = shapes the MR without moving it: `create`, `update`
+    # (title/description/reviewers/external id -- auto-merge is NOT a field
+    # here), `request-changes` (moves it AWAY from approved). Reads are
+    # ungated on the server.
+    "merge-request.list": "read",
+    "merge-request.detail": "read",
+    "merge-request.conflicts": "read",
+    "merge-request.diff": "read",
+    "merge-request.create": "write",
+    "merge-request.update": "write",
+    "merge-request.request-changes": "write",
+    "merge-request.request-review": "destructive",
+    "merge-request.approve": "destructive",
+    "merge-request.resolve": "destructive",
+    "merge-request.merge": "destructive",
+    "merge-request.auto-merge": "destructive",
+    # Serve-only: `GET /merge-requests/{project}/by-branch/{branch_id}` exposes
+    # the branch->MR resolver that the CLI hides behind an omitted
+    # --merge-request-id (there is no active-branch idiom over HTTP). No CLI
+    # leaf command -- exempted from the dead-key check via SERVE_ONLY_OPERATIONS.
+    "merge-request.by-branch": "read",
     # Workspace lifecycle
     "workspace.create": "write",
     "workspace.list": "read",
@@ -329,11 +365,16 @@ OPERATION_REGISTRY: dict[str, str] = {
     "ai.chat": "write",
     "workspace.sql-improve": "write",
     # Raw HTTP client against `kbagent serve` (used by AI subprocesses).
-    # Categorised by the underlying HTTP method: GET = read, mutating verbs
-    # = write. Since vNEXT (issue #655) the serve's own routes DO enforce the
-    # served config dir's policy on top, so a denied operation is refused at
-    # both ends; before that, this second layer did not exist and the claim
-    # this comment used to make was false.
+    # Categorised by the underlying HTTP method under the taxonomy at the top
+    # of this registry: GET = read, POST/PATCH = write (they create/modify),
+    # DELETE = destructive (it deletes). DELETE is deliberately a rung above
+    # the other mutating verbs -- lumping it in as `write` would let a
+    # `--deny-destructive` session delete through the REST boundary.
+    # Since vNEXT (issue #655) the serve's own routes DO enforce the served
+    # config dir's policy on top, so a denied operation is refused at both
+    # ends; before that, only `/auth/*` (since 0.90.1) and `/merge-requests/*`
+    # re-checked the policy and every other router was unguarded, so these
+    # keys were the only firewall an `http.*` call met there.
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
@@ -351,6 +392,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Flow operations
     "flow.list": "read",
     "flow.detail": "read",
+    "flow.triggers": "read",
     "flow.schema": "read",
     "flow.examples": "read",
     "flow.validate": "read",
@@ -359,9 +401,13 @@ OPERATION_REGISTRY: dict[str, str] = {
     "flow.delete": "destructive",
     "flow.schedule": "write",
     "flow.schedule-remove": "destructive",
-    # Schedule discovery / audit (read-only)
+    # Notification subscription audit + write path (issue #600, #690)
     "notification.list": "read",
     "notification.detail": "read",
+    "notification.create": "write",
+    "notification.delete": "destructive",
+    "notification.replace-recipient": "write",
+    # Schedule discovery / audit (read-only)
     "schedule.list": "read",
     "schedule.detail": "read",
     "schedule.find": "read",
@@ -394,8 +440,14 @@ OPERATION_REGISTRY: dict[str, str] = {
 # `project remove`. Without this, a policy denying `cli:admin` to keep an agent
 # out of the project registry would still let it de-register projects through
 # `auth`.
+#
+# `sync push --force` applies the deletions push plans. For a SQL workspace
+# (CLI-25) that also deletes its SQL editor sessions and their workspaces,
+# which a config restore does not bring back, so it is destructive while a
+# plain push is only a write.
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
+    "sync.push --force": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real
@@ -406,6 +458,7 @@ FLAG_ESCALATIONS: dict[str, str] = {
 SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
     {
         "auth.projects",
+        "merge-request.by-branch",
         # Both back a web-UI affordance with no terminal equivalent: the
         # dashboard's Local AI chat tile and the workspace SQL editor's
         # "improve this query" helper.
@@ -423,6 +476,22 @@ INERT_SINCE_VERSION = "0.85.0"
 # Single wording for the "your policy carries dead rules" hint, so `permissions
 # show` and `kbagent doctor` cannot drift apart.
 INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
+
+# Generic hint for a pattern that matches nothing for a reason other than the
+# retired `tool:` namespace (most commonly a typo). Kept distinct from
+# INERT_PATTERN_HINT so `permissions show` / `doctor` can point at the right
+# fix instead of always mentioning the MCP migration.
+UNMATCHED_PATTERN_HINT = (
+    "Check for typos against `kbagent permissions list`, or use a cli:* category "
+    "(cli:read, cli:write, cli:destructive, cli:admin)."
+)
+
+# The four risk-category patterns `_matches_pattern` special-cases. Exported
+# so `pattern_matches_known_operation` cannot drift from the engine's own
+# notion of "valid category pattern".
+CLI_CATEGORY_PATTERNS: frozenset[str] = frozenset(
+    {"cli:read", "cli:write", "cli:destructive", "cli:admin"}
+)
 
 
 def apply_firewall_flags(
@@ -481,13 +550,36 @@ def apply_firewall_flags(
     )
 
 
+def pattern_matches_known_operation(pattern: str) -> bool:
+    """True if the pattern is a cli:* category or matches >=1 known operation.
+
+    Known operations are ``OPERATION_REGISTRY`` keys plus ``FLAG_ESCALATIONS``
+    keys (flag-escalated strings like ``auth.logout --remove-projects`` are
+    real operation strings passed to ``PermissionEngine.is_allowed()``, see
+    ``commands/auth.py``). A glob pattern counts as valid when it matches at
+    least one of those operation strings via ``fnmatch.filter``.
+
+    Used both to reject unknown patterns at write time (``permissions set``)
+    and to flag ones already on disk (``find_inert_patterns``) -- kept as a
+    single source of truth so the two checks cannot drift apart.
+    """
+    if pattern in CLI_CATEGORY_PATTERNS:
+        return True
+    return bool(fnmatch.filter([*OPERATION_REGISTRY, *FLAG_ESCALATIONS], pattern))
+
+
 def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
     """Patterns in a persisted policy that can no longer match any operation.
 
-    The MCP passthrough was removed in 0.85.0 and with it the ``tool:``
-    operation namespace; patterns targeting it fall through to fnmatch and
-    match nothing. Surfaced by ``permissions show`` and ``kbagent doctor``
-    so a pre-0.85 policy does not silently carry dead rules.
+    Generalized (issue #688): flags ANY pattern that matches zero known
+    operations, not only the retired ``tool:`` namespace. That namespace --
+    gone since the MCP passthrough was removed in 0.85.0 -- is simply the
+    most common historical cause; a typo'd operation name or a stale glob is
+    just as inert and just as worth surfacing. Surfaced by ``permissions
+    show`` and ``kbagent doctor`` so a policy does not silently carry dead
+    rules. ``permissions set`` (issue #688) additionally REJECTS such
+    patterns at write time -- this function stays for what is already
+    persisted (pre-fix policies, or the engine's own leniency).
 
     Returns the offending patterns in policy order (allow first, then deny),
     de-duplicated -- the same dead pattern listed twice is one problem.
@@ -497,7 +589,7 @@ def find_inert_patterns(policy: PermissionPolicy | None) -> list[str]:
 
     inert: list[str] = []
     for pattern in [*policy.allow, *policy.deny]:
-        if pattern.startswith(INERT_PATTERN_PREFIX) and pattern not in inert:
+        if not pattern_matches_known_operation(pattern) and pattern not in inert:
             inert.append(pattern)
     return inert
 
@@ -518,7 +610,7 @@ def _matches_pattern(operation: str, pattern: str) -> bool:
     match nothing, and stay inert instead of raising.
     """
     # Category patterns: cli:read, cli:write, cli:destructive, cli:admin
-    if pattern in ("cli:read", "cli:write", "cli:destructive", "cli:admin"):
+    if pattern in CLI_CATEGORY_PATTERNS:
         target_category = pattern.split(":")[1]
         # Fail-closed: unknown CLI ops default to 'write' so they are
         # blocked by cli:write policies. This prevents new commands from

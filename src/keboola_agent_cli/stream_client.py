@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -94,15 +94,12 @@ class StreamClient(BaseHttpClient):
     :class:`BaseHttpClient`.
     """
 
-    SESSION_AUTH_FEATURE = "The Data Streams Service"
-
     def __init__(self, stack_url: str, token: str, *, http_auth: httpx.Auth | None = None) -> None:
         self._stack_url = stack_url.rstrip("/")
         stream_base_url = self._derive_service_url(self._stack_url, "stream")
-        headers = {
-            "X-StorageApi-Token": token,
-            "Content-Type": "application/json",
-        }
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if http_auth is None:
+            headers["X-StorageApi-Token"] = token
         super().__init__(
             base_url=stream_base_url,
             token=token,
@@ -111,10 +108,10 @@ class StreamClient(BaseHttpClient):
             http_auth=http_auth,
         )
 
-    def __enter__(self) -> StreamClient:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     # ------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 ``KeboolaClient`` is assembled here from the per-family mixins (storage tables,
 storage files, configs, queue, tokens, branches, merge requests, stream,
-query, workspaces, billing, notifications, misc) over the shared
+query, workspaces, billing, notifications, editor, misc) over the shared
 ``_CoreClient`` plumbing base. It stays a single class exposing every
 Storage/Queue method at its original signature, so ``keboola_agent_cli.Client`` and its ``.raw`` accessor
 are unaffected by the split of the former single-file ``client.py`` into a
@@ -17,6 +17,7 @@ from ._core import _CoreClient
 from .billing import _BillingMixin
 from .branches import _BranchesMixin
 from .configs import _ConfigsMixin
+from .editor import _EditorMixin
 from .merge_requests import _MergeRequestsMixin
 from .misc import _MiscMixin
 from .notifications import _NotificationsMixin
@@ -26,6 +27,7 @@ from .storage_files import _StorageFilesMixin
 from .storage_tables import _StorageTablesMixin
 from .stream import _StreamMixin
 from .tokens import _TokensMixin
+from .triggers import _TriggersMixin
 from .workspaces import _WorkspacesMixin
 
 
@@ -42,6 +44,8 @@ class KeboolaClient(
     _WorkspacesMixin,
     _BillingMixin,
     _NotificationsMixin,
+    _EditorMixin,
+    _TriggersMixin,
     _MiscMixin,
     _CoreClient,
 ):

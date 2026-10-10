@@ -80,6 +80,14 @@ def test_every_allowlisted_write_scope_still_exists() -> None:
         assert f"def {function}(" in source, f"{scope} names a function that no longer exists"
 
 
+def test_every_allowlisted_client_construction_scope_still_exists() -> None:
+    """Same silent-hole guard for the Check 4 construction allowlist."""
+    for scope in _mod.PROJECT_CLIENT_CONSTRUCTION_ALLOWED:
+        rel, function = scope.split("::")
+        source = (_mod.SRC_ROOT / rel).read_text(encoding="utf-8")
+        assert f"def {function}(" in source, f"{scope} names a function that no longer exists"
+
+
 # --------------------------------------------------------------------------
 # Check 1 -- unguarded credential writes
 # --------------------------------------------------------------------------
@@ -353,6 +361,32 @@ def build(stack_url, manage_token):
 """
         root = _tree(tmp_path, **{"services/manage_service.py": source})
         assert _mod._unguarded_project_clients(root) == []
+
+    @pytest.mark.parametrize(
+        "client_cls",
+        [
+            "AiServiceClient",
+            "DataScienceClient",
+            "MetastoreClient",
+            "SchedulerClient",
+            "StreamClient",
+        ],
+    )
+    def test_a_cli13_bearer_service_client_from_a_project_token_is_detected(
+        self, tmp_path: Path, client_cls: str
+    ) -> None:
+        """CLI-13 dropped these clients' SESSION_AUTH_FEATURE runtime guard, so
+        Check 4 is now the only net against a direct construction from a
+        `kbc-session://` `project.token` that skips the sentinel-aware factory.
+        """
+        source = f"""
+def _client_for(project):
+    return {client_cls}(project.stack_url, project.token)
+"""
+        root = _tree(tmp_path, **{"services/rogue_service.py": source})
+        offenders = _mod._unguarded_project_clients(root)
+        assert len(offenders) == 1, f"{client_cls} construction went undetected"
+        assert "(in _client_for)" in offenders[0]
 
 
 # --------------------------------------------------------------------------

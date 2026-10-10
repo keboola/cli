@@ -13,10 +13,20 @@ from typing import Any
 
 from ..auth.sentinel import is_session_token, parse_session_project_id, require_static_token
 from ..client import KeboolaClient
-from ..config_store import ConfigError, ConfigStore, project_not_found_error
-from ..constants import ENV_MAX_PARALLEL_WORKERS, UNEXPECTED_ERROR_MAX_MESSAGE_LEN
+from ..config_store import (
+    ConfigError,
+    ConfigStore,
+    project_not_found_error,
+    project_not_registered_error,
+)
+from ..constants import (
+    ENV_KBAGENT_PROJECT,
+    ENV_MAX_PARALLEL_WORKERS,
+    UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
+)
 from ..errors import ErrorCode
 from ..models import ProjectConfig
+from ..project_ref import resolve_project_ref
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +59,13 @@ def resolve_project_credentials(
 
     Shared by the single-project services (``token`` / ``stream`` / ``snapshot``)
     whose ``_resolve_project`` helpers were previously byte-identical. Uses the
-    same short, actionable "not registered" message they already emitted (kept
-    verbatim rather than switching to the richer
-    :meth:`ConfigStore.project_not_found_error`, to preserve behavior).
+    same short, actionable "not registered" message they already emitted
+    (:func:`project_not_registered_error`) rather than the richer
+    :meth:`ConfigStore.project_not_found_error`, to preserve behavior.
     """
     project = config_store.get_project(alias)
     if project is None:
-        raise ConfigError(f"Project alias '{alias}' is not registered. Run `kbagent project list`.")
+        raise project_not_registered_error(alias)
     return ResolvedProjectCredentials(stack_url=project.stack_url, token=project.token)
 
 
@@ -114,6 +124,33 @@ def project_error_entry(
     }
 
 
+def find_default_branch_id(branches: list[dict[str, Any]]) -> int | None:
+    """The id of the ``isDefault`` branch in a ``list_dev_branches()`` result.
+
+    The one home for the ``isDefault`` scan shared by the config, sync,
+    workspace and merge-request services. Returns ``None`` when no flagged
+    branch carries a usable (int-coercible) id -- an entry that cannot be
+    coerced is skipped, never raised on, so a degenerate payload cannot
+    crash a caller mid-operation. What ``None`` means (error vs. fallback)
+    stays the caller's decision. ``lib.py`` keeps its own loop deliberately:
+    the SDK facade does not import the services layer.
+    """
+    for branch in branches:
+        if not branch.get("isDefault"):
+            continue
+        try:
+            return int(branch["id"])
+        except (KeyError, TypeError, ValueError):
+            # Skipping is the right recovery, but not a silent one: the
+            # callers then word "no default branch" for a project that DID
+            # report one (followups F4). The log line is where the truth goes.
+            logger.warning(
+                "isDefault branch carries a non-numeric id %r -- skipped", branch.get("id")
+            )
+            continue
+    return None
+
+
 def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
     """Create a KeboolaClient with the given stack URL and token.
 
@@ -128,26 +165,28 @@ def default_client_factory(stack_url: str, token: str) -> KeboolaClient:
     return KeboolaClient(stack_url=stack_url, token=token)
 
 
-def make_client_factory(config_store: ConfigStore) -> ClientFactory:
-    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+def make_session_aware_client_factory(
+    config_store: ConfigStore, client_cls: Callable[..., Any]
+) -> Callable[[str, str], Any]:
+    """Return a ``(stack_url, token) -> client_cls`` factory that reaches a
+    browser-login project the way ``KeboolaClient`` already does.
 
-    The factory signature stays 2-arg, so none of the ~150 existing call
-    sites change shape: a `kbc-session://{project_id}` sentinel token is
-    detected here, the project id is parsed out of the sentinel itself (the
-    one datum the 2-arg signature otherwise lacks), and the client is built
-    with `http_auth=BearerAuth(...)` instead of a static `X-StorageApi-Token`.
-    A plain static token takes the unchanged, byte-identical path.
+    For a plain static token it builds ``client_cls(stack_url, token)`` -- the
+    unchanged, byte-identical path. For a `kbc-session://{project_id}` token it
+    builds the client with ``http_auth=BearerAuth(...)`` and an empty token, so
+    the request carries `Authorization: Bearer` + `X-KBC-ProjectId` instead of a
+    static header. ``client_cls`` must accept a keyword-only ``http_auth`` (every
+    ``BaseHttpClient`` subclass that forwards the argument does).
 
     `auth.state_store` / `auth.token_provider` are imported lazily inside the
-    returned closure (not at module level) so the static-token startup path
-    never pays for constructing the auth package's heavier dependencies
-    (filelock, httpx client machinery) -- only a session-registered project
-    ever reaches that branch.
+    returned closure (not at module level) so the static-token path never pays
+    for the auth package's heavier dependencies (filelock, httpx client
+    machinery) -- only a session-registered project ever reaches that branch.
     """
 
-    def _factory(stack_url: str, token: str) -> KeboolaClient:
+    def _factory(stack_url: str, token: str) -> Any:
         if not is_session_token(token):
-            return KeboolaClient(stack_url=stack_url, token=token)
+            return client_cls(stack_url=stack_url, token=token)
 
         project_id = parse_session_project_id(token)
         if project_id is None:
@@ -162,13 +201,59 @@ def make_client_factory(config_store: ConfigStore) -> ClientFactory:
 
         state_store = AuthStateStore.from_config_store(config_store)
         provider = get_session_token_provider(stack_url, state_store)
-        return KeboolaClient(
+        return client_cls(
             stack_url=stack_url,
             token="",
-            http_auth=BearerAuth(provider, project_id),
+            http_auth=BearerAuth(
+                provider,
+                project_id,
+                refresh_on_401=getattr(client_cls, "BEARER_REFRESH_ON_401", True),
+            ),
         )
 
     return _factory
+
+
+def make_client_factory(config_store: ConfigStore) -> ClientFactory:
+    """Return a ``(stack_url, token) -> KeboolaClient`` factory, sentinel-aware.
+
+    The Storage-client specialisation of :func:`make_session_aware_client_factory`.
+    The factory signature stays 2-arg, so none of the ~150 existing call sites
+    change shape.
+    """
+    return make_session_aware_client_factory(config_store, KeboolaClient)
+
+
+def make_telemetry_client(
+    config_store: ConfigStore, stack_url: str, token: str
+) -> KeboolaClient | None:
+    """Build a client for a best-effort usage event that never triggers a refresh.
+
+    For a static token this mirrors `make_client_factory`. For a `kbc-session://`
+    sentinel it reads a currently-fresh access token WITHOUT refreshing and stamps
+    it with a non-refreshing bearer, so a stale on-disk token or a 401 can never
+    make telemetry wait on the network or the cross-process refresh lease. Returns
+    None when only a refresh would produce a usable token -- the caller then skips
+    the event. Session projects stay covered whenever their token is already fresh.
+    """
+    if not is_session_token(token):
+        return KeboolaClient(stack_url=stack_url, token=token)
+
+    project_id = parse_session_project_id(token)
+    if project_id is None:
+        return None
+
+    from ..auth.state_store import AuthStateStore
+    from ..auth.token_provider import StaticBearerAuth, get_session_token_provider
+
+    state_store = AuthStateStore.from_config_store(config_store)
+    provider = get_session_token_provider(stack_url, state_store)
+    access = provider.peek_access_token()
+    if not access:
+        return None
+    return KeboolaClient(
+        stack_url=stack_url, token="", http_auth=StaticBearerAuth(access, project_id)
+    )
 
 
 class BaseService:
@@ -216,6 +301,80 @@ class BaseService:
             resolved[alias] = config.projects[alias]
 
         return resolved
+
+    def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
+        """Resolve the effective project alias for a single-project operation.
+
+        Precedence (first match wins):
+        1. ``explicit`` argument (typically the CLI ``--project`` flag)
+        2. ``KBAGENT_PROJECT`` env var
+        3. Persisted ``default_project`` pin
+        4. If exactly one project is registered, fall back to it (source=sole)
+        5. Fail hard with ConfigError
+
+        This is the single-project analog of ``resolve_projects()`` (which
+        fans out to all projects). Every service that needs one implicit
+        project must go through this cascade -- never a "first registered
+        project" shortcut, which ignores the ``project use`` pin (issue #684).
+
+        ``explicit`` and the env var may give a project ID instead of an
+        alias (CLI-22, :func:`~keboola_agent_cli.project_ref.resolve_project_ref`);
+        the returned value is always the alias. The CLI translates
+        ``--project`` before a command runs, so for ``explicit`` this only
+        matters to callers that pass their own value (telemetry, REST bodies).
+
+        Args:
+            explicit: Explicit alias (or project ID) from a CLI flag, or None.
+
+        Returns:
+            Tuple of (alias, source).
+
+        Raises:
+            ConfigError: If the resolved alias is not registered, or if none
+                can be resolved.
+        """
+        config = self._config_store.load()
+
+        if explicit:
+            alias = resolve_project_ref(config.projects, explicit)
+            if alias not in config.projects:
+                raise project_not_found_error(
+                    explicit, self._config_store.config_path, self._config_store.source
+                )
+            return alias, "explicit"
+
+        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
+        if env_value:
+            alias = resolve_project_ref(config.projects, env_value)
+            if alias not in config.projects:
+                raise ConfigError(
+                    f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
+                    "that is not registered (no alias or project ID matches it). "
+                    "Use 'kbagent project add' or unset the env var."
+                )
+            return alias, "env"
+
+        pinned = config.default_project
+        if pinned:
+            if pinned not in config.projects:
+                raise ConfigError(
+                    f"Pinned default project '{pinned}' is not registered. "
+                    "Run 'kbagent project use <alias>' to repair."
+                )
+            return pinned, "pin"
+
+        if len(config.projects) == 1:
+            (sole,) = config.projects.keys()
+            return sole, "sole"
+
+        if not config.projects:
+            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
+
+        raise ConfigError(
+            "Multiple projects configured and no default pinned. "
+            "Pass --project <alias>, set KBAGENT_PROJECT, or run "
+            "'kbagent project use <alias>'."
+        )
 
     def _resolve_max_workers(self) -> int:
         """Resolve max parallel workers: env var > config.json > default (10).

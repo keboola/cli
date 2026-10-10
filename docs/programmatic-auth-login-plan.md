@@ -125,19 +125,20 @@ Mandatory CLI behavior (RFC "CLI Behavior" section):
 stack per OS user):
 
 ```python
-class StackSession(BaseModel):              # persisted in auth.json (0600)
-    stack_url: str                          # normalized https://host
+class StackSession(BaseModel):  # persisted in auth.json (0600)
+    stack_url: str  # normalized https://host
     session_id: str
     user_email: str = ""
     user_name: str = ""
-    access_token: str                       # kbc_at_* — plaintext, 0600 file
-    refresh_token: str                      # kbc_rt_* — plaintext, 0600 file
+    access_token: str  # kbc_at_* — plaintext, 0600 file
+    refresh_token: str  # kbc_rt_* — plaintext, 0600 file
     access_expires_at: datetime | None = None
     refresh_expires_at: datetime | None = None
     created_at: datetime
-    model_config = {"extra": "allow"}       # forward compat
+    model_config = {"extra": "allow"}  # forward compat
 
-class AuthState(BaseModel):                 # auth.json root
+
+class AuthState(BaseModel):  # auth.json root
     version: int = 1
     sessions: dict[str, StackSession] = Field(default_factory=dict)
 ```
@@ -231,7 +232,7 @@ touching the token provider or the flows.
   class DevicePollResult:
       status: Literal["ok", "pending", "slow_down", "denied", "expired", "error"]
       tokens: CliTokenResponse | None = None
-      interval: int | None = None      # params.interval on slow_down
+      interval: int | None = None  # params.interval on slow_down
   ```
 
   429 → treated as slow_down with backoff; unknown 400 → typed error.
@@ -285,9 +286,11 @@ class TokenProvider(Protocol):
     def get_access_token(self) -> str: ...
     def force_refresh(self, rejected_token: str) -> str: ...
 
+
 class SessionTokenProvider:
     """One instance per stack per process (module-level registry + lock);
     thread-safe; reads and persists rotations via AuthStateStore (auth.json)."""
+
 
 class BearerAuth(httpx.Auth):
     def auth_flow(self, request):
@@ -295,7 +298,7 @@ class BearerAuth(httpx.Auth):
         if self._project_id is not None:
             request.headers["X-KBC-ProjectId"] = str(self._project_id)
         response = yield request
-        if response.status_code == 401:          # exactly once
+        if response.status_code == 401:  # exactly once
             request.headers["Authorization"] = f"Bearer {provider.force_refresh(...)}"
             yield request
 ```

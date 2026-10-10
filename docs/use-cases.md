@@ -296,9 +296,11 @@ with full git diff visibility into what changed, when, and where.
 **Situation:** You use Claude Code, Cursor, or another AI coding assistant.
 You want the AI to understand and work with your Keboola setup.
 
-Install the `kbagent` plugin for Claude Code from the marketplace -- it teaches
-the AI how to use all commands, follow proper workflows, and avoid common pitfalls.
-Then just talk to it naturally:
+Install the `kbagent` plugin for Claude Code from Keboola's `keboola-claude-kit`
+marketplace (`/plugin marketplace add keboola/ai-kit`, then
+`/plugin install kbagent@keboola-claude-kit`) -- it teaches the AI how to use all
+commands, follow proper workflows, and avoid common pitfalls. Then just talk to it
+naturally:
 
 > **"Which projects had the most job failures this week?"**
 > The AI runs `kbagent job list --status error` across all projects and

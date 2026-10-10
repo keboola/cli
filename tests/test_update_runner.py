@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +211,33 @@ class TestBuildWaiterScript:
 
     def test_a_powershell_level_error_is_recorded_as_a_failure(self, script: str) -> None:
         assert "Set-Content -LiteralPath $exitFile -Value 'failed'" in script
+
+    def test_runs_the_installer_once_without_a_retry_command(self, script: str) -> None:
+        """No retry command (pip, POSIX, user-set UV_LINK_MODE) -> one attempt (#786)."""
+        assert "--link-mode" not in script
+        assert script.count("$LASTEXITCODE") == 1
+
+    def test_retries_in_copy_mode_only_after_a_hardlink_failure(self, tmp_path: Path) -> None:
+        """Issue #786: one retry, and only when a failed install reports a hardlink error."""
+        cmd = REQUEST.install_command
+        retry = (*cmd[:-1], "--link-mode", "copy", cmd[-1])
+        script = build_waiter_script(
+            replace(REQUEST, hardlink_retry_command=retry),
+            pid=4321,
+            exit_file=tmp_path / DEFERRED_UPDATE_EXIT_FILENAME,
+            install_log=tmp_path / "install.log",
+        )
+        guard = (
+            "if (($code -ne 0) -and ($output -cmatch [regex]::Escape('failed to hardlink file'))) {"
+        )
+        quoted_retry = " ".join(quote_for_powershell(part) for part in retry)
+        assert guard in script
+        assert f"$output += (& {quoted_retry} 2>&1 | Out-String -Width 4096)" in script
+        # Between the first attempt and the log write, so the recorded exit
+        # code and the log cover both attempts.
+        first_attempt = script.index("$code = $LASTEXITCODE")
+        log_write = script.index("AppendAllText($logFile, $output")
+        assert first_attempt < script.index(guard) < log_write
 
 
 class TestBuildHelperCommand:
@@ -514,6 +542,81 @@ class TestWaiterScriptOnWindows:
         )
 
         assert exit_file.read_text(encoding="utf-8").strip() == "3"
+
+    def _run_with_retry(
+        self, tmp_path: Path, first_install: str, retry_install: str
+    ) -> tuple[str, str]:
+        """Run the helper with a retry command; return (exit file, log)."""
+        exit_file = tmp_path / DEFERRED_UPDATE_EXIT_FILENAME
+        install_log = tmp_path / "install.log"
+        request = DeferredUpdateRequest(
+            from_version="1.0.0",
+            target_version="2.0.0",
+            install_command=(sys.executable, "-c", first_install),
+            recovery_command=None,
+            hardlink_retry_command=(sys.executable, "-c", retry_install),
+        )
+        self._run_helper(
+            build_waiter_script(
+                request,
+                pid=self._already_exited_pid(),
+                exit_file=exit_file,
+                install_log=install_log,
+                max_wait_seconds=60,
+                poll_seconds=1,
+                process_name="kbagent",
+            )
+        )
+        return (
+            exit_file.read_text(encoding="utf-8").strip(),
+            install_log.read_text(encoding="utf-8"),
+        )
+
+    # uv writes its errors to stderr, which PowerShell 5.1 wraps as ErrorRecords
+    # under `2>&1`, so the fake installers below write to stderr too.
+
+    def test_hardlink_error_runs_the_retry_command(self, tmp_path: Path) -> None:
+        """Issue #786: a uv hardlink error runs the retry, and its exit code counts."""
+        exit_code, log = self._run_with_retry(
+            tmp_path,
+            first_install=(
+                "import sys; sys.stderr.write('Caused by: failed to hardlink file from a to b: "
+                "The cloud operation cannot be performed (os error 396)'); sys.exit(2)"
+            ),
+            retry_install="print('RETRY-RAN')",
+        )
+
+        assert exit_code == "0"
+        assert "failed to hardlink file" in log
+        assert "retrying with --link-mode copy" in log
+        assert "RETRY-RAN" in log
+
+    def test_other_install_failures_are_not_retried(self, tmp_path: Path) -> None:
+        """Copy mode cannot fix a network or resolver error, so no retry runs."""
+        exit_code, log = self._run_with_retry(
+            tmp_path,
+            first_install=(
+                "import sys; sys.stderr.write('error: network unreachable'); sys.exit(3)"
+            ),
+            retry_install="print('RETRY-RAN')",
+        )
+
+        assert exit_code == "3"
+        assert "RETRY-RAN" not in log
+
+    def test_the_fallback_warning_alone_does_not_trigger_the_retry(self, tmp_path: Path) -> None:
+        """uv's "falling back to full copy" warning means copy mode already ran."""
+        exit_code, log = self._run_with_retry(
+            tmp_path,
+            first_install=(
+                "import sys; sys.stderr.write('warning: Failed to hardlink files; falling back "
+                "to full copy.\\nerror: network unreachable'); sys.exit(1)"
+            ),
+            retry_install="print('RETRY-RAN')",
+        )
+
+        assert exit_code == "1"
+        assert "RETRY-RAN" not in log
 
     def test_gives_up_without_installing_while_a_process_is_still_running(
         self, tmp_path: Path

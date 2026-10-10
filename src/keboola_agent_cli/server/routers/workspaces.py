@@ -26,6 +26,14 @@ class WorkspaceCreate(BaseModel):
 class WorkspaceLoad(BaseModel):
     tables: list[str]
     preserve: bool = False
+    # None == auto: clone every table the backend can clone, copy the rest.
+    load_type: str | None = None
+    # Skips the large-COPY size guard. There is no operator to prompt over
+    # HTTP, so without this a guarded load is refused (HTTP 400,
+    # WORKSPACE_LOAD_COPY_TOO_LARGE) rather than started unannounced.
+    force: bool = False
+    # gt=0: a zero/negative budget would make every load "time out" instantly.
+    timeout: float | None = Field(default=None, gt=0)
 
 
 class WorkspaceQuery(BaseModel):
@@ -78,9 +86,8 @@ def list_workspaces(
     branch: int | None = Query(
         None,
         description=(
-            "Dev branch ID. Requires exactly one project. Without branch, the "
-            "production endpoint is used regardless of any pinned active branch "
-            "(read-command convention, mirrors `storage buckets`)."
+            "Dev branch ID. Requires exactly one project. Without branch, each "
+            "project's active branch (`kbagent branch use`) is used, else production."
         ),
     ),
     qs_compatible: bool = Query(
@@ -127,8 +134,8 @@ def detail(
     branch: int | None = Query(
         None,
         description=(
-            "Dev branch ID. Without branch, the production endpoint is used "
-            "regardless of any pinned active branch (read-command convention)."
+            "Dev branch ID. Without branch, the project's active branch "
+            "(`kbagent branch use`) is used, else production."
         ),
     ),
     registry: ServiceRegistry = Depends(get_registry),
@@ -162,12 +169,21 @@ def load(
     body: WorkspaceLoad,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Load Storage tables into a workspace. Mirrors `kbagent workspace load`."""
+    """Load Storage tables into a workspace. Mirrors `kbagent workspace load`.
+
+    ``on_copy_guard`` is deliberately not passed: an HTTP caller cannot answer
+    a confirmation prompt, so an oversized COPY is refused with a structured
+    error until the caller re-sends it with ``force``.
+    """
     return registry.workspace.load_tables(
         alias=project,
         workspace_id=workspace_id,
         tables=body.tables,
         preserve=body.preserve,
+        load_type=body.load_type,
+        force=body.force,
+        timeout=body.timeout,
+        on_copy_guard=None,
     )
 
 

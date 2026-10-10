@@ -73,6 +73,7 @@ class _CoreClient(BaseHttpClient):
         self._sync_actions_client: httpx.Client | None = None
         self._billing_client: httpx.Client | None = None
         self._notification_client: httpx.Client | None = None
+        self._editor_client: httpx.Client | None = None
         # Lazily built on first Data Streams call (per-device OTLP sources); the
         # Stream control plane is a sibling host reachable from this stack+token.
         self._stream_client: StreamClient | None = None
@@ -107,6 +108,10 @@ class _CoreClient(BaseHttpClient):
     def _notification_base_url(self) -> str:
         return self._derive_service_url(self._stack_url, "notification")
 
+    @property
+    def _editor_base_url(self) -> str:
+        return self._derive_service_url(self._stack_url, "editor")
+
     def close(self) -> None:
         """Close the underlying HTTP clients."""
         super().close()
@@ -122,13 +127,15 @@ class _CoreClient(BaseHttpClient):
             self._billing_client.close()
         if self._notification_client is not None:
             self._notification_client.close()
+        if self._editor_client is not None:
+            self._editor_client.close()
         if self._stream_client is not None:
             self._stream_client.close()
 
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def _request(
@@ -184,8 +191,14 @@ class _CoreClient(BaseHttpClient):
 
     def _encrypt_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Execute an Encryption API request with retry."""
+        # Start from the main client's headers so User-Agent (and X-Conversation-ID)
+        # reach the encryption service too -- passing a bare {"Content-Type": ...}
+        # here used to REPLACE them, leaving this the one Keboola endpoint the
+        # central User-Agent never signed.
+        headers = dict(self._client._headers)
+        headers["Content-Type"] = "application/json"
         client = self._get_or_create_sub_client(
-            "_encrypt_client", self._encrypt_base_url, headers={"Content-Type": "application/json"}
+            "_encrypt_client", self._encrypt_base_url, headers=headers
         )
         return self._do_request(
             method, path, client=client, base_url=self._encrypt_base_url, **kwargs
@@ -223,6 +236,20 @@ class _CoreClient(BaseHttpClient):
             method, path, client=client, base_url=self._notification_base_url, **kwargs
         )
 
+    def _editor_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Execute an Editor Service (SQL editor sessions) request with retry.
+
+        The editor service is a sibling host derived from the stack URL
+        (``editor.{stack-suffix}``, the ``editor`` entry of ``GET /v2/storage``);
+        the sub-client inherits the main client's headers, so the
+        ``X-StorageApi-Token`` auth carries over. The service also accepts a
+        bearer token, which ``_get_or_create_sub_client`` passes on.
+        """
+        client = self._get_or_create_sub_client("_editor_client", self._editor_base_url)
+        return self._do_request(
+            method, path, client=client, base_url=self._editor_base_url, **kwargs
+        )
+
     def _billing_get(self, path: str, **kwargs: Any) -> httpx.Response:
         """Execute a read-only Billing API request with retry.
 
@@ -250,7 +277,7 @@ class _CoreClient(BaseHttpClient):
     def _wait_for_storage_job(
         self,
         job: dict[str, Any],
-        max_wait: float = STORAGE_JOB_MAX_WAIT,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Poll a Storage API job until it reaches a terminal state.
 
@@ -278,7 +305,10 @@ class _CoreClient(BaseHttpClient):
                 with PUT). May already be terminal (the Storage API can fail
                 fast, never returning ``waiting``), in which case no request
                 is made at all.
-            max_wait: Maximum seconds to wait (default: STORAGE_JOB_MAX_WAIT).
+            max_wait: Maximum seconds to wait. ``None`` (the default) means
+                ``STORAGE_JOB_MAX_WAIT``. Callers whose jobs are legitimately
+                slower pass their own budget -- e.g. a workspace load moving
+                gigabytes (``WORKSPACE_LOAD_JOB_MAX_WAIT``).
 
         Returns:
             Completed job dict (with results on success).
@@ -286,8 +316,9 @@ class _CoreClient(BaseHttpClient):
         Raises:
             KeboolaApiError: If the job fails or times out.
         """
+        budget = STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait
         job_id = job.get("id")
-        deadline = time.monotonic() + max_wait
+        deadline = time.monotonic() + budget
         while True:
             status = job.get("status")
             if status == "success":
@@ -307,7 +338,16 @@ class _CoreClient(BaseHttpClient):
             job = self._request("GET", f"/v2/storage/jobs/{job_id}").json()
 
         raise KeboolaApiError(
-            message=f"Storage job {job_id} did not complete within {max_wait}s",
+            # Naming the consequence matters: giving up locally does NOT stop
+            # the job. It keeps running (and keeps consuming backend
+            # resources) server-side, so "it timed out" must not be read as
+            # "nothing happened" -- point the caller at where to check.
+            message=(
+                f"Storage job {job_id} did not complete within {budget}s. "
+                "The job continues running server-side and keeps consuming backend "
+                f"resources; check its status with GET /v2/storage/jobs/{job_id} "
+                "or in the Keboola UI."
+            ),
             status_code=504,
             error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,

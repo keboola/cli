@@ -4,7 +4,12 @@ The Keboola semantic layer (aka **metastore**) is a project-scoped catalogue
 of datasets, metrics, relationships, constraints, and glossary terms. It is
 served from a separate API at `metastore.<stack>` (derived from
 `connection.<stack>` by string-substitution; cloud/region-agnostic). Auth is
-the same `X-StorageApi-Token` as Storage.
+the same `X-StorageApi-Token` as Storage, **with one extra requirement: it
+must be a MASTER (project admin) token**. The metastore's auth gate rejects
+every valid non-master token with an opaque 401 `Failed to create project
+scope`, which kbagent reclassifies to `MISSING_MASTER_TOKEN` with the remedy
+(since 0.92.0, #711). Pre-flight: `kbagent --json project info --project P`
+-> `is_master_token`.
 
 `kbagent semantic-layer ...` (alias `kbagent sl ...`, hidden) wraps the
 metastore so AI agents and CI scripts don't roll their own `urllib` loops.
@@ -87,6 +92,12 @@ filter your jq with these exact values:
   Snowflake STRING column (error).
 - `DEEP_FETCH_FAILED` (`--deep` only) -- couldn't fetch the Snowflake
   schema for a dataset; deep checks for that dataset are skipped (warning).
+- `FQN_MISMATCH` (`--deep` only, since 0.95.0) -- a dataset's stored `fqn`
+  is not the table's Storage location (`storage table-detail` ->
+  `sql_path`). Every model built before 0.95.0 hits this: its fqns name a
+  `"KEBOOLA"` database that exists in no project. Repair recipe in
+  [gotchas.md](gotchas.md) (warning -- an fqn set on purpose with
+  `add dataset --fqn` may point elsewhere).
 
 ---
 
@@ -230,7 +241,7 @@ success/failure in the response envelope's `rollback` field. If the
 rollback itself fails, the model is left in a partial state -- run
 `semantic-layer validate` immediately.
 
-**Partial cascade state (since v0.41.10)**: the cascade has per-item
+**Partial cascade state**: the cascade has per-item
 rollback only -- each constraint DELETE+POST rolls back individually.
 If the metric rename succeeds but M of N dependent constraints fail
 to repoint, the envelope sets `partial_state: true` at the top level
@@ -373,7 +384,8 @@ kbagent semantic-layer add relationship \
 the kbagent AI Service client has no JSON-generation endpoint as of
 v0.41.0. The heuristic synthesises:
 
-- One dataset per `--tables` entry, with FQN derived and `fields[]`
+- One dataset per `--tables` entry, with FQN read from the table's
+  Storage location (bucket `backendPath`) and `fields[]`
   role-classified (PK_/FK_->key, *_DATE/*_DT->timestamp,
   numeric amount/value/rate->measure, else dimension).
 - One `COUNT(*)` metric per dataset.
@@ -390,7 +402,7 @@ inference, paired range constraints), the `sl-build` skill in
 `04_AI_Kit/ai-kit/` is the right tool. The two are interoperable via
 the same metastore contract; bridge between them as needed.
 
-**Rollback on push failure (since v0.41.10)**: if a child POST fails
+**Rollback on push failure**: if a child POST fails
 mid-push, the service walks the list of successfully-POSTed children
 in REVERSE PUSH_ORDER and DELETEs each one, then DELETEs the model
 itself if we created it during this call. The wrapped error carries
@@ -495,7 +507,7 @@ Quick reminders:
 - **Duplicate-name POST -> 409 Conflict** (post go-monorepo PR #513) with
   `"Object with this name already exists in this project"`, or **500** with
   `"Failed to create meta object"` on legacy stacks. kbagent normalizes both
-  into `ErrorCode.ALREADY_EXISTS` (since v0.43.5). 409 is non-retryable so
+  into `ErrorCode.ALREADY_EXISTS`. 409 is non-retryable so
   the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
   still pays.
 - **DELETE -> 204** empty body.

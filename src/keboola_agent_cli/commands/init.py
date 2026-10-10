@@ -1,6 +1,7 @@
 """Init command - initialize a local .kbagent/ workspace in the current directory."""
 
 import json
+import logging
 import stat
 import sys
 from pathlib import Path
@@ -76,7 +77,7 @@ def init_command(
                         "available in local workspace. Use --from-global to copy them."
                     )
         except Exception:
-            pass  # Global config unreadable, proceed with empty
+            logging.getLogger(__name__).debug("global config unreadable during init", exc_info=True)
 
     if copy_from_global:
         if global_store.source != "global":
@@ -172,7 +173,8 @@ def _filter_global_projects(
         available = ", ".join(sorted(config.projects)) or "(none)"
         formatter.error(
             message=(
-                f"Unknown project alias(es): {', '.join(missing)}. "
+                f"Unknown project alias(es): {', '.join(missing)} "
+                "(no alias or project ID matches). "
                 f"Available in global config: {available}"
             ),
             error_code=ErrorCode.CONFIG_ERROR,

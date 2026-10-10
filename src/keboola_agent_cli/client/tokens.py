@@ -41,6 +41,15 @@ class _TokensMixin(_CoreClient):
             org_id = int(org_id_raw) if org_id_raw is not None else None
         except (TypeError, ValueError):
             org_id = None
+        # Top-level `admin` block: present for admin tokens only (a scoped
+        # token has no admin identity behind it). Its id is the caller's
+        # user id -- the anchor for viewer-relative MR derivations.
+        admin = data.get("admin") or {}
+        admin_id_raw = admin.get("id")
+        try:
+            admin_id = int(admin_id_raw) if admin_id_raw is not None else None
+        except (TypeError, ValueError):
+            admin_id = None
         response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
@@ -55,6 +64,8 @@ class _TokensMixin(_CoreClient):
             # the id (e.g. "#73") as a fallback until `org setup` fills
             # in the human-readable name.
             org_name=None,
+            admin_id=admin_id,
+            admin_name=admin.get("name"),
         )
         # Refresh the features cache on every successful verify so explicit
         # callers stay consistent with the cached view used by has_feature().

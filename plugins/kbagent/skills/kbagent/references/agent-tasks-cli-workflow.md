@@ -55,7 +55,7 @@ Every task carries an `action` envelope with `type` + `params`:
 `cli` accepts `claude`, `codex`, or `gemini`. The chosen CLI must be on
 the server's `PATH` when the task fires (cron or `agent run`).
 
-**`extra_args` are ignored unless the serve operator opts in (since v0.60.2).**
+**`extra_args` are ignored unless the serve operator opts in.**
 They are passed verbatim to the AI CLI and can disable its safety rails, so
 `kbagent serve` drops them with a warning unless it was started with a truthy
 `KBAGENT_ALLOW_AI_EXTRA_ARGS` (e.g. `KBAGENT_ALLOW_AI_EXTRA_ARGS=1`). The
@@ -98,7 +98,7 @@ kbagent agent list
 kbagent agent show <task_id>
 ```
 
-> **ID forms (since v0.44.0):** every subcommand that takes a task/run ID
+> **ID forms:** every subcommand that takes a task/run ID
 > accepts it positionally (`agent show <task_id>`) or via a named flag
 > (`--id` / `--task-id`, plus `--run-id` for `run-detail` / `run-events`) --
 > matching the rest of the CLI (`--job-id`, `--config-id`, ...). Examples

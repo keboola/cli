@@ -24,15 +24,9 @@ from typing import Any
 
 from ..data_science_client import DataScienceClient
 from ..errors import ErrorCode, KeboolaApiError
-from .base import BaseService, ClientFactory
+from .base import BaseService, ClientFactory, make_session_aware_client_factory
 
 DataScienceClientFactory = Any  # Callable[[str, str], DataScienceClient]
-
-
-def _default_ds_client_factory(stack_url: str, token: str) -> DataScienceClient:
-    """Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction."""
-    return DataScienceClient(stack_url=stack_url, token=token)
 
 
 class DataAppGitService(BaseService):
@@ -45,7 +39,9 @@ class DataAppGitService(BaseService):
         ds_client_factory: DataScienceClientFactory | None = None,
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ds_client_factory = ds_client_factory or _default_ds_client_factory
+        self._ds_client_factory = ds_client_factory or make_session_aware_client_factory(
+            config_store, DataScienceClient
+        )
 
     def get_data_app_git_repo(self, alias: str, app_id: str) -> dict[str, Any]:
         """Return the clone URLs of a data app's configured git repository."""

@@ -13,7 +13,9 @@ from helpers import make_mock_client
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import ENV_CONVERSATION_ID
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.http_base import BaseHttpClient
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -8453,3 +8455,75 @@ class TestProjectRefresh:
         # The final result should contain projects_refreshed from the refresh call
         assert len(output["data"]["projects_refreshed"]) == 1
         assert output["data"]["projects_refreshed"][0]["alias"] == "existing-project"
+
+
+class TestConversationIdFlag:
+    """Tests for the top-level --conversation-id session flag (issue #716)."""
+
+    def _run(self, argv: list[str], env: dict[str, str], tmp_path: Path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, env, clear=False),
+        ):
+            os.environ.pop(ENV_CONVERSATION_ID, None)
+            os.environ.update(env)
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            result = runner.invoke(app, argv)
+            observed = os.environ.get(ENV_CONVERSATION_ID)
+        return result, observed
+
+    def test_flag_sets_the_conversation_id(self, tmp_path: Path) -> None:
+        """The flag is the whole point: no `export` needed, so the command
+        still begins with `kbagent` and can match a permission allow-rule."""
+        _, observed = self._run(
+            ["--conversation-id", "kbagent-session-4242", "--json", "project", "list"],
+            {},
+            tmp_path,
+        )
+        assert observed == "kbagent-session-4242"
+
+    def test_flag_wins_over_the_env_var(self, tmp_path: Path) -> None:
+        """An explicit flag is the more specific instruction."""
+        _, observed = self._run(
+            ["--conversation-id", "from-flag", "--json", "project", "list"],
+            {ENV_CONVERSATION_ID: "from-env"},
+            tmp_path,
+        )
+        assert observed == "from-flag"
+
+    def test_env_var_still_honoured_without_the_flag(self, tmp_path: Path) -> None:
+        """The pre-existing channel is unchanged -- this is purely additive."""
+        _, observed = self._run(
+            ["--json", "project", "list"],
+            {ENV_CONVERSATION_ID: "from-env"},
+            tmp_path,
+        )
+        assert observed == "from-env"
+
+    def test_absent_flag_and_env_leaves_it_unset(self, tmp_path: Path) -> None:
+        """No flag, no env var -- the header stays omitted as before."""
+        _, observed = self._run(["--json", "project", "list"], {}, tmp_path)
+        assert observed is None
+
+    def test_flag_reaches_the_outgoing_header(self, tmp_path: Path) -> None:
+        """The flag is worthless unless it actually reaches the wire."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop(ENV_CONVERSATION_ID, None)
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            runner.invoke(app, ["--conversation-id", "on-the-wire", "--json", "project", "list"])
+            client = BaseHttpClient(
+                base_url="https://connection.keboola.com",
+                token=TEST_TOKEN,
+                headers={},
+            )
+            try:
+                assert client._client.headers.get("X-Conversation-ID") == "on-the-wire"
+            finally:
+                client.close()

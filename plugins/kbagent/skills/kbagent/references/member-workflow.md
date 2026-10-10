@@ -1,4 +1,4 @@
-# Project Member & Invitation Workflow (since v0.29.0)
+# Project Member & Invitation Workflow
 
 Closes the long-standing Manage API gap that forced every Keboola-internal
 automation (most recently the Cuesta-training orchestrator) to bypass kbagent

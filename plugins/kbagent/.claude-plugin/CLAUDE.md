@@ -1,9 +1,15 @@
 # kbagent plugin — operational guidance
 
-This plugin exposes a CLI (`kbagent`), a skill (`kbagent`), two slash
-commands (`/keboola`, `/kbagent:review`), and two specialist subagents
-(`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under
-`kbagent:`. The two subagents serve disjoint domains:
+This plugin exposes a CLI (`kbagent`), three skills (`kbagent`,
+`kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash
+commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two
+specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are
+namespaced under `kbagent:`.
+
+`/kbagent:setup` is the first-run entry point: it installs the CLI if
+missing, connects a project, and verifies with `kbagent doctor` -- every
+step conditional, so it is safe to re-run. It runs in the main context and
+spawns no subagent. The two subagents serve disjoint domains:
 
 | Subagent | Use for | Slash command | Trigger phrases |
 |---|---|---|---|
@@ -90,11 +96,20 @@ a clean slate per task.
   equivalent`): subagent would refuse; politely decline and point the
   user at the `kbagent serve` REST API for programmatic integrations.
 - User asks to log in / set up auth via a browser (`kbagent auth
-  login`): browser login needs a human at a browser, so no agent --
-  main context or subagent -- can complete it. Hand the exact command
-  back to the user and wait. For an unattended context, the answer is
-  NOT automatically a static Storage token: if the user has account
-  credentials for this purpose, `kbagent auth login-password`
+  login`): the human part is APPROVING in the browser, not driving the
+  command. In an ATTENDED session whose harness has a background
+  shell, the main context SHOULD complete it: run `kbagent auth login
+  --device-code --stack <URL> --register-projects` in a **background**
+  shell capturing stdout+stderr (human mode, not `--json` -- there the
+  URL and code go to stderr), relay the verification URL and user code
+  to the user, then confirm with `kbagent --json auth status` (exit 0
+  = signed in, exit 3 = not yet). Never in a foreground tool shell
+  (its ~120 s timeout kills the flow mid-flight) and never blind-retry
+  -- check `auth status` first. With no background shell available,
+  hand the plain command back to the user and wait. For an UNATTENDED
+  context `auth login` is out entirely (nobody can approve), and the
+  answer is NOT automatically a static Storage token: if the user has
+  account credentials for this purpose, `kbagent auth login-password`
   (0.84.0+) is the CI-safe, headless alternative and an agent MAY run
   it directly; fall back to a static Storage token only when no such
   credentials exist.
@@ -124,7 +139,12 @@ When the subagent returns:
 
 ## For Claude Code users
 
-- Install the kbagent CLI: `uv tool install git+https://github.com/keboola/cli`
+- **Start here: run `/kbagent:setup`.** One command -- it installs the
+  kbagent CLI if it is missing, connects a Keboola project (browser
+  login, falling back to `auth login-password` from the environment and
+  then a static token, per the order above), and verifies the result with
+  `kbagent doctor`. Idempotent, so re-running it after a partial setup
+  only fills the gaps.
 - Initialize a project workspace: `kbagent init --from-global`
   (writes `.kbagent/config.json` whose first field is a `_warning`
   steering any LLM that reads the file away from direct REST calls)
@@ -134,6 +154,11 @@ When the subagent returns:
   the read-only reviewer to leave a structured comment review on the
   PR. Requires `gh auth login`
 - Or let description-matching auto-trigger the skill for ambient help
+- Install or reinstall this plugin from Keboola's marketplace:
+  `/plugin marketplace add keboola/ai-kit` then
+  `/plugin install kbagent@keboola-claude-kit`. A copy installed from the
+  older `keboola-agent-cli` marketplace still works, but that entry is
+  deprecated -- `kbagent doctor` says so and prints those two lines
 
 ## Version
 

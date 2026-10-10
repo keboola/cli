@@ -27,6 +27,16 @@ The agent CANNOT:
 > denies everything. Rewrite such a policy with `cli:read`. `kbagent permissions
 > show` names any such pattern (key `inert_patterns` in `--json`) and `kbagent
 > doctor` WARNs via its `inert_permission_patterns` check.
+>
+> **(since 0.91.0)** `permissions set` now validates every `--allow`/`--deny`
+> pattern before persisting it: it must be a `cli:*` category, an exact
+> operation name, or a glob matching >=1 known operation, else the call fails
+> with `VALIDATION_ERROR`, exit 2, before the confirmation prompt is even
+> shown. `permissions show` / `doctor` are generalized the same way -- they
+> now flag ANY persisted pattern matching zero operations (a typo included),
+> not only `tool:*`. `tool:*` remains the one historical case with its own
+> "MCP passthrough removed" hint; every other dead pattern gets a generic
+> "check for typos" hint instead.
 
 ## Common restriction recipes
 
@@ -67,6 +77,7 @@ The agent can still pull configs and view diffs, but cannot push changes back. N
 kbagent permissions set --mode allow --deny "cli:destructive"
 ```
 Blocks `branch.delete`, `workspace.delete`, `config.delete`. The agent can still create and modify resources.
+*(since 0.96.0)* It also blocks `sync push --force` (operation `sync.push --force`, a flag escalation like `auth.logout --remove-projects`): a forced push of a tree that syncs SQL workspaces deletes their SQL editor sessions and workspaces. A plain `sync push` stays write-class and allowed.
 
 ### Allow only specific commands (strict allowlist)
 ```bash
@@ -76,6 +87,8 @@ kbagent permissions set --mode deny \
   --allow "job.list" --allow "job.detail"
 ```
 Everything else is blocked. This is the most restrictive approach.
+
+*(since 0.96.0)* `sync push --force` is checked as its own operation, `sync.push --force`. An allow-list that names only `sync.push` allows a plain push and blocks a forced push (exit 6). To allow a forced push, add `--allow "sync.push --force"`, or use a glob such as `sync.*`. The same is true for a default-allow policy that denies `cli:write` and allows `sync.push`.
 
 ## Checking permissions before acting
 
@@ -96,7 +109,7 @@ kbagent --json permissions list
 | `cli:read` | All read-only CLI commands |
 | `branch.delete` | Exact command match |
 | `sync.*` | All sync subcommands (glob) |
-| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone) |
+| `tool:*` | Nothing -- inert since v0.85.0 (the MCP passthrough is gone); `permissions set` REJECTS it as input (since 0.91.0) -- only an already-persisted `tool:*` sticks around |
 
 ## Session firewall flags
 

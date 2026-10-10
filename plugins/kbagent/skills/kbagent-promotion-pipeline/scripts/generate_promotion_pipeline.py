@@ -10,12 +10,15 @@ directory between a SOURCE Keboola project (e.g. dev) and a DESTINATION project
      Pulls every pipeline's directory from its SOURCE project and opens/updates
      one PR against the main branch with the combined diff.
   2. kbagent-promote-validate.yml (pull_request against main)
-     For every pipeline, runs `sync push --dry-run` against the DESTINATION
-     project -- this is the cross-project diff: "if this PR merges, here is
-     exactly what changes in the destination project."
+     For every pipeline, runs `sync push --dry-run --force` against the
+     DESTINATION project -- this is the cross-project diff: "if this PR merges,
+     here is exactly what changes in the destination project."
   3. kbagent-promote-push.yml   (push to main, environment-gated)
      Pushes every pipeline's directory to its DESTINATION project once the PR
-     has merged.
+     has merged, with `--force`: a config deleted in the SOURCE is deleted in
+     the DESTINATION too. Without `--force`, `sync push` deletes nothing
+     (since 0.96.0, #792), and the validate dry-run passes it for the same
+     reason, so it shows what the push does.
 
 Each pipeline needs two Storage API token secrets (`KBC_TOKEN_<NAME>_SOURCE` /
 `KBC_TOKEN_<NAME>_DEST`) and uses kbagent's `KBAGENT_PROJECT_FROM_ENV=1` /
@@ -364,7 +367,7 @@ def gen_validate(pipelines: list[Pipeline]) -> str:
         _pipeline_step(
             p,
             "Destination dry-run",
-            "push --dry-run",
+            "push --dry-run --force",
             p.dest_token_secret,
             p.dest_stack_url,
             json_output=True,
@@ -414,7 +417,9 @@ def _push_job(p: Pipeline) -> str:
         f"{_INSTALL_TOKEN}"
         "      # `sync push` encrypts #-secrets fail-closed by default. Do NOT add\n"
         "      # --allow-plaintext-on-encrypt-failure in CI.\n"
-        f"{_pipeline_step(p, 'Push', 'push', p.dest_token_secret, p.dest_stack_url)}"
+        "      # --force: a config deleted in the source is deleted here too;\n"
+        "      # without it, `sync push` deletes nothing.\n"
+        f"{_pipeline_step(p, 'Push', 'push --force', p.dest_token_secret, p.dest_stack_url)}"
     )
 
 

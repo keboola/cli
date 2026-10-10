@@ -324,7 +324,7 @@ def _ensure_bucket_exists_in_branch(
             f"expected 'stage.c-name' format."
         )
     stage, slug = parts
-    bucket_name = slug[2:] if slug.startswith("c-") else slug
+    bucket_name = slug.removeprefix("c-")
     client.create_bucket(stage=stage, name=bucket_name, branch_id=branch_id)
     logger.info(
         "Auto-materialized bucket %s in branch %s (stage=%s, name=%s)",
@@ -1100,7 +1100,7 @@ class StorageService(ColumnDescriptionsMixin):
                 if len(parts) == 3:
                     stage, bucket_slug, table_name = parts
                     bucket_id = f"{stage}.{bucket_slug}"
-                    bucket_name = bucket_slug[2:] if bucket_slug.startswith("c-") else bucket_slug
+                    bucket_name = bucket_slug.removeprefix("c-")
 
                     # Ensure bucket exists
                     try:

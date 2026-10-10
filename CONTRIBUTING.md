@@ -55,13 +55,14 @@ def storage_create_bucket(ctx, project, stage, name):
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result) if formatter.json_mode else ...
 
+
 # BAD -- business logic leaked into command
 @storage_app.command("create-bucket")
 def storage_create_bucket(ctx, project, stage, name):
     if stage not in ("in", "out"):  # This belongs in service!
         ...
-    client = KeboolaClient(...)     # This belongs in service!
-    client.create_bucket(...)       # Commands don't call clients!
+    client = KeboolaClient(...)  # This belongs in service!
+    client.create_bucket(...)  # Commands don't call clients!
 ```
 
 ### Validate at system boundaries
@@ -128,10 +129,11 @@ caught immediately.
 
 ```python
 # BAD -- caller has to remember positional meaning
-def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]:
-    ...
+def resolve_project(alias: str | None) -> tuple[str, ProjectConfig]: ...
+
 
 resolved_alias, project = resolve_project(alias)  # which is which?
+
 
 # GOOD -- self-documenting at every call site
 @dataclass(frozen=True)
@@ -139,8 +141,9 @@ class ResolvedProject:
     alias: str
     config: ProjectConfig
 
-def resolve_project(alias: str | None) -> ResolvedProject:
-    ...
+
+def resolve_project(alias: str | None) -> ResolvedProject: ...
+
 
 resolved = resolve_project(alias)
 resolved.alias, resolved.config  # unambiguous
@@ -159,6 +162,7 @@ formatter.error(message="Bucket not found", error_code=ErrorCode.NOT_FOUND)
 # GOOD -- category first, then the variable part
 formatter.error(error_code=ErrorCode.NOT_FOUND, message="Bucket not found")
 
+
 def log_failure(error_code: ErrorCode, message: str) -> None: ...
 def raise_api_error(error_code: ErrorCode, *, message: str, status: int) -> None: ...
 ```
@@ -175,6 +179,7 @@ raise KeboolaApiError(message="...", error_code="not_found")
 
 # GOOD
 from .errors import ErrorCode
+
 raise KeboolaApiError(error_code=ErrorCode.NOT_FOUND, message="...")
 ```
 
@@ -245,9 +250,11 @@ Single-expression `sort` keys and `filter` predicates are fine as lambdas. Anyth
 parse_row = lambda r: {"id": r[0], "name": r[1], "active": r[2] == "Y"}
 rows = [parse_row(r) for r in raw]
 
+
 # GOOD
 def _parse_storage_row(raw: tuple[str, str, str]) -> dict[str, Any]:
     return {"id": raw[0], "name": raw[1], "active": raw[2] == "Y"}
+
 
 rows = [_parse_storage_row(r) for r in raw]
 
@@ -346,6 +353,8 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Service method** in `services/` -- business logic, validation, orchestration
 - [ ] **Command function** in `commands/` -- Typer options, formatter, error handling
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
+- [ ] **Branch choice** through `resolve_branch()` in `effective_branch.py` when the command takes `--branch` or uses the active branch -- never read `ProjectConfig.active_branch_id` directly. The function reports the branch (`Target:` line, `targets` in `--json`); `tests/test_effective_branch.py` fails on a new direct read.
+- [ ] **`--project` naming a NEW alias** -- every `--project` option also takes a project ID, translated to the alias before the command runs (`commands/_project_ref.py`, CLI-22). A command whose `--project` is not a registry lookup (a new alias like `project add`, an offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like `config clone --target-project`) to `ALIAS_OPTIONS`. `tests/test_project_ref.py` fails on a new option whose flag contains `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the test's `NOT_AN_ALIAS` list (with a reason); an option with any other name needs this decision by hand.
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 - [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
 
@@ -385,7 +394,7 @@ before the PR is mergeable.
 - [ ] **`plugins/kbagent/skills/kbagent/references/gotchas.md`** -- if the command's behavior is non-obvious, add an entry tagged with a version. In a feature PR that version is not known yet (the PR does not bump the version), so tag with the literal placeholder `(since vNEXT)` -- the release PR replaces every `vNEXT` with the version actually being released. Never guess a numeric version: `make version-gate-check` (per-PR CI) rejects any `(since vX.Y.Z)` whose version has no `changelog.py` entry. The version tag is **non-optional**; gotchas without versions are how AI agents end up recommending behavior that does not exist on older kbagent installs.
 - [ ] **`plugins/kbagent/skills/kbagent/references/<topic>-workflow.md`** -- create a new file if the command introduces a new workflow or topic area (existing examples: `workspace-workflow.md`, `branch-workflow.md`, `sync-workflow.md`, `storage-files-workflow.md`, `storage-types-workflow.md`). Single-command additions go into an existing workflow file.
 - [ ] **`plugins/kbagent/.claude-plugin/CLAUDE.md`** -- only update when the high-level delegation strategy changes (e.g. new "when NOT to delegate" cases). Most command additions do not touch this.
-- [ ] **`plugins/kbagent/commands/keboola.md`** -- only update if the `/keboola` slash-command UX changes. Most command additions do not touch this.
+- [ ] **`plugins/kbagent/commands/*.md`** -- only update if a slash-command UX changes (`/keboola`, `/kbagent:setup`, `/kbagent:review`). Most command additions do not touch these. Adding a *new* slash-command file has its own follow-through list -- see the [Plugin synchronization map](#plugin-synchronization-map) row.
 
 ### Tests (mandatory!)
 
@@ -394,6 +403,8 @@ before the PR is mergeable.
 - [ ] **E2E tests** -- add a test in `tests/test_e2e.py` that exercises the command against a real Keboola project (requires `E2E_API_TOKEN` + `E2E_URL`). Run `make test-e2e` to verify. Every CLI command must have E2E coverage
 
   > **Running locally without exporting a token:** if the target project is already registered in a kbagent `config.json`, use config-dir mode -- `make test-e2e-local CONFIG_DIR=/path/to/.kbagent ALIAS=my-proj`. The harness reads the token from `config.json` at import time and promotes it into `E2E_API_TOKEN` / `E2E_URL`; an explicit `E2E_API_TOKEN` still wins.
+
+- [ ] **API call-count test for hot read paths** -- a new or changed list/detail command that users and agents run often (the `project`/`config`/`job`/`storage`/`flow` read commands and their peers) adds or updates a case in `tests/test_api_call_counts.py`. It pins the exact calls via `helpers.assert_api_calls`, which compares the method and path and, where the test pins them, the parsed query (`include_query=True`) and the token (`include_token=True`, for multi-project cases). List commands also run with 1 and 10 items and expect the same calls at both sizes: this catches a call made once per item, but not a call made once per batch or page of more than 10 items. Fixtures must look like real API payloads (several component types, a transformation with rows and storage mappings, Queue jobs with `runId`, alias and shared tables), because a per-item call that depends on a field the fixture lacks is not caught. The expected lists are a ratchet: raising one is a deliberate, reviewed change -- say why in the PR
 
 - [ ] **Run `make check`** before committing (lint + format + full test suite)
 - [ ] **Run `make typecheck`** -- `ty` must pass clean (0 diagnostics; the backlog was cleared in 0.45.0, so the gate is blocking, not warning-only)
@@ -462,9 +473,11 @@ release checklist below.
 | `docs/web-server.md` | Architecture, auth, concepts, router categories. Never enumerate routes here -- that is the generated file's job (this doc drifted to "150+ endpoints" over a 226-operation server, issue #656) | NO (prose); the route list it used to carry is now gated |
 | `CLAUDE.md` (`## All CLI Commands`) | Adding/removing/renaming commands | NO |
 | `plugins/kbagent/.claude-plugin/plugin.json` | Every release (auto-synced) | YES (`make version-check`; pre-commit auto-stages) |
+| `.claude-plugin/marketplace.json` (this repo -- **deprecated shim**) | Never by hand except the entry `description`. The `version` is auto-synced; the file and its `kbagent` entry MUST stay so installs made from the old `keboola-agent-cli` marketplace keep resolving updates. Planned removal: ~3 releases after vNEXT (the release that first ships the deprecation notice) | YES (`make version-check`; pre-commit auto-stages) |
+| **`keboola/ai-kit` -> `.claude-plugin/marketplace.json`** (ANOTHER REPO) | Every stable release -- this is where the plugin is actually published (`keboola-claude-kit`, an external `git-subdir` entry pinned to the release tag). Automated: the `ai-kit-marketplace` job in `.github/workflows/release-kbagent.yml` rewrites `version` + `source.ref` and opens a PR against keboola/ai-kit. **Merging that PR is what ships the release to plugin users** -- a green release here does not move them | NO -- nothing in this repo can see ai-kit's catalogue. Check the opened PR after every release; if `secrets.AI_KIT_TOKEN` is missing or expired the job fails and no PR appears |
 | `plugins/kbagent/.claude-plugin/CLAUDE.md` | Changing delegation strategy / when-to-delegate rules | NO |
 | `plugins/kbagent/agents/keboola-expert.md` | New write/destructive command **group** (one matrix row per group, not per command -- file has a hard 70 000 B prompt budget); new minimum-version requirement (Rule 6 VERSION GATE); behavior change (gotchas) | NO -- **highest silent-drift risk** |
-| `plugins/kbagent/commands/keboola.md` | `/keboola` slash-command UX change (rare) | NO |
+| `plugins/kbagent/commands/*.md` (`setup.md`, `keboola.md`, `review.md`) | Slash-command UX change (rare). **Adding a new slash-command file** also needs: the surfaces list + "For Claude Code users" block in `plugins/kbagent/.claude-plugin/CLAUDE.md`, `skills/kbagent/SKILL.md` prose if it changes the documented setup/usage path, and the user-facing flow in `README.md`, `docs/TUTORIAL.md`, `commands/context.py` `AGENT_CONTEXT` and `install.sh`'s "Next steps" | NO -- no CI gate or test reads `commands/*.md` at all |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- table | Auto-generated by `make skill-gen` | YES (`make skill-check`; pre-commit auto-stages) |
 | `plugins/kbagent/skills/kbagent/SKILL.md` -- description / rules / workflow links | New topic area in `description` triggers; new workflow file added to bottom table | NO |
 | `plugins/kbagent/skills/kbagent/references/commands-reference.md` | Adding/removing/renaming commands; flag changes | NO |
@@ -622,11 +635,19 @@ silent-drift risks summarized in the
    Those merged PRs are **exactly** the scope of the release: the changelog
    entry and the release notes must cover each of them, and nothing else.
 2. **Edit `pyproject.toml`** -- bump `version = "X.Y.Z"`. Single source of truth; everything else derives from it. This is the release PR's defining change -- if you are doing this in a feature PR, stop and read the section intro above.
-3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only that first sentence per version by default (the rest is revealed by `--full`), so a buried headline or a single wall-of-text bullet reads as an unscannable blob. The first sentence is also **capped at 160 characters**, enforced by `tests/test_changelog_render.py::TestLiveChangelogHeadlines::test_newest_release_notes_are_not_truncated` (so `make check` in step 12 catches it) -- past the cap the default view and the release page show it cut mid-clause. Write a short self-contained first sentence and put the detail in the sentences after it; 2 of 0.90.0's 13 bullets needed exactly this rewrite.
-4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released, then verify none survive:
+3. **Add a changelog entry** to `src/keboola_agent_cli/changelog.py` -- ONE entry for the new version, covering **every PR merged since the last release** (step 1), no exceptions. CI fails (`make changelog-check`) if this is missing. Author it as the file's docstring describes: **one logical change per bullet** (split the release into several list items rather than one mega-paragraph), each starting with a recognised prefix (`BREAKING:`, `New:`, `Fix:`, `Change:`, `Note:`, `Security:`, ...), carrying its `(#PR)` reference, and leading with a self-contained first sentence. `kbagent changelog` shows only first sentences by default: of every `BREAKING` bullet of a version, plus of the first other bullets until at least two show (the rest is revealed by `--full`). The `What's new` notice after an update shows the first sentence of every bullet. So a buried headline or a single wall-of-text bullet reads as an unscannable blob. The first sentence is also **capped at 160 characters**, enforced by `tests/test_changelog_render.py::TestLiveChangelogHeadlines::test_newest_release_notes_are_not_truncated` (so `make check` in step 12 catches it) -- past the cap the default view and the release page show it cut mid-clause. Write a short self-contained first sentence and put the detail in the sentences after it; 2 of 0.90.0's 13 bullets needed exactly this rewrite.
+4. **Replace every `vNEXT` placeholder** left behind by the feature PRs with the version being released. Do it mechanically -- never by hand, and never with a repo-wide `sed`:
    ```bash
+   make vnext-resolve VERSION=X.Y.Z
    make vnext-check
    ```
+   `vnext-resolve` reuses the same scanner `vnext-check` does, so it rewrites
+   exactly the live gates and leaves every backticked mention of the token
+   alone -- including a line that carries both at once, which a line-level
+   `sed` corrupts. It refuses any `VERSION` that disagrees with
+   `pyproject.toml` (bump that first, in step 2): `packaging` happily parses
+   `v0.91` and `0.91`, so a typo can look valid and then be stamped into every
+   gate in the tree at once.
    A leftover `(since vNEXT)` ships agents a gate no installed version can
    ever satisfy -- strictly worse than no gate, because they then refuse a
    command the user has. The release PR is the only place it can be fixed.
@@ -649,12 +670,61 @@ silent-drift risks summarized in the
    > numeric gates -- `docs/sdk.md` writes 14 genuine ones as `` `0.66.0+` ``,
    > where backticks are ordinary typography rather than quotation.
 
-   While resolving, keep version tags **out of markdown headings**: a
-   `### Foo *(since vNEXT)*` heading changes its generated anchor slug at
-   every release, breaking each inbound `#foo-...` link (this bit 0.90.0 --
+   Version tags must stay **out of markdown headings**: a
+   `### Foo *(since vNEXT)*` heading changes its generated anchor slug when the
+   placeholder resolves, breaking each inbound `#foo-...` link (this bit 0.90.0 --
    the What's-new section's link broke the moment the placeholder resolved).
    Put the tag on the section's first body line instead; the gate checks scan
    whole files, not just headings, so nothing is lost.
+
+   **This is CI-enforced on EVERY PR**, not just at release time -- a `vNEXT`
+   inside an ATX heading in a `.md` file fails `make version-gate-check`
+   (already part of `make check`). It is deliberately armed everywhere rather
+   than only under `--release`, because the rule used to be a hand-run
+   `grep -rn '^##.*vNEXT' plugins/` at release time and that grep **lost a
+   merge race in 0.91.0**: PR #697 ran it two minutes before #694 and #696
+   landed headings of their own, so all three shipped and had to be cleaned up
+   after the tag. Any rule of the form "run this grep when releasing" loses
+   that race eventually, because a release is exactly when parallel branches
+   converge. Already-numeric headings are *not* flagged -- a resolved tag never
+   changes again, so its slug is stable.
+4b. **Retire gates below the floor** (periodic, not every release):
+   ```bash
+   make gate-floor-report                     # what is below the current floor
+   ```
+   A version gate earns its place only while some live install predates it.
+   kbagent self-updates on startup, so that population shrinks to roughly
+   nothing: pip/uv installs upgrade themselves, and only a standalone binary
+   (brew/choco/apt/dnf, which self-update is disabled for), an explicit
+   `KBAGENT_AUTO_UPDATE=false`, a dev tree, or a pip install stranded below
+   0.62.0 by the #424 rename can sit on an old version. Meanwhile the stale
+   gate keeps making the agent refuse a command the user actually has -- which
+   this file already calls strictly worse than no gate.
+
+   The two failure modes are asymmetric, and that is the whole argument for
+   pruning: a **kept-too-long** gate fails silently and permanently (the user
+   never learns the command exists), while a **removed-too-early** gate fails
+   loudly and self-correctingly (`No such command 'x'`, and `kbagent context` /
+   `--help` on the user's own install are authoritative anyway).
+
+   **The floor is 0.80.0** as of the 0.91.0 cleanup. Retiring a gate means
+   deleting the *tag*, never the content -- the guidance under it is almost
+   always still true, and 0.91.0's pass kept every word while removing 223 tags.
+
+   Four things are deliberately out of scope:
+
+   - `changelog.py` -- the historical record; the version IS the content.
+   - `src/**/*.py` except `commands/context.py` -- developer comments
+     (`# DEPRECATED (since 0.43.4)`) are provenance, and no agent reads them.
+   - `X+` written inside a sentence -- often load-bearing prose
+     (`created by < 0.66.1 stay dormant until re-run on 0.66.1+`).
+   - **Safety gates, at any age.** Keep the tag wherever not knowing the
+     version causes silent data loss or a false assurance rather than an error
+     message -- e.g. `sync pull --force` (pre-0.53.0 it silently stranded local
+     edits), the `sync status` / `doctor` plaintext-secret audit (a false
+     all-clear on a leaked credential), the manage-token default-deny, and the
+     `--deny-writes` firewall.
+
 5. **Run `make version-sync`** -- propagates the new version to `plugins/kbagent/.claude-plugin/plugin.json`. The pre-commit hook does this automatically on `git commit`, but running it explicitly lets you eyeball the diff.
 6. **Run `make skill-gen`** -- regenerates the decision table in `SKILL.md`. Idempotent if no commands changed since the previous release.
 7. **Add a curated What's-new entry** to `web/frontend/src/whatsnew.ts` when the release ships anything UI-visible -- a `WhatsNewRelease` element keyed by the **exact** new version, newest first. This is the reel the web UI shows once per version; it is deliberately *not* derived from `changelog.py` (see `docs/web-server.md` > "What's-new popup"). Skipping it does not error anywhere: `whatsNewFor` falls back to the previous release's reel, which returning users have already dismissed -- so the release's UI work ships **dark**. A release with no UI-visible changes correctly adds nothing. Only the release PR can write this entry (a feature PR cannot know the version), which is why it lives in this checklist and not the per-command one.
@@ -668,16 +738,38 @@ silent-drift risks summarized in the
 12. **Run `make check`** -- lint + format + skill freshness + version sync + changelog completeness + error-code enum + full test suite.
 13. **Run `make test-e2e`** if any command changed since the last release -- requires `E2E_API_TOKEN` and `E2E_URL`.
 14. **Open the release PR** -- link the merged PRs it covers (step 1) and list every plugin file you touched in the description so reviewers can spot what was missed. Plugin files do not auto-show up in CI failures the way Python files do; reviewers are the second line of defence.
-15. **Merge via `gh pr merge`, then tag -- the tag push IS the release.** Never push directly to `main` (protected). The only manual action after the merge is:
+15. **Re-verify the scope against the commit you are about to tag:**
+    ```bash
+    make release-scope-check                       # in the release PR, before merging
+    make release-scope-check SCOPE_ARGS="--head origin/main --ignore-pr <release-PR>"
+    ```
+    Step 1 collected the scope when the release PR was *opened*; this proves
+    the changelog entry covers every PR the **tag will actually contain**. The
+    two differ whenever a feature PR merges while the release PR is open --
+    which is a structural window, not bad luck, since a release PR stays open
+    for as long as its CI runs. It shipped in v0.91.0: #625 merged nine minutes
+    before the release PR did, landing inside the tag's tree with no release
+    note, and was caught only because the tag happened to be deferred.
+    `make changelog-check` cannot see this: it proves every *released version*
+    has an entry, never that an entry covers every *commit* under the tag.
+    Run before merging and nothing needs ignoring -- the release PR's own
+    number is not in the log until its merge commit exists.
+16. **Merge via `gh pr merge`, then tag -- the tag push IS the release.** Never push directly to `main` (protected). The only manual action after the merge is:
     ```bash
     git fetch origin && git tag v<X.Y.Z> <merge-commit-sha> && git push origin v<X.Y.Z>
     ```
     The tag must point at the release PR's merge commit on `main` -- the pipeline's `gate` job fails the whole release if the tag's `pyproject.toml` disagrees with the tag name. Pushing it triggers `.github/workflows/release-kbagent.yml`, which does **everything else**: re-runs the gates, renders the release notes from `changelog.py` (`scripts/gen_release_notes.py` -- never write them by hand), publishes to PyPI, freezes the native binaries for all platforms, packages deb/rpm, creates the GitHub Release with every asset attached and fills its body, and updates Homebrew/Chocolatey/WinGet. Do **not** pre-create the GitHub Release by hand: the pipeline keeps a hand-written body untouched, which silently discards the changelog-rendered notes.
-16. **Verify the publish** -- the pipeline guards against half-releases, but both guards exist because each failure shipped once (v0.66.1 went out with an empty body, v0.64.0 without a wheel), so look anyway:
+17. **Verify the publish** -- the pipeline guards against half-releases, but both guards exist because each failure shipped once (v0.66.1 went out with an empty body, v0.64.0 without a wheel), so look anyway:
     ```bash
     gh run watch $(gh run list --workflow release-kbagent.yml --limit 1 --json databaseId --jq '.[0].databaseId')
     ```
     then confirm `gh release view v<X.Y.Z>` shows a non-empty body rendered from the changelog and both wheels (`keboola_cli-*` + legacy `keboola_agent_cli-*`) among the assets. A `skipped` winget job is normal; any red job is a real signal.
+18. **After the tag: merge the ai-kit publish PR.** The `ai-kit-marketplace` job opens
+    `chore(kbagent): publish vX.Y.Z` against `keboola/ai-kit`, bumping the `kbagent`
+    entry in the `keboola-claude-kit` marketplace to this tag. Until that PR merges,
+    `/plugin install kbagent@keboola-claude-kit` still serves the PREVIOUS version --
+    the release is not user-visible for plugin users. If no PR appeared, the job
+    failed: check `secrets.AI_KIT_TOKEN` in the `release` environment.
 
 If any of steps 8-11 reveal "I should have done this in the PR that introduced
 the command, not at release time", **also patch the per-command checklist**
@@ -768,6 +860,7 @@ make check              # CI parity: lint + format + typecheck + skill + version
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
+make audit              # Audit locked dependencies for known vulnerabilities (uv audit, OSV)
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
@@ -801,7 +894,31 @@ Two GitHub Actions workflows guard the repo:
   (`-m "not integration"`; `e2e` self-skips without credentials). Coverage is
   printed (`--cov ... --cov-report=term-missing`) but **informational** --
   there is no `--cov-fail-under` threshold, so coverage never blocks a merge.
+- **`audit` job** (one run, Python 3.12): `uv audit --frozen` against the OSV
+  advisory database. Deliberately separate and **not** a required check -- its
+  result depends on advisories published over time, not on the diff, so a
+  finding shows red here for visibility but never blocks a merge. Run it locally
+  with `make audit`. See **Fixing an audit finding** below.
 - **`build-windows` job**: real `uv build` wheel checks (issue #320).
+
+**Fixing an audit finding.** Dependabot is the named fix channel, but it
+cannot run here. Its bundled uv is 0.12.7, and that uv must satisfy
+`[tool.uv] required-version`. A bound above 0.12.7 makes every Dependabot
+dependency PR fail with `tool_version_not_supported`. Until Dependabot
+bundles a newer uv, fix each finding by hand:
+
+- **Transitive dependency** (not in `[project.dependencies]` or a dependency
+  group): update it in the lockfile only. Run
+  `uv lock --upgrade-package NAME==FIXED_VERSION`. Do not add it to
+  `pyproject.toml` as a direct dependency. We do not own it, and a pin there
+  is debt that someone must maintain. A transitive dependency has no upper
+  bound, so the resolver keeps the new minimum version on its own. A later
+  `uv lock` keeps it.
+- **Direct dependency**: raise the constraint in `pyproject.toml` instead.
+
+Then verify two things. `uv audit --frozen` reports no vulnerabilities, and
+`uv lock --check` passes. Commit only `uv.lock`. For a direct dependency,
+also commit `pyproject.toml`.
 
 `make check` runs the same gates as the `check` + `test` CI jobs locally and is
 slightly *stricter*: its `test` target uses `-m "not e2e"`, so it also runs the

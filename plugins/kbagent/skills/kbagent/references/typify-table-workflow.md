@@ -96,7 +96,12 @@ kbagent --json workspace create --project ALIAS --name "typify-<table-slug>"
 # -> workspace_id, host, database, schema, user, password
 # SAVE THE PASSWORD -- it cannot be retrieved later.
 
-# 2b. Load the typeless table
+# 2b. Load the typeless table. Default (no --load-type) auto-picks clone
+# when eligible -- zero-copy, seconds, any size. If it falls back to copy
+# (see tables[].clone_ineligible_reason in the response) and the table is
+# over 1 GiB, --json mode refuses without --force (no prompt to answer) --
+# add --force once you've confirmed the copy cost is expected. See
+# workspace-workflow.md "Load types" for the full clone/copy/view rules.
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id W_ID \
@@ -485,6 +490,6 @@ The rehearsal branch is already gone (Phase 7); there is no merge step.
   + `workspace query` patterns. The `from-transformation` mode is the
   alternative to ad-hoc workspaces when you want to debug an existing
   config that is failing.
-- `gotchas.md` -- "swap-tables aliases stay put (since v0.28.0)";
-  "config update auto-normalizes script[] (since v0.28.0)" if the
+- `gotchas.md` -- "swap-tables aliases stay put";
+  "config update auto-normalizes script[]" if the
   Phase 3 Option B SQL transformation route is taken.

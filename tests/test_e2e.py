@@ -47,6 +47,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -251,7 +252,7 @@ def _json_ok(result) -> dict[str, Any]:
     return data
 
 
-def _step(num: int | float | str, title: str, detail: str = "") -> None:
+def _step(num: float | str, title: str, detail: str = "") -> None:
     """Print a visible step marker for -s output."""
     suffix = f" — {detail}" if detail else ""
     print(f"\n{_BOLD}{'=' * 60}")
@@ -1682,6 +1683,7 @@ class TestFullE2E:
             env={**os.environ, "KBAGENT_CONFIG_DIR": str(self.config_dir)},
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 2, (
             f"expected exit 2 for --config-id + multi --project, got {result.returncode}"
@@ -2655,7 +2657,13 @@ class TestFullE2E:
             self._created_file_ids.remove(meta.id)
 
     def _test_workspace_load(self, workspace_id: int, table_id: str) -> None:
-        """Load a table into the workspace."""
+        """Load a table into the workspace.
+
+        Deliberately left on the DEFAULT (auto) load type -- that is the path
+        real users take, and it is the one that decides CLONE vs COPY per
+        table. The per-table report is asserted so a silently-dropped
+        ``loadType`` shows up here rather than as a mysteriously slow load.
+        """
         data = self._run_ok(
             "workspace",
             "load",
@@ -2667,6 +2675,10 @@ class TestFullE2E:
             table_id,
         )
         assert data["status"] == "ok"
+        assert data["data"]["load_type_requested"] == "auto"
+        loaded = data["data"]["tables"]
+        assert [entry["table_id"] for entry in loaded] == [table_id]
+        assert loaded[0]["load_type"] in {"clone", "copy"}
 
     def _test_workspace_query(self, workspace_id: int, table_id: str) -> None:
         """Run a SQL query in the workspace and verify result.
@@ -3965,7 +3977,7 @@ class TestFullE2E:
                 if bucket.get("name") == guard_bucket_name:
                     self._created_buckets.append(bucket["id"])
         except Exception:
-            pass  # Best-effort cleanup tracking only.
+            logging.getLogger(__name__).debug("best-effort cleanup tracking failed", exc_info=True)
 
         # --- --deny-destructive blocks destructive ops --------------------
         # delete-bucket is destructive; must exit 6 even on a bucket that
@@ -4265,8 +4277,9 @@ class TestFullE2E:
             # 2. add two datasets, three metrics, one constraint, one glossary entry.
             # tableId comes from the bucket/table built earlier in the big test.
             # We don't depend on it existing in actual Snowflake — the metastore
-            # accepts any string. validate --deep is skipped (would 404 trying to
-            # fetch storage detail for a synthetic tableId).
+            # accepts any string. `--fqn` is passed because without it `add dataset`
+            # reads the fqn from Storage, which would 404 for a synthetic tableId
+            # (so would validate --deep, skipped here).
             ds1 = self._run_ok(
                 "semantic-layer",
                 "add",
@@ -4279,6 +4292,8 @@ class TestFullE2E:
                 f"{tag}_ds_a",
                 "--table-id",
                 "out.c-syn.fact_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_a"',
             )
             created_items.append(("semantic-dataset", ds1["data"]["id"]))
 
@@ -4294,6 +4309,8 @@ class TestFullE2E:
                 f"{tag}_ds_b",
                 "--table-id",
                 "out.c-syn.fact_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_b"',
             )
             created_items.append(("semantic-dataset", ds2["data"]["id"]))
 
@@ -5627,6 +5644,175 @@ class TestE2ESyncWorkflow:
                             f"  [cleanup] Failed to delete keboola.variables/{auto_vars_id}: {exc}"
                         )
 
+    def test_sync_ignored_components_round_trip(self) -> None:
+        """Issue #689 (ignored components), end-to-end.
+
+        The manifest's ``ignoredComponents`` field (unioned with the
+        hardcoded ``ALWAYS_IGNORED_COMPONENTS``) is now honored by
+        ``sync pull`` / ``sync diff`` / ``sync push``:
+
+        * Adding a component to ``ignoredComponents`` and pulling drops its
+          manifest entry AND removes its local dir, with the pull ``details``
+          reporting ``action: "ignored"`` (vs ``"removed"`` for an actual
+          remote deletion).
+        * The trap this closes: re-ignoring a component WITHOUT pulling
+          first, then deleting its now-stale local dir by hand (as one might
+          when tidying a tree), must NOT make ``sync diff`` report it as
+          ``deleted`` or ``sync push`` plan to delete/recreate it -- the
+          config must be left untouched on the remote.
+        * Un-ignoring the component and pulling again re-materializes it.
+
+        Creates + cleans up a dedicated config so the test is idempotent.
+        """
+        import yaml as _yaml
+
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.constants import CONFIG_FILENAME
+
+        cfg: dict = {}
+        try:
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                cfg = api.create_config(
+                    component_id=TEST_COMPONENT_ID,
+                    name=f"{RUN_ID}-ignoredcomp",
+                    description="E2E ignored-components round-trip fixture (#689)",
+                    configuration={"parameters": {"db": {"host": "orig.example.com"}}},
+                )
+            cfg_id = str(cfg["id"])
+            manifest_path = self.project_dir / ".keboola" / "manifest.json"
+
+            def _find_config_dir() -> Path:
+                matches = [
+                    p
+                    for p in self.project_dir.rglob(CONFIG_FILENAME)
+                    if "rows" not in p.relative_to(self.project_dir).parts
+                    and str(
+                        _yaml.safe_load(p.read_text(encoding="utf-8"))
+                        .get("_keboola", {})
+                        .get("config_id")
+                    )
+                    == cfg_id
+                ]
+                assert len(matches) == 1, f"config YAML not found after pull: {matches}"
+                return matches[0].parent
+
+            # --- (a) sync init + pull -> materialized + tracked in manifest ---
+            _step("9a", "sync init + pull (ignored-components fixture)")
+            self._run_ok(
+                "sync", "init", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            config_dir = _find_config_dir()
+            assert config_dir.exists()
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert any(
+                e["componentId"] == TEST_COMPONENT_ID and e["id"] == cfg_id
+                for e in manifest["configurations"]
+            ), "config must be tracked in the manifest right after pull"
+
+            # --- (b) ignoredComponents + pull -> local dir AND manifest entry
+            # gone; pull details report action "ignored" ---
+            _step("9b", "ignoredComponents + pull drops the dir/manifest entry")
+            manifest["ignoredComponents"] = [TEST_COMPONENT_ID]
+            manifest_path.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+            pull_data = self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )["data"]
+            assert not config_dir.exists(), "ignored component's local dir must be removed"
+            manifest_after = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert not any(
+                e["componentId"] == TEST_COMPONENT_ID and e["id"] == cfg_id
+                for e in manifest_after["configurations"]
+            ), "config must be dropped from the manifest once its component is ignored"
+            ignored_details = [
+                d
+                for d in pull_data["details"]
+                if d["component_id"] == TEST_COMPONENT_ID and d["action"] == "ignored"
+            ]
+            assert ignored_details, (
+                f"pull details must report action=ignored: {pull_data['details']}"
+            )
+
+            # --- (c) un-ignore + pull -> re-materializes, giving us a fresh
+            # baseline dir for the trap scenario below ---
+            _step("9c", "un-ignore + pull re-materializes the config")
+            manifest_after["ignoredComponents"] = []
+            manifest_path.write_text(json.dumps(manifest_after, indent=4), encoding="utf-8")
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            config_dir = _find_config_dir()
+            assert config_dir.exists(), "un-ignoring + pull must re-materialize the config"
+
+            # --- (d) THE TRAP: re-add the ignore WITHOUT pulling, then delete
+            # the (now stale) local dir by hand. diff/push must never mistake
+            # this for a real remote deletion. ---
+            _step("9d", "re-ignore without pulling + delete dir by hand -- the trap")
+            manifest_current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_current["ignoredComponents"] = [TEST_COMPONENT_ID]
+            manifest_path.write_text(json.dumps(manifest_current, indent=4), encoding="utf-8")
+            shutil.rmtree(config_dir)
+
+            diff_data = self._run_ok(
+                "sync", "diff", "--project", self.alias, "--directory", str(self.project_dir)
+            )["data"]
+            deleted_hits = [
+                c
+                for c in diff_data.get("changes", [])
+                if c.get("config_id") == cfg_id and c.get("change_type") == "deleted"
+            ]
+            assert not deleted_hits, (
+                f"an ignored component's stale manifest entry must never diff "
+                f"as deleted: {deleted_hits}"
+            )
+            orphaned_hits = [
+                o for o in diff_data.get("orphaned", []) if o.get("config_id") == cfg_id
+            ]
+            assert not orphaned_hits, (
+                f"an ignored component must not surface as orphaned either: {orphaned_hits}"
+            )
+
+            push_dry = self._run_ok(
+                "sync",
+                "push",
+                "--project",
+                self.alias,
+                "--directory",
+                str(self.project_dir),
+                "--dry-run",
+            )["data"]
+            planned_hits = [c for c in push_dry.get("changes", []) if c.get("config_id") == cfg_id]
+            assert not planned_hits, (
+                f"push --dry-run must plan neither a delete nor a re-create for it: {planned_hits}"
+            )
+
+            # The config must still exist untouched on the remote -- this is
+            # the delete-dir-then-push production-delete trap #689 closes.
+            with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                remote_detail = api.get_config_detail(
+                    component_id=TEST_COMPONENT_ID, config_id=cfg_id
+                )
+            assert str(remote_detail["id"]) == cfg_id, "config must still exist remotely"
+
+            # --- (e) un-ignore + pull -> re-materializes again ---
+            _step("9e", "un-ignore + pull re-materializes the config again")
+            manifest_current["ignoredComponents"] = []
+            manifest_path.write_text(json.dumps(manifest_current, indent=4), encoding="utf-8")
+            self._run_ok(
+                "sync", "pull", "--project", self.alias, "--directory", str(self.project_dir)
+            )
+            assert _find_config_dir().exists(), "final un-ignore + pull must re-materialize"
+        finally:
+            cfg_id = cfg.get("id") if cfg else None
+            if cfg_id:
+                try:
+                    with KeboolaClient(stack_url=self.url, token=self.token) as api:
+                        api.delete_config(component_id=TEST_COMPONENT_ID, config_id=str(cfg_id))
+                except Exception as exc:
+                    print(f"  [cleanup] Failed to delete {TEST_COMPONENT_ID}/{cfg_id}: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Billing / PAYG credit balance (issue #594)
@@ -5733,18 +5919,22 @@ class TestE2EBillingCredits:
 @skip_without_credentials
 @pytest.mark.e2e
 class TestE2ENotificationSubscriptions:
-    """End-to-end test for `kbagent notification list` / `detail` (issue #600).
+    """End-to-end test for `kbagent notification list` / `detail` / the write path (issue #600, #690).
 
-    The CLI has no write path for subscriptions, so this test cannot create
-    its own fixture: whether the E2E project has any Notifications-tab
-    subscription at all is out of its control. The honest contract to assert
-    is therefore the envelope and the live auth path -- that a plain project
-    Storage token reaches the notification sibling host and gets a well-formed
+    Most of the read-path tests below still cannot create their own fixture
+    for the *pre-existing* subscriptions they inspect: whether the E2E
+    project already has any Notifications-tab subscription (and how many
+    distinct events it spans) is out of their control -- creating a
+    subscription now costs a real write against the notification sibling
+    host, which most of these read-only assertions have no reason to pay for.
+    The honest contract for those is therefore the envelope and the live
+    auth path -- that a plain project Storage token reaches the notification
+    sibling host and gets a well-formed
     ``{"subscriptions": [...], "errors": [...], "project_wide_excluded": N}``
     back with exit 0, and that per-row shape and ``detail`` hold *when* rows
-    exist. That makes the test meaningful on an empty project (it still proves
-    the host derivation, auth, and envelope) and start covering the row path
-    the day a subscription is added, without needing a rewrite.
+    exist. That makes those tests meaningful on an empty project (they still
+    prove the host derivation, auth, and envelope) and start covering the
+    row path the day a subscription is added, without needing a rewrite.
 
     That vacuity is not free, and it already cost us once: the service turned
     out to IGNORE its documented ``?event=`` filter, and the assertion that
@@ -5754,6 +5944,11 @@ class TestE2ENotificationSubscriptions:
     visible gap; a green vacuous one is not. Populate the E2E project with a
     couple of Notifications-tab subscriptions on different events to turn
     them on.
+
+    Since #690 the CLI *does* have a write path (`create` / `delete` /
+    `replace-recipient`), and ``test_create_replace_recipient_delete_round_trip``
+    below uses it to create, mutate, and tear down its own subscription --
+    no pre-existing project data required, and no vacuity to skip around.
     """
 
     @pytest.fixture(autouse=True)
@@ -5856,7 +6051,7 @@ class TestE2ENotificationSubscriptions:
                 "need >= 2 to prove --event narrows"
             )
 
-        target = sorted(events)[0]
+        target = min(events)
         expected = sum(1 for row in rows if row["event"] == target)
         filtered = self._payload("notification", "list", "--project", self.alias, "--event", target)
 
@@ -5885,7 +6080,7 @@ class TestE2ENotificationSubscriptions:
         if len(events) < 2:
             pytest.skip("need >= 2 distinct events to observe the API-side filter")
 
-        target = sorted(events)[0]
+        target = min(events)
         raw = self.client.list_project_subscriptions(event=target)
         raw_events = {str(sub.get("event", "")) for sub in raw}
 
@@ -5978,6 +6173,147 @@ class TestE2ENotificationSubscriptions:
 
         assert result.exit_code != 0
         assert "error" in result.output.lower()
+
+    def test_create_replace_recipient_delete_round_trip(self) -> None:
+        """Full write-path round trip (issue #690): create -> detail -> replace-recipient -> delete.
+
+        Exercises every write command this class previously had no coverage
+        for: ``create`` mints a project-wide ``job-failed`` email subscription
+        (asserted against its own audit row), ``detail`` round-trips it,
+        ``replace-recipient`` swaps the address to a second one (asserting the
+        new id differs from the old and the old subscription was actually
+        deleted), and ``delete --yes`` removes the replacement. A final
+        ``list`` proves neither the original nor the replacement id lingers.
+
+        Cleanup is best-effort in ``finally``: whichever of the two ids is
+        still live gets deleted so a failed assertion never leaks a real
+        subscription in the E2E project.
+        """
+        # Pre-flight best-effort sweep: a killed process (CI timeout,
+        # Ctrl-C) from a PRIOR run of this test leaks a project-wide
+        # job-failed subscription that then fires for EVERY job in the
+        # E2E project until removed by hand. RUN_ID is timestamp-based
+        # and changes every run, so a leaked address never matches this
+        # run's own `address`/`replaced_address` below -- match on the
+        # stable "-690" marker suffix instead, mirroring the best-effort
+        # `finally` cleanup further down.
+        stale = self._payload("notification", "list", "--project", self.alias)
+        for row in stale["subscriptions"]:
+            row_address = row.get("address") or ""
+            if "-690@example.com" in row_address or "-690-replaced@example.com" in row_address:
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        row["subscription_id"],
+                        "--yes",
+                    )
+
+        _step(9, "notification create -- project-wide job-failed/email")
+        address = f"{RUN_ID}-690@example.com"
+        replaced_address = f"{RUN_ID}-690-replaced@example.com"
+        old_id: str | None = None
+        new_id: str | None = None
+
+        try:
+            created = self._payload(
+                "notification",
+                "create",
+                "--project",
+                self.alias,
+                "--event",
+                "job-failed",
+                "--channel",
+                "email",
+                "--address",
+                address,
+            )
+            old_id = created["subscription_id"]
+            assert old_id, f"create returned no subscription_id: {created}"
+            assert created["event"] == "job-failed"
+            assert created["channel"] == "email"
+            assert created["address"] == address
+            assert created["scope"] == "project-wide"
+            assert created["project_alias"] == self.alias
+
+            _step(10, "notification detail -- round-trip the new subscription")
+            detail = self._payload(
+                "notification",
+                "detail",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                old_id,
+            )
+            assert detail["subscription_id"] == old_id
+            assert detail["event"] == "job-failed"
+            assert detail["address"] == address
+
+            _step(11, "notification replace-recipient -- swap to a second address")
+            replaced = self._payload(
+                "notification",
+                "replace-recipient",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                old_id,
+                "--address",
+                replaced_address,
+                "--yes",
+            )
+            assert replaced["old_subscription_id"] == old_id
+            new_id = replaced["new_subscription_id"]
+            assert new_id, f"replace-recipient returned no new_subscription_id: {replaced}"
+            assert new_id != old_id
+            assert replaced["old_address"] == address
+            assert replaced["old_deleted"] is True
+            assert replaced["address"] == replaced_address
+            assert replaced["event"] == "job-failed"
+            # The old subscription is gone -- only the replacement remains live.
+            old_id = None
+
+            _step(12, "notification delete --yes -- remove the replacement")
+            deleted = self._payload(
+                "notification",
+                "delete",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                new_id,
+                "--yes",
+            )
+            assert deleted == {
+                "project_alias": self.alias,
+                "subscription_id": new_id,
+                "deleted": True,
+            }
+            new_id = None
+
+            _step(13, "notification list -- neither id lingers")
+            final = self._payload("notification", "list", "--project", self.alias)
+            ids = {row["subscription_id"] for row in final["subscriptions"]}
+            assert replaced["old_subscription_id"] not in ids
+            assert replaced["new_subscription_id"] not in ids
+        finally:
+            # Best-effort cleanup: whichever id is still non-None was not
+            # confirmed deleted by the assertions above, so delete it now
+            # rather than leaking a live subscription in the E2E project.
+            for leftover_id in (old_id, new_id):
+                if leftover_id is None:
+                    continue
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        leftover_id,
+                        "--yes",
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -11065,6 +11401,8 @@ class TestE2ESemanticLayerLifecycle:
                 f"{tag}_ds_a",
                 "--table-id",
                 "out.c-syn.fact_a",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_a"',
             )
             created_items.append(("semantic-dataset", ds1["data"]["id"]))
 
@@ -11080,6 +11418,8 @@ class TestE2ESemanticLayerLifecycle:
                 f"{tag}_ds_b",
                 "--table-id",
                 "out.c-syn.fact_b",
+                "--fqn",
+                '"SYN_DB"."out.c-syn"."fact_b"',
             )
             created_items.append(("semantic-dataset", ds2["data"]["id"]))
 
@@ -11420,6 +11760,12 @@ class TestE2ESemanticLayerLifecycle:
                     f"Expected heuristic fallback, got: {data['data'].get('fallback_used')}"
                 )
                 assert len(data["data"]["generated"]["datasets"]) == 1
+                # build's dataset fqn is the table's Storage location.
+                detail = self._run_ok(
+                    "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+                )
+                assert detail["data"]["sql_path"]
+                assert data["data"]["generated"]["datasets"][0]["fqn"] == detail["data"]["sql_path"]
             else:
                 print("  WARN: no storage tables in project -- build --dry-run skipped")
 
@@ -14078,3 +14424,256 @@ class TestE2EConfigState:
             "parameters.foo=1",
         )["data"]
         assert data["configuration"]["parameters"]["foo"] == 1
+
+
+@skip_without_credentials
+@pytest.mark.e2e
+class TestE2EMergeRequestLifecycle:
+    """End-to-end tests for the `merge-request` group (DMD-1900) -- all eleven commands.
+
+    GATED ON THE PROJECT FEATURE, not on credentials: the E2E project does not
+    carry ``branches-merge-requests`` today and kbagent cannot provision one
+    (no project-create in ManageClient). ``setup`` runs ``merge-request list``
+    -- which must SUCCEED (a crash or an auth regression is a failure, never a
+    skip) -- and ``pytest.skip``s only on ``feature_enabled: false``. The suite
+    stays green and starts covering the group the moment the flag lands
+    (one-time, super-admin manage token: ``kbagent feature project-add
+    --project kbagent-e2e --feature branches-merge-requests``).
+
+    The scenario manufactures a REAL conflict so `conflicts` / `diff` /
+    `resolve` have something to work on: a throwaway ``ex-generic-v2`` config is
+    created in PRODUCTION, a branch is created (it inherits the config), the
+    config is then changed on BOTH sides. After the merge the config lives in
+    production with the branch's content and ``cleanup`` deletes it -- an
+    explicit teardown, never left for the next run. ``merge`` takes a
+    project-wide lock, so two concurrent runs collide with
+    ``MR_NOT_READY_TO_MERGE``: a known flake source, not a regression.
+
+    ``approve`` has no happy path on a 0-approval project (422 in every state,
+    ``in_review`` is unreachable) -- the test asserts THAT refusal precisely.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path: Path) -> None:
+        self.token = os.environ[ENV_TOKEN]
+        raw_url = os.environ.get(ENV_URL, "connection.keboola.com")
+        self.url = raw_url if raw_url.startswith("https://") else f"https://{raw_url}"
+        self.alias = f"{RUN_ID}-mr"[:60]
+        self.component_id = "ex-generic-v2"
+
+        self.config_dir = tmp_path / "config"
+        self.config_dir.mkdir()
+        result = _invoke(
+            self.config_dir,
+            [
+                "--json",
+                "project",
+                "add",
+                "--project",
+                self.alias,
+                "--url",
+                self.url,
+                "--token",
+                self.token,
+            ],
+        )
+        assert result.exit_code == 0, f"project add failed: {result.output}"
+
+        self.client = KeboolaClient(stack_url=self.url, token=self.token)
+        self._created_branch_ids: list[int] = []
+        self._production_config_ids: list[str] = []
+
+        # The feature gate -- and ONLY the feature gate. `list` is ungated
+        # server-side, so on a project without the feature it answers 200 + []
+        # and the service adds feature_enabled: false; anything else failing
+        # here is a real failure and must be reported as one.
+        listing = self._run("merge-request", "list", "--project", self.alias)
+        assert listing.exit_code == 0, f"merge-request list failed: {listing.output}"
+        if json.loads(listing.output)["data"].get("feature_enabled") is False:
+            pytest.skip(
+                "E2E project lacks the `branches-merge-requests` feature; enable it once with "
+                "`kbagent feature project-add --project kbagent-e2e "
+                "--feature branches-merge-requests`"
+            )
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self) -> Any:
+        yield
+        for cfg_id in self._production_config_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_config(component_id=self.component_id, config_id=cfg_id)
+        # A merged branch is deleted by the backend; an unmerged one (failed test) is ours.
+        for branch_id in self._created_branch_ids:
+            with contextlib.suppress(Exception):
+                self.client.delete_dev_branch(branch_id)
+        self.client.close()
+
+    def _run(self, *args: str) -> Any:
+        return _invoke(self.config_dir, ["--json", *args])
+
+    def _run_ok(self, *args: str) -> dict[str, Any]:
+        return _json_ok(self._run(*args))
+
+    def _mr(self, command: str, mr_id: int, *args: str) -> dict[str, Any]:
+        return self._run_ok(
+            "merge-request",
+            command,
+            "--project",
+            self.alias,
+            "--merge-request-id",
+            str(mr_id),
+            *args,
+        )["data"]
+
+    def test_full_lifecycle_with_a_real_conflict(self, tmp_path: Path) -> None:
+        _step(1, "config in PRODUCTION", "so the branch inherits it and a conflict is possible")
+        cfg = self.client.create_config(
+            component_id=self.component_id,
+            name=f"{RUN_ID}-mr-config",
+            configuration={"parameters": {"side": "base", "e2e": RUN_ID}},
+            description="E2E throwaway -- DMD-1900 merge-request lifecycle",
+        )
+        config_id = str(cfg["id"])
+        self._production_config_ids.append(config_id)
+
+        _step(2, "branch create", "the merge request's source; inherits the config")
+        branch = self._run_ok(
+            "branch", "create", "--project", self.alias, "--name", f"{RUN_ID}-mr-src"
+        )["data"]
+        branch_id = int(branch["branch_id"])
+        self._created_branch_ids.append(branch_id)
+
+        _step(3, "change the config on BOTH sides", "branch says ours, production says theirs")
+        self.client.update_config(
+            self.component_id,
+            config_id,
+            configuration={"parameters": {"side": "ours", "e2e": RUN_ID}},
+            change_description="E2E branch change",
+            branch_id=branch_id,
+        )
+        self.client.update_config(
+            self.component_id,
+            config_id,
+            configuration={"parameters": {"side": "theirs", "e2e": RUN_ID}},
+            change_description="E2E production change",
+        )
+
+        _step(4, "merge-request create --branch")
+        created = self._run_ok(
+            "merge-request",
+            "create",
+            "--project",
+            self.alias,
+            "--branch",
+            str(branch_id),
+            "--title",
+            f"{RUN_ID} lifecycle",
+            "--description",
+            "E2E",
+        )["data"]
+        mr_id = int(created["id"])
+        assert created["branch_from_id"] == branch_id
+        assert created["derived_state"] == "in_development"
+        assert created["merge_request_id"] == mr_id and created["resolved_from_branch"] is False
+
+        _step(5, "update --title / --external-id", "omitted fields stay")
+        updated = self._mr(
+            "update", mr_id, "--title", f"{RUN_ID} lifecycle (edited)", "--external-id", "E2E-1"
+        )
+        assert updated["title"].endswith("(edited)") and updated["externalId"] == "E2E-1"
+        assert updated["description"] == "E2E"
+
+        _step(6, "list shows it with the derived state")
+        rows = self._run_ok("merge-request", "list", "--project", self.alias)["data"][
+            "merge_requests"
+        ]
+        assert any(int(r["id"]) == mr_id for r in rows)
+
+        _step(7, "detail: blocked by the conflict; viewer; feature_enabled; empty change log")
+        detail = self._mr("detail", mr_id)
+        assert detail["conflicts_count"] == 1 and detail["mergeable"] is False
+        assert "conflicts" in detail["merge_blockers"]
+        assert detail["viewer"]["is_creator"] is True
+        assert detail["feature_enabled"] is True
+        assert not (detail.get("changeLog") or {}).get("configurations")
+
+        _step(8, "conflicts via --branch resolution", "the same MR, named by its branch")
+        conflicts = self._run_ok(
+            "merge-request", "conflicts", "--project", self.alias, "--branch", str(branch_id)
+        )["data"]
+        assert conflicts["merge_request_id"] == mr_id and conflicts["count"] == 1
+        assert conflicts["conflicts"][0]["configurationId"] == config_id
+
+        _step(
+            9,
+            "diff: both sides changed configuration.parameters.side; --output writes the candidate",
+        )
+        candidate_path = tmp_path / "resolved.json"
+        diff = self._mr(
+            "diff",
+            mr_id,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--output",
+            str(candidate_path),
+        )
+        by_path = {c["path"]: c for c in diff["changes"]}
+        assert by_path["configuration.parameters.side"]["changed_by"] == "both"
+        assert by_path["configuration.parameters.side"]["ours"] == "ours"
+        assert by_path["configuration.parameters.side"]["theirs"] == "theirs"
+        assert diff["branch_id"] == branch_id and diff["branch_from_id"] == branch_id
+        candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+        assert set(candidate) == {"name", "description", "isDisabled", "configuration", "rows"}
+        assert candidate["configuration"]["parameters"]["side"] == "ours"
+
+        _step(10, "resolve --take ours", "rebase onto production's version; conflict set empties")
+        resolved = self._mr(
+            "resolve",
+            mr_id,
+            "--component-id",
+            self.component_id,
+            "--config-id",
+            config_id,
+            "--take",
+            "ours",
+            "--change-description",
+            "E2E resolved",
+        )
+        assert resolved["resolution"] == "ours"
+        assert self._mr("conflicts", mr_id)["count"] == 0
+
+        _step(11, "request-review lands directly in approved (0 required approvals)")
+        reviewed = self._mr("request-review", mr_id)
+        assert reviewed["state"] == "approved"
+
+        _step(12, "request-changes sends it back to development")
+        changed = self._mr("request-changes", mr_id, "--reason", "E2E round trip")
+        assert changed["state"] == "development"
+
+        _step(13, "approve is 422 on a 0-approval project", "assert THAT refusal, nothing looser")
+        approve = self._run(
+            "merge-request", "approve", "--project", self.alias, "--merge-request-id", str(mr_id)
+        )
+        assert approve.exit_code == 1, approve.output
+        err = json.loads(approve.output)["error"]
+        assert err["code"] == ErrorCode.API_ERROR and "422" in err["message"], err
+
+        _step(14, "--json merge without an explicit target is exit 2 before any call")
+        bare = self._run("merge-request", "merge", "--project", self.alias)
+        assert bare.exit_code == 2, bare.output
+
+        _step(15, "merge --merge-request-id", "straight from development; blocks on the job")
+        merged = self._mr("merge", mr_id)
+        assert merged["branch_from_id"] == branch_id
+        assert "is being deleted" in merged["message"]
+        assert "cleanup_skipped" not in merged
+        assert merged.get("derived_state") in (None, "merged")
+
+        _step(16, "production now holds the branch's content")
+        prod = self.client.get_config_detail(component_id=self.component_id, config_id=config_id)
+        assert prod["configuration"]["parameters"]["side"] == "ours"
+        # The backend deletes the source branch asynchronously; nothing to assert
+        # about its existence at this instant (the RFC's wording rule exists for
+        # exactly this reason).

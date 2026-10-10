@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from helpers import setup_single_project
+from helpers import setup_single_project, setup_two_projects
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import SECRET_PLACEHOLDER
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
@@ -334,6 +334,33 @@ class TestListComponentsViaAi:
         mock_ai.suggest_components.assert_called_once_with("download data from http")
         mock_ai.close.assert_called_once()
 
+    def test_list_via_ai_no_alias_honors_pin(self, tmp_config_dir: Path, monkeypatch) -> None:
+        """A query without aliases resolves the pin, not the first project.
+
+        Regression test for issue #684: `component list --query` without
+        --project ran the AI query against the first registered project.
+        """
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = setup_two_projects(tmp_config_dir)
+        # add_project() pinned "prod" (first added); repoint like `project use dev`.
+        cfg = store.load()
+        cfg.default_project = "dev"
+        store.save(cfg)
+        dev_token = store.load().projects["dev"].token
+
+        mock_ai = _make_ai_client(suggest_response=[])
+        seen_tokens: list[str] = []
+
+        def factory(url: str, token: str) -> MagicMock:
+            seen_tokens.append(token)
+            return mock_ai
+
+        service = ComponentService(config_store=store, ai_client_factory=factory)
+        service.list_components(query="anything")
+
+        assert seen_tokens == [dev_token]
+        mock_ai.close.assert_called_once()
+
 
 # ===========================================================================
 # get_component_detail
@@ -342,6 +369,35 @@ class TestListComponentsViaAi:
 
 class TestGetComponentDetail:
     """Tests for get_component_detail."""
+
+    def test_get_component_detail_no_alias_honors_pin(
+        self, tmp_config_dir: Path, monkeypatch
+    ) -> None:
+        """alias=None resolves the pin, not the first project.
+
+        Regression test for issue #684: `component detail` without --project
+        used the first registered project.
+        """
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+        store = setup_two_projects(tmp_config_dir)
+        # add_project() pinned "prod" (first added); repoint like `project use dev`.
+        cfg = store.load()
+        cfg.default_project = "dev"
+        store.save(cfg)
+        dev_token = store.load().projects["dev"].token
+
+        mock_ai = _make_ai_client(detail_response=EXTRACTOR_RESPONSE)
+        seen_tokens: list[str] = []
+
+        def factory(url: str, token: str) -> MagicMock:
+            seen_tokens.append(token)
+            return mock_ai
+
+        service = ComponentService(config_store=store, ai_client_factory=factory)
+        service.get_component_detail(alias=None, component_id="keboola.ex-http")
+
+        assert seen_tokens == [dev_token]
+        mock_ai.close.assert_called_once()
 
     def test_get_component_detail_success(self, tmp_config_dir: Path) -> None:
         """Returns parsed detail with schema_summary for a valid component."""
