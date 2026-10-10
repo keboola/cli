@@ -11,6 +11,7 @@ test_data_science_client.py / test_e2e.py).
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
@@ -63,7 +64,10 @@ def _make_service(
     storage_mock: MagicMock | None = None,
     encrypt_mock: MagicMock | None = None,
 ) -> tuple[DataAppService, MagicMock, MagicMock, MagicMock]:
-    ds_mock = ds_mock or MagicMock()
+    if ds_mock is None:
+        ds_mock = MagicMock()
+        # No run history: a never-deployed app (a bare MagicMock would be truthy).
+        ds_mock.list_app_runs.return_value = []
     storage_mock = storage_mock or MagicMock()
     if encrypt_mock is None:
         encrypt_mock = MagicMock()
@@ -1100,9 +1104,13 @@ class TestDataAppDeploy:
         kwargs = ds_mock.patch_app.call_args.kwargs
         assert "config" not in kwargs
 
-    def test_deploy_pure_managed_omits_config_version(self, tmp_path: Path) -> None:
-        """A managed-repo app with NO git block deploys from managedGitRepoId,
-        so configVersion is omitted (matches keboola-mcp-server)."""
+    def test_deploy_pure_managed_backfills_git_block_and_pins_new_version(
+        self, tmp_path: Path
+    ) -> None:
+        """A managed-repo app with NO git block does not get a workspace just from
+        omitting configVersion (CLI-15) -- provisioning is gated on
+        parameters.dataApp.git being present in Storage config. Backfill it from
+        the managed repo's URL and pin the resulting version."""
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
@@ -1110,12 +1118,306 @@ class TestDataAppDeploy:
             "version": 4,
             "configuration": {"parameters": {"dataApp": {"slug": "x"}}},  # no git block
         }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": None,
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+        storage_mock.update_config.return_value = {"version": "5"}
         ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
-        kwargs = ds_mock.patch_app.call_args.kwargs
-        assert kwargs["config_version"] is None  # omitted
+        ds_mock.get_git_repo.assert_called_once_with("42")
+        update_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = update_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block == {
+            "repository": "https://git.example.com/keboola/app-42.git",
+            "branch": "main",
+            "private": True,
+        }
+        # slug survives the merge -- we mutate the fetched config, not replace it
+        assert update_kwargs["configuration"]["parameters"]["dataApp"]["slug"] == "x"
+
+        patch_kwargs = ds_mock.patch_app.call_args.kwargs
+        assert patch_kwargs["config_version"] == "5"  # the newly-written version, pinned
+
+    def test_deploy_pure_managed_falls_back_to_ssh_url(self, tmp_path: Path) -> None:
+        """httpsUrl is preferred but sshUrl works when it's the only one set."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 1,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": "ssh://git@git.example.com/keboola/app-42.git",
+            "httpsUrl": None,
+            "isManagedGitRepo": True,
+        }
+        storage_mock.update_config.return_value = {"version": "2"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        update_kwargs = storage_mock.update_config.call_args.kwargs
+        git_block = update_kwargs["configuration"]["parameters"]["dataApp"]["git"]
+        assert git_block["repository"] == "ssh://git@git.example.com/keboola/app-42.git"
+
+    def test_deploy_pure_managed_raises_when_git_repo_lookup_empty(self, tmp_path: Path) -> None:
+        """Neither URL set on the git-repo lookup -- fail loudly rather than
+        deploy with no source pointer."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 1,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": None,
+            "httpsUrl": None,
+            "isManagedGitRepo": True,
+        }
+
+        with pytest.raises(KeboolaApiError):
+            service.deploy_data_app(alias="prod", app_id="42")
+
+        storage_mock.update_config.assert_not_called()
+        ds_mock.patch_app.assert_not_called()
+
+    def test_deploy_pure_managed_raises_when_backfill_returns_no_version(
+        self, tmp_path: Path
+    ) -> None:
+        """The backfill PUT returned no version -- falling back to the pre-backfill
+        version would deploy the no-git-block config (the CLI-15 bug), so fail
+        loudly instead of deploying."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {
+            "sshUrl": None,
+            "httpsUrl": "https://git.example.com/keboola/app-42.git",
+            "isManagedGitRepo": True,
+        }
+        storage_mock.update_config.return_value = {}
+
+        with pytest.raises(KeboolaApiError, match="did not return a version"):
+            service.deploy_data_app(alias="prod", app_id="42")
+
+        storage_mock.update_config.assert_called_once()
+        ds_mock.patch_app.assert_not_called()
+
+    def test_deploy_pure_managed_result_reports_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        assert result["git_backfilled"] is True
+        assert len(result["warnings"]) == 1
+        assert "parameters.dataApp.git" in result["warnings"][0]
+        assert "main" in result["warnings"][0]
+
+    @pytest.mark.parametrize("branch", ["dev", "release/1.0"])
+    def test_deploy_backfill_writes_and_reports_git_branch(
+        self, tmp_path: Path, branch: str
+    ) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch=branch)
+
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == branch
+        assert result["git_branch"] == branch
+        assert f"branch {branch})" in result["warnings"][0]
+        assert f"Push your code to {branch} " in result["warnings"][0]
+
+    def test_deploy_backfill_defaults_to_main(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        ds_mock.list_app_runs.assert_called_once_with("42", limit=1)
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == "main"
+        assert result["git_branch"] == "main"
+
+    def test_deploy_backfill_without_git_branch_fails_for_deployed_app(
+        self, tmp_path: Path
+    ) -> None:
+        """An app with run history deployed before from the managed repo's own
+        default branch, which no API returns. Writing main could repoint it for
+        good, so deploy stops before any write and asks for --git-branch."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.list_app_runs.return_value = [{"state": "running"}]
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.deploy_data_app(alias="prod", app_id="42")
+
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "--git-branch BRANCH" in exc.value.message
+        ds_mock.get_git_repo.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+        ds_mock.patch_app.assert_not_called()
+
+    def test_deploy_backfill_explicit_git_branch_skips_run_check(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.list_app_runs.return_value = [{"state": "running"}]
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch="master")
+
+        ds_mock.list_app_runs.assert_not_called()
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["branch"] == "master"
+        assert result["git_branch"] == "master"
+
+    def test_deploy_git_branch_is_ignored_without_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        git_block = {"repository": "https://g/r", "branch": "main"}
+        storage_mock.get_config_detail.return_value = {
+            "version": 9,
+            "configuration": {"parameters": {"dataApp": {"git": git_block}}},
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", git_branch="dev")
+
+        storage_mock.update_config.assert_not_called()
+        assert "git_branch" not in result
+        assert "git_backfilled" not in result
+
+    @pytest.mark.parametrize("git_branch", ["x" * 256, "", " "])
+    def test_deploy_rejects_invalid_git_branch(self, tmp_path: Path, git_branch: str) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage_mock, _enc = _make_service(store)
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.deploy_data_app(alias="prod", app_id="42", git_branch=git_branch)
+
+        assert exc.value.error_code == ErrorCode.VALIDATION_ERROR
+        ds_mock.get_app.assert_not_called()
+
+    def test_deploy_with_git_block_does_not_report_backfill(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 9,
+            "configuration": {"parameters": {"dataApp": {"git": {"repository": "https://g/r"}}}},
+        }
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42")
+
+        assert "git_backfilled" not in result
+        assert "warnings" not in result
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [[], {"dataApp": None}, {"dataApp": []}],
+        ids=["parameters-list", "dataApp-null", "dataApp-list"],
+    )
+    def test_deploy_pure_managed_backfill_tolerates_non_dict_shapes(
+        self, tmp_path: Path, parameters: Any
+    ) -> None:
+        """The read treats a non-dict parameters / dataApp as empty; the write must too."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": parameters},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42")
+
+        written = storage_mock.update_config.call_args.kwargs["configuration"]
+        assert written["parameters"]["dataApp"]["git"]["repository"] == (
+            "https://git.example.com/app-42.git"
+        )
+
+    def test_deploy_pure_managed_backfill_targets_deploy_branch(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        storage_mock.get_config_detail.return_value = {
+            "version": 4,
+            "configuration": {"parameters": {"dataApp": {"slug": "x"}}},
+        }
+        ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
+        storage_mock.update_config.return_value = {"version": "5"}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        service.deploy_data_app(alias="prod", app_id="42", branch_id=777)
+
+        assert storage_mock.get_config_detail.call_args.kwargs["branch_id"] == 777
+        assert storage_mock.update_config.call_args.kwargs["branch_id"] == 777
+
+    def test_deploy_explicit_version_on_pure_managed_skips_backfill(self, tmp_path: Path) -> None:
+        """An explicit --config-version bypasses resolve_effective_version entirely."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
+        ds_mock.patch_app.return_value = {"state": "starting"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", config_version="3")
+
+        ds_mock.get_git_repo.assert_not_called()
+        storage_mock.update_config.assert_not_called()
+        assert ds_mock.patch_app.call_args.kwargs["config_version"] == "3"
+        assert "git_backfilled" not in result
 
     def test_deploy_managed_with_git_block_pins_latest(self, tmp_path: Path) -> None:
         """Once a credential is wired (parameters.dataApp.git present), the source
@@ -1432,6 +1734,21 @@ class TestDataAppPassword:
         storage_mock.get_config_detail.assert_called_once_with(
             "keboola.data-apps", "cfg-1", branch_id=config_branch
         )
+
+    def test_auth_is_read_from_a_configuration_echoed_as_json_string(self, tmp_path: Path) -> None:
+        """Some Storage payloads echo ``configuration`` as a JSON string; the auth
+        check must parse it, not crash on ``str.get`` or report ``missing``."""
+        store = _make_store(tmp_path)
+        service, ds_mock, storage_mock, _enc = _make_service(store)
+        _stub_password_app(ds_mock, storage_mock, authorization=_build_simple_auth_block())
+        storage_mock.get_config_detail.return_value = {
+            "id": "cfg-1",
+            "configuration": json.dumps({"authorization": _build_simple_auth_block()}),
+        }
+
+        result = service.get_data_app_password(alias="prod", app_id="42")
+
+        assert result.password == "deadbeefcafe"
 
 
 # ---------------------------------------------------------------------------

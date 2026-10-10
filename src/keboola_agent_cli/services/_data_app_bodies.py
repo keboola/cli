@@ -1,16 +1,30 @@
-"""Pure body-builders and redaction helpers for :mod:`data_app_service`.
+"""Body-builders, redaction helpers, and git/version resolution for
+:mod:`data_app_service`.
 
 Extracted from ``data_app_service.py`` (which is over its file-size budget)
-so the service module holds orchestration only. Everything here is a pure
-function of its arguments: no HTTP, no config store, no I/O. The service
-re-exports these names, so existing ``from ...data_app_service import _x``
-call sites keep working.
+so the service module holds orchestration only. Most functions here are pure
+functions of their arguments -- no HTTP, no config store, no I/O. The
+exceptions are ``backfill_managed_git`` and ``resolve_effective_version``,
+which call the pre-constructed client objects they are passed (no new I/O
+wiring of their own); they live here anyway because they are the direct
+continuation of ``deploy_data_app``'s git-block/version-resolution logic, not
+a separate concern. The service re-exports these names, so existing
+``from ...data_app_service import _x`` call sites keep working.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+from dataclasses import dataclass
 from typing import Any
+
+from ..constants import DEFAULT_GIT_BRANCH
+from ..errors import ErrorCode, KeboolaApiError
+
+DATA_APP_COMPONENT_ID = "keboola.data-apps"
+
+logger = logging.getLogger(__name__)
 
 # Encrypted-secret prefixes produced by the Encryption API for PROJECT-scoped
 # ciphertext -- one variant per cloud, and exactly these three exist:
@@ -195,6 +209,257 @@ def _build_runtime_block(*, size: str, workspace: bool) -> dict[str, Any]:
     if workspace:
         runtime["workspace"] = {"enabled": True}
     return runtime
+
+
+def _has_control_chars(value: str, *, allow_whitespace: bool = False) -> bool:
+    """Return True if ``value`` contains any ASCII control byte (0x00-0x1f / 0x7f).
+
+    Set ``allow_whitespace=True`` to permit ``\\t \\n \\r`` (description markdown);
+    everything else under 0x20 + 0x7f is still rejected.
+    """
+    allowed = {0x09, 0x0A, 0x0D} if allow_whitespace else set()
+    for ch in value:
+        code = ord(ch)
+        if code in allowed:
+            continue
+        if code < 0x20 or code == 0x7F:
+            return True
+    return False
+
+
+def _check_text_field(
+    field_name: str, value: Any, max_len: int, allow_ws: bool, *, required: bool = False
+) -> None:
+    """Reject a too-long or control-char-bearing string; non-strings are skipped.
+
+    ``required=True`` also rejects an empty or whitespace-only string.
+    """
+    if not isinstance(value, str):
+        return
+    if required and not value.strip():
+        raise KeboolaApiError(
+            message=f"{field_name} must not be empty.",
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    if len(value) > max_len:
+        raise KeboolaApiError(
+            message=(
+                f"{field_name} exceeds the {max_len}-character limit "
+                "enforced at the service boundary."
+            ),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    # Description allows tab/LF/CR (markdown); other fields reject any
+    # control char including CR/LF (would break URL host derivation,
+    # JSON serialization, or audit-log change descriptions).
+    if _has_control_chars(value, allow_whitespace=allow_ws):
+        raise KeboolaApiError(
+            message=(f"{field_name} contains disallowed control characters."),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+
+
+def _build_managed_git_block(repo: dict[str, Any], app_id: str, git_branch: str) -> dict[str, Any]:
+    """Build ``parameters.dataApp.git`` for a managed-repo app from a
+    ``get_git_repo`` response.
+
+    See CLI-15: a managed-repo app's first deploy does not get a workspace
+    just from omitting ``configVersion`` -- provisioning is gated on this
+    block being present in Storage config, independent of
+    ``managedGitRepoId``/``hasManagedGitRepo``. ``deploy_data_app`` calls this
+    to backfill it before deploying, same as an external-git app.
+
+    Raises if the lookup returned neither URL -- fail loudly rather than
+    deploy with no source pointer.
+    """
+    git_url = repo.get("httpsUrl") or repo.get("sshUrl")
+    if not git_url:
+        raise KeboolaApiError(
+            error_code=ErrorCode.API_ERROR,
+            message=f"App {app_id} is managed but git-repo lookup returned no URL",
+            status_code=500,
+            retryable=False,
+        )
+    # get_git_repo carries no branch field, so the caller (``deploy --git-branch``)
+    # decides which branch the platform clones.
+    return {"repository": git_url, "branch": git_branch, "private": True}
+
+
+def git_backfill_warning(git_branch: str) -> str:
+    return (
+        f"Deploy wrote parameters.dataApp.git (managed repository URL, branch {git_branch}) "
+        f"into the configuration. Push your code to {git_branch} of the managed repository."
+    )
+
+
+@dataclass(frozen=True)
+class EffectiveVersion:
+    """The Storage ``configVersion`` deploy pins, and whether deploy backfilled the git block."""
+
+    version: str
+    git_backfilled: bool
+    git_branch: str | None = None
+
+
+@dataclass(frozen=True)
+class ManagedGitBackfillTarget:
+    """The identifying context :func:`backfill_managed_git` needs,
+    grouped so the call site at ``deploy_data_app`` stays one line."""
+
+    app_id: str
+    config_id: str
+    branch_id: int | None
+    latest_version: str
+    git_branch: str
+
+
+def backfill_managed_git(
+    ds_client: Any,
+    storage_client: Any,
+    configuration: dict[str, Any],
+    ctx: ManagedGitBackfillTarget,
+) -> str:
+    """Resolve + persist ``parameters.dataApp.git`` for a managed-repo app with
+    no git block yet; returns the resulting configVersion to pin.
+
+    See CLI-15: ``deploy_data_app``'s configVersion-omission branch alone does
+    not get the app a workspace -- provisioning is gated on this block being
+    present. Takes pre-constructed clients (not a service instance) so
+    ``deploy_data_app`` can call it inline with no new constructor wiring.
+    """
+    git_block = _build_managed_git_block(
+        ds_client.get_git_repo(ctx.app_id), ctx.app_id, ctx.git_branch
+    )
+    # Match the read in resolve_effective_version: a non-dict value counts as empty.
+    parameters = configuration.get("parameters")
+    if not isinstance(parameters, dict):
+        parameters = configuration["parameters"] = {}
+    data_app = parameters.get("dataApp")
+    if not isinstance(data_app, dict):
+        data_app = parameters["dataApp"] = {}
+    data_app["git"] = git_block
+    updated = storage_client.update_config(
+        component_id=DATA_APP_COMPONENT_ID,
+        config_id=ctx.config_id,
+        configuration=configuration,
+        change_description="Auto-backfill managed-repo git block (workspace provisioning fix)",
+        branch_id=ctx.branch_id,
+    )
+    new_version = str(updated.get("version", "") or "")
+    if not new_version:
+        # Falling back to ctx.latest_version would pin the pre-backfill config --
+        # the exact no-workspace state this backfill exists to fix. Fail loudly,
+        # mirroring create_data_app's handling of the same missing-version case.
+        raise KeboolaApiError(
+            message=(
+                "Storage API did not return a version after backfilling the "
+                "managed-repo git block; cannot pin configVersion for deploy."
+            ),
+            status_code=500,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+    logger.info(
+        "Backfilled parameters.dataApp.git for managed-repo app %s (config %s); "
+        "Storage version %s -> %s",
+        ctx.app_id,
+        ctx.config_id,
+        ctx.latest_version,
+        new_version,
+    )
+    return new_version
+
+
+def _backfill_branch(ds_client: Any, app_id: str, git_branch: str | None) -> str:
+    """Choose the branch to write into a backfilled managed-repo git block.
+
+    An explicit ``--git-branch`` always wins. No API returns the managed
+    repo's default branch (``get_git_repo`` has no branch field). Before
+    vNEXT a pure managed repo deployed from ``managedGitRepoId`` on the
+    repo's own default branch, so an app with any run history may serve code
+    from a branch other than ``main``. Writing ``main`` for it would repoint
+    it for good. So ``main`` is used only for an app with no runs; otherwise
+    deploy stops before any write and asks for ``--git-branch``.
+    """
+    if git_branch is not None:
+        return git_branch
+    if ds_client.list_app_runs(app_id, limit=1):
+        raise KeboolaApiError(
+            message=(
+                f"Data app {app_id} uses a managed git repository and was deployed "
+                "before, but its configuration has no git block. Deploy must write "
+                "the branch into the configuration, and the branch of the managed "
+                "repository is unknown. Pass --git-branch BRANCH (the branch your "
+                "code is on). Nothing was changed."
+            ),
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    return DEFAULT_GIT_BRANCH
+
+
+def resolve_effective_version(
+    ds_client: Any,
+    storage_client: Any,
+    app: dict[str, Any],
+    app_id: str,
+    config_id: str,
+    branch_id: int | None,
+    git_branch: str | None = None,
+) -> EffectiveVersion:
+    """Resolve the Storage ``configVersion`` for ``deploy_data_app`` to pin.
+
+    ``git_backfilled`` in the result is True when the git block was written
+    into the Storage config; ``git_branch`` then names the branch it wrote.
+    ``git_branch`` is used only for that backfill and ignored otherwise.
+    ``None`` means the caller did not pass ``--git-branch``: see
+    :func:`_backfill_branch` for how the branch is then chosen.
+
+    configVersion resolution depends on where the app's *source* lives:
+
+    * Streamlit / external-git (``parameters.dataApp.git`` present) -- pin the
+      latest Storage version so the operator reads the current git block.
+    * A pure managed repo (``hasManagedGitRepo``, no git block yet) -- backfill
+      the git block first (CLI-15: omitting configVersion alone does not get
+      the app a workspace; see :func:`backfill_managed_git`), then pin the
+      version that backfill wrote.
+
+    Raises if neither a git block can be backfilled nor a Storage version is
+    resolvable.
+    """
+    storage_config = storage_client.get_config_detail(
+        DATA_APP_COMPONENT_ID,
+        config_id,
+        branch_id=branch_id,
+    )
+    latest_version = str(storage_config.get("version", "") or "")
+    configuration = _coerce_config_dict(storage_config.get("configuration"))
+    data_app_cfg = (configuration.get("parameters") or {}).get("dataApp") or {}
+    is_managed = bool(app.get("hasManagedGitRepo"))
+    has_git_block = bool(data_app_cfg.get("git"))
+    if is_managed and not has_git_block:
+        branch = _backfill_branch(ds_client, app_id, git_branch)
+        ctx = ManagedGitBackfillTarget(app_id, config_id, branch_id, latest_version, branch)
+        version = backfill_managed_git(ds_client, storage_client, configuration, ctx)
+        return EffectiveVersion(version=version, git_backfilled=True, git_branch=branch)
+    if not latest_version:
+        raise KeboolaApiError(
+            message=(
+                f"Cannot resolve a Storage configVersion for app {app_id}; "
+                "Storage config returned no version."
+            ),
+            status_code=500,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+    return EffectiveVersion(version=latest_version, git_backfilled=False)
 
 
 def _redact_secret(value: Any) -> Any:

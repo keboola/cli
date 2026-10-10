@@ -212,13 +212,10 @@ class DataScienceClient(BaseHttpClient):
         + ``restart_if_running=True`` together when bumping the deployed
         config version; sending ``config_version`` alone yields HTTP 422.
 
-        EXCEPTION (python-js managed repos): a *pure* managed-repo app
-        (``useManagedGitRepo``, no ``parameters.dataApp.git`` block) deploys its
-        source from ``app.managedGitRepoId``, not from a Storage configVersion,
-        so the caller passes ``config_version=None`` and this PATCH omits the
-        field entirely -- payload ``{desiredState, restartIfRunning}``. This
-        matches keboola-mcp-server / Kai behavior; see
-        ``DataAppService.deploy_data_app`` for the source-location branch.
+        ``config_version=None`` omits the field -- payload
+        ``{desiredState, restartIfRunning}``. ``DataAppService.deploy_data_app``
+        no longer takes this path for a pure managed repo: it backfills
+        ``parameters.dataApp.git`` and pins the resulting version (CLI-15).
         """
         payload: dict[str, Any] = {}
         if desired_state is not None:
