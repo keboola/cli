@@ -69,6 +69,9 @@ from .dependencies import get_permission_engine
 # routes registered inside ``FastAPI.__init__``, so the app-level dependency
 # never attaches to them at all. They are listed anyway: the exemption should
 # read as a decision, not as an accident of registration order.
+# Only reads of the paths below are exempt (see :func:`is_unguarded`).
+_UNGUARDED_METHODS: frozenset[str] = frozenset({"GET", "HEAD"})
+
 UNGUARDED_PATHS: frozenset[str] = frozenset(
     {
         "/health/ping",
@@ -406,9 +409,18 @@ def resolve_route_operation(method: str, path: str) -> str | None:
     request URL -- looking policy up by a concrete URL would make the decision
     depend on user-supplied identifiers.
     """
-    if path in UNGUARDED_PATHS:
+    if is_unguarded(method, path):
         return None
     return ROUTE_OPERATIONS.get((method.upper(), path))
+
+
+def is_unguarded(method: str, path: str) -> bool:
+    """Whether ``method path`` is bootstrap surface that no policy checks.
+
+    Only a read (GET or HEAD) of an :data:`UNGUARDED_PATHS` entry is exempt, so
+    a future write route on one of those paths still needs a table entry.
+    """
+    return method.upper() in _UNGUARDED_METHODS and path in UNGUARDED_PATHS
 
 
 def enforce_route_permission(
@@ -442,7 +454,7 @@ def enforce_route_permission(
         # to authorize; Starlette will answer for it.
         return
 
-    if path in UNGUARDED_PATHS:
+    if is_unguarded(request.method, path):
         return
 
     operation = ROUTE_OPERATIONS.get((request.method.upper(), path))

@@ -36,6 +36,7 @@ from keboola_agent_cli.server.dependencies import PERMISSION_DEPENDENCY_MARKER
 from keboola_agent_cli.server.route_permissions import (
     ROUTE_OPERATIONS,
     UNGUARDED_PATHS,
+    is_unguarded,
     resolve_route_operation,
     unknown_operations,
 )
@@ -141,6 +142,16 @@ def _openapi_operations(app: Any) -> set[tuple[str, str]]:
     }
 
 
+def test_unguarded_exemption_covers_reads_only() -> None:
+    """A write route on a bootstrap path is not exempt; it needs a table entry."""
+    for path in UNGUARDED_PATHS:
+        assert is_unguarded("GET", path)
+        assert is_unguarded("head", path)
+        assert not is_unguarded("POST", path)
+        assert not is_unguarded("PUT", path)
+        assert not is_unguarded("DELETE", path)
+
+
 class TestTableCoversTheLiveApp:
     """The three-way partition: mapped, exempt, or inline-guarded. No fourth case."""
 
@@ -150,7 +161,7 @@ class TestTableCoversTheLiveApp:
             f"{method} {path}"
             for method, path in _live_routes(app)
             if (method, path) not in ROUTE_OPERATIONS
-            and path not in UNGUARDED_PATHS
+            and not is_unguarded(method, path)
             and not _declares_inline_guard(app, method, path)
         )
         assert unclassified == [], (

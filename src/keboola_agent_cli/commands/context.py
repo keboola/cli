@@ -2273,7 +2273,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     is not an error; the serve-level flag wins. That directory decides which
     projects the REST surface exposes AND which persisted `permissions`
     policy its routes enforce (every route since vNEXT; only /auth/* and
-    /merge-requests/* on 0.96.0 and older). NOTE for older installs: up to 0.90.1
+    /merge-requests/* on 0.98.0 and older). NOTE for older installs: up to 0.90.1
     `serve` ignored the root-level flag entirely, silently serving a
     different directory -- there, always pass --config-dir to `serve` itself.
 

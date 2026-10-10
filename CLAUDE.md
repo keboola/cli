@@ -816,7 +816,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # (since vNEXT, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
 #   route is classified in server/route_permissions.py and checked by one app-level dependency
 #   against the SERVED config dir's policy -> HTTP 403 error_code PERMISSION_DENIED, the same
-#   code the CLI exits on. On 0.96.0 and older only /auth/* (0.90.1+) and /merge-requests/*
+#   code the CLI exits on. On 0.98.0 and older only /auth/* (0.90.1+) and /merge-requests/*
 #   (0.94.0+) were checked and every other route executed unchecked. Routes that declare their
 #   own `require_permission(...)` (those two routers) are skipped by the table. An unclassified
 #   route is REFUSED, not exempted (a test keeps the table

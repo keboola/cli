@@ -5344,7 +5344,7 @@ endpoint shapes.
   `permissions set --mode deny --deny cli:write` now blocks `POST
   /storage/tables/{project}` exactly like it blocks `POST
   /auth/register-projects` -- HTTP 403, `error_code: PERMISSION_DENIED`, same
-  code the CLI exits on. **On 0.96.0 and older only `/auth/*` (0.90.1+) and
+  code the CLI exits on. **On 0.98.0 and older only `/auth/*` (0.90.1+) and
   `/merge-requests/*` (0.94.0+) were checked**;
   on those versions every other write/destructive route executed unchecked, so
   do not rely on a deny policy to contain a `serve` you did not upgrade.
