@@ -822,6 +822,20 @@ ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     }
 )
 
+# --- Lineage HTML: Mermaid.js from the CDN (issue #271 sec-16) ---
+# Every lineage HTML page (`lineage show --format html`, the `lineage server`
+# browser and its "Download HTML" file) loads Mermaid.js from jsDelivr. The URL
+# names one exact release, and the SRI hash makes the browser refuse a file that
+# is different from that release. To upgrade: set the new version, then compute
+# the hash of `dist/mermaid.min.js` from the npm tarball of that version
+# (`openssl dgst -sha384 -binary mermaid.min.js | base64`) and replace it here.
+MERMAID_VERSION: str = "11.17.2"
+MERMAID_CDN_URL: str = f"https://cdn.jsdelivr.net/npm/mermaid@{MERMAID_VERSION}/dist/mermaid.min.js"
+MERMAID_SRI_HASH: str = "sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2"
+MERMAID_SCRIPT_ATTRS: str = (
+    f'src="{MERMAID_CDN_URL}" integrity="{MERMAID_SRI_HASH}" crossorigin="anonymous"'
+)
+
 # --- Diff Engine ---
 DIFF_MAX_DEPTH: int = 3  # max nesting depth for deep_diff detail output
 DIFF_MAX_LINES: int = 20  # max number of diff detail lines per config change

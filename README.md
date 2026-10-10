@@ -127,7 +127,7 @@ Then either let the `kbagent` skill auto-trigger from natural prompts, or delega
 kbagent init --from-global --read-only
 ```
 
-Three protection layers (kbagent policy + filesystem chmod + Claude Code deny rules) prevent the agent from writing, deleting, or bypassing restrictions. See [Permissions Guide](docs/guide.md#permissions) for details.
+Three protection layers (kbagent policy + filesystem chmod + Claude Code deny rules) stop the agent from writing, deleting, or changing the restrictions by mistake. They are guard rails, not a sandbox: a process that runs as the same OS user can get around them. For a hard lockout, run the agent as a different OS user ([ADR 0002](docs/adr/0002-sec-09-config-privilege-separation.md)). See [Permissions Guide](docs/guide.md#permissions) for details.
 
 ## Use as a library
 

@@ -2,6 +2,9 @@
 
 import json
 import os
+import subprocess
+import sys
+import textwrap
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -268,6 +271,43 @@ class TestVersionCache:
         assert cache_file.is_file()
         data = json.loads(cache_file.read_text(encoding="utf-8"))
         assert data["latest_version"] == "3.0.0"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs RLIMIT_FSIZE (POSIX only)")
+    def test_failed_write_keeps_the_previous_cache(self, tmp_path):
+        """A write that fails part-way leaves the old cache complete (issue #271 sec-12).
+
+        The cache is replaced in one step, so a reader never sees a partial
+        file. To check this without a race, a child process writes the cache
+        with a file-size limit smaller than the payload: the write fails part
+        of the way, like on a full disk. An in-place write has already
+        truncated the old cache at that point.
+        """
+        cache_file = tmp_path / "version_cache.json"
+        cache_file.write_text(
+            json.dumps({"last_check": time.time(), "latest_version": "1.2.3"}), encoding="utf-8"
+        )
+        child = textwrap.dedent(
+            """
+            import resource, signal, sys
+            from pathlib import Path
+            from unittest.mock import patch
+
+            import keboola_agent_cli.auto_update as auto_update
+
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)  # fail with EFBIG, do not kill
+            _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (8, hard))
+            with patch.object(auto_update, "_get_cache_path", return_value=Path(sys.argv[1])):
+                auto_update._write_cache("9.9.9")
+            """
+        )
+        subprocess.run([sys.executable, "-c", child, str(cache_file)], check=True, timeout=60)
+
+        with patch("keboola_agent_cli.auto_update._get_cache_path", return_value=cache_file):
+            cache = _read_cache()
+        assert cache is not None, "the failed write destroyed the previous cache"
+        assert cache["latest_version"] == "1.2.3"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["version_cache.json"]
 
     def test_cache_fresh_within_ttl(self):
         cache = {"last_check": time.time() - 100, "latest_version": "1.0.0"}
@@ -814,6 +854,26 @@ class TestReExecPathSkipsKbagentStage:
             maybe_auto_update()
 
         mock_fetch_kbagent.assert_not_called()
+
+    @patch("keboola_agent_cli.auto_update._is_dev_install", return_value=False)
+    def test_user_opt_out_leaves_the_version_cache_untouched(self, _mock_dev):
+        """The opt-out neither reads nor writes the cache (issue #271 sec-17).
+
+        So after the user removes ``KBAGENT_AUTO_UPDATE=false``, the cache holds
+        only the result of a real check, and the normal one-hour TTL applies.
+        """
+        env = {k: v for k, v in os.environ.items() if k not in (ENV_SKIP_UPDATE,)}
+        env[ENV_AUTO_UPDATE] = "false"
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("sys.argv", ["kbagent", "config", "list"]),
+            patch("keboola_agent_cli.auto_update._read_cache") as mock_read,
+            patch("keboola_agent_cli.auto_update._write_cache") as mock_write,
+        ):
+            maybe_auto_update()
+
+        mock_read.assert_not_called()
+        mock_write.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,11 @@
 Thin CLI layer for managing the firewall-style permission policy.
 No business logic belongs here -- the PermissionEngine handles evaluation.
 
-Security: set and reset require interactive confirmation (type a random code)
-so that an AI agent constrained by the policy cannot bypass it programmatically.
+Security: set and reset require interactive confirmation (type a random code).
+This is a guard rail against agent mistakes, not a hard lockout: a process that
+runs as the same OS user can get around it, for example by editing config.json
+directly. A hard lockout needs OS-level privilege separation (issue #271 sec-09,
+docs/adr/0002-sec-09-config-privilege-separation.md).
 """
 
 from typing import Any
@@ -29,6 +32,12 @@ from ..permissions import (
 from ._helpers import get_formatter, get_service, require_random_code_confirmation
 
 permissions_app = typer.Typer(help="Manage operation permissions (firewall rules)")
+
+# Printed after `permissions set` in human mode (issue #271 sec-09).
+GUARD_RAIL_NOTE = (
+    "Note: the policy is a guard rail against agent mistakes, not a sandbox. "
+    "A process that runs as the same OS user can change it."
+)
 
 
 def _format_operations_table(
@@ -265,8 +274,12 @@ def permissions_set(
 ) -> None:
     """Set the permission policy (firewall rules).
 
-    Requires interactive confirmation (type a random code) to prevent
-    AI agents from modifying permissions programmatically.
+    Requires interactive confirmation: a human types a random code at a real
+    terminal. The policy and this check are guard rails against agent
+    mistakes, not a hard lockout: a process that runs as the same OS user can
+    get around them, for example by editing config.json directly. For a hard
+    lockout, run the agent as a different OS user (ADR 0002 in the
+    keboola/cli repository, docs/adr/, describes the setup).
 
     Every ``--allow`` / ``--deny`` pattern must be a ``cli:*`` category, an
     exact operation name, or a glob matching at least one known operation
@@ -346,6 +359,7 @@ def permissions_set(
             formatter.console.print(f"  Allow: {', '.join(policy.allow)}")
         if policy.deny:
             formatter.console.print(f"  Deny: {', '.join(policy.deny)}")
+        formatter.err_console.print(f"\n[dim]{GUARD_RAIL_NOTE}[/dim]")
 
 
 @permissions_app.command("reset")
@@ -354,8 +368,9 @@ def permissions_reset(
 ) -> None:
     """Remove all permission restrictions.
 
-    Requires interactive confirmation (type a random code) to prevent
-    AI agents from removing the policy programmatically.
+    Requires interactive confirmation: a human types a random code at a real
+    terminal. This check is a guard rail against agent mistakes, not a hard
+    lockout (see `kbagent permissions set --help`).
     """
     formatter = get_formatter(ctx)
 

@@ -1,6 +1,7 @@
 """Tests for permissions CLI commands and enforcement via CliRunner."""
 
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -333,6 +334,38 @@ class TestPermissionsSet:
         assert result.exit_code == EXIT_PERMISSION_DENIED
         assert "Refusing to update permission policy" in result.output
         assert store.load().permissions is None
+
+    def test_set_human_output_says_guard_rail_not_sandbox(self, tmp_path: Path) -> None:
+        """Issue #271 sec-09: the policy is friction, so the output must not promise a lockout."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app, ["permissions", "set", "--mode", "allow", "--deny", "cli:write"]
+            )
+        assert result.exit_code == 0, result.output
+        output = " ".join(result.output.split())
+        assert "guard rail against agent mistakes, not a sandbox" in output
+        assert "same OS user can change it" in output
+
+    def test_set_and_reset_help_do_not_promise_a_lockout(self) -> None:
+        """Issue #271 sec-09: `--help` names the check a guard rail, not a hard lockout."""
+        for command in ("set", "reset"):
+            result = runner.invoke(app, ["permissions", command, "--help"])
+            assert result.exit_code == 0, result.output
+            # CI renders the help with colour codes and the panel border (│) at
+            # each wrapped line, so drop both before the phrase match.
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("│", " ")
+            help_text = " ".join(plain.split())
+            assert "guard rail" in help_text, command
+            assert "not a hard lockout" in help_text, command
+            assert "programmatically" not in help_text, command
 
     def test_set_invalid_mode(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

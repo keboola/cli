@@ -33,7 +33,7 @@ kbagent doctor       # verify setup, token validity, plugin install
 kbagent checks for updates on startup and upgrades itself automatically.
 
 - After update, shows "What's new" with changes from the changelog
-- Opt-out: `export KBAGENT_AUTO_UPDATE=false`
+- Opt-out: `export KBAGENT_AUTO_UPDATE=false`. When you remove it again, the next run checks for updates, unless a check ran in the last hour; then kbagent uses that result.
 - Manual update: `kbagent update`
 - View changelog: `kbagent changelog` or `kbagent changelog --limit 5`
 

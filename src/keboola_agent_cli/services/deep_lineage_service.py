@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from ..config_store import ConfigStore
+from ..constants import MERMAID_SCRIPT_ATTRS
 
 logger = logging.getLogger(__name__)
 
@@ -1400,7 +1401,7 @@ class DeepLineageService:
             "<html>\n"
             "<head>\n"
             f"  <title>{escaped_title}</title>\n"
-            '  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>\n'
+            f"  <script {MERMAID_SCRIPT_ATTRS}></script>\n"
             "  <style>\n"
             "    body { font-family: system-ui, -apple-system, sans-serif;\n"
             "           max-width: 100%; padding: 20px; color: #333; }\n"
