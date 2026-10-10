@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import typer
 
+from ..constants import MERMAID_SCRIPT_ATTRS
 from ..errors import ErrorCode
 from ..output import OutputFormatter
 from ..services.deep_lineage_service import DeepLineageService, LineageGraph
@@ -562,6 +563,8 @@ def _format_lineage_tree(
 
 # -- lineage serve ---------------------------------------------------------
 
+# The two Mermaid <script> tags get the pinned URL and SRI hash from
+# MERMAID_SCRIPT_ATTRS (the .replace() at the end of the template).
 _LINEAGE_HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -768,7 +771,7 @@ body {
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script __MERMAID_SCRIPT_ATTRS__></script>
 <script>
 (function() {
   // State
@@ -1256,7 +1259,7 @@ body {
   function buildStandaloneHtml(mermaidCode, title) {
     return '<!DOCTYPE html>\n<html>\n<head>\n' +
       '  <title>' + escapeHtml(title) + '</title>\n' +
-      '  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><' + '/script>\n' +
+      '  <script __MERMAID_SCRIPT_ATTRS__><' + '/script>\n' +
       '  <style>\n' +
       '    body { font-family: system-ui, -apple-system, sans-serif;\n' +
       '           max-width: 100%; padding: 20px; color: #333; }\n' +
@@ -1284,7 +1287,7 @@ body {
 })();
 </script>
 </body>
-</html>"""
+</html>""".replace("__MERMAID_SCRIPT_ATTRS__", MERMAID_SCRIPT_ATTRS)
 
 
 class _LineageHandler(http.server.BaseHTTPRequestHandler):

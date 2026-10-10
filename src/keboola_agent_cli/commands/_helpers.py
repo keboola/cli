@@ -341,9 +341,11 @@ _CONFIRM_CODE_LENGTH = 4
 def require_random_code_confirmation(action_description: str) -> None:
     """Require the user to type a random hex code to confirm a high-risk action.
 
-    Prevents AI agents from programmatically approving production-affecting
-    writes (Developer Portal updates, permission policy changes). The agent
-    cannot predict the code and cannot type it into stdin.
+    Stops an AI agent from approving production-affecting writes (Developer
+    Portal updates, permission policy changes) by mistake: without a real
+    terminal the action is refused. This is friction, not a hard lockout: a
+    process that runs as the same OS user can get around it (issue #271
+    sec-09, docs/adr/0002-sec-09-config-privilege-separation.md).
 
     Behaviour:
     - No TTY -> raise typer.Exit(EXIT_PERMISSION_DENIED).

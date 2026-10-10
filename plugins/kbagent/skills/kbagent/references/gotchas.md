@@ -3403,7 +3403,7 @@ GitHub Release is available, it prefers the release wheel, performs a full
 exact-version reinstall, and re-executes the same command seamlessly. This is
 transparent -- no user action is normally required.
 
-- Opt-out: `KBAGENT_AUTO_UPDATE=false`
+- Opt-out: `KBAGENT_AUTO_UPDATE=false`. The opt-out skips the whole startup check and does not read or write the version cache. After you remove it, the next run checks again, unless a check ran in the last hour (for example `kbagent version`, which also writes the cache); then that result is used.
 - Version cache: checks the release endpoints at most once per hour
 - Skipped for: dev/editable installs, `update`/`version` commands
 - Never crashes the CLI -- update failures leave the current invocation running

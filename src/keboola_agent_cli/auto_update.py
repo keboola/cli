@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 from importlib.metadata import distribution
 from pathlib import Path
@@ -135,7 +136,22 @@ def _write_cache(latest_version: str | None) -> None:
             "last_check": time.time(),
             "latest_version": latest_version,
         }
-        cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        # Atomic replace (issue #271 sec-12): write a temp file next to the
+        # cache, then rename it over the cache in one step. A reader never sees
+        # a partial file, and a failed write keeps the previous cache. Each
+        # writer has its own temp file, so parallel kbagent starts need no
+        # lock: the last rename wins, and each value is a complete check result.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=cache_path.parent, prefix=f".{cache_path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+                tmp_file.write(json.dumps(payload))
+            os.replace(tmp_path, cache_path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
     except OSError:
         pass  # Non-critical; next run will re-fetch
 

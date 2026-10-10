@@ -8,6 +8,7 @@ default tree.
 """
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -103,6 +104,54 @@ class TestEnsureBranchRegistered:
         client = MagicMock()
         client.list_dev_branches.return_value = []  # API knows nothing
         assert ensure_branch_registered(manifest, 20, client) == "branch-20"
+
+    def test_changed_branch_name_is_reported(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A branch stored under another directory name gets a warning (issue #271 sec-10)."""
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}])
+        manifest = load_manifest(tmp_path)
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 20, "name": "../etc"}]
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
+            assert ensure_branch_registered(manifest, 20, client) == "etc"
+
+        assert [r.getMessage() for r in caplog.records] == [
+            (
+                "Dev branch 20 '../etc' uses the directory 'etc/' in the sync workspace: "
+                "the branch name is not a safe directory name, or another branch "
+                "already uses that directory."
+            )
+        ]
+
+    def test_directory_collision_is_reported(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A name that is already a branch directory gets the id suffix and a warning."""
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}, {"id": 20, "path": "etc"}])
+        manifest = load_manifest(tmp_path)
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 30, "name": "etc"}]
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
+            assert ensure_branch_registered(manifest, 30, client) == "etc-30"
+
+        assert len(caplog.records) == 1
+        assert "Dev branch 30 'etc' uses the directory 'etc-30/'" in caplog.records[0].getMessage()
+
+    def test_unchanged_branch_name_is_silent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}])
+        manifest = load_manifest(tmp_path)
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 20, "name": "feature-x"}]
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
+            assert ensure_branch_registered(manifest, 20, client) == "feature-x"
+
+        assert caplog.records == []
 
 
 class TestResolveScaffoldPlacement:

@@ -334,6 +334,35 @@ class TestPermissionsSet:
         assert "Refusing to update permission policy" in result.output
         assert store.load().permissions is None
 
+    def test_set_human_output_says_guard_rail_not_sandbox(self, tmp_path: Path) -> None:
+        """Issue #271 sec-09: the policy is friction, so the output must not promise a lockout."""
+        store = _make_store(tmp_path)
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch(
+                "keboola_agent_cli.commands.permissions.require_random_code_confirmation",
+                return_value=None,
+            ),
+        ):
+            MockStore.return_value = store
+            result = runner.invoke(
+                app, ["permissions", "set", "--mode", "allow", "--deny", "cli:write"]
+            )
+        assert result.exit_code == 0, result.output
+        output = " ".join(result.output.split())
+        assert "guard rail against agent mistakes, not a sandbox" in output
+        assert "same OS user can change it" in output
+
+    def test_set_and_reset_help_do_not_promise_a_lockout(self) -> None:
+        """Issue #271 sec-09: `--help` names the check a guard rail, not a hard lockout."""
+        for command in ("set", "reset"):
+            result = runner.invoke(app, ["permissions", command, "--help"])
+            assert result.exit_code == 0, result.output
+            help_text = " ".join(result.output.split())
+            assert "guard rail" in help_text, command
+            assert "not a hard lockout" in help_text, command
+            assert "programmatically" not in help_text, command
+
     def test_set_invalid_mode(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:

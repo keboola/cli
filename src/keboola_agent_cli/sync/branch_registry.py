@@ -167,6 +167,19 @@ def ensure_branch_registered(
     if path in existing_paths:
         path = f"{path}-{branch_id}"
 
+    # Tell the user when the directory is not the branch name (issue #271
+    # sec-10). Otherwise an unexpected sync-workspace layout -- '../etc' stored
+    # as 'etc/', or a second 'etc' stored as 'etc-<id>/' -- has no explanation.
+    if branch_name and path != branch_name:
+        logger.warning(
+            "Dev branch %d '%s' uses the directory '%s/' in the sync workspace: "
+            "the branch name is not a safe directory name, or another branch "
+            "already uses that directory.",
+            branch_id,
+            branch_name,
+            path,
+        )
+
     manifest.branches.append(ManifestBranch(id=branch_id, path=path))
     logger.info("Registered dev branch %d as '%s' in manifest", branch_id, path)
     return path
