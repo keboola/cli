@@ -459,6 +459,17 @@ class TestSwapTablesCLI:
         assert "requires a branch" in payload["error"]["message"]
 
 
+def _swap_timeout() -> KeboolaApiError:
+    """The client's swap timeout: not retryable, ``job_id`` in the details."""
+    return KeboolaApiError(
+        message="Storage swap-tables job 777 did not finish within 300s.",
+        status_code=0,
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        retryable=False,
+        details={"job_id": 777},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Job wait budget (issue #713)
 # ---------------------------------------------------------------------------
@@ -582,8 +593,8 @@ class TestSwapTablesTimeout:
         """An exhausted budget raises STORAGE_JOB_TIMEOUT naming the live job.
 
         The message must not read as "nothing happened": kbagent stops
-        watching, the swap keeps running server-side. That is also why the
-        code is retryable (exit 4), not a plain failure.
+        watching, the swap keeps running server-side. It is NOT retryable:
+        a repeat after the swap lands swaps the tables back. Exit code 4.
 
         A budget already in the past puts the deadline behind the very first
         check, so the timeout branch is reached without a poll, a sleep, or
@@ -614,9 +625,66 @@ class TestSwapTablesTimeout:
 
         exc = exc_info.value
         assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
-        assert exc.retryable is True
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 777
         assert "777" in exc.message
-        assert "continues running" in exc.message
+        assert "keeps running server-side" in exc.message
+        assert "swaps the tables back" in exc.message
+
+    def test_service_timeout_names_job_detail(self, tmp_path: Path) -> None:
+        """The service appends the follow-up command; the client knows no alias."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.swap_tables.side_effect = _swap_timeout()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.swap_tables(
+                alias="test",
+                table_id="in.c-foo.a",
+                target_table_id="in.c-foo.b",
+                branch_id=42,
+            )
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 777
+        assert "kbagent storage job-detail --project test --job-id 777 --wait" in exc.message
+        mock_client.close.assert_called_once()
+
+    def test_cli_timeout_is_exit_4_not_retryable(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            MockSvc.return_value.swap_tables.side_effect = _swap_timeout()
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "swap-tables",
+                    "--project",
+                    "test",
+                    "--table-id",
+                    "in.c-foo.a",
+                    "--target-table-id",
+                    "in.c-foo.b",
+                    "--branch",
+                    "42",
+                    "--yes",
+                ],
+            )
+
+        assert result.exit_code == 4
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == 777
 
     def test_cli_forwards_timeout(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

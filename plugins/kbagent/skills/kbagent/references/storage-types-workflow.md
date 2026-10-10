@@ -379,6 +379,14 @@ kbagent storage create-table --project prod --bucket-id in.c-main \
 ```
 
 **A timeout is not a failure.** kbagent stops watching; the Storage job keeps
-running server-side. The error names the job id -- poll
-`GET /v2/storage/jobs/{id}`, or just run step 3. Never blindly re-issue the
-swap: repeating one that already landed swaps the tables straight back.
+running server-side. The error is `STORAGE_JOB_TIMEOUT`, exit 4,
+`retryable: false`, with the job id in `details.job_id` and the follow-up
+command in the message:
+
+```bash
+kbagent storage job-detail --project prod --job-id <ID> --wait
+```
+
+Then run step 3. Never re-issue the command: repeating a swap that already
+landed swaps the tables straight back, and repeating the create starts a
+second copy.

@@ -725,8 +725,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
       --source-table-id copy moves real data and used to inherit the 60s metadata-job
       default, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a copy that was
       still running and would succeed. A local timeout NEVER cancels the job -- it keeps
-      running server-side; poll GET /v2/storage/jobs/{{id}} or verify with table-detail
-      instead of assuming failure. Exit code is 4 (retryable), not 1.
+      running server-side. The error is STORAGE_JOB_TIMEOUT, exit 4, retryable: false,
+      details.job_id; follow it with `storage job-detail --job-id ID --wait`, verify with
+      table-detail, and never re-run the create (a second copy).
     - --if-not-exists: opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
@@ -826,7 +827,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     does not carry storage schema).
     --timeout SECONDS (since vNEXT, default 300): budget for the async swap job. A swap on a large
     BigQuery table outlasts the old 60s metadata-job default. A local timeout NEVER cancels the swap --
-    it keeps running server-side and usually lands; verify with table-detail rather than re-issuing it.
+    it keeps running server-side and usually lands. The error is STORAGE_JOB_TIMEOUT, exit 4,
+    retryable: false, details.job_id; follow it with `storage job-detail --job-id ID --wait` and never
+    re-issue the swap (a repeat after it lands swaps the tables back).
 
   kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
     Clone (pull) a production table into a dev branch (POST /tables/{{id}}/pull). On storage-branches projects a

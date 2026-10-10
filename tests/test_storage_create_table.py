@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
@@ -175,6 +176,37 @@ class TestCreateTableClientBody:
         client.close()
 
         assert poller.call_args.kwargs["max_wait"] == 900.0
+
+    def test_timeout_is_not_retryable(self, httpx_mock) -> None:
+        """A --source-table-id copy that outlives the budget keeps running.
+
+        A retry would start a second copy next to it, so the timeout is NOT
+        retryable and carries the job id. A budget already in the past
+        reaches the timeout branch without a poll (see the swap-tables twin
+        in test_storage_swap.py for why a tiny positive budget is flaky).
+        """
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/buckets/in.c-main/tables-definition",
+            method="POST",
+            json={"id": 555, "status": "waiting"},
+            status_code=200,
+        )
+        client = KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.create_table(
+                bucket_id="in.c-main",
+                name="events_repart",
+                source={"tableId": "in.c-main.events"},
+                max_wait=-1.0,
+            )
+        client.close()
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 555
+        assert "keeps running server-side" in exc.message
+        assert "second copy" in exc.message
 
 
 # ---------------------------------------------------------------------------

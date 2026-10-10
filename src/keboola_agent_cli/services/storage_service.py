@@ -28,6 +28,7 @@ from ._storage_jobs import (
     summarize_storage_job,
     validate_wait_timeout,
     with_import_hint,
+    with_job_timeout_hint,
 )
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
@@ -783,7 +784,10 @@ class StorageService(ColumnDescriptionsMixin):
             ``schema_drift`` is ``True`` when the two diverge.
 
         Raises:
-            KeboolaApiError: ``INVALID_ARGUMENT`` for a non-positive ``timeout``.
+            KeboolaApiError: ``INVALID_ARGUMENT`` for a non-positive ``timeout``;
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details ``job_id``,
+                message names ``storage job-detail`` and ``storage table-detail``)
+                when the wait runs out -- the create keeps running server-side.
             ValueError: Malformed column spec or ``--default`` assignment;
                 ``--not-null`` / ``--default`` references an unknown column;
                 ``columns`` and ``source`` both/neither given;
@@ -957,7 +961,7 @@ class StorageService(ColumnDescriptionsMixin):
                             "range_partitioning": None,
                             "clustering": None,
                         }
-                raise
+                raise with_job_timeout_hint(exc, alias, target_table_id, branch_id) from exc
             legacy_branch_storage = _detect_legacy_branch_storage(client, branch_id)
         finally:
             client.close()
@@ -1603,7 +1607,10 @@ class StorageService(ColumnDescriptionsMixin):
         Raises:
             ConfigError: If branch_id is None.
             KeboolaApiError: ``INVALID_ARGUMENT`` for a non-positive
-                ``timeout``, or if the API call fails.
+                ``timeout``, or if the API call fails. A wait timeout is
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details
+                ``job_id``, message names ``storage job-detail``): the swap
+                keeps running, and repeating it would swap the tables back.
         """
         max_wait = normalize_job_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
 
@@ -1641,6 +1648,8 @@ class StorageService(ColumnDescriptionsMixin):
                 branch_id=branch_id,
                 max_wait=max_wait,
             )
+        except KeboolaApiError as exc:
+            raise with_job_timeout_hint(exc, alias) from exc
         finally:
             client.close()
 

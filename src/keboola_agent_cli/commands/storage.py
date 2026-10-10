@@ -685,7 +685,12 @@ def storage_create_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -1531,6 +1536,7 @@ def storage_swap_tables(
             error_code=exc.error_code,
             project=project,
             retryable=exc.retryable,
+            details=exc.details,
         )
         raise typer.Exit(code=exit_code) from None
 

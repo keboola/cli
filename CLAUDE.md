@@ -668,9 +668,11 @@ kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --
     #   of the repartition path move real data yet used to inherit the 60s metadata-job
     #   budget, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a job that was
     #   still running and would succeed. Default is now 300s on both. A local timeout
-    #   NEVER cancels the job -- it keeps running server-side; poll
-    #   GET /v2/storage/jobs/{id} or verify with `storage table-detail` rather than
-    #   assuming the operation failed.
+    #   NEVER cancels the job -- it keeps running server-side. The error is
+    #   STORAGE_JOB_TIMEOUT, exit 4, retryable=false, details.job_id, and the message
+    #   names `storage job-detail --job-id ID --wait` (create-table also names
+    #   `storage table-detail`). Never re-run: a repeated swap swaps the tables back,
+    #   a repeated --source-table-id create starts a second copy.
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
 kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
 kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]

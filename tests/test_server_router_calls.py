@@ -2913,6 +2913,48 @@ def test_swap_tables_route_rejects_non_positive_timeout(tmp_path: Path) -> None:
     storage_svc.swap_tables.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("service_method", "path", "body"),
+    [
+        (
+            "create_table",
+            f"/storage/tables/{PROJECT}",
+            {"bucket_id": "in.c-b", "name": "t", "source_table_id": "in.c-b.src"},
+        ),
+        (
+            "swap_tables",
+            f"/storage/tables/{PROJECT}/in.c-b.a/swap",
+            {"target_table_id": "in.c-b.b", "branch_id": 42},
+        ),
+    ],
+)
+def test_table_job_timeout_route_keeps_code_and_follow_up(
+    tmp_path: Path, service_method: str, path: str, body: dict
+) -> None:
+    """A wait timeout reaches the REST caller as STORAGE_JOB_TIMEOUT with the job-detail command."""
+    storage_svc = MagicMock()
+    getattr(storage_svc, service_method).side_effect = KeboolaApiError(
+        message=(
+            "Storage job 777 did not finish within 300s. Waiting stopped locally; "
+            "the job keeps running server-side. Follow it with: kbagent storage "
+            f"job-detail --project {PROJECT} --job-id 777 --wait"
+        ),
+        status_code=0,
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        retryable=False,
+        details={"job_id": 777},
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.post(path, headers=AUTH, json=body)
+
+    error = res.json()["error"]
+    assert error["code"] == ErrorCode.STORAGE_JOB_TIMEOUT
+    assert "storage job-detail" in error["message"]
+    assert "--job-id 777" in error["message"]
+
+
 # ---------------------------------------------------------------------------
 # merge_requests.py -- the REST mirror of `kbagent merge-request *` (DMD-1900)
 # Service: MergeRequestService.<method>(project, merge_request_id, ...)

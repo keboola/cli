@@ -2599,3 +2599,63 @@ class TestCreateTableJobTimeout:
 
         assert result.exit_code == 0
         assert svc.create_table.call_args.kwargs["timeout"] == 1800.0
+
+    def test_timeout_names_job_detail_and_table_detail(self, tmp_path: Path) -> None:
+        """The service appends the follow-up commands; the client knows no alias."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = _create_timeout()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["id:INTEGER"])
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 555
+        assert "kbagent storage job-detail --project test --job-id 555 --wait" in exc.message
+        assert "kbagent storage table-detail --project test --table-id in.c-b.t" in exc.message
+
+    def test_cli_timeout_is_exit_4_not_retryable(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            MockSvc.return_value.create_table.side_effect = _create_timeout()
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "id:INTEGER",
+                ],
+            )
+
+        assert result.exit_code == 4
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == 555
+
+
+def _create_timeout() -> KeboolaApiError:
+    """The client's create-table timeout: not retryable, ``job_id`` in the details."""
+    return KeboolaApiError(
+        message="Storage create-table job 555 did not finish within 300s.",
+        status_code=0,
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        retryable=False,
+        details={"job_id": 555},
+    )

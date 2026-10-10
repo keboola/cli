@@ -180,6 +180,48 @@ def _table_detail_command(alias: str, table_id: str, branch_id: int | None) -> s
     return shlex.join(args + _branch_args(branch_id))
 
 
+def _job_detail_command(alias: str, job_id: Any) -> str:
+    """The ``storage job-detail --wait`` command that follows a running job."""
+    args = ["kbagent", "storage", "job-detail", "--project", alias, "--job-id", str(job_id)]
+    return shlex.join([*args, "--wait"])
+
+
+def _with_hint(exc: KeboolaApiError, hint: str) -> KeboolaApiError:
+    """An equal copy of ``exc`` with ``hint`` appended to its message."""
+    return KeboolaApiError(
+        message=exc.message + hint,
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        retryable=exc.retryable,
+        details=exc.details,
+    )
+
+
+def with_job_timeout_hint(
+    exc: KeboolaApiError,
+    alias: str,
+    table_id: str | None = None,
+    branch_id: int | None = None,
+) -> KeboolaApiError:
+    """Append the follow-up commands to a wait timeout (create-table, swap-tables).
+
+    The client cannot name them (it knows no project alias). A
+    ``STORAGE_JOB_TIMEOUT`` with a ``job_id`` gets ``storage job-detail
+    --wait``, plus ``storage table-detail`` for ``table_id`` when given.
+    Anything else comes back as an equal copy, so a caller can always
+    ``raise with_job_timeout_hint(exc, ...) from exc``.
+    """
+    job_id = exc.details.get("job_id")
+    if exc.error_code != ErrorCode.STORAGE_JOB_TIMEOUT or job_id is None:
+        return _with_hint(exc, "")
+    hint = f" Follow it with: {_job_detail_command(alias, job_id)}"
+    if table_id is not None:
+        hint += (
+            f" -- then verify the table with: {_table_detail_command(alias, table_id, branch_id)}"
+        )
+    return _with_hint(exc, hint)
+
+
 def with_import_hint(
     exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
 ) -> KeboolaApiError:
@@ -203,11 +245,8 @@ def with_import_hint(
     job_id = exc.details.get("job_id")
     file_id = exc.details.get("file_id")
     if exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT and job_id is not None:
-        hint = (
-            f" Follow it with: kbagent storage job-detail --project {shlex.quote(alias)} "
-            f"--job-id {job_id} --wait"
-        )
-    elif exc.details.get("import_may_be_running") and job_id is None:
+        return with_job_timeout_hint(exc, alias)
+    if exc.details.get("import_may_be_running") and job_id is None:
         hint = (
             " The import request may have reached Storage, so the import may already be "
             "running -- do NOT re-import yet. Check the table first: "
@@ -223,13 +262,7 @@ def with_import_hint(
         hint = f" Import it with: {_load_file_command(alias, file_id, table_id, options)}"
     else:
         hint = ""
-    return KeboolaApiError(
-        message=exc.message + hint,
-        status_code=exc.status_code,
-        error_code=exc.error_code,
-        retryable=exc.retryable,
-        details=exc.details,
-    )
+    return _with_hint(exc, hint)
 
 
 def read_csv_header(file_path: str, delimiter: str = ",", enclosure: str = '"') -> list[str]:
