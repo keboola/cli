@@ -2669,3 +2669,63 @@ class TestCreateWorkspaceUiMode:
         mock_client.delete_config.assert_called_once_with(
             "keboola.sandboxes", "cfg-h", branch_id=123
         )
+
+    def test_ui_mode_job_timeout_keeps_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A Queue job that outran the wait may still create the workspace.
+
+        Trashing the config then would orphan that workspace, so the config
+        is kept and the error says why, names the job and how to check.
+        """
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-slow", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j77", "branchId": "123"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job j77 did not complete within 300s",
+            status_code=504,
+            error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+            retryable=True,
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.QUEUE_JOB_TIMEOUT
+        assert exc.details["sandbox_config_rolled_back"] is False
+        assert exc.details["sandbox_config_kept_reason"] == "timeout_outcome_unknown"
+        assert exc.details["sandbox_config_id"] == "cfg-slow"
+        assert exc.details["job_id"] == "j77"
+        assert "job j77 may still finish" in exc.message
+        assert "kbagent workspace list --project prod" in exc.message
+        assert "--config-id cfg-slow" in exc.message
+        mock_client.delete_config.assert_not_called()
+
+    def test_headless_request_timeout_keeps_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A read timeout on the workspace POST: the server may have created it."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-t", "name": "ws"}
+        mock_client.create_config_workspace.side_effect = KeboolaApiError(
+            message="Request timed out", status_code=0, error_code=ErrorCode.TIMEOUT
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
+        exc = exc_info.value
+        assert exc.details["sandbox_config_rolled_back"] is False
+        assert exc.details["sandbox_config_kept_reason"] == "timeout_outcome_unknown"
+        assert "job_id" not in exc.details
+        assert "the workspace create may still finish" in exc.message
+        mock_client.delete_config.assert_not_called()

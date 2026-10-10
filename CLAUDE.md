@@ -902,7 +902,9 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
 # workspace create (#755): a failed create -- headless or --ui -- moves the keboola.sandboxes
 #   config it created to the trash and says so (--json error.details: sandbox_config_id,
-#   sandbox_config_rolled_back, branch_id, job_id for --ui); the --ui job is queued on the branch
+#   sandbox_config_rolled_back, branch_id, job_id for --ui) -- except after TIMEOUT /
+#   QUEUE_JOB_TIMEOUT, where the config is kept (sandbox_config_kept_reason: the server may still
+#   finish); the --ui job is queued on the branch
 #   the config lives in (was: default branch -> Queue 400 on a pinned dev branch). --ui itself
 #   still ends in WORKSPACE_NOT_FOUND on current SaaS stacks: the keboola.sandboxes `create` task
 #   dropped Snowflake/BigQuery provisioning in 2026-03 (the UI uses SQL Editor sessions), so the

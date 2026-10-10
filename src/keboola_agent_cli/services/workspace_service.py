@@ -43,6 +43,12 @@ from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
+# Step-2 errors of `create_workspace` after which the server may still finish
+# the work: an HTTP timeout (the request may have arrived) and a Queue job
+# that did not finish in time. The sandbox config is kept after these, not
+# trashed -- trashing it would orphan a workspace that appears later.
+_AMBIGUOUS_CREATE_ERRORS = frozenset({ErrorCode.TIMEOUT, ErrorCode.QUEUE_JOB_TIMEOUT})
+
 
 def _summarize_load_types(plans: list[LoadTablePlan]) -> str:
     """Render "2 clone, 1 copy" for the human success message."""
@@ -322,10 +328,11 @@ class WorkspaceService(BaseService):
             config_id = sandbox_config.get("id", "")
 
             # Step 2: back the config with a Storage workspace. If that fails
-            # for ANY reason the config from step 1 is debris nobody asked for
+            # definitely, the config from step 1 is debris nobody asked for
             # (issue #755: three failed --ui attempts left three orphaned
             # keboola.sandboxes configs, invisible to `workspace gc` because
             # gc detects the inverse -- a workspace whose config is gone).
+            # After a timeout the outcome is unknown, so the config is kept.
             try:
                 if ui_mode:
                     return self._create_workspace_via_job(
@@ -346,10 +353,39 @@ class WorkspaceService(BaseService):
                     read_only,
                 )
             except KeboolaApiError as exc:
-                self._rollback_sandbox_config(client, exc, config_id, branch_id)
+                if exc.error_code in _AMBIGUOUS_CREATE_ERRORS:
+                    self._keep_sandbox_config(exc, alias, config_id, branch_id)
+                else:
+                    self._rollback_sandbox_config(client, exc, config_id, branch_id)
                 raise
         finally:
             client.close()
+
+    @staticmethod
+    def _keep_sandbox_config(
+        exc: KeboolaApiError, alias: str, config_id: str, branch_id: int
+    ) -> None:
+        """Keep the sandbox config after a timeout; annotate ``exc`` with what to check.
+
+        The server may still finish the job or the workspace create; trashing
+        the config then would leave a workspace whose config is gone.
+        """
+        job_id = exc.details.get("job_id")
+        exc.details.update(
+            {
+                "sandbox_config_id": config_id,
+                "branch_id": branch_id,
+                "sandbox_config_rolled_back": False,
+                "sandbox_config_kept_reason": "timeout_outcome_unknown",
+            }
+        )
+        pending = f"job {job_id}" if job_id else "the workspace create"
+        exc.message = (
+            f"{exc.message} The keboola.sandboxes config {config_id} was kept: {pending} "
+            f"may still finish. Check with 'kbagent workspace list --project {alias}'; if no "
+            f"workspace for config {config_id} appears, remove the config with 'kbagent config "
+            f"delete --project {alias} --component-id keboola.sandboxes --config-id {config_id}'."
+        )
 
     @staticmethod
     def _rollback_sandbox_config(
@@ -458,17 +494,19 @@ class WorkspaceService(BaseService):
         )
         job_id = str(job.get("id", ""))
 
-        # Wait for the job to complete
-        client.wait_for_queue_job(job_id)
-
-        # Find the workspace created by the job. Look it up on the branch we
-        # resolved ourselves -- the job's own branchId echo is null on the
-        # default branch, and int(None) used to crash here.
-        workspaces = client.list_config_workspaces(
-            branch_id=branch_id,
-            component_id="keboola.sandboxes",
-            config_id=config_id,
-        )
+        try:
+            client.wait_for_queue_job(job_id)
+            # Find the workspace created by the job. Look it up on the branch we
+            # resolved ourselves -- the job's own branchId echo is null on the
+            # default branch, and int(None) used to crash here.
+            workspaces = client.list_config_workspaces(
+                branch_id=branch_id,
+                component_id="keboola.sandboxes",
+                config_id=config_id,
+            )
+        except KeboolaApiError as exc:
+            exc.details.setdefault("job_id", job_id)
+            raise
 
         if not workspaces:
             # A green job with nothing behind it is not a race to poll away:

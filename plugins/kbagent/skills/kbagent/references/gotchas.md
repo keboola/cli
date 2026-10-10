@@ -1374,7 +1374,14 @@ What changed in kbagent:
   `sandbox_config_rolled_back` (bool), `branch_id`, and for `--ui` `job_id`.
   A failed cleanup is reported (`sandbox_config_rolled_back: false`,
   `sandbox_config_cleanup_error`) with the exact `config delete` to run --
-  it never masks the original failure. Before, three failed `--ui` attempts
+  it never masks the original failure. Exception: after a **timeout**
+  (`TIMEOUT` on an HTTP request, `QUEUE_JOB_TIMEOUT` on the job wait) the
+  server may still finish the job or the workspace, so the config is **kept**
+  (`sandbox_config_rolled_back: false`,
+  `sandbox_config_kept_reason: timeout_outcome_unknown`). The message names
+  the config and job; run `workspace list --project ALIAS`, and if no
+  workspace for that config appears, `config delete --component-id
+  keboola.sandboxes --config-id ID`. Before, three failed `--ui` attempts
   left three orphaned configs that `workspace gc` cannot see (gc detects the
   inverse: a workspace whose config is gone).
 - The `WORKSPACE_NOT_FOUND` message now names the job and explains WHY nothing

@@ -161,7 +161,8 @@ kbagent --json workspace create --project ALIAS --name "shared-debug" --ui
 ```
 
 **On current SaaS stacks this fails with `WORKSPACE_NOT_FOUND`** (issue #755,
-since vNEXT the error explains why and the attempt leaves nothing behind): the
+since vNEXT the error explains why and the attempt leaves nothing behind;
+after a timeout the sandbox config is kept because the job may still finish): the
 `keboola.sandboxes` `create` job no longer provisions Snowflake/BigQuery
 workspaces -- the UI creates them through SQL Editor sessions, which kbagent
 does not drive. Do not retry; it is not a race. Use the headless default
