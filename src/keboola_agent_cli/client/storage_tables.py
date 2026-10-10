@@ -637,9 +637,11 @@ class _StorageTablesMixin(_CoreClient):
             budget=STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait,
             operation="create-table",
             warning=(
-                ". Re-running the command starts a second create (with a source "
-                "table, a second copy) -- check the job before retrying."
-            ),
+                ". Re-running the command starts a second copy of the source table"
+                if source is not None
+                else ". Re-running the command starts a second create job"
+            )
+            + " -- check the job before retrying.",
         )
         return job.get("results", {})
 
