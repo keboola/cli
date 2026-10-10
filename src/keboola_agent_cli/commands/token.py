@@ -367,7 +367,7 @@ def token_refresh(
     Needs canManageTokens, NOT a master token -- unlike `token create` (the API
     defect behind that guard is create-only, issue #599). Note the new secret is
     printed but not stored: rotating the token this project alias itself uses
-    leaves the alias holding a dead value until you run `project edit --token`.
+    leaves the alias holding a dead value until you run `project edit --token-stdin`.
     """
     formatter = get_formatter(ctx)
     if (

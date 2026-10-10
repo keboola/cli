@@ -40,8 +40,9 @@ settings.json -> env). The flag takes precedence over the env var.
 
 ## Quick Start
 
-  # Add a single project
-  kbagent --json project add --project my-project --url https://connection.keboola.com --token YOUR_TOKEN
+  # Add a single project -- --token-stdin prompts (hidden) on a TTY and reads
+  # a pipe otherwise, so the token stays out of the shell history
+  kbagent --json project add --project my-project --url https://connection.keboola.com --token-stdin
 
   # Or bulk-onboard all projects from an organization
   KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
@@ -86,7 +87,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   through the CLI. `auth login-password` (below) is the unattended path: it
   is safe to run headlessly given the credentials it needs, and is what
   CI/automation should use to get a full session (as opposed to a
-  single-project static Storage token via `project add --token` /
+  single-project static Storage token via `project add --token-stdin` /
   `KBAGENT_PROJECT_FROM_ENV`).
 
   kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
@@ -288,8 +289,32 @@ Use `kbagent <command> --help` for full flag details and examples.
     the stack finish it in the background (the async default warns that the
     first Storage command may fail until it lands).
 
-  kbagent project add --project NAME --url URL --token TOKEN
+  kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH | --token-env NAME | --token TOKEN]
     Add a new project connection. Token verified against API.
+    See "Getting a Storage token in" below before you pick a flag.
+
+  HOW TO GET A STORAGE TOKEN IN (applies to `project add` and `project edit`)
+
+    Never put a Storage API token on the command line. The `--token <value>`
+    form writes the token into the user's shell history, into the kbagent
+    REPL history file, and into a process listing.
+
+    Use this order:
+
+    1. If the person can run the command, give them the command with
+       `--token-stdin` and let them run it. The prompt hides the input.
+    2. If you must run the command yourself, ask the person to write the
+       token into a file. Then pass `--token-file <path>`. kbagent reads the
+       file and deletes it after the command succeeds. Pass
+       `--keep-token-file` only for a read-only mount.
+    3. In CI, where the runner sets the variable, pass `--token-env <NAME>`.
+       `project add` also still reads KBC_TOKEN on its own; `project edit`
+       does not.
+    4. Use `--token <value>` only when nothing else works. Then tell the
+       person that the token is in their shell history, and that they must
+       delete that entry or invalidate the token.
+
+    The four sources are mutually exclusive. Passing two is exit 2.
 
   kbagent project list
     List all connected projects (tokens always masked). An `Auth` column
@@ -309,12 +334,18 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent project remove --project NAME
     Remove a project connection.
 
-  kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
-    Edit project connection. Re-verifies token if changed. --new-alias renames
+  kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH | --token-env NAME | --token TOKEN] [--new-alias NEW]
+    Edit project connection. Re-verifies token if changed. The token is
+    optional here, so with no token flag the command changes no credential
+    and never prompts. Unlike `project add`, this command ignores KBC_TOKEN:
+    a new token rewrites the alias's project_id and project_name from
+    whatever it verifies as, so an exported variable could silently repoint
+    the alias at another project during an unrelated edit such as
+    --new-alias. --new-alias renames
     the alias and cascades the rename through config.json and the nested sync
     directory at <cwd>/<old-alias>/. Lineage cache embeds the alias in FQNs
     and is NOT auto-updated; rebuild via `kbagent lineage build` after rename.
-    Passing --token for a browser-login (session) project is allowed and
+    Passing a new token for a browser-login (session) project is allowed and
     converts it to a static-token project, but it emits a warning: once
     converted, `auth logout --remove-projects` no longer cleans that alias up
     (use `project remove`). In --json mode the warning is carried in an
@@ -331,7 +362,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
-    use `project edit --token` for a deliberate one-project conversion.
+    use `project edit --token-stdin` for a deliberate one-project conversion.
 
   kbagent project description-get --project NAME
     Read the Keboola dashboard project description (markdown). Backed by
@@ -989,7 +1020,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Rotate a token's secret (new secret printed ONCE; confirms unless --yes / --json).
     Needs canManageTokens only -- NOT master-guarded (that API defect is create-only). The new
     secret is NOT written back to config.json: rotating the alias's own token leaves it dead
-    until `project edit --project ALIAS --token <NEW>`.
+    until `project edit --project ALIAS --token-stdin` (paste the new secret at the hidden
+    prompt; see "HOW TO GET A STORAGE TOKEN IN").
   Notes: uses the per-project Storage token (no manage token). `token create` requires a MASTER
   (admin) token; list/delete/refresh only need the canManageTokens privilege. The importable SDK
   (Client(url,token)) has NO pre-flight guard and mirrors these as
@@ -2408,7 +2440,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      KBAGENT_CONVERSATION_ID  Conversation/session ID (REQUIRED -- sent as X-Conversation-ID header).
                               Prefer the --conversation-id global flag from an agent harness:
                               a standalone `export` does not survive between tool calls.
-     KBC_TOKEN                Storage API token (fallback for --token)
+     KBC_TOKEN                Storage API token, read by `project add` only.
+                              `project edit` ignores it -- name it with
+                              --token-env KBC_TOKEN if you want it there.
      KBC_STORAGE_API_URL      Default stack URL (fallback for --url)
      KBC_MANAGE_API_TOKEN     Manage API token (org setup, project refresh).
                               Default-DENY since 0.29.0: pass --allow-env-manage-token

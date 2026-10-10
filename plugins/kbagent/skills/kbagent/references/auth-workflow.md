@@ -76,7 +76,7 @@ For CI, containers, or any other unattended context there are two options
 (since v0.84.0): if the task has account email + password (+ a TOTP seed for
 MFA), use `kbagent auth login-password` -- see "Unattended login" below, an
 agent MAY run it directly. Otherwise keep using a static Storage token
-(`kbagent project add --token ...` or `KBAGENT_PROJECT_FROM_ENV`) -- that
+(`kbagent project add --token-stdin` or `KBAGENT_PROJECT_FROM_ENV`) -- that
 path is unchanged by either feature.
 
 ## No Keboola account at all: `project create`
@@ -362,7 +362,7 @@ If your workflow needs one of those, register the same project again under
 a different alias with a static Storage token:
 
 ```
-kbagent project add --project my-project-static --url <stack> --token <token>
+kbagent project add --project my-project-static --url <stack> --token-stdin
 ```
 
 The two aliases can coexist; only the sentinel-token one is guarded.
@@ -438,7 +438,7 @@ differently on purpose:
   access token rotates on its own -- so the project is reported under
   `skipped` with that reason rather than raising. `--force` does not convert
   it either.
-- **`project edit --token` converts it, with a warning.** This is the
+- **`project edit --token-stdin` converts it, with a warning.** This is the
   supported deliberate conversion. Once done the alias is a static-token
   project, so `auth logout --remove-projects` no longer cleans it up -- use
   `kbagent project remove`. The warning is identical under `--dry-run`, and

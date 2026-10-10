@@ -507,10 +507,10 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   delivered and may have succeeded (retryable:false, message says not to repeat -- check
 #   `auth status`, whose stored session + claim link is the evidence). `--sync-backend-init`
 #   raises that call's read timeout to 300s, which can outlast an agent's foreground shell.
-kbagent project add --project NAME --url URL --token TOKEN
+kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
 kbagent project list
 kbagent project remove --project NAME
-kbagent project edit --project NAME [--url URL] [--token TOKEN] [--new-alias NEW]
+kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN] [--new-alias NEW]
 kbagent project status [--project NAME]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]

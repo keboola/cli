@@ -316,7 +316,7 @@ class TokenService(BaseService):
                     f"the Storage API rejects the request with a generic 500 "
                     f"'Application error.' (CreateTokenVoter LogicException, "
                     f"issue #599). Point the alias at a master token "
-                    f"(`kbagent project edit --project {alias} --token <MASTER>`) "
+                    f"(`kbagent project edit --project {alias} --token-stdin`) "
                     f"-- master = the token from your own user account in the "
                     f"Keboola UI, `isMasterToken: true` in `kbagent token list`."
                 ),
