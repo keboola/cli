@@ -555,7 +555,10 @@ kbagent config set-folder --project NAME --component-id ID --config-id ID --name
 kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--change-description TEXT] [--is-disabled | --is-enabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
-kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL] [--no-open]
+# oauth-url: opens the link in the default browser (interactive human mode only; never with
+#   --json, over SSH, in a container or in WSL without wslview); --no-open only prints it.
+#   Version gate in gotchas.md.
 kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
 kbagent config state-set --project NAME --component-id ID --config-id ID [--row-id ID] --state JSON|@file|- [--branch ID] [--dry-run] [--yes]
 # state-get/state-set (0.84.2+, #593): read/write a config's runtime state via the dedicated

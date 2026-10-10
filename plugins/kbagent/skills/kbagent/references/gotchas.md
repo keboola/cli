@@ -6057,3 +6057,29 @@ appeared in human mode on a terminal.
 On older versions `--progress` does not exist and the command fails with a
 usage error (exit 2) -- check `kbagent version` before passing it.
 
+## An OAuth authorization URL survives only as long as one visual row (SUPPORT-17391)
+
+The `config oauth-url` link is ~200 chars (`token` + encoded `sapiUrl` +
+`#/<component>/<config>`), so it fits no terminal row, and two layers then
+truncate it. Both end in the same misleading browser message,
+`Failed to load config data. Please contact us on support@keboola.com` --
+`token`/`sapiUrl` come first and survive, the config id in the fragment does
+not, so the wizard authenticates and then 404s on the configuration:
+
+- **Rich layout.** `console.print(url)` inserts REAL newlines at the console
+  width; a copy of one visual row, or a line-based parse of stdout, loses the
+  tail. `soft_wrap=True` is mandatory for anything printing a URL.
+- **Per-row link detection.** Terminals and chat renderers that autodetect URLs
+  scope detection to one visual row, so a wrapped URL becomes a link to its
+  first row only. Nothing kbagent prints can prevent that in a renderer it does
+  not control (e.g. an assistant transcript).
+
+Since vNEXT the command therefore opens the URL itself (interactive human mode
+only; `--no-open` opts out) and prints it unwrapped as a copy fallback. It
+skips the open where `auth login` skips it too: an SSH session (`webbrowser`
+would start a console browser such as lynx or w3m on the terminal), a
+container, and WSL without a working `wslview`. Under
+WSL `open_browser` routes through `wslview`, because `webbrowser` keys its
+Windows handling off `sys.platform == "win32"` -- `linux` inside WSL -- and
+would otherwise find no handler or open a Linux-side browser that shares none
+of the logins the flow needs.

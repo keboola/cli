@@ -456,6 +456,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
+| **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
