@@ -6075,7 +6075,10 @@ not, so the wizard authenticates and then 404s on the configuration:
   not control (e.g. an assistant transcript).
 
 Since vNEXT the command therefore opens the URL itself (interactive human mode
-only; `--no-open` opts out) and prints it unwrapped as a copy fallback. Under
+only; `--no-open` opts out) and prints it unwrapped as a copy fallback. It
+skips the open where `auth login` skips it too: an SSH session (`webbrowser`
+would start a console browser such as lynx or w3m on the terminal), a
+container, and WSL without a working `wslview`. Under
 WSL `open_browser` routes through `wslview`, because `webbrowser` keys its
 Windows handling off `sys.platform == "win32"` -- `linux` inside WSL -- and
 would otherwise find no handler or open a Linux-side browser that shares none

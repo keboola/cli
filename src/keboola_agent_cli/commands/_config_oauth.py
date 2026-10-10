@@ -16,7 +16,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
-from ..auth.environment import open_browser
+from ..auth.environment import detect_browser_environment, open_browser
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import get_formatter, get_service, map_error_to_exit_code
 
@@ -25,11 +25,6 @@ from ._helpers import get_formatter, get_service, map_error_to_exit_code
 # `data-app password --open`: long enough for `webbrowser` to start the
 # opener, short enough that an opener it blocks on cannot hold the command.
 _BROWSER_OPEN_WAIT_SECONDS = 2.0
-
-
-def _should_open(*, no_open: bool, is_terminal: bool) -> bool:
-    """Whether to hand the URL to a browser: interactive use, unless opted out."""
-    return is_terminal and not no_open
 
 
 def register(app: typer.Typer) -> None:
@@ -82,7 +77,9 @@ def register(app: typer.Typer) -> None:
 
         The browser is left alone in `--json` mode and when stdout is not a
         terminal, so scripted and piped callers never get a stray window;
-        `--no-open` suppresses it in interactive use too. The `--json` output
+        `--no-open` suppresses it in interactive use too. It is also left alone
+        where `auth login` would not open one either: an SSH session, a
+        container, or WSL without a working `wslview`. The `--json` output
         has `browser_opened: false`: give the URL to the user.
 
         \b
@@ -137,7 +134,15 @@ def register(app: typer.Typer) -> None:
         # being read as a style tag.
         formatter.console.print(url, soft_wrap=True, highlight=False, markup=False)
 
-        should_open = _should_open(no_open=no_open, is_terminal=formatter.console.is_terminal)
+        # Same rule as `auth login`: over SSH `webbrowser` would start a console
+        # browser (lynx, w3m) on the user's terminal, and WSL without `wslview`
+        # gets a Linux-side browser without the user's logins. The detection
+        # runs last, so --no-open and piped runs skip its `wslview` probe.
+        should_open = (
+            formatter.console.is_terminal
+            and not no_open
+            and detect_browser_environment().loopback_browser_usable
+        )
         if should_open and open_browser(url, wait_seconds=_BROWSER_OPEN_WAIT_SECONDS):
             formatter.console.print(
                 "\n[dim]Opened in your default browser. Grant access there.[/dim]"

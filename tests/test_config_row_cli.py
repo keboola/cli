@@ -11,7 +11,6 @@ from typer.testing import CliRunner, Result
 from helpers import setup_single_project
 from keboola_agent_cli.auth import environment
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands._config_oauth import _should_open
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.services.config_service import ConfigService
 
@@ -677,110 +676,124 @@ class TestConfigOauthUrlCli:
         assert result.exit_code == 0, result.output
         assert OAUTH_RESULT["url"] in result.output
 
-    def test_no_open_flag_leaves_the_browser_alone(self, tmp_config_dir: Path) -> None:
-        """--no-open never dispatches an open, whatever the console reports."""
-        service = self._make_oauth_service(tmp_config_dir)
-
-        def _fail(_url: str) -> bool:
-            raise AssertionError("browser must not be opened with --no-open")
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "keboola_agent_cli.commands._config_oauth.get_service",
-                lambda ctx, name: service,
-            )
-            mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _fail)
-            result = runner.invoke(
-                app,
-                [
-                    "--config-dir",
-                    str(tmp_config_dir),
-                    "config",
-                    "oauth-url",
-                    "--project",
-                    "prod",
-                    "--component-id",
-                    "keboola.ex-google-drive",
-                    "--config-id",
-                    "cfg-001",
-                    "--no-open",
-                ],
-            )
-
-        assert result.exit_code == 0, result.output
-        assert OAUTH_RESULT["url"] in result.output
-
-    def test_json_mode_leaves_the_browser_alone(self, tmp_config_dir: Path) -> None:
-        """--json is a machine surface: no browser, unchanged payload."""
-        service = self._make_oauth_service(tmp_config_dir)
-
-        def _fail(_url: str) -> bool:
-            raise AssertionError("browser must not be opened in --json mode")
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "keboola_agent_cli.commands._config_oauth.get_service",
-                lambda ctx, name: service,
-            )
-            mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _fail)
-            result = _invoke(
-                tmp_config_dir,
-                "oauth-url",
-                [
-                    "--project",
-                    "prod",
-                    "--component-id",
-                    "keboola.ex-google-drive",
-                    "--config-id",
-                    "cfg-001",
-                ],
-            )
-
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["data"]["url"] == OAUTH_RESULT["url"]
-
-    def test_interactive_terminal_opens_the_complete_url(self, tmp_config_dir: Path) -> None:
-        """On a terminal the whole URL -- not a wrapped fragment -- reaches the browser."""
+    def _run_oauth_url(
+        self,
+        tmp_config_dir: Path,
+        mp: pytest.MonkeyPatch,
+        *extra: str,
+        json_mode: bool = False,
+    ) -> tuple[Result, list[str]]:
+        """Run oauth-url with a recording opener; return the result and the opened URLs."""
         service = self._make_oauth_service(tmp_config_dir)
         opened: list[str] = []
 
+        def _record(url: str, **_kwargs: float) -> bool:
+            opened.append(url)
+            return True
+
+        mp.setattr(
+            "keboola_agent_cli.commands._config_oauth.get_service",
+            lambda ctx, name: service,
+        )
+        mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _record)
+        result = runner.invoke(
+            app,
+            [
+                *(["--json"] if json_mode else []),
+                "--config-dir",
+                str(tmp_config_dir),
+                "config",
+                "oauth-url",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-google-drive",
+                "--config-id",
+                "cfg-001",
+                *extra,
+            ],
+            env={"COLUMNS": "40"},
+        )
+        return result, opened
+
+    @staticmethod
+    def _desktop_environment(mp: pytest.MonkeyPatch) -> None:
+        """A machine where `auth login` would open a browser too."""
+        mp.setattr(
+            "keboola_agent_cli.commands._config_oauth.detect_browser_environment",
+            lambda: environment.BrowserEnvironment(
+                loopback_browser_usable=True, reason="", opener="xdg-open"
+            ),
+        )
+
+    def test_interactive_terminal_opens_the_complete_url(
+        self, tmp_config_dir: Path, force_colour: None
+    ) -> None:
+        """On a terminal the whole URL -- not a wrapped fragment -- reaches the browser."""
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "keboola_agent_cli.commands._config_oauth.get_service",
-                lambda ctx, name: service,
-            )
-
-            def _record(url: str, **_kwargs: float) -> bool:
-                opened.append(url)
-                return True
-
-            def _always_open(**_kwargs: bool) -> bool:
-                return True
-
-            mp.setattr("keboola_agent_cli.commands._config_oauth.open_browser", _record)
-            mp.setattr("keboola_agent_cli.commands._config_oauth._should_open", _always_open)
-            result = runner.invoke(
-                app,
-                [
-                    "--config-dir",
-                    str(tmp_config_dir),
-                    "config",
-                    "oauth-url",
-                    "--project",
-                    "prod",
-                    "--component-id",
-                    "keboola.ex-google-drive",
-                    "--config-id",
-                    "cfg-001",
-                ],
-                env={"COLUMNS": "40"},
-            )
+            self._desktop_environment(mp)
+            result, opened = self._run_oauth_url(tmp_config_dir, mp)
 
         assert result.exit_code == 0, result.output
         assert opened == [OAUTH_RESULT["url"]]
         assert "Opened in your default browser" in result.output
 
-    def test_opener_has_run_when_the_command_returns(self, tmp_config_dir: Path) -> None:
+    @pytest.mark.parametrize(
+        ("extra", "json_mode"),
+        [(["--no-open"], False), ([], True)],
+        ids=["no-open", "json"],
+    )
+    def test_terminal_run_with_opt_out_leaves_the_browser_alone(
+        self, tmp_config_dir: Path, force_colour: None, extra: list[str], json_mode: bool
+    ) -> None:
+        """--no-open and --json never open a browser, even on a terminal."""
+        with pytest.MonkeyPatch.context() as mp:
+            self._desktop_environment(mp)
+            result, opened = self._run_oauth_url(tmp_config_dir, mp, *extra, json_mode=json_mode)
+
+        assert result.exit_code == 0, result.output
+        assert opened == []
+        assert "Opened in your default browser" not in result.output
+
+    def test_non_terminal_run_leaves_the_browser_alone(self, tmp_config_dir: Path) -> None:
+        """A piped run (CliRunner stdout is no terminal) prints the URL only."""
+        with pytest.MonkeyPatch.context() as mp:
+            self._desktop_environment(mp)
+            result, opened = self._run_oauth_url(tmp_config_dir, mp)
+
+        assert result.exit_code == 0, result.output
+        assert opened == []
+        assert OAUTH_RESULT["url"] in result.output
+        assert "Open this URL in a browser" in result.output
+
+    @pytest.mark.parametrize(
+        ("env_var", "value"),
+        [("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22"), ("WSL_INTEROP", "/run/WSL/1_interop")],
+        ids=["ssh", "wsl-without-wslview"],
+    )
+    def test_terminal_without_a_usable_browser_leaves_the_browser_alone(
+        self, tmp_config_dir: Path, force_colour: None, env_var: str, value: str
+    ) -> None:
+        """Where `auth login` would not open a browser, oauth-url does not either.
+
+        Runs the real `detect_browser_environment`: over SSH `webbrowser` would
+        start a console browser on the user's terminal.
+        """
+        with pytest.MonkeyPatch.context() as mp:
+            for name in ("SSH_CONNECTION", "SSH_TTY", "WSL_INTEROP"):
+                mp.delenv(name, raising=False)
+            mp.setattr(environment, "_is_containerized", lambda: False)
+            mp.setattr(environment, "_wslview_is_working", lambda: False)
+            mp.setenv(env_var, value)
+            result, opened = self._run_oauth_url(tmp_config_dir, mp)
+
+        assert result.exit_code == 0, result.output
+        assert opened == []
+        assert "Open this URL in a browser" in result.output
+
+    def test_opener_has_run_when_the_command_returns(
+        self, tmp_config_dir: Path, force_colour: None
+    ) -> None:
         """The process exits right after the command, and the opener thread dies with it.
 
         The fake opener is slow on purpose: without the wait, the command
@@ -794,9 +807,6 @@ class TestConfigOauthUrlCli:
             opened.append(url)
             return True
 
-        def _always_open(**_kwargs: bool) -> bool:
-            return True
-
         with pytest.MonkeyPatch.context() as mp:
             # The real open_browser, on its webbrowser path: no WSL, no real browser.
             mp.delenv("WSL_INTEROP", raising=False)
@@ -807,7 +817,7 @@ class TestConfigOauthUrlCli:
                 "keboola_agent_cli.commands._config_oauth.get_service",
                 lambda ctx, name: service,
             )
-            mp.setattr("keboola_agent_cli.commands._config_oauth._should_open", _always_open)
+            self._desktop_environment(mp)
             result = runner.invoke(
                 app,
                 [
@@ -852,22 +862,6 @@ class TestConfigOauthUrlCli:
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["browser_opened"] is False
-
-
-class TestShouldOpenBrowser:
-    """The interactive-only gate on the automatic browser open."""
-
-    @pytest.mark.parametrize(
-        ("no_open", "is_terminal", "expected"),
-        [
-            (False, True, True),
-            (True, True, False),
-            (False, False, False),
-            (True, False, False),
-        ],
-    )
-    def test_gate(self, no_open: bool, is_terminal: bool, expected: bool) -> None:
-        assert _should_open(no_open=no_open, is_terminal=is_terminal) is expected
 
 
 # ---------------------------------------------------------------------------
