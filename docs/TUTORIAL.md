@@ -512,7 +512,7 @@ git add -A && git commit -m "initial sync"
 `manifest.json`'s `ignoredComponents` field (since 0.91.0) lets you exclude
 project-specific components from every sync operation, on top of the
 always-ignored `keboola.sandboxes` and `keboola.mcp-server-tool`.
-`sync init --with-workspaces` *(since 0.96.0)* opts a tree in to syncing its
+`sync init --with-workspaces` *(since 0.96.1)* opts a tree in to syncing its
 shared SQL workspaces (`keboola.sandboxes`), config only.
 
 What you end up with on disk:
@@ -929,8 +929,9 @@ copy it later (the project token is enough):
 
 ```bash
 kbagent data-app password --project prod --app-id 12345678
-# Shows the app URL and the Keboola UI page, then: press c to copy the
-# password, Enter to finish. The password is not printed.
+# Prints the links "Open the app:" and "Configuration:" (the Keboola UI
+# page), then: press c to copy the password, Enter to finish. The password
+# is not printed.
 ```
 
 Without a terminal (a script, or an AI agent running the command), add

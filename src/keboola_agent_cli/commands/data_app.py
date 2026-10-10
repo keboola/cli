@@ -41,6 +41,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._url_copy import LINK_STYLE
 
 # Canonical Keboola help-doc references appended to each --help epilog so
 # operators have a one-click path to the rule a flag enforces.
@@ -198,7 +199,12 @@ def data_app_detail(
             ),
             c.print(f"  [bold]Size:[/bold] {d.get('size', '')}"),
             c.print(f"  [bold]Auto-suspend:[/bold] {d.get('auto_suspend_after_seconds', '?')}s"),
-            c.print(f"  [bold]URL:[/bold] {d.get('url', '')}"),
+            c.print(
+                f"  [bold]Open the app:[/bold] "
+                f"[{LINK_STYLE}]{escape(d.get('url') or '')}[/{LINK_STYLE}]",
+                highlight=False,
+                soft_wrap=True,
+            ),
             c.print(f"  [bold]Last started:[/bold] {d.get('last_start_timestamp', '')}"),
             c.print(f"  [bold]Git:[/bold] {d.get('git', {})}"),
         ),
@@ -238,7 +244,12 @@ def _print_create_result(console: Console, result: dict[str, Any]) -> None:
                 "not be injected; an app that reads Storage will serve no data"
             )
         if result.get("url"):
-            console.print(f"  [bold]URL:[/bold] {result['url']}")
+            console.print(
+                f"  [bold]Open the app:[/bold] "
+                f"[{LINK_STYLE}]{escape(result['url'])}[/{LINK_STYLE}]",
+                highlight=False,
+                soft_wrap=True,
+            )
         console.print(
             f"  [bold]State:[/bold] {result.get('state', '?')} "
             f"(desired={result.get('desired_state', '?')})"

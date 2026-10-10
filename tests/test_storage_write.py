@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.client import TableUploadOutcome
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import TABLE_DATA_JOB_MAX_WAIT
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
@@ -17,6 +18,15 @@ from keboola_agent_cli.services.storage_service import StorageService
 runner = CliRunner()
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+
+
+def _outcome(
+    results: dict, status: str = "success", file_id: int = 777, job_id: int = 888
+) -> TableUploadOutcome:
+    """A client ``upload_table_with_outcome`` return: the uploaded file and its import job."""
+    return TableUploadOutcome(
+        file_id=file_id, job={"id": job_id, "status": status, "results": results}
+    )
 
 
 def _make_store(tmp_path: Path) -> ConfigStore:
@@ -644,7 +654,9 @@ class TestUploadTableService:
         csv_file.write_text("id,name\n1,Alice\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {"importedRowsCount": 42, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 42, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -660,13 +672,16 @@ class TestUploadTableService:
         assert result["warnings"] == []
         assert "file_size_bytes" in result
         assert result["file_size_bytes"] > 0
-        mock_client.upload_table.assert_called_once_with(
+        mock_client.upload_table_with_outcome.assert_called_once_with(
             table_id="in.c-b.users",
             file_path=str(csv_file),
             incremental=False,
             delimiter=",",
             enclosure='"',
             branch_id=None,
+            wait=True,
+            max_wait=None,
+            on_progress=None,
         )
         mock_client.close.assert_called_once()
 
@@ -675,7 +690,9 @@ class TestUploadTableService:
         csv_file.write_text("ts,msg\n2024-01-01,hello\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {"importedRowsCount": 10, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 10, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -687,13 +704,16 @@ class TestUploadTableService:
         )
 
         assert result["incremental"] is True
-        mock_client.upload_table.assert_called_once_with(
+        mock_client.upload_table_with_outcome.assert_called_once_with(
             table_id="in.c-b.events",
             file_path=str(csv_file),
             incremental=True,
             delimiter=",",
             enclosure='"',
             branch_id=None,
+            wait=True,
+            max_wait=None,
+            on_progress=None,
         )
 
     def test_custom_delimiter_and_enclosure(self, tmp_path: Path) -> None:
@@ -701,7 +721,9 @@ class TestUploadTableService:
         csv_file.write_text("a;b\n1;2\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {"importedRowsCount": 5, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 5, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         service.upload_table(
@@ -713,13 +735,16 @@ class TestUploadTableService:
             auto_create=False,
         )
 
-        mock_client.upload_table.assert_called_once_with(
+        mock_client.upload_table_with_outcome.assert_called_once_with(
             table_id="in.c-b.t",
             file_path=str(csv_file),
             incremental=False,
             delimiter=";",
             enclosure="'",
             branch_id=None,
+            wait=True,
+            max_wait=None,
+            on_progress=None,
         )
 
     def test_warnings_passed_through(self, tmp_path: Path) -> None:
@@ -727,10 +752,12 @@ class TestUploadTableService:
         csv_file.write_text("id\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {
-            "importedRowsCount": 3,
-            "warnings": ["Duplicate rows skipped"],
-        }
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {
+                "importedRowsCount": 3,
+                "warnings": ["Duplicate rows skipped"],
+            }
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -744,7 +771,7 @@ class TestUploadTableService:
         csv_file.write_text("id\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.side_effect = KeboolaApiError(
+        mock_client.upload_table_with_outcome.side_effect = KeboolaApiError(
             "Table not found", status_code=404, error_code="NOT_FOUND"
         )
         service = _make_service(store, mock_client)
@@ -776,7 +803,9 @@ class TestUploadTableAutoCreate:
             "Bucket not found", status_code=404, error_code="storage.buckets.notFound"
         )
         mock_client.list_tables.return_value = []  # table also absent after bucket create
-        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 1, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -812,7 +841,9 @@ class TestUploadTableAutoCreate:
         mock_client = MagicMock()
         mock_client.get_bucket_detail.return_value = {"id": "in.c-logs"}  # bucket exists
         mock_client.list_tables.return_value = []  # table absent
-        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 1, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -843,7 +874,9 @@ class TestUploadTableAutoCreate:
         mock_client = MagicMock()
         mock_client.get_bucket_detail.return_value = {"id": "in.c-b"}
         mock_client.list_tables.return_value = [{"name": "data"}]
-        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 1, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         result = service.upload_table(
@@ -863,7 +896,9 @@ class TestUploadTableAutoCreate:
         csv_file.write_text("x\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 1, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         service.upload_table(
@@ -1644,6 +1679,9 @@ class TestUploadTableCLI:
             enclosure='"',
             auto_create=True,
             branch_id=None,
+            wait=True,
+            timeout=None,
+            on_progress=None,
         )
 
     def test_upload_table_incremental(self, tmp_path: Path) -> None:
@@ -1688,6 +1726,9 @@ class TestUploadTableCLI:
             enclosure='"',
             auto_create=True,
             branch_id=None,
+            wait=True,
+            timeout=None,
+            on_progress=None,
         )
 
     def test_upload_table_file_not_found(self, tmp_path: Path) -> None:
@@ -1787,6 +1828,9 @@ class TestUploadTableCLI:
             enclosure='"',
             auto_create=False,
             branch_id=None,
+            wait=True,
+            timeout=None,
+            on_progress=None,
         )
 
 
@@ -1941,7 +1985,9 @@ class TestUploadTableBranch:
         csv_file.write_text("id\n1\n")
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.upload_table.return_value = {"importedRowsCount": 1, "warnings": []}
+        mock_client.upload_table_with_outcome.return_value = _outcome(
+            {"importedRowsCount": 1, "warnings": []}
+        )
         service = _make_service(store, mock_client)
 
         service.upload_table(
@@ -1952,13 +1998,16 @@ class TestUploadTableBranch:
             branch_id=33,
         )
 
-        mock_client.upload_table.assert_called_once_with(
+        mock_client.upload_table_with_outcome.assert_called_once_with(
             table_id="in.c-b.data",
             file_path=str(csv_file),
             incremental=False,
             delimiter=",",
             enclosure='"',
             branch_id=33,
+            wait=True,
+            max_wait=None,
+            on_progress=None,
         )
 
     def test_cli_branch_flag(self, tmp_path: Path) -> None:
@@ -2028,7 +2077,7 @@ class TestDownloadTableService:
 
         out_file = tmp_path / "output.csv"
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"1","Alice","a@b.c"\n')
             return 1024
 
@@ -2074,7 +2123,7 @@ class TestDownloadTableService:
         }
         out_file = tmp_path / "events.csv"
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"1","Alice"\n')
             return 512
 
@@ -2123,7 +2172,7 @@ class TestDownloadTableService:
         }
         mock_client.list_tables.return_value = []
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"data"\n')
             return 256
 
@@ -2155,7 +2204,7 @@ class TestDownloadTableService:
         ]
         out_path = str(tmp_path / "out.csv")
 
-        def _fake_sliced_download(detail, path):
+        def _fake_sliced_download(detail, path, on_progress=None):
             Path(path).write_text('"1","2"\n')
             return 4096
 
@@ -2169,7 +2218,7 @@ class TestDownloadTableService:
         )
 
         assert result["columns"] == ["a", "b"]
-        mock_client.download_sliced_file.assert_called_once_with(file_detail, out_path)
+        mock_client.download_sliced_file.assert_called_once_with(file_detail, out_path, None)
         mock_client.close.assert_called_once()
 
     def test_no_file_id_raises_error(self, tmp_path: Path) -> None:
@@ -2220,7 +2269,7 @@ class TestDownloadTableService:
         }
         mock_client.list_tables.return_value = []
 
-        def _fake_download(url, path):
+        def _fake_download(url, path, on_progress=None):
             Path(path).write_text('"data"\n')
             return 128
 
@@ -2304,6 +2353,7 @@ class TestDownloadTableCLI:
             where_values=None,
             changed_since=None,
             changed_until=None,
+            on_progress=None,
         )
 
     def test_download_table_with_columns_and_limit(self, tmp_path: Path) -> None:
@@ -2356,6 +2406,7 @@ class TestDownloadTableCLI:
             where_values=None,
             changed_since=None,
             changed_until=None,
+            on_progress=None,
         )
 
     def test_download_table_api_error(self, tmp_path: Path) -> None:

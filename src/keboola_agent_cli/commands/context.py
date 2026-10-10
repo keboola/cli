@@ -163,7 +163,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     registered unless --register-projects was passed, and where the
     suggested alias is slugified from the project NAME, never the numeric
     project id (e.g. 9840). Once registered, `--project 9840` resolves to
-    that alias too (since 0.96.0; see Tips 3).
+    that alias too (since 0.96.1; see Tips 3).
     --all registers every accessible project. --project-id ID (repeatable)
     registers specific ones (an id the session cannot access raises a
     ConfigError naming it). Omitting both starts an interactive arrow-key +
@@ -344,7 +344,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project use ALIAS
     Pin ALIAS as the default project. Persists to config.json. A registered
-    project ID pins that project's alias (since 0.96.0; see Tips 3).
+    project ID pins that project's alias (since 0.96.1; see Tips 3).
     Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
     an explicit --project flag overrides both.
 
@@ -373,7 +373,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
     Bulk invite. CSV must have a header row with columns: email, project (alias or
-    numeric ID -- an alias wins, see Tips 3; since 0.96.0) or project_id (ID only),
+    numeric ID -- an alias wins, see Tips 3; since 0.96.1) or project_id (ID only),
     role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
     `rows[]` with status=ok|noop|failed; `failed_rows` ordering is not deterministic.
@@ -770,12 +770,30 @@ remain branch-aware because modifying a dev branch is the expected intent.
         --time-partitioning-field created_at --clustering-field tenant_id --primary-key id
       then: kbagent storage swap-tables --table-id in.c-main.events --target-table-id in.c-main.events_repart --branch ID
 
-  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--branch ID]
-    Upload CSV into a table. Auto-creates bucket and table if missing (columns inferred as STRING from CSV header).
-    Use --no-auto-create to require the table to already exist.
-    Full load by default; --incremental to append rows. Supports files up to 5 GB via async file-first upload flow. Branch-aware.
+  kbagent storage upload-table --project NAME --table-id TABLE_ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
+    Upload CSV (or .csv.gz, uploaded as-is) into a table. Auto-creates bucket and table if missing (columns inferred
+    as STRING from the CSV header; read through gzip for .csv.gz). Use --no-auto-create to require the table to exist.
+    Full load by default; --incremental to append rows. Branch-aware. Two phases: cloud upload, then an async
+    Storage import job.
+    Cloud upload (since 0.98.0): on AWS stacks a file above 64 MiB goes up as an S3 MULTIPART upload (64 MiB parts,
+    auto-scaled to fit 10,000 parts, 4 in parallel, per-part retry; peak memory ~4 x part size). The old 5 GiB
+    single-PUT ceiling is gone. Azure/GCP stacks are unchanged. Human mode shows a progress bar on stderr.
+    The S3 credentials last 12 h (a 200 GB file needs ~5 MB/s sustained); the source file must not change during
+    the upload (error if size/mtime moves); a failed upload restarts from zero (no resume).
+    Import (since 0.98.0): --wait (default) waits up to --timeout SECONDS (default 600) for the import job.
+    --no-wait still waits for the upload, then enqueues the import and returns at once with file_id, job_id,
+    job_status (imported_rows is null while pending) -- poll with `storage job-detail --job-id ID --wait`.
+    A wait timeout is STORAGE_JOB_TIMEOUT (exit 4, retryable=false): the import KEEPS RUNNING server-side; the
+    error names job_id + file_id. NEVER re-run the upload while that job is waiting/processing -- an incremental
+    re-run duplicates rows. If the import fails or its enqueue fails after the upload, re-import the already
+    uploaded file with `storage load-file --file-id ID` instead of uploading again.
+    For a 100+ GB file use --no-wait and poll (see the large-upload workflow in the kbagent skill).
+    --progress (since 0.98.0): ALWAYS report progress on stderr, also with --json and without a terminal: a bar on
+    a terminal, else one line every 10 s + a final line, e.g.
+    `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`. stdout stays clean JSON.
+    For long runs: `kbagent --json storage upload-table ... --progress 2>progress.log`, then read the log.
 
-  kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
+  kbagent storage download-table --project NAME --table-id TABLE_ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID] [--progress]
     Export table data to a local CSV file. Async export with streaming download.
     --where-column + --where-value (repeatable) + --where-operator eq|neq filter rows; --changed-since/--changed-until (unix ts or strtotime) filter by import time.
     Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
@@ -879,14 +897,17 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
     List Storage Files. --tag filters by tags (AND logic, repeat for multiple). --query for full-text search on name.
     Uses production by default; pass --branch to query a dev branch explicitly.
+    --progress: as on upload-table (network bytes; the clock starts when the download starts, after the export).
 
-  kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
+  kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID] [--progress]
     Upload any file to Storage Files. --tag assigns tags (repeatable). --permanent prevents auto-deletion after 15 days.
-    --name overrides the filename (default: local filename). Branch-aware.
+    --name overrides the filename (default: local filename). Branch-aware. --progress as on upload-table.
+    Since 0.98.0: same S3 multipart upload as upload-table on AWS stacks (above 64 MiB; no 5 GiB ceiling).
 
-  kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
+  kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE] [--progress]
     Download a Storage File. Either --file-id (by ID) or --tag (latest file matching all tags).
     --output sets local path (default: original filename). Handles sliced and gzipped files transparently.
+    --progress as on download-table.
 
   kbagent storage file-detail --project NAME --file-id ID
     Show file metadata: name, size, tags, sliced/permanent status, creator token. Does not download.
@@ -897,13 +918,23 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
     Add and/or remove tags on a file in a single operation. Both --add and --remove are repeatable.
 
-  kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
-    Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload.
-    --incremental to append rows. Branch-aware.
+  kbagent storage load-file --project NAME --file-id ID --table-id TABLE_ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+    Import an already-uploaded Storage File into a table. Useful for files uploaded by components or file-upload,
+    and the recovery path after a failed upload-table import (no re-upload). --incremental to append rows.
+    Since 0.98.0: --wait/--no-wait + --timeout SECONDS (default 600) behave exactly as on upload-table
+    (--no-wait returns job_id; a wait timeout is STORAGE_JOB_TIMEOUT, exit 4, the import keeps running). Branch-aware.
 
-  kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
+  kbagent storage job-detail --project NAME --job-id ID [--wait] [--timeout SECONDS]
+    (since 0.98.0) Show one Storage API job: status, operation_name, table_id, file_id, created/start/end times,
+    imported_rows, warnings, results, error. --wait polls until the job finishes (--timeout budget).
+    Exit 0 for success/waiting/processing; exit 1 STORAGE_JOB_FAILED when the job ended in error (details are
+    still returned); exit 4 on a --wait timeout. Job ids are project-scoped (no --branch; the active branch does
+    not matter). Read-only. Use it to follow `upload-table --no-wait` / `load-file --no-wait`.
+
+  kbagent storage unload-table --project NAME --table-id TABLE_ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID] [--progress]
     Export a table to a Storage File. The file stays in Keboola for other components to use.
     --tag assigns tags to the exported file. --download also saves it locally. Branch-aware.
+    --progress reports the --download transfer as on download-table (nothing to report without --download).
     --file-type parquet produces a sliced Parquet file (CSV default). With --download, --output
     is a directory that will hold one .parquet file per slice plus _manifest.json.
     Default parquet directory: ./{{project}}/{{table_id}}.parquet/ (mirrors Keboola addressing).
@@ -1440,7 +1471,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
     [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
-    With --wait on a password app (0.96.0+): the password is delivered like
+    With --wait on a password app (0.96.1+): the password is delivered like
     `data-app password` (the c prompt in a terminal, which then waits for
     Enter or 120 s; --copy / --reveal need --wait). Without a flag and
     without the prompt (no terminal, --json) nothing is read: output as
@@ -1467,11 +1498,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent data-app password --project NAME --app-id ID
     [--copy] [--reveal] [--open]
     Give the user the password of a password-protected app WITHOUT printing
-    it (0.96.0+; older versions printed it and needed a Manage API token).
+    it (0.96.1+; older versions printed it and needed a Manage API token).
     Project token only (static or session), no Manage token. In a terminal
-    (human mode, stdin + stdout a TTY, not a background job) it shows the app
-    URL and `ui_url`, then waits: `c` copies the password, Enter / Esc / q
-    finishes, 120 s timeout.
+    (human mode, stdin + stdout a TTY, not a background job) it prints the
+    links `Open the app:` (`app_url`) and `Configuration:` (`ui_url`), then
+    waits: `c` copies the password, Enter / Esc / q finishes, 120 s timeout.
     Without a terminal or with --json there is no prompt: only --copy copies
     it (the clipboard tool gets it on stdin). Nothing copied -> exit 0 with
     `password_delivered_to: null`; `ui_url` is the Keboola UI page that shows
@@ -1601,7 +1632,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
     Initialize sync working directory. --git-branching enables git-to-Keboola branch mapping.
-    --with-workspaces (since 0.96.0, CLI-25) sets "syncWorkspaces": true in the manifest
+    --with-workspaces (since 0.96.1, CLI-25) sets "syncWorkspaces": true in the manifest
     (with --adopt-existing: turns it on in an existing one). pull/diff/push/clone then also
     sync shared SQL workspaces: keboola.sandboxes configs with no parameters.id and
     runtime.shared true (Python/R and legacy SQL sandboxes carry parameters.id and stay
@@ -1636,7 +1667,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
-    always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.0),
+    always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),
     unioned with the manifest's ignoredComponents list
     (.keboola/manifest.json) -- a per-tree exclusion knob honored by pull/diff/push. A
     component newly ignored has its manifest entry dropped and local dir removed on the next
@@ -1676,7 +1707,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
-    Workspace delete (since 0.96.0, syncWorkspaces trees): a --force push that deletes a shared
+    Workspace delete (since 0.96.1, syncWorkspaces trees): a --force push that deletes a shared
     SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
     backend workspaces, which config restore does not bring back; check
     `sync push --dry-run --force` (warnings[] workspace_sessions) first. --force is destructive-class (a policy denying
@@ -1715,11 +1746,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Clone a reference synced tree into a fresh target project + parameterize it
     (bucket_map / variable_values / instance_rename overrides), then push so every
     config CREATEs fresh. keboola.flow task configIds + variable links remap
-    reference->ULID; since 0.96.0 also shared-code links, legacy keboola.orchestrator
+    reference->ULID; since 0.96.1 also shared-code links, legacy keboola.orchestrator
     task configIds, task configRowIds and schedule targets (link_remaps counts each
     kind; an unset link is an errors[] entry, a failed PUT is sent by the next push).
     Idempotent (re-run -> no_changes); needs a fresh target.
-    Read warnings[] after a clone (also --dry-run, 0.96.0+): missing_task_target (a
+    Read warnings[] after a clone (also --dry-run, 0.96.1+): missing_task_target (a
     flow/orchestrator task runs a config not in the tree), encrypted_values_copied
     (KBC:: paths the target cannot decrypt; secret_keys: plaintext in _config.yml +
     sync push, unencryptable_keys: encrypt values, oauth_keys: authorize again),
@@ -1760,18 +1791,34 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 Manage Keboola metastore models: datasets, metrics, relationships, constraints,
 glossary terms. Metastore URL derived from stack URL by replacing `connection.`
-with `metastore.`. Auth: same `X-StorageApi-Token` as Storage, but it MUST be a
-MASTER (project admin) token -- the metastore rejects valid non-master tokens
-with an opaque 401 "Failed to create project scope", reclassified by kbagent to
-MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
+with `metastore.`. Auth: same `X-StorageApi-Token` as Storage. READS work with
+any valid, non-disabled, non-expired token (PSGO-282); WRITES (add, edit,
+remove, import, promote, build, scope add|remove|set|request-*) need a
+project-admin token (master, or any admin-role user's). A non-admin write is
+the metastore's opaque 401 "Failed to create project scope", reclassified by
+kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 `kbagent --json project info --project P` -> is_master_token. Alias:
 `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 
   kbagent semantic-layer model list --project P
     List all semantic-layer models in a project.
 
-  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
-    Create a new model (default sql-dialect: Snowflake).
+  kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+    Create a new model (default sql-dialect: Snowflake). --scope omitted =
+    "project" (owner-only). "targeted" = owner + explicit --target-project
+    grants (alias or numeric project ID; repeatable or comma-separated; an
+    alias must be on the owner's stack; a project-admin token is needed).
+    "organization" = visible to every project in the org from creation -- the
+    schema's ACL requires the organization-admin ROLE to create directly at
+    this scope (a normal project token gets 403 ACCESS_DENIED); an ordinary
+    caller instead creates at project/targeted scope and uses
+    `scope request-create` + an org-admin's `scope set --scope organization`
+    (below). `--scope organization` is irreversible and is gated as
+    destructive. ASK THE USER which project(s) before ever passing --scope
+    organization|targeted -- never guess. --target-project without --scope
+    targeted exits 2. With --scope targeted and no --target-project: on a
+    real terminal this launches an interactive picker over the other projects
+    on the stack; in --json/non-interactive it fails fast (exit 2).
 
   kbagent semantic-layer model delete --project P --model M [--yes]
     Delete a model. Fails if the model still has child entities.
@@ -1838,14 +1885,16 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     else dimension). Constraint name regex `^[a-z][a-z0-9_]*$`, severity is
     error|warning|info (the 4-band health convention lives in the NAME suffix
     `_critical/_warning/_healthy/_review`, not the API severity). `--rule` is
-    a STRING expression (e.g. "value >= 0"), NEVER an object.
+    a STRING expression (e.g. "value >= 0"), NEVER an object. --scope /
+    --target-project: same semantics as `model create --scope` above --
+    ASK THE USER before ever passing --scope organization|targeted.
 
   kbagent semantic-layer edit metric|dataset|constraint|relationship|glossary ...
-    DELETE+POST (no PATCH on metastore). Metric rename cascades through every
-    constraint referencing the old name (DELETE old + POST new with updated
+    In-place PUT (same id, scope and grants). Metric rename cascades through
+    every constraint referencing the old name (each PUT with updated
     metrics[]); CODE_METRIC warning shown
-    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). On POST failure,
-    rollback re-POSTs original_attrs and reports success/failure explicitly.
+    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). A failed PUT
+    changes nothing (the `rollback` field is always null).
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
@@ -1856,6 +1905,10 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --new-metrics ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
+    Edits update the item in place (PUT): it keeps its id, scope,
+    target-project grants (`scope get` below), pending elevation request and
+    revision history -- editing an organization/targeted item never
+    downgrades it. A failed edit changes nothing.
 
   kbagent semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes
@@ -1867,7 +1920,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
     Replay a snapshot. Default: skip on conflict. --overwrite opts into
-    DELETE+POST. Dependency-ordered push (datasets -> metrics -> relationships
+    an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
   kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types ...] [--dry-run] [--yes]
@@ -1891,6 +1944,72 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Encrypt the project's storage token for transformation `user_properties`.
     Builds {{"#metastore_token": <token>}} and delegates to EncryptService.
     --encrypt is currently required; other modes refused with USAGE_ERROR.
+
+  kbagent semantic-layer scope get --project P --type T --context-id ID
+    Show an item's current scope ("project"|"organization"|"targeted"),
+    target_project_ids, and any pending scope_elevation_requested_at.
+    --type is one of model|dataset|metric|relationship|constraint|glossary.
+
+  kbagent semantic-layer scope add --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+  kbagent semantic-layer scope remove --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+    Attach / detach target projects of a --scope targeted item (alias or
+    numeric ID; repeatable or comma-separated). A client-side merge (read the
+    grants, apply the delta, PUT) -- NOT atomic against a concurrent grant
+    change. Refused (exit 2) from a project that does not own the item: the
+    server hides the grants from a non-owner, so a merge would overwrite them
+    -- use `scope set --target-project` there. The item must have been created
+    with scope="targeted" (400 otherwise).
+
+  kbagent semantic-layer scope set --project P --type T --context-id ID (--scope organization | --target-project ALIAS|ID ... | --clear) [--dry-run] [--yes]
+    Write the scope. Exactly ONE of: --target-project (REPLACES the whole
+    list), --clear (revokes every grant; owner-only again), or --scope
+    organization (elevate; the only value --scope accepts). A mixed
+    request exits 2. Elevating REQUIRES the organization-admin ROLE (403
+    otherwise), is ONE-WAY (no downgrade), and is gated as destructive;
+    it prompts unless --yes/--json, and --dry-run shows the change without
+    applying it. NEVER elevate without the user explicitly naming the item
+    -- it makes the item (and its full revision history) visible to every
+    project in the organization, irreversibly.
+
+  kbagent semantic-layer scope request-create --project P --type T --context-id ID
+    Owner-only. Flags a project-scoped item as awaiting an organization
+    admin's step-up decision (`scope set --scope organization`). Idempotent --
+    calling again just refreshes the timestamp.
+
+  kbagent semantic-layer scope request-delete --project P --type T --context-id ID
+    Owner-only. Clears a pending elevation request. Idempotent no-op if
+    none is pending.
+
+  kbagent semantic-layer scope request-list --project P --type T [--limit N] [--offset N]
+    One page (default --limit 50) of items of --type awaiting an elevation
+    decision, across the whole organization; returns {{items, limit, offset,
+    has_more}}. The org-admin's discovery queue.
+
+  Child items (`add metric|dataset|...`) with --scope omitted INHERIT their
+  model's scope and target projects; pass --scope to override. An inherited
+  organization scope is gated as destructive like a typed one, and a
+  non-org-admin token gets a 403 on it (pass --scope project). `import`,
+  `promote` and `build --model` create their NEW items at the target model's
+  scope too, with the same gate; `import` / `promote --scope` (and
+  --target-project) override it, as on `add`. Overwritten items keep their scope.
+
+  Item names are unique per type across ALL models of a project: a second
+  model in the same project cannot reuse an item name (ALREADY_EXISTS, "in
+  this project"). An item stored at schema version 1.0.0 (created before
+  0.97.0) cannot be elevated; recreate it: export, delete the model, create
+  it again, import.
+
+  Elevating an EXISTING project's semantic-layer objects in bulk: there is no
+  bulk-elevate endpoint -- each object needs its own `scope request-create` +
+  an org-admin's `scope set --scope organization`, one call per item. Do this
+  deliberately, one object at a time, only when the user has named which
+  objects should become org-wide; never loop this over every object in a
+  project speculatively.
+
+  Over `kbagent serve`: GET/PUT /semantic-layer/scope/{{context_id}},
+  POST/DELETE .../target-projects, PUT/DELETE .../elevation-request,
+  GET /semantic-layer/scope/elevation-requests; POST /semantic-layer/models
+  and /items/{{kind}} take `scope` + `target_projects`.
 
 
 ### Self-call HTTP (inside `kbagent serve` subprocesses)
@@ -2265,7 +2384,7 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
-   --project takes an alias or a registered project's numeric ID (since 0.96.0).
+   --project takes an alias or a registered project's numeric ID (since 0.96.1).
    An alias wins over an ID. An ID registered under several aliases fails with
    CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
    exactly one is a session (browser-login) alias, which then wins. The same
@@ -2371,6 +2490,32 @@ MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   6  Permission denied (operation blocked by policy)
 
 When you receive a non-zero exit code, use --json to get structured error details.
+
+Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
+item fails exit 1 when at least one item failed: sync push, sync
+push/pull/diff --all-projects, sync clone, org setup, project refresh,
+project invite --from-csv, workspace gc, semantic-layer
+import/promote/build/edit metric, storage describe-batch, flow
+schedule-remove. Only sync push, sync clone, storage describe-batch, storage
+describe-migrate and flow schedule-remove print a "Failed:" headline with the
+failed count instead of "Success:". The other commands list the failed items
+in a table or in summary lines, and the --all-projects variants state the
+count in the summary line. flow schedule-remove always returns the errors[]
+key, empty when nothing failed; a partial failure fills it and exits 1; when
+every schedule delete fails it still raises SCHEDULE_DELETE_FAILED.
+The bulk storage commands
+(delete-table, delete-bucket, file-delete, describe-migrate, ...) already
+exited 1. The --json payload is still emitted in full (errors / projects_failed
+/ projects_refresh_failed / failed / fetch_errors / summary.failed), BEFORE the exit, so parse it and then
+branch on the exit code. Exit 1 here does not mean nothing was written: the
+items that succeeded stay written, so read the payload before you run the
+command again. A --dry-run of these commands exits 1 when it reports a failed
+item, like the real run. sync diff --all-projects also exits 1 when a project
+failed.
+Other read-only multi-project fan-outs (billing credits, job list, schedule
+list, notification list, ...) are the deliberate exception: a per-project
+failure there degrades that project only and still exits 0, so check their
+errors array rather than the exit code.
 
 ## Claude Code Plugin
 

@@ -4,7 +4,6 @@ Provides direct access to Storage API data including the sharing/linked
 bucket metadata (sourceBucket, sourceProject) that thinner listings drop.
 """
 
-import csv
 import logging
 import re
 from collections.abc import Callable
@@ -15,6 +14,21 @@ from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
+from ._storage_downloads import (
+    DownloadProgress,
+    file_download_target,
+    prepend_csv_header,
+    safe_download_target,
+    write_columns_sidecar,
+)
+from ._storage_jobs import (
+    ImportOptions,
+    import_job_fields,
+    read_csv_header,
+    summarize_storage_job,
+    validate_wait_timeout,
+    with_import_hint,
+)
 from ._storage_tables import normalize_table_rows
 from ._table_detail import build_table_detail
 from .base import normalize_job_timeout
@@ -48,31 +62,6 @@ def _detect_legacy_branch_storage(client: Any, branch_id: int | None) -> bool:
         return False
 
 
-def _safe_download_target(base: Path, server_name: str) -> Path:
-    """Contain an API-supplied file name under ``base``.
-
-    The Storage API controls the file ``name``; using it verbatim as a write
-    path lets a malicious or compromised response escape the user's chosen
-    directory (``../../etc/...`` or an absolute path) and overwrite arbitrary
-    files with attacker-controlled bytes. We strip leading separators so an
-    absolute name cannot override ``base``, preserve legitimate nested
-    subpaths, and assert the resolved path stays within ``base``.
-    """
-    cleaned = server_name.lstrip("/\\").strip() or "download"
-    candidate = (base / cleaned).resolve()
-    if not candidate.is_relative_to(base.resolve()):
-        raise KeboolaApiError(
-            message=(
-                f"Refusing to write outside the target directory: the "
-                f"server-provided file name {server_name!r} escapes {base.resolve()}"
-            ),
-            status_code=400,
-            error_code=ErrorCode.INVALID_ARGUMENT,
-            retryable=False,
-        )
-    return candidate
-
-
 # "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
 # Storage API, which validates type/length combinations per backend and
 # returns clear errors (e.g. "'10' is not valid length for INTEGER"). This
@@ -84,24 +73,6 @@ _COL_SPEC_RE = re.compile(
     r"\s*(?:\(\s*(?P<length>[0-9][0-9,\s]*)\s*\))?"
     r"\s*$"
 )
-
-
-def _read_csv_header(file_path: str, delimiter: str = ",") -> list[str]:
-    """Return column names from the first row of a CSV file.
-
-    Strips leading/trailing whitespace and skips empty fields. Handles
-    UTF-8 BOM automatically (utf-8-sig encoding).
-
-    Raises:
-        ValueError: If the first row is empty or contains no non-empty fields.
-    """
-    with open(file_path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.reader(fh, delimiter=delimiter)
-        header = next(reader, [])
-    columns = [col.strip() for col in header if col.strip()]
-    if not columns:
-        raise ValueError("CSV file has no column headers in the first row.")
-    return columns
 
 
 def _parse_column_spec(
@@ -351,51 +322,6 @@ def _ensure_bucket_exists_in_branch(
             exc,
         )
     return True
-
-
-def _write_columns_sidecar(output_dir: str, columns: list[str]) -> None:
-    """Write a _columns.csv sidecar listing the table's column order.
-
-    Storage exports slices without a header row; the column list comes from
-    the table metadata. Writing a tiny sidecar here lets downstream tools
-    (DuckDB read_csv, polars scan_csv) reconstruct the schema without
-    querying Storage. Using the ``_`` prefix matches the _manifest.json
-    convention that pyarrow/Spark/Hive use for "skip when reading as a
-    dataset".
-    """
-    sidecar = Path(output_dir) / "_columns.csv"
-    with sidecar.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh, quoting=csv.QUOTE_ALL)
-        writer.writerow(columns)
-
-
-def _prepend_csv_header(file_path: str, columns: list[str]) -> None:
-    """Prepend a CSV header row to an existing file.
-
-    Streams the original body into a temp file so that multi-GB CSV exports
-    never sit in RAM at once (issue #187: the old read_bytes() peaked at the
-    full file size). Uses CSV quoting to match Keboola's RFC4180 format.
-    """
-    import io
-    import shutil
-    import tempfile
-
-    writer_buf = io.StringIO()
-    writer = csv.writer(writer_buf, quoting=csv.QUOTE_ALL)
-    writer.writerow(columns)
-    header_line = writer_buf.getvalue().encode("utf-8")
-
-    p = Path(file_path)
-    # Temp file sits next to the target so shutil.move is a cheap rename on
-    # the same filesystem.
-    with tempfile.NamedTemporaryFile(
-        dir=p.parent, prefix=p.name + ".", suffix=".tmp", delete=False
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-        tmp.write(header_line)
-        with p.open("rb") as src:
-            shutil.copyfileobj(src, tmp, length=1024 * 1024)
-    tmp_path.replace(p)
 
 
 class StorageService(ColumnDescriptionsMixin):
@@ -1072,6 +998,10 @@ class StorageService(ColumnDescriptionsMixin):
         enclosure: str = '"',
         auto_create: bool = True,
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        timeout: float | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
@@ -1088,12 +1018,22 @@ class StorageService(ColumnDescriptionsMixin):
             enclosure: CSV value enclosure character.
             auto_create: Auto-create bucket and table if missing.
             branch_id: If set, target a specific dev branch.
+            wait: If False, return once the import job is queued (the cloud
+                upload is always awaited); ``imported_rows`` is then None.
+            timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+            on_progress: ``(bytes_sent, total_bytes)`` callback for the upload.
 
         Returns:
-            Dict with import results plus auto_created_bucket / auto_created_table flags.
-        """
-        from ..errors import KeboolaApiError
+            Dict with import results, ``file_id`` / ``job_id`` / ``job_status``,
+            plus auto_created_bucket / auto_created_table flags.
 
+        Raises:
+            ValueError: ``timeout`` is not a positive finite number, or the
+                header of a file to auto-create a table from is unreadable.
+            KeboolaApiError: An import timeout names the still-running job and
+                the ``storage job-detail`` command to follow it.
+        """
+        validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -1132,7 +1072,7 @@ class StorageService(ColumnDescriptionsMixin):
                         branch_id=branch_id,
                     )
                     if not any(t.get("name") == table_name for t in existing):
-                        columns = _read_csv_header(file_path, delimiter=delimiter)
+                        columns = read_csv_header(file_path, delimiter, enclosure)
                         client.create_table(
                             bucket_id=bucket_id,
                             name=table_name,
@@ -1145,14 +1085,25 @@ class StorageService(ColumnDescriptionsMixin):
                         auto_created_table = True
                         logger.info("Auto-created table %s (%d columns)", table_id, len(columns))
 
-            results = client.upload_table(
+            outcome = client.upload_table_with_outcome(
                 table_id=table_id,
                 file_path=file_path,
                 incremental=incremental,
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                wait=wait,
+                max_wait=timeout,
+                on_progress=on_progress,
             )
+        except KeboolaApiError as exc:
+            options = ImportOptions(
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+            )
+            raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
             client.close()
 
@@ -1161,8 +1112,8 @@ class StorageService(ColumnDescriptionsMixin):
             "table_id": table_id,
             "incremental": incremental,
             "file_size_bytes": file_size_bytes,
-            "imported_rows": results.get("importedRowsCount"),
-            "warnings": results.get("warnings", []),
+            "file_id": outcome.file_id,
+            **import_job_fields(outcome.job, outcome.file_id),
             "auto_created_bucket": auto_created_bucket,
             "auto_created_table": auto_created_table,
         }
@@ -1186,6 +1137,7 @@ class StorageService(ColumnDescriptionsMixin):
         where_values: list[str] | None = None,
         changed_since: str | None = None,
         changed_until: str | None = None,
+        on_progress: DownloadProgress | None = None,
     ) -> dict[str, Any]:
         """Export a storage table to a local CSV file.
 
@@ -1213,6 +1165,9 @@ class StorageService(ColumnDescriptionsMixin):
                 analytical tools the slices themselves are header-less
                 parts of a single logical CSV; headers come from catalog
                 metadata, not the slice bodies.
+            on_progress: ``(network_bytes_done, total_or_None)`` during the
+                download (not the export job); a terminal concern, so the
+                REST API and SDK leave it None.
 
         Returns:
             Dict with export metadata. With ``keep_slices`` the result also
@@ -1288,10 +1243,12 @@ class StorageService(ColumnDescriptionsMixin):
                         error_code=ErrorCode.NOT_SLICED,
                         retryable=False,
                     )
-                slice_info = client.download_sliced_file_to_dir(file_detail, output_path)
+                slice_info = client.download_sliced_file_to_dir(
+                    file_detail, output_path, on_progress
+                )
                 # Sidecar with the column order so downstream readers can
                 # reconstruct the header without hitting Storage.
-                _write_columns_sidecar(slice_info["output_dir"], table_columns or [])
+                write_columns_sidecar(slice_info["output_dir"], table_columns or [])
                 return {
                     "project_alias": alias,
                     "table_id": table_id,
@@ -1306,13 +1263,13 @@ class StorageService(ColumnDescriptionsMixin):
 
             # Step 4b: Default mode -- concat into a single CSV file.
             if file_detail.get("isSliced"):
-                bytes_written = client.download_sliced_file(file_detail, output_path)
+                bytes_written = client.download_sliced_file(file_detail, output_path, on_progress)
             else:
-                bytes_written = client.download_file(download_url, output_path)
+                bytes_written = client.download_file(download_url, output_path, on_progress)
 
             # Step 5: Prepend CSV header row
             if table_columns:
-                _prepend_csv_header(output_path, table_columns)
+                prepend_csv_header(output_path, table_columns)
                 # Recalculate size after adding header
                 bytes_written = Path(output_path).stat().st_size
         finally:
@@ -1915,6 +1872,7 @@ class StorageService(ColumnDescriptionsMixin):
         tags: list[str] | None = None,
         is_permanent: bool = False,
         branch_id: int | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a local file to Storage Files.
 
@@ -1925,6 +1883,7 @@ class StorageService(ColumnDescriptionsMixin):
             tags: Optional list of tags.
             is_permanent: If True, file is not auto-deleted.
             branch_id: If set, target a specific dev branch.
+            on_progress: ``(bytes_sent, total_bytes)`` during the cloud upload.
 
         Returns:
             Dict with file metadata.
@@ -1942,6 +1901,7 @@ class StorageService(ColumnDescriptionsMixin):
                 tags=tags,
                 is_permanent=is_permanent,
                 branch_id=branch_id,
+                on_progress=on_progress,
             )
         finally:
             client.close()
@@ -1982,6 +1942,7 @@ class StorageService(ColumnDescriptionsMixin):
         file_id: int | None = None,
         tags: list[str] | None = None,
         output_path: str | None = None,
+        on_progress: DownloadProgress | None = None,
     ) -> dict[str, Any]:
         """Download a Storage File to local disk.
 
@@ -1993,6 +1954,7 @@ class StorageService(ColumnDescriptionsMixin):
             file_id: Storage file ID (mutually exclusive with tags).
             tags: Download latest file matching these tags.
             output_path: Local output path (defaults to file's name).
+            on_progress: As for :meth:`download_table`.
 
         Returns:
             Dict with download metadata.
@@ -2037,8 +1999,10 @@ class StorageService(ColumnDescriptionsMixin):
                 if output_path:
                     effective_output = output_path
                 else:
-                    effective_output = str(_safe_download_target(Path.cwd(), f"{file_name}.d"))
-                slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
+                    effective_output = str(safe_download_target(Path.cwd(), f"{file_name}.d"))
+                slice_info = client.download_sliced_file_to_dir(
+                    file_detail, effective_output, on_progress
+                )
                 result: dict[str, Any] = {
                     "project_alias": alias,
                     "file_id": file_id,
@@ -2051,20 +2015,11 @@ class StorageService(ColumnDescriptionsMixin):
                 }
                 return result
 
-            if output_path and Path(output_path).is_dir():
-                # Caller passed a directory (e.g. the REST file-download endpoint);
-                # save inside it under the file's own name. The name comes from the
-                # API, so contain it under the directory to block path traversal.
-                effective_output = str(_safe_download_target(Path(output_path), file_name))
-            elif output_path:
-                # Explicit --output file path: the user's own choice (trusted).
-                effective_output = output_path
-            else:
-                # No --output: the API-controlled name becomes the path; contain
-                # it under CWD so a malicious name (../../, absolute) cannot escape.
-                effective_output = str(_safe_download_target(Path.cwd(), file_name))
+            effective_output = file_download_target(output_path, file_name)
             if is_sliced:
-                bytes_written = client.download_sliced_file(file_detail, effective_output)
+                bytes_written = client.download_sliced_file(
+                    file_detail, effective_output, on_progress
+                )
             else:
                 download_url = file_detail.get("url")
                 if not download_url:
@@ -2074,7 +2029,7 @@ class StorageService(ColumnDescriptionsMixin):
                         error_code=ErrorCode.FILE_NO_URL,
                         retryable=False,
                     )
-                bytes_written = client.download_file(download_url, effective_output)
+                bytes_written = client.download_file(download_url, effective_output, on_progress)
         finally:
             client.close()
 
@@ -2200,6 +2155,9 @@ class StorageService(ColumnDescriptionsMixin):
         delimiter: str = ",",
         enclosure: str = '"',
         branch_id: int | None = None,
+        *,
+        wait: bool = True,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Load an existing Storage File into a table.
 
@@ -2214,10 +2172,13 @@ class StorageService(ColumnDescriptionsMixin):
             delimiter: CSV column delimiter.
             enclosure: CSV value enclosure character.
             branch_id: If set, target a specific dev branch.
+            wait: If False, return once the import job is queued.
+            timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
 
         Returns:
-            Dict with import results.
+            Dict with import results plus ``job_id`` / ``job_status``.
         """
+        validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -2230,19 +2191,65 @@ class StorageService(ColumnDescriptionsMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                wait=wait,
+                max_wait=timeout,
             )
+        except KeboolaApiError as exc:
+            options = ImportOptions(
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                branch_id=branch_id,
+            )
+            raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
             client.close()
 
-        results = job.get("results", {})
         return {
             "project_alias": alias,
             "file_id": file_id,
             "table_id": table_id,
             "incremental": incremental,
-            "imported_rows": results.get("importedRowsCount"),
-            "warnings": results.get("warnings", []),
+            **import_job_fields(job, file_id),
         }
+
+    def storage_job_detail(
+        self,
+        alias: str,
+        job_id: int,
+        wait: bool = False,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Report one Storage job (e.g. a table import), optionally waiting for it.
+
+        Storage job IDs are project-scoped and branch-independent, so no
+        branch is resolved. A job that ended in ``error`` is returned (with
+        ``error``), not raised -- the command decides the exit code.
+
+        Args:
+            alias: Project alias.
+            job_id: Storage job ID.
+            wait: Poll until the job is terminal.
+            timeout: Wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+
+        Raises:
+            ValueError: ``timeout`` is not a positive finite number, or is
+                given without ``wait`` (it would be silently ignored).
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` when ``wait`` runs out.
+        """
+        if timeout is not None and not wait:
+            raise ValueError("--timeout requires --wait.")
+        validate_wait_timeout(timeout)
+        project = self.resolve_projects([alias])[alias]
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            if wait:
+                job = client.follow_storage_job(job_id, max_wait=timeout)
+            else:
+                job = client.get_storage_job(job_id)
+        finally:
+            client.close()
+        return summarize_storage_job(alias, job)
 
     def unload_table_to_file(
         self,
@@ -2256,6 +2263,7 @@ class StorageService(ColumnDescriptionsMixin):
         branch_id: int | None = None,
         file_type: str = "csv",
         keep_slices: bool = False,
+        on_progress: DownloadProgress | None = None,
     ) -> dict[str, Any]:
         """Export a table to a Storage File.
 
@@ -2276,6 +2284,7 @@ class StorageService(ColumnDescriptionsMixin):
                 work with the slices directly. Parquet + download is not
                 supported yet (slices cannot be concatenated into a single
                 valid parquet file).
+            on_progress: As for :meth:`download_table` (only with ``download``).
 
         Returns:
             Dict with export metadata and file info.
@@ -2337,30 +2346,25 @@ class StorageService(ColumnDescriptionsMixin):
             if download:
                 table_short = table_id.rsplit(".", 1)[-1]
 
-                if file_type == "parquet":
+                if file_type == "parquet" or (keep_slices and file_detail.get("isSliced")):
                     # Parquet slices cannot be concatenated -- save each as its
-                    # own file in a directory (manifest.json is also preserved).
-                    # Default layout mirrors Keboola's project+table addressing:
-                    #   ./{project_alias}/{table_id}.parquet/
+                    # own file in a directory (manifest.json is also preserved);
+                    # CSV --keep-slices mirrors that layout. Default layout
+                    # follows Keboola's project+table addressing:
+                    #   ./{project_alias}/{table_id}.{parquet|csv}/
                     # which stays unambiguous across multiple exports and reads
-                    # natively as a Parquet dataset in pyarrow/Spark/DuckDB.
-                    effective_output = output_path or f"{alias}/{table_id}.parquet"
-                    slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
+                    # natively as a dataset in pyarrow/Spark/DuckDB.
+                    effective_output = output_path or f"{alias}/{table_id}.{file_type}"
+                    slice_info = client.download_sliced_file_to_dir(
+                        file_detail, effective_output, on_progress
+                    )
                     result["downloaded"] = True
                     result["output_path"] = slice_info["output_dir"]
                     result["downloaded_bytes"] = slice_info["total_bytes"]
                     result["slice_count"] = slice_info["slice_count"]
                     result["slices"] = slice_info["slices"]
-                elif keep_slices and file_detail.get("isSliced"):
-                    # Preserve slices as a directory (parallel to parquet layout)
-                    effective_output = output_path or f"{alias}/{table_id}.csv"
-                    slice_info = client.download_sliced_file_to_dir(file_detail, effective_output)
-                    result["downloaded"] = True
-                    result["output_path"] = slice_info["output_dir"]
-                    result["downloaded_bytes"] = slice_info["total_bytes"]
-                    result["slice_count"] = slice_info["slice_count"]
-                    result["slices"] = slice_info["slices"]
-                    result["keep_slices"] = True
+                    if file_type != "parquet":
+                        result["keep_slices"] = True
                 else:
                     if keep_slices:
                         raise KeboolaApiError(
@@ -2375,7 +2379,9 @@ class StorageService(ColumnDescriptionsMixin):
                     effective_output = output_path or f"{table_short}.csv"
 
                     if file_detail.get("isSliced"):
-                        bytes_written = client.download_sliced_file(file_detail, effective_output)
+                        bytes_written = client.download_sliced_file(
+                            file_detail, effective_output, on_progress
+                        )
                     else:
                         download_url = file_detail.get("url")
                         if not download_url:
@@ -2385,7 +2391,9 @@ class StorageService(ColumnDescriptionsMixin):
                                 error_code=ErrorCode.FILE_NO_URL,
                                 retryable=False,
                             )
-                        bytes_written = client.download_file(download_url, effective_output)
+                        bytes_written = client.download_file(
+                            download_url, effective_output, on_progress
+                        )
 
                     result["downloaded"] = True
                     result["output_path"] = str(Path(effective_output).resolve())

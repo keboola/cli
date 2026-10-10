@@ -36,11 +36,6 @@ env:
   # Pin the interpreter uv uses across all jobs for reproducible release builds
   # (project requires-python >=3.12; CI gates on 3.12).
   UV_PYTHON: "3.12"
-  # Apple notarization identifiers — public (not secret); kept here so rotating the
-  # account/team is a one-line change rather than editing the freeze step's env. The
-  # macOS sign step inherits these; the actual secrets stay in that step.
-  APPLE_ACCOUNT_USERNAME: apple@keboola.com
-  APPLE_TEAM_ID: "46P6KJ65M2"
 
 # Least-privilege default: every job is read-only unless it overrides this with the
 # narrower scope it actually needs (see the per-job `permissions:` below). Only three
@@ -212,7 +207,7 @@ jobs:
           - { os: macos-latest, platform: darwin, arch: arm64 }
           - { os: windows-latest, platform: windows, arch: amd64 }
     runs-on: ${{ matrix.os }}
-    environment: release # so APPLE_*/WINDOWS_* signing secrets resolve
+    environment: release # so the WINDOWS_* signing secrets resolve
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
@@ -232,19 +227,6 @@ jobs:
             --collect-all keboola_agent_cli \
             --distpath dist \
             build/package/entry.py
-
-      # macOS: sign + notarize. On a pre-release tag this runs as a NON-FATAL
-      # signature check (continue-on-error) so a dev tag verifies the Apple creds
-      # without blocking the build; on a real tag it is required.
-      - name: Sign & notarize (macOS)
-        if: ${{ matrix.platform == 'darwin' }}
-        continue-on-error: ${{ needs.version.outputs.IS_PRERELEASE == 'true' }}
-        env:
-          APPLE_DEVELOPER_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          APPLE_DEVELOPER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-          APPLE_ACCOUNT_PASSWORD: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
-          # APPLE_ACCOUNT_USERNAME / APPLE_TEAM_ID inherited from the workflow-level env.
-        run: bash build/package/macos/sign_notarize.sh "dist/$BIN_NAME"
 
       # Windows: Authenticode sign the .exe. Non-fatal on pre-release (signature
       # check only); required on a real tag.

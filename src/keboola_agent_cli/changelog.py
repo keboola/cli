@@ -26,7 +26,72 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "0.96.0": [
+    "0.98.0": [
+        "New (#837): `storage upload-table` and `file-upload` now upload large files to AWS "
+        "stacks in parts, so files over 5 GB work and memory stays flat. Files above 64 MiB are "
+        "sent as an S3 multipart upload: 64 MiB parts, four in parallel, each part retried on "
+        "its own. Before, kbagent read the whole file into memory and S3 refused anything over "
+        "5 GB. In a test, a 10 GB file that 0.97.0 could not upload (it used 10 GB of memory and "
+        "then failed) uploaded in about four minutes with under 350 MB of memory. A `.csv.gz` "
+        "file is uploaded as it is. Azure and GCP stacks are unchanged.",
+        "New (#837): `storage upload-table` and `load-file` can queue the import without waiting "
+        "for it, and the new `storage job-detail` command follows the import. `--no-wait` "
+        "returns `job_id` and `file_id` as soon as the import is queued; `--timeout` sets how "
+        "long the default `--wait` waits. `storage job-detail --job-id ID [--wait]` shows the "
+        "status, the table and the imported rows. When the wait times out, the error says the "
+        "import keeps running, names the job, and is no longer marked retryable, so a long "
+        "upload is not repeated by mistake. `kbagent serve` (`GET /storage/jobs/{project}/"
+        "{job_id}`) and the SDK (`Client.storage_job()`) have the same functions.",
+        "New (#837): `--progress` shows percent, speed, elapsed time and time left for storage "
+        "uploads and downloads. It works on `storage upload-table`, `file-upload`, "
+        "`download-table`, `file-download` and `unload-table --download`, and writes to stderr, also with `--json`: a progress bar in "
+        "a terminal, otherwise one line every 10 seconds.",
+        "Fix (#837): `storage download-table --keep-slices`, `file-download` and `unload-table` "
+        "now keep every slice file inside the output directory. A slice name from the export manifest that "
+        "could point outside it (`..`, a backslash, a drive letter) is replaced by "
+        "`part-NNNNN`.",
+        "Fix (#747): commands that process several items now exit 1 and print `Failed:` when "
+        "an item fails. Before, `sync push`, `sync clone`, `org setup`, `project refresh`, "
+        "`workspace gc`, several `semantic-layer` commands, `storage describe-batch --json`, "
+        "`flow schedule-remove` and others printed `Success:` and exited 0 even when items "
+        "failed. A `--dry-run` that reports a failed item exits 1 too. The `--json` output "
+        "keeps its keys, with a few additions such as `errors[]` in `flow schedule-remove`.",
+        "Fix (#836): `semantic-layer import`, `promote` and `build --model` now give new items "
+        "the scope of the target model. Before, they created every item at `project` scope, "
+        "also in a shared model, so the other projects could not see it. Items they overwrite "
+        "keep their own scope. Duplicate-name and elevation errors now say what is wrong and "
+        "how to fix it.",
+        "Change (#836): `semantic-layer add glossary` now requires `--definition`. Without it the "
+        "Metastore always rejected the item with a bare 422 error, so no working call breaks.",
+    ],
+    "0.97.0": [
+        "New (#715): semantic-layer items can now be shared with chosen projects or with the "
+        "whole organization, not only kept in the owning project (AI-3790). `model create` and "
+        "every `add <kind>` take `--scope project|targeted|organization` and `--target-project` "
+        "(a registered alias or a project ID). The new `semantic-layer scope` command group "
+        "shows and changes who sees an existing item: `get`, `add`, `remove` and `set`, plus "
+        "`request-create`, `request-delete` and `request-list` for requests to make an item "
+        "organization-wide. Without `--scope`, `model create` keeps the model in its project, "
+        "and `add <kind>` uses the scope of its model. Making an item organization-wide needs "
+        "the organization-admin role and cannot be reverted, so `--deny-destructive` blocks it. "
+        "`kbagent serve` has the same functions under `/semantic-layer/scope`.",
+        "Fix (#715): `semantic-layer edit`, `import --overwrite` and `promote` now update an item "
+        "in place, so it keeps its ID, its visibility and its history. Before, they deleted the "
+        "item and created it again with a new ID. A failed update changes nothing, so the "
+        "`rollback` field in the result is now always `null`.",
+    ],
+    "0.96.2": [
+        "Fix (#825): the `data-app` commands now label the app link `Open the app:` and the "
+        "Keboola UI link `Configuration:`, so it is clear which link opens what. Before, the "
+        "labels were `App URL:` and `UI URL:`, or only `URL:` in `data-app detail` and "
+        "`data-app create`. In a terminal, `data-app password`, `create --wait` and "
+        "`deploy --wait` show the links in a panel that looks like the `auth login` device-code "
+        "panel. Outside a terminal, the output stays plain lines without a panel. The `--json` "
+        "output does not change.",
+        "Note (#819, #820, #822, #823): housekeeping with no user-facing change. Dependency "
+        "updates in the web UI and its backend (fast-uri, brace-expansion, fastify, dompurify).",
+    ],
+    "0.96.1": [
         "BREAKING (#813): `kbagent data-app password` no longer prints the password unless "
         "you pass `--reveal`. When an AI agent ran the command, the password went into the model "
         "context and the chat history (CLI-23). The command now uses the project token (static or "
@@ -213,6 +278,12 @@ CHANGELOG: dict[str, list[str]] = {
         "a version by default, not only of the first note. When a version has fewer than two "
         "BREAKING notes, it adds the first other notes until two notes show. `--full`, `--json` "
         "and the `What's new` notice after an update do not change.",
+        "Change (#821): the macOS binary is no longer signed with an Apple Developer ID or "
+        "notarized by Apple. A problem on the Apple side stopped the 0.96.0 release on every "
+        "platform. The binary now has only the ad-hoc signature that PyInstaller adds. Install "
+        "it with `brew install keboola-cli2`, or use `uv tool install keboola-cli`. macOS blocks "
+        "a `darwin_arm64` zip that a browser downloads: allow it in System Settings > Privacy & "
+        "Security, or run `xattr -d com.apple.quarantine kbagent`.",
         "Note (#793, #797, #804, #806, #816): housekeeping with no user-facing change. #793 adds a "
         "formal model of the sync engine (TLA+ and Lean 4, under `formal/sync/`) and one "
         "regression test for each finding. The sync fixes #794, #795, #796 and #811 in this "
@@ -220,6 +291,9 @@ CHANGELOG: dict[str, list[str]] = {
         "that they guard breaks, and add tests that count the API calls of frequent read "
         "commands. #806 updates `undici` in the web backend from 6.28.0 to 6.28.1, for three "
         "security advisories.",
+        "Note: this release replaces 0.96.0, because the 0.96.0 release run stopped at the Apple "
+        "notarization. 0.96.0 reached PyPI, but it got no GitHub release and no packages, and "
+        "`kbagent update` stayed on 0.95.0. This release has every change of 0.96.0 and #821.",
     ],
     "0.95.0": [
         "New (#775): `kbagent project create --url URL` creates a new Keboola project from a "

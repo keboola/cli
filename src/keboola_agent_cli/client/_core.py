@@ -16,13 +16,18 @@ from typing import Any, Self
 
 import httpx
 
-from ..constants import DEFAULT_TIMEOUT, STORAGE_JOB_MAX_WAIT, STORAGE_JOB_POLL_INTERVAL
+from ..constants import (
+    DEFAULT_TIMEOUT,
+    IMPORT_JOB_MAX_WAIT,
+    STORAGE_JOB_MAX_WAIT,
+    STORAGE_JOB_POLL_INTERVAL,
+)
 from ..errors import ErrorCode, KeboolaApiError
 from ..http_base import BaseHttpClient
 from ..stream_client import StreamClient
 
 
-def _storage_job_error_message(job: dict[str, Any]) -> str:
+def storage_job_error_message(job: dict[str, Any]) -> str:
     """Best-effort human message out of a failed Storage job's ``error`` field.
 
     Written tolerantly on purpose. An API ``error`` field is not reliably a
@@ -278,6 +283,8 @@ class _CoreClient(BaseHttpClient):
         self,
         job: dict[str, Any],
         max_wait: float | None = None,
+        *,
+        raise_on_error: bool = True,
     ) -> dict[str, Any]:
         """Poll a Storage API job until it reaches a terminal state.
 
@@ -309,12 +316,20 @@ class _CoreClient(BaseHttpClient):
                 ``STORAGE_JOB_MAX_WAIT``. Callers whose jobs are legitimately
                 slower pass their own budget -- e.g. a workspace load moving
                 gigabytes (``WORKSPACE_LOAD_JOB_MAX_WAIT``).
+            raise_on_error: When False, a job that ended in ``error`` is
+                returned like a successful one instead of raising
+                ``STORAGE_JOB_FAILED`` -- for a caller that reports the job
+                itself (``storage job-detail --wait``) and would otherwise
+                lose every field but the message.
 
         Returns:
-            Completed job dict (with results on success).
+            Terminal job dict (with results on success; with ``error`` when
+            ``raise_on_error`` is False and the job failed).
 
         Raises:
-            KeboolaApiError: If the job fails or times out.
+            KeboolaApiError: If the job fails (unless ``raise_on_error`` is
+                False) or the budget runs out. The timeout carries
+                ``details={"job_id": ...}``.
         """
         budget = STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait
         job_id = job.get("id")
@@ -324,8 +339,10 @@ class _CoreClient(BaseHttpClient):
             if status == "success":
                 return job
             if status == "error":
+                if not raise_on_error:
+                    return job
                 raise KeboolaApiError(
-                    message=_storage_job_error_message(job),
+                    message=storage_job_error_message(job),
                     status_code=500,
                     error_code=ErrorCode.STORAGE_JOB_FAILED,
                     retryable=False,
@@ -351,4 +368,43 @@ class _CoreClient(BaseHttpClient):
             status_code=504,
             error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
             retryable=True,
+            details={"job_id": job_id},
+        )
+
+    def get_storage_job(self, job_id: int | str) -> dict[str, Any]:
+        """Fetch one Storage API job (``GET /v2/storage/jobs/{id}``).
+
+        Job IDs are project-scoped and branch-independent: the route has no
+        ``/branch/{id}`` variant, so no branch is taken here.
+
+        Args:
+            job_id: Storage job ID (as returned by any async Storage write).
+
+        Returns:
+            The raw job dict (``id``, ``status``, ``operationName``,
+            ``operationParams``, ``results``, ``error``, timestamps, ...).
+        """
+        return self._request("GET", f"/v2/storage/jobs/{job_id}").json()
+
+    def follow_storage_job(
+        self, job_id: int | str, max_wait: float | None = None
+    ) -> dict[str, Any]:
+        """Fetch a Storage job and poll it to a terminal state.
+
+        Unlike the write paths, a job that ended in ``error`` is RETURNED, not
+        raised: the caller asked about the job, and the error is part of the
+        answer. A job already terminal costs exactly one GET.
+
+        Args:
+            job_id: Storage job ID.
+            max_wait: Seconds to poll. ``None`` means ``IMPORT_JOB_MAX_WAIT``
+                -- the jobs worth following by hand are the long imports.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` when the budget runs out
+                (the job keeps running; following it again is safe).
+        """
+        budget = IMPORT_JOB_MAX_WAIT if max_wait is None else max_wait
+        return self._wait_for_storage_job(
+            self.get_storage_job(job_id), max_wait=budget, raise_on_error=False
         )

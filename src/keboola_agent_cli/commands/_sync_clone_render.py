@@ -57,19 +57,32 @@ def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
             f"[cyan]{result.get('target_alias')}[/cyan]."
         )
         return
+    errors = result.get("errors", [])
+    # A bucket error is a failed item too: the count matches the error lines printed below.
+    failed = len(errors) + len(result.get("bucket_errors", []))
     if status == "no_changes":
-        formatter.console.print(
-            f"[green]Already cloned[/green] -- no changes to push into "
-            f"[cyan]{result.get('target_alias')}[/cyan]."
-        )
+        if failed:
+            formatter.console.print(
+                f"[bold red]Failed:[/bold red] Already cloned into "
+                f"[cyan]{result.get('target_alias')}[/cyan], {failed} failed"
+            )
+        else:
+            formatter.console.print(
+                f"[green]Already cloned[/green] -- no changes to push into "
+                f"[cyan]{result.get('target_alias')}[/cyan]."
+            )
         _print_clone_buckets(formatter, result)
         return
-    formatter.success(
+    headline = (
         f"Cloned into {result.get('target_alias')}: {result.get('created', 0)} created "
         f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})"
     )
+    if failed:
+        formatter.console.print(f"[bold red]Failed:[/bold red] {headline}, {failed} failed")
+    else:
+        formatter.success(headline)
     _print_clone_buckets(formatter, result)
-    for err in result.get("errors", []):
+    for err in errors:
         formatter.warning(
             f"  Error: {err.get('change_type')} "
             f"{err.get('component_id')}/{err.get('config_id')}: {err.get('message')}"

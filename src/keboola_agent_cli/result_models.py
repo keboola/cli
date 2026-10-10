@@ -168,6 +168,76 @@ class UploadTableResult(_ApiResultModel):
     project_alias: str = Field(
         default="", description="Project alias (service path; empty for the facade)."
     )
+    file_id: int | None = Field(
+        default=None,
+        description=("Storage file the CSV was uploaded as -- re-importable without re-uploading."),
+    )
+    job_id: int | None = Field(default=None, description="Storage import job ID.")
+    job_status: str | None = Field(
+        default=None,
+        description=(
+            "Import job status: success, or waiting / processing when the caller did not "
+            "wait (imported_rows is then None)."
+        ),
+    )
+
+
+class StorageJobResult(_ApiResultModel):
+    """One Storage API job (e.g. a table import), as :meth:`Client.storage_job` reports it.
+
+    Accepts both the raw ``GET /v2/storage/jobs/{id}`` body (``id``,
+    ``operationName``, ``tableId``, ``createdTime``, ...) and the
+    ``StorageService.storage_job_detail`` dict (``job_id``, ``operation_name``,
+    ...). A job that ended in ``error`` is a normal result here: check
+    :attr:`failed` and ``error``.
+    """
+
+    job_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("job_id", "id"),
+        description="Storage job ID.",
+    )
+    status: str = Field(
+        default="", description="Job status: waiting | processing | success | error."
+    )
+    operation_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("operation_name", "operationName"),
+        description="Storage operation, e.g. tableImport.",
+    )
+    table_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("table_id", "tableId"),
+        description="Table the job works on, when it has one.",
+    )
+    file_id: int | None = Field(
+        default=None, description="Source Storage file of an import, when the job names one."
+    )
+    created_time: str | None = Field(
+        default=None, validation_alias=AliasChoices("created_time", "createdTime")
+    )
+    start_time: str | None = Field(
+        default=None, validation_alias=AliasChoices("start_time", "startTime")
+    )
+    end_time: str | None = Field(default=None, validation_alias=AliasChoices("end_time", "endTime"))
+    imported_rows: int | None = Field(
+        default=None, description="Rows imported, once an import job succeeded."
+    )
+    warnings: list[Any] = Field(
+        default_factory=list, description="Import warnings from the job results."
+    )
+    results: Any = Field(default=None, description="Raw job results.")
+    error: Any = Field(default=None, description="Raw job error (message, code) when it failed.")
+
+    @property
+    def finished(self) -> bool:
+        """True once the job reached a terminal state (success or error)."""
+        return self.status in ("success", "error")
+
+    @property
+    def failed(self) -> bool:
+        """True when the job ended in error."""
+        return self.status == "error"
 
 
 class SyncPushResult(_ApiResultModel):

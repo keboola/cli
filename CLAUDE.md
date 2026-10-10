@@ -627,8 +627,37 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
-kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--branch ID]
-kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID]
+kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
+# upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
+#   MULTIPART upload -- 64 MiB parts (auto-scaled so the file fits in 10,000 parts), 4 in parallel,
+#   per-part retry on 429/5xx/transport errors, peak memory ~4 x part size. Before, the whole file was
+#   read into RAM and sent as one PutObject (hard 5 GiB ceiling). Also covers the SDK
+#   Client.upload_table. Azure/GCP stacks unchanged (they already stream; chunked upload there is a
+#   follow-up in #834). Limits: S3 federation credentials last 12 h (200 GB needs ~5 MB/s sustained);
+#   the source file must not change during the upload (size/mtime checked); no resume across runs; an
+#   aborted multipart upload may leave orphaned parts (the token cannot abort). A .csv.gz is uploaded
+#   byte-for-byte and imported by Storage; auto-create reads its header through gzip. Human mode shows
+#   a progress bar on stderr. `serve`'s upload route streams the body to a temp file (needs temp disk
+#   of the file size) instead of holding it in memory.
+# upload-table / load-file async import (#834): --wait (default) waits --timeout SECONDS (default 600)
+#   for the Storage import job; --no-wait still waits for the cloud upload, then enqueues the import and
+#   returns file_id / job_id / job_status (imported_rows null while pending; keys are additive). A wait
+#   timeout is STORAGE_JOB_TIMEOUT, exit 4, retryable=false: the import KEEPS RUNNING server-side, the
+#   error names job_id + file_id and `storage job-detail --job-id ID --wait`. Never re-run the upload
+#   while that job is waiting/processing -- an incremental re-run duplicates rows. An enqueue failure
+#   after the upload carries file_id -> `storage load-file --file-id` instead of re-uploading.
+#   Workflow: plugins/kbagent/skills/kbagent/references/large-upload-workflow.md. Version gate for this
+#   entry lives in gotchas.md.
+kbagent storage download-table --project NAME --table-id ID [--output FILE] [--columns COL ...] [--limit N] [--where-column COL --where-value VAL ... [--where-operator eq|neq]] [--changed-since WHEN] [--changed-until WHEN] [--branch ID] [--progress]
+# --progress on upload-table / file-upload / download-table / file-download / unload-table (with
+#   --download): ALWAYS report transfer progress on stderr -- also with --json and with no terminal.
+#   A terminal gets a Rich bar (percent, transferred/total, speed, elapsed, ETA); otherwise one plain line
+#   every 10 s plus a final line, e.g. `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed
+#   0:01:03, ETA 0:01:27` (last line: `avg` speed + `done`/`failed`). stdout (the JSON envelope) is
+#   untouched. Speed/ETA use a trailing 30 s window; downloads count network (compressed) bytes and start
+#   the clock when the download starts, not during the export job; a sliced download with no sizes in
+#   its manifest shows bytes + speed only. Without the flag nothing changes: a transient bar only in
+#   human mode on a terminal. Terminal-only: no serve / SDK surface. Version gate in gotchas.md.
 kbagent storage add-column --project NAME --table-id ID --column COL:TYPE[(length)] [--not-null] [--default VALUE] [--branch ID]
 kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
@@ -682,13 +711,19 @@ kbagent storage describe-migrate --project ALIAS [--table-id ID ...] [--bucket-i
 #   application are still accumulated into errors[] (exit 1) -- shape is a usage error, an API
 #   refusal is not.
 kbagent storage files --project NAME [--tag TAG ...] [--limit N] [--offset N] [--query Q] [--branch ID]
-kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID]
-kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE]
+kbagent storage file-upload --project NAME --file PATH [--name NAME] [--tag TAG ...] [--permanent] [--branch ID] [--progress]
+kbagent storage file-download --project NAME [--file-id ID | --tag TAG ...] [--output FILE] [--progress]
 kbagent storage file-detail --project NAME --file-id ID
 kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
-kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--branch ID]
-kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID]
+kbagent storage load-file --project NAME --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+kbagent storage job-detail --project NAME --job-id ID [--wait] [--timeout SECONDS]
+# storage job-detail (#834): read-class; shows a Storage API job (status, operation_name, table_id,
+#   file_id, times, imported_rows, warnings, results, error). Exit 0 success/waiting/processing, exit 1
+#   STORAGE_JOB_FAILED when the job ended in error (details still returned), exit 4 on --wait timeout.
+#   Job ids are project-scoped, independent of the active branch (no --branch). Serve:
+#   GET /storage/jobs/{project}/{job_id}?wait=&timeout=. Version gate for this entry lives in gotchas.md.
+kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [--limit N] [--tag TAG ...] [--download] [--output FILE|DIR] [--file-type csv|parquet] [--branch ID] [--progress]
 
 # stream: Data Streams (OpenTelemetry/OTLP). Storage token from config (no manage token).
 # Control plane = stream.<region> (derived from connection.<region>); the OTLP ingest URL
@@ -1014,6 +1049,26 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
+# Partial failures change the exit code (#745): commands that collect per-item failures
+#   and keep going exit 1 (was 0) when at least one item failed:
+#   `sync push`, `sync push/pull/diff --all-projects`, `sync clone` (also `bucket_errors`),
+#   `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`,
+#   `semantic-layer import/promote/build/edit metric`, `storage describe-batch --json`,
+#   `flow schedule-remove` (new `errors[]` key, always present, empty when nothing
+#   failed; a partial failure fills it and exits 1; when every schedule delete
+#   fails it still raises `SCHEDULE_DELETE_FAILED`). Only `sync push`, `sync clone`,
+#   `storage describe-batch`, `storage describe-migrate` and `flow schedule-remove` print
+#   a `Failed:` headline instead of a green `Success:`; the others list the failed items
+#   in a table or in summary lines, and the `--all-projects` variants state the count in
+#   their summary line. `sync push --all-projects` counts a project
+#   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
+#   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
+#   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
+#   exits 1 when a project failed. Other read-only fan-outs (`billing credits`, `job list`,
+#   `schedule list`, ...) still exit 0. The helper is `item_failure_exit_code()` in
+#   commands/_helpers.py (returns the code, the caller raises). Version gate for this
+#   entry lives in gotchas.md -- the placeholder cannot be written on these `# ` comment
+#   lines (check_version_gates.py parses them as ATX markdown headings).
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API
 #   response (or a read-back), never from disk -- push-deployed multi-statement SQL transformations
 #   (and anything disabled in the UI whose local YAML lacks `is_disabled`) no longer show permanent
@@ -1061,7 +1116,7 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 kbagent encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]
 
 kbagent semantic-layer model list --project P
-kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake]
+kbagent semantic-layer model create --project P --name N [--description D] [--sql-dialect Snowflake] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer model delete --project P --model M [--yes]
 kbagent semantic-layer show --project P [--model M] [--type dataset|metric|relationship|constraint|glossary]
 kbagent semantic-layer search-context --project P [--pattern G ...] [--type model|dataset|metric|relationship|constraint|glossary|all] [--limit N]
@@ -1084,7 +1139,7 @@ kbagent semantic-layer add dataset --project P [--model M] --name N --table-id T
 #   --overwrite. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent semantic-layer add relationship --project P [--model M] --name N --from TABLE_ID --to TABLE_ID --on EXPR [--type left|inner]
 kbagent semantic-layer add constraint --project P [--model M] --name N --constraint-type inequality|equality|range|composition|exclusion|temporal|conditional --rule "EXPR" --metrics M1,M2 [--severity error|warning|info]
-kbagent semantic-layer add glossary --project P [--model M] --term TERM [--definition D]
+kbagent semantic-layer add glossary --project P [--model M] --term TERM --definition D
 kbagent semantic-layer edit metric --project P [--model M] --name N [--new-name N2] [--new-sql SQL] [--new-dataset TABLE_ID] [--new-description D] [--yes]
 kbagent semantic-layer edit dataset --project P [--model M] --name N [--new-name N2] [--new-description D] [--new-grain G]
 kbagent semantic-layer edit constraint --project P [--model M] --name N [--new-name N2] [--new-rule "EXPR"] [--new-constraint-type T] [--new-severity error|warning|info] [--new-metrics M1,M2]
@@ -1095,23 +1150,67 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
+# scope (PSGO-140, new): visibility scope for a semantic-layer item -- "project"
+#   (owner only), "organization" (every project in the org), or "targeted" (owner +
+#   explicit --target-project grants). --scope/--target-project are also accepted by `model
+#   create` and every `add <kind>` above. --scope omitted: `model create` makes a "project"
+#   item, `add <kind>` INHERITS its model's scope (an org-level model gets org-level children;
+#   a targeted model, its target projects); an inherited organization scope is permission-gated
+#   like a typed one, and a non-org-admin gets a 403 on it (pass --scope project). `import`,
+#   `promote` and `build --model` create their NEW items at the target model's scope the same way
+#   (same gate: FLAG_ESCALATIONS `semantic-layer.import|promote|build --scope organization`);
+#   `import` / `promote --scope` (+ --target-project) override it, e.g. `--scope project` for a
+#   non-org-admin under an org-level model; items they overwrite keep their own scope. Item names are unique per object type across ALL
+#   models of a project (ALREADY_EXISTS says "in this project"), so a model cannot be copied into
+#   a second model of the same project under the same item names. An item stored at schema version
+#   1.0.0 (created before 0.97.0) cannot be elevated: the error names the stored version and the
+#   fix (export, delete, create again, import). --target-project takes a registered alias OR a
+#   numeric project ID (repeatable or comma-separated; an alias must be on the owner's stack);
+#   without --scope targeted it exits 2. With --scope targeted and no --target-project: a real
+#   terminal launches an interactive picker over the other projects on the stack; --json fails
+#   fast (exit 2). A bad alias/ID/--scope/--type is a usage error (exit 2), never a traceback.
+#   Creating directly at --scope organization requires the organization-admin ROLE (403
+#   otherwise) -- an ordinary token instead uses `scope request-create` + an org-admin's
+#   `scope set --scope organization`. Elevation is ONE-WAY (no downgrade endpoint), which is why
+#   every `--scope organization` (here and on `model create` / `add <kind>`) is destructive-class
+#   (FLAG_ESCALATIONS). `edit`, `import --overwrite` and `promote` update in place (PUT): an item
+#   keeps its id, scope, grants and pending elevation request. `scope add|remove` merge into the
+#   grants client-side (not atomic; refused from a project that does not own the item, because
+#   the server hides the grants from a non-owner -- use `scope set --target-project` there).
+#   Verbs follow the CLI spec (#791): get / add / remove / set / request-create / request-delete /
+#   request-list; `scope set` takes exactly ONE of --scope organization, --target-project (replace
+#   the whole list) or --clear.
+kbagent semantic-layer scope get --project P --type model|dataset|metric|relationship|constraint|glossary --context-id ID
+kbagent semantic-layer scope add --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope remove --project P --type T --context-id ID --target-project ALIAS|ID [--target-project ...]
+kbagent semantic-layer scope set --project P --type T --context-id ID (--scope organization | --target-project ALIAS|ID [...] | --clear) [--dry-run] [--yes]
+kbagent semantic-layer scope request-create --project P --type T --context-id ID
+kbagent semantic-layer scope request-delete --project P --type T --context-id ID
+kbagent semantic-layer scope request-list --project P --type T [--limit N] [--offset N]
+# scope over `kbagent serve`: GET/PUT /semantic-layer/scope/{context_id}, POST/DELETE
+#   .../target-projects, PUT/DELETE .../elevation-request, GET /semantic-layer/scope/elevation-requests;
+#   POST /semantic-layer/models and /items/{kind} take `scope` + `target_projects`.
 kbagent semantic-layer reference-data list --project P [--model M]
 kbagent semantic-layer reference-data get --project P (--id ID | --dimension D)
 kbagent semantic-layer reference-data set --project P [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
 kbagent semantic-layer reference-data delete --project P --id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
-# semantic-layer REQUIRES A MASTER (project admin) Storage token (#711): the Metastore's
-#   auth gate -- unlike the Storage API -- rejects every valid non-master token with an opaque
-#   401 "Failed to create project scope" (the underlying MasterTokenRequiredError is swallowed
-#   server-side). kbagent reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) with
-#   the remedy; other unexplained 401s anywhere map to AUTH_REJECTED instead of the false
-#   "Invalid or expired token" (INVALID_TOKEN stays for 401s that DO blame the credential).
-#   Version gate for this entry lives in gotchas.md -- `(since vNEXT)` cannot be written on
-#   these `# ` comment lines (check_version_gates.py parses them as ATX headings).
+# semantic-layer READS work with any valid, non-disabled, non-expired Storage token
+#   (0.97.0, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES
+#   (add/edit/remove/import/promote/build/scope add|remove|set) still need a project-admin token
+#   (master token or any admin-role user token) -- a non-admin token 403s on the write. Before
+#   PSGO-282 the Metastore's auth gate rejected EVERY valid non-master token, including reads,
+#   with an opaque 401 "Failed to create project scope" (#711, MasterTokenRequiredError swallowed
+#   server-side); kbagent still reclassifies exactly that 401 to MISSING_MASTER_TOKEN (exit 3) as
+#   a safety net for a deployment that predates the fix. Other unexplained 401s anywhere map to
+#   AUTH_REJECTED instead of the false "Invalid or expired token" (INVALID_TOKEN stays for 401s
+#   that DO blame the credential). Version gate for this entry lives in gotchas.md -- `(since
+#   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
+#   ATX headings).
 
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
