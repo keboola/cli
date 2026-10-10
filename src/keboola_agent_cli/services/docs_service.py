@@ -9,10 +9,11 @@ response into the CLI's snake_case output contract.
 import logging
 from typing import Any
 
+from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..models import DocsAnswer
-from .base import BaseService, ClientFactory
-from .component_service import AiClientFactory, default_ai_client_factory
+from .base import BaseService, ClientFactory, make_session_aware_client_factory
+from .component_service import AiClientFactory
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,9 @@ class DocsService(BaseService):
         ai_client_factory: AiClientFactory | None = None,
     ) -> None:
         super().__init__(config_store, client_factory)
-        self._ai_client_factory = ai_client_factory or default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
 
     def ask_docs(self, alias: str | None, query: str) -> dict[str, Any]:
         """Ask the Keboola documentation a natural language question.

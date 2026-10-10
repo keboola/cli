@@ -502,9 +502,7 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     for task in tasks:
         ref = str(task.get("phase"))
         if ref not in valid_phase_ids:
-            errors.append(
-                f"Task '{task.get('id', '?')}' references unknown phase '{ref}'"
-            )
+            errors.append(f"Task '{task.get('id', '?')}' references unknown phase '{ref}'")
 
     # next[].goto is an existing phase id or null
     for phase in phases:
@@ -637,10 +635,18 @@ def _phase_with_condition(condition):
 
 def _tasks_two_phases():
     return [
-        {"id": "a", "name": "A", "phase": "p1",
-         "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"}},
-        {"id": "b", "name": "B", "phase": "p2",
-         "task": {"type": "job", "componentId": "c", "configId": "2", "mode": "run"}},
+        {
+            "id": "a",
+            "name": "A",
+            "phase": "p1",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        },
+        {
+            "id": "b",
+            "name": "B",
+            "phase": "p2",
+            "task": {"type": "job", "componentId": "c", "configId": "2", "mode": "run"},
+        },
     ]
 
 
@@ -775,12 +781,26 @@ def test_goto_loop_is_not_an_error():
         {"id": "loop", "name": "Loop", "next": [{"id": "b", "goto": "start"}]},
     ]
     assert find_unreachable_phases(phases) == []
-    assert validate_conditional_flow(phases, [
-        {"id": "t", "name": "T", "phase": "start",
-         "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"}},
-        {"id": "u", "name": "U", "phase": "loop",
-         "task": {"type": "job", "componentId": "c", "configId": "2", "mode": "run"}},
-    ]) == []
+    assert (
+        validate_conditional_flow(
+            phases,
+            [
+                {
+                    "id": "t",
+                    "name": "T",
+                    "phase": "start",
+                    "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+                },
+                {
+                    "id": "u",
+                    "name": "U",
+                    "phase": "loop",
+                    "task": {"type": "job", "componentId": "c", "configId": "2", "mode": "run"},
+                },
+            ],
+        )
+        == []
+    )
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -894,8 +914,12 @@ def _valid_body():
         {"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]},
     ]
     tasks = [
-        {"id": "t1", "name": "T1", "phase": "p1",
-         "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"}},
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "p1",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        },
     ]
     return phases, tasks
 
@@ -909,8 +933,14 @@ def test_create_flow_rejects_invalid_definition():
     svc = _make_flow_service(client)
     # task references a phase that does not exist -> semantic error
     phases = [{"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]}]
-    tasks = [{"id": "t1", "name": "T1", "phase": "ghost",
-              "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"}}]
+    tasks = [
+        {
+            "id": "t1",
+            "name": "T1",
+            "phase": "ghost",
+            "task": {"type": "job", "componentId": "c", "configId": "1", "mode": "run"},
+        }
+    ]
     with pytest.raises(KeboolaApiError) as exc:
         svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
     assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
@@ -976,80 +1006,79 @@ worker now lists ONLY `keboola.flow`, plus a separate count of
 `keboola.orchestrator` configs:
 
 ```python
-        def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
-            client = self._client_factory(project.stack_url, project.token)
-            effective_branch = branch_id or project.active_branch_id
-            try:
-                flows: list[dict[str, Any]] = []
-                try:
-                    configs = client.list_component_configs(
-                        FLOW_COMPONENT_ID, branch_id=effective_branch
-                    )
-                except KeboolaApiError as exc:
-                    if exc.error_code == "NOT_FOUND":
-                        configs = []
-                    else:
-                        raise
-                for cfg in configs:
-                    flow_row: dict[str, Any] = {
-                        "project_alias": alias,
-                        "component_id": FLOW_COMPONENT_ID,
-                        "config_id": str(cfg.get("id", "")),
-                        "name": cfg.get("name", ""),
-                        "description": cfg.get("description", ""),
-                        "is_disabled": cfg.get("isDisabled", False),
-                    }
-                    if with_schedules:
-                        flow_row["schedules"] = []
-                    flows.append(flow_row)
+def worker(alias: str, project: ProjectConfig) -> tuple[Any, ...]:
+    client = self._client_factory(project.stack_url, project.token)
+    effective_branch = branch_id or project.active_branch_id
+    try:
+        flows: list[dict[str, Any]] = []
+        try:
+            configs = client.list_component_configs(FLOW_COMPONENT_ID, branch_id=effective_branch)
+        except KeboolaApiError as exc:
+            if exc.error_code == "NOT_FOUND":
+                configs = []
+            else:
+                raise
+        for cfg in configs:
+            flow_row: dict[str, Any] = {
+                "project_alias": alias,
+                "component_id": FLOW_COMPONENT_ID,
+                "config_id": str(cfg.get("id", "")),
+                "name": cfg.get("name", ""),
+                "description": cfg.get("description", ""),
+                "is_disabled": cfg.get("isDisabled", False),
+            }
+            if with_schedules:
+                flow_row["schedules"] = []
+            flows.append(flow_row)
 
-                # Count (do not list) legacy orchestrator configs so the CLI can warn.
-                try:
-                    legacy = client.list_component_configs(
-                        LEGACY_FLOW_COMPONENT_ID, branch_id=effective_branch
-                    )
-                    legacy_count = len(legacy)
-                except KeboolaApiError as exc:
-                    if exc.error_code == "NOT_FOUND":
-                        legacy_count = 0
-                    else:
-                        raise
+        # Count (do not list) legacy orchestrator configs so the CLI can warn.
+        try:
+            legacy = client.list_component_configs(
+                LEGACY_FLOW_COMPONENT_ID, branch_id=effective_branch
+            )
+            legacy_count = len(legacy)
+        except KeboolaApiError as exc:
+            if exc.error_code == "NOT_FOUND":
+                legacy_count = 0
+            else:
+                raise
 
-                if with_schedules and flows:
-                    schedules_by_parent = _collect_schedules_by_parent(client, effective_branch)
-                    for flow_row in flows:
-                        key = (flow_row["component_id"], flow_row["config_id"])
-                        flow_row["schedules"] = schedules_by_parent.get(key, [])
+        if with_schedules and flows:
+            schedules_by_parent = _collect_schedules_by_parent(client, effective_branch)
+            for flow_row in flows:
+                key = (flow_row["component_id"], flow_row["config_id"])
+                flow_row["schedules"] = schedules_by_parent.get(key, [])
 
-                return (alias, flows, legacy_count)
-            except KeboolaApiError as exc:
-                return (
-                    alias,
-                    {"project_alias": alias, "error_code": exc.error_code, "message": exc.message},
-                )
-            except Exception as exc:
-                return (
-                    alias,
-                    {"project_alias": alias, "error_code": "UNEXPECTED_ERROR", "message": str(exc)},
-                )
-            finally:
-                client.close()
+        return (alias, flows, legacy_count)
+    except KeboolaApiError as exc:
+        return (
+            alias,
+            {"project_alias": alias, "error_code": exc.error_code, "message": exc.message},
+        )
+    except Exception as exc:
+        return (
+            alias,
+            {"project_alias": alias, "error_code": "UNEXPECTED_ERROR", "message": str(exc)},
+        )
+    finally:
+        client.close()
 
-        successes, errors = self._run_parallel(projects, worker)
 
-        all_flows: list[dict[str, Any]] = []
-        legacy_total = 0
-        for _, flows, legacy_count in successes:
-            all_flows.extend(flows)
-            legacy_total += legacy_count
-        all_flows.sort(key=lambda f: (f["project_alias"], f["name"].lower()))
-        errors.sort(key=lambda e: e.get("project_alias", ""))
+successes, errors = self._run_parallel(projects, worker)
 
-        return {
-            "flows": all_flows,
-            "errors": errors,
-            "legacy_orchestrator_count": legacy_total,
-        }
+all_flows: list[dict[str, Any]] = []
+legacy_total = 0
+for _, flows, legacy_count in successes:
+    all_flows.extend(flows)
+    legacy_total += legacy_count
+all_flows.sort(key=lambda f: (f["project_alias"], f["name"].lower()))
+errors.sort(key=lambda e: e.get("project_alias", ""))
+
+return {
+    "flows": all_flows,
+    "errors": errors,
+    "legacy_orchestrator_count": legacy_total,
+}
 ```
 
 Update the `list_flows` docstring Returns section to mention
@@ -1067,23 +1096,22 @@ of `component_id` with `FLOW_COMPONENT_ID`:
   replace the `if phases: dag_errors = _validate_dag(...)` block with:
 
   ```python
-          phases = phases or []
-          tasks = tasks or []
+  phases = phases or []
+  tasks = tasks or []
 
-          definition_errors = validate_conditional_flow(phases, tasks)
-          if definition_errors:
-              raise KeboolaApiError(
-                  message="Flow definition is invalid: " + "; ".join(definition_errors),
-                  status_code=400,
-                  error_code=ErrorCode.INVALID_FLOW_DEFINITION,
-                  retryable=False,
-              )
-          warnings = [
-              f"Phase '{pid}' is unreachable from the entry phase"
-              for pid in find_unreachable_phases(phases)
-          ]
+  definition_errors = validate_conditional_flow(phases, tasks)
+  if definition_errors:
+      raise KeboolaApiError(
+          message="Flow definition is invalid: " + "; ".join(definition_errors),
+          status_code=400,
+          error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+          retryable=False,
+      )
+  warnings = [
+      f"Phase '{pid}' is unreachable from the entry phase" for pid in find_unreachable_phases(phases)
+  ]
 
-          configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
+  configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
   ```
 
   Call `client.create_config(component_id=FLOW_COMPONENT_ID, ...)`; add
@@ -1167,6 +1195,7 @@ def test_flow_schema_full_json_mode(runner, app):
     result = runner.invoke(app, ["--json", "flow", "schema", "--full"])
     assert result.exit_code == 0
     import json as _json
+
     payload = _json.loads(result.stdout)
     assert payload["schema"]["required"] == ["phases", "tasks"]
 ```
@@ -1525,7 +1554,8 @@ Append to `tests/test_flow_cli.py`:
 def test_component_id_flag_removed(runner, app):
     # --component-id is no longer a recognized option on flow detail
     result = runner.invoke(
-        app, ["flow", "detail", "--project", "x", "--flow-id", "1", "--component-id", "keboola.flow"]
+        app,
+        ["flow", "detail", "--project", "x", "--flow-id", "1", "--component-id", "keboola.flow"],
     )
     assert result.exit_code == 2
     assert "No such option" in result.stdout or "no such option" in result.stdout.lower()
@@ -1567,16 +1597,44 @@ def test_format_flow_detail_renders_transitions_and_badges(capsys):
         "name": "My CF",
         "id": "100",
         "phases": [
-            {"id": "p1", "name": "Extract",
-             "next": [{"id": "c", "goto": "p2", "condition": {"type": "operator", "operator": "ANY_TASKS_IN_PHASE", "phase": "p1", "operands": []}},
-                      {"id": "d", "goto": None}]},
+            {
+                "id": "p1",
+                "name": "Extract",
+                "next": [
+                    {
+                        "id": "c",
+                        "goto": "p2",
+                        "condition": {
+                            "type": "operator",
+                            "operator": "ANY_TASKS_IN_PHASE",
+                            "phase": "p1",
+                            "operands": [],
+                        },
+                    },
+                    {"id": "d", "goto": None},
+                ],
+            },
             {"id": "p2", "name": "Transform"},
         ],
         "tasks": [
-            {"id": "t1", "name": "Run", "phase": "p1", "enabled": True,
-             "task": {"type": "job", "componentId": "keboola.ex-http", "configId": "9", "mode": "run"}},
-            {"id": "t2", "name": "Notify", "phase": "p2",
-             "task": {"type": "notification", "title": "x", "recipients": []}},
+            {
+                "id": "t1",
+                "name": "Run",
+                "phase": "p1",
+                "enabled": True,
+                "task": {
+                    "type": "job",
+                    "componentId": "keboola.ex-http",
+                    "configId": "9",
+                    "mode": "run",
+                },
+            },
+            {
+                "id": "t2",
+                "name": "Notify",
+                "phase": "p2",
+                "task": {"type": "notification", "title": "x", "recipients": []},
+            },
         ],
     }
     _format_flow_detail(formatter, detail)
@@ -1654,9 +1712,7 @@ def _format_flow_detail(formatter: Any, result: dict[str, Any]) -> None:
             goto = transition.get("goto")
             target = "END" if goto is None else str(goto)
             summary = _summarize_condition(transition.get("condition"))
-            formatter.console.print(
-                f"      [dim]→ {escape(target)} [{escape(summary)}][/dim]"
-            )
+            formatter.console.print(f"      [dim]→ {escape(target)} [{escape(summary)}][/dim]")
         for task in tasks_by_phase.get(pid, []):
             t_info = task.get("task") or {}
             ttype = t_info.get("type", "?")
@@ -1852,41 +1908,49 @@ drops every `--component-id` argument. Add a `flow validate` step (offline). At
 the start of `test_flow_crud_and_skip`, detect CF support and skip cleanly:
 
 ```python
-    def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
-        # Skip if the project has conditional flows disabled.
-        probe = self._run("flow", "new", "--project", self.alias, "--name", "cf-probe",
-                           "--file", "@" + str(self._write_cf(tmp_path)))
-        if probe.exit_code != 0 and "conditional" in (probe.stdout + probe.stderr).lower():
-            pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
-        ...
+def test_flow_crud_and_schedule(self, tmp_path: Path) -> None:
+    # Skip if the project has conditional flows disabled.
+    probe = self._run(
+        "flow",
+        "new",
+        "--project",
+        self.alias,
+        "--name",
+        "cf-probe",
+        "--file",
+        "@" + str(self._write_cf(tmp_path)),
+    )
+    if probe.exit_code != 0 and "conditional" in (probe.stdout + probe.stderr).lower():
+        pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
+    ...
 ```
 
 Add a helper on the test class:
 
 ```python
-    @staticmethod
-    def _write_cf(tmp_path: Path) -> Path:
-        body = (
-            'phases:\n'
-            '  - id: "p1"\n'
-            '    name: "P1"\n'
-            '    next:\n'
-            '      - id: "n"\n'
-            '        goto: null\n'
-            'tasks:\n'
-            '  - id: "t1"\n'
-            '    name: "T1"\n'
-            '    phase: "p1"\n'
-            '    enabled: true\n'
-            '    task:\n'
-            '      type: job\n'
-            '      componentId: "keboola.ex-http"\n'
-            '      configId: "1"\n'
-            '      mode: run\n'
-        )
-        path = tmp_path / "cf.yaml"
-        path.write_text(body, encoding="utf-8")
-        return path
+@staticmethod
+def _write_cf(tmp_path: Path) -> Path:
+    body = (
+        "phases:\n"
+        '  - id: "p1"\n'
+        '    name: "P1"\n'
+        "    next:\n"
+        '      - id: "n"\n'
+        "        goto: null\n"
+        "tasks:\n"
+        '  - id: "t1"\n'
+        '    name: "T1"\n'
+        '    phase: "p1"\n'
+        "    enabled: true\n"
+        "    task:\n"
+        "      type: job\n"
+        '      componentId: "keboola.ex-http"\n'
+        '      configId: "1"\n'
+        "      mode: run\n"
+    )
+    path = tmp_path / "cf.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
 ```
 
 Ensure the steps cover: schema → validate → new → detail → update → schedule →

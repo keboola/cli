@@ -154,6 +154,10 @@ class Manifest(BaseModel):
     naming: ManifestNaming
     allowed_branches: list[str] = Field(default_factory=list, alias="allowedBranches")
     ignored_components: list[str] = Field(default_factory=list, alias="ignoredComponents")
+    # Opt-in (CLI-25): sync shared SQL workspaces (``keboola.sandboxes``) in
+    # this tree. kbagent-only: ``kbc`` ignores unknown manifest keys on load.
+    # ``save_manifest`` writes the key only while it is true.
+    sync_workspaces: bool = Field(default=False, alias="syncWorkspaces")
     branches: list[ManifestBranch] = Field(default_factory=list)
     configurations: list[ManifestConfiguration] = Field(default_factory=list)
 
@@ -184,13 +188,16 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     """Save *manifest* to .keboola/manifest.json.
 
     Uses ``by_alias=True`` so all keys are written in camelCase,
-    matching the format expected by the Go CLI.
+    matching the format expected by the Go CLI. ``syncWorkspaces`` is left
+    out while false, so a tree that never opted in keeps its manifest as it was.
     """
     keboola_dir = project_root / KEBOOLA_DIR_NAME
     keboola_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = keboola_dir / MANIFEST_FILENAME
     payload = manifest.model_dump(mode="json", by_alias=True)
+    if not manifest.sync_workspaces:
+        payload.pop("syncWorkspaces", None)
     manifest_path.write_text(
         json.dumps(payload, indent=4, ensure_ascii=False) + "\n",
         encoding="utf-8",

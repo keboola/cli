@@ -45,13 +45,13 @@ of bare dicts, so you get autocomplete and a versioned contract:
 
 ```python
 job = kbc.run_job("keboola.ex-db-snowflake", "12345", wait=True)
-if job.succeeded:                       # -> JobResult
+if job.succeeded:  # -> JobResult
     print(job.id, job.result)
 
-res = kbc.query_result(ws, 'SELECT id, name FROM t')   # -> QueryResult
+res = kbc.query_result(ws, "SELECT id, name FROM t")  # -> QueryResult
 print(res.columns, res.row_count, res.truncated)
 
-cfg = kbc.config_detail("keboola.ex-http", "98765")    # -> ConfigDetailResult
+cfg = kbc.config_detail("keboola.ex-http", "98765")  # -> ConfigDetailResult
 print(cfg.name, cfg.version, cfg.configuration)
 ```
 
@@ -75,8 +75,9 @@ from keboola_agent_cli import Client, JobIdempotencyStore
 
 store = JobIdempotencyStore("/var/run/myapp/job_idempotency.json")
 with Client(url=URL, token=TOKEN, idempotency_store=store) as kbc:
-    job = kbc.run_job("keboola.ex-db-snowflake", "12345",
-                      idempotency_key="bootstrap-extract", wait=True)
+    job = kbc.run_job(
+        "keboola.ex-db-snowflake", "12345", idempotency_key="bootstrap-extract", wait=True
+    )
     if job.idempotent_replay:
         ...  # a prior run was returned -- no new job fired
 ```
@@ -115,7 +116,7 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
 ## Querying a workspace
 
 ```python
-rows = kbc.query(workspace_id, 'SELECT id, name FROM customers')
+rows = kbc.query(workspace_id, "SELECT id, name FROM customers")
 # -> [{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]
 ```
 
@@ -125,7 +126,7 @@ rows = kbc.query(workspace_id, 'SELECT id, name FROM customers')
 transparent and does **not** coerce, so cast on your side:
 
 ```python
-total = sum(int(r["amount"]) for r in kbc.query(ws, 'SELECT amount FROM sales'))
+total = sum(int(r["amount"]) for r in kbc.query(ws, "SELECT amount FROM sales"))
 ```
 
 Other `query()` facts:
@@ -145,7 +146,7 @@ Other `query()` facts:
 ```python
 # Upload from a path or from in-memory bytes (bytes need an explicit name)
 meta = kbc.files.upload(b"hello world", name="greeting.txt", tags=["demo"], permanent=True)
-meta = kbc.files.upload("/tmp/report.csv", tags=["demo"])          # name defaults to basename
+meta = kbc.files.upload("/tmp/report.csv", tags=["demo"])  # name defaults to basename
 
 # Read a file fully into memory (handles sliced files + gzip internally)
 data: bytes = kbc.files.read_bytes(meta.id)
@@ -172,7 +173,7 @@ For endpoints the facade does not wrap (buckets, tables, branches, job polling
 internals, ...), reach for the underlying client:
 
 ```python
-client = kbc.raw                      # a KeboolaClient
+client = kbc.raw  # a KeboolaClient
 buckets = client.list_buckets()
 ```
 

@@ -29,6 +29,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
@@ -357,7 +358,7 @@ class ScheduleService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -514,7 +515,7 @@ class ScheduleService(BaseService):
         size**, not the schedule count. See ``schedule-workflow.md`` for
         the trade-off rationale.
         """
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -578,7 +579,7 @@ class ScheduleService(BaseService):
         tuple, the client is always closed, and the caller sees the
         uniform ``(alias, payload, True?)`` shape.
         """
-        effective_branch = branch_id or project.active_branch_id
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:

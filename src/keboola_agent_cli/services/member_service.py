@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from ..config_store import ConfigStore
+from ..config_store import ConfigStore, project_not_registered_error
 from ..constants import DEFAULT_INVITE_WORKERS, PROJECT_ROLES
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..manage_client import ManageClient
@@ -36,6 +36,12 @@ from ..models import (
     MemberInviteRow,
     ProjectInvitation,
     ProjectMember,
+)
+from ..project_ref import (
+    alias_shadow_notice,
+    is_project_id,
+    resolve_project_id,
+    resolve_project_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,8 +120,8 @@ class MemberService:
         CSV must have a header row. Recognised columns (case-insensitive):
         ``email`` (required), ``project`` or ``project_id`` (one required),
         ``role`` (optional if ``default_role`` is given), ``reason`` (optional).
-        Extra columns are ignored. ``project`` values that are all-digits are
-        resolved as numeric project IDs without an alias lookup.
+        Extra columns are ignored. A ``project`` value is an alias or a
+        project ID (an alias wins, CLI-22); a ``project_id`` value is an ID.
         """
         if default_role is not None:
             self._validate_role(default_role)
@@ -329,9 +335,7 @@ class MemberService:
         """Look up ``alias`` in the config store and return ``(stack_url, project_id)``."""
         project = self._config_store.get_project(alias)
         if project is None:
-            raise ConfigError(
-                f"Project alias '{alias}' is not registered. Run `kbagent project list`."
-            )
+            raise project_not_registered_error(alias)
         if project.project_id is None:
             raise ConfigError(
                 f"Project alias '{alias}' has no numeric project_id; "
@@ -340,22 +344,40 @@ class MemberService:
         return project.stack_url, project.project_id
 
     def _stack_for_row(self, row: dict[str, Any]) -> tuple[str, int]:
-        """Resolve a CSV row's project field to ``(stack_url, project_id)``."""
+        """Resolve a CSV row's project field to ``(stack_url, project_id)``.
+
+        A ``project`` value follows the ``--project`` rules (CLI-22): an alias
+        wins, then a project ID, and an ID registered more than once is a
+        ``ConfigError`` listing the aliases. A ``project_id`` value is only
+        ever looked up as an ID. The stack URL comes from the registered project.
+
+        One difference from ``--project``: when a digits-only alias is also the
+        project ID of a DIFFERENT registered project, the row fails instead of
+        taking the alias. An invite grants membership, and a bulk run has no
+        notice a person reads before the grant, so kbagent must not guess.
+        """
         project_field = str(row["project"]).strip()
-        if project_field.isdigit():
-            # Numeric project_id rows still need a stack_url; we infer from the
-            # currently-registered projects sharing that ID, falling back to
-            # any default.
-            project_id = int(project_field)
-            for cfg in self._config_store.load().projects.values():
-                if cfg.project_id == project_id:
-                    return cfg.stack_url, project_id
+        projects = self._config_store.load().projects
+        if row.get("by_id") and is_project_id(project_field):
+            alias = resolve_project_id(projects, int(project_field))
+        else:
+            shadow = alias_shadow_notice(projects, project_field)
+            if shadow is not None:
+                raise ConfigError(
+                    f"{shadow} kbagent skips this row, because it does not guess the project "
+                    "of an invite: put the alias in the `project` column, or the ID in the "
+                    "`project_id` column."
+                )
+            alias = resolve_project_ref(projects, project_field)
+        if alias is not None and alias in projects:
+            return self._resolve_alias(alias)
+        if is_project_id(project_field):
             raise ConfigError(
-                f"CSV row references project_id={project_id}, which is not registered "
+                f"CSV row references project_id={project_field}, which is not registered "
                 "in this kbagent config; add it via `kbagent project add` so we know "
                 "which stack URL to use."
             )
-        return self._resolve_alias(project_field)
+        raise project_not_registered_error(project_field)
 
     @staticmethod
     def _resolve_member_id(manage_client: ManageClient, project_id: int, email: str) -> int:
@@ -537,6 +559,7 @@ class MemberService:
                     {
                         "email": email,
                         "project": project,
+                        "by_id": project_key == "project_id",
                         "role": role,
                         "reason": reason or None,
                     }

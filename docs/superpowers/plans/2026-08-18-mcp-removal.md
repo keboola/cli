@@ -158,7 +158,9 @@ class TestRoundTrip:
         store.save_tasks([_mcp_task()])
         # unrelated write: upsert a different task, then reload
         store.upsert_task(
-            AgentTask(name="new", action=AgentAction(type="cli_command", params={"argv": ["version"]}))
+            AgentTask(
+                name="new", action=AgentAction(type="cli_command", params={"argv": ["version"]})
+            )
         )
         names = {t.name for t in store.load_tasks()}
         assert "legacy" in names, "tombstone task must NOT be dropped by an unrelated save"
@@ -190,7 +192,9 @@ class TestSchedulerSkip:
     def test_live_types_are_dispatchable(self) -> None:
         from keboola_agent_cli.server.agent_runner import is_dispatchable
 
-        t = AgentTask(name="x", action=AgentAction(type="cli_command", params={"argv": ["version"]}))
+        t = AgentTask(
+            name="x", action=AgentAction(type="cli_command", params={"argv": ["version"]})
+        )
         assert is_dispatchable(t) is True
 
 
@@ -200,7 +204,9 @@ class TestAnnotate:
         assert annotate_removed_action(payload)["deprecation"] == REMOVED_ACTION_MESSAGE
 
     def test_annotate_leaves_live_types_alone(self) -> None:
-        t = AgentTask(name="x", action=AgentAction(type="cli_command", params={"argv": ["version"]}))
+        t = AgentTask(
+            name="x", action=AgentAction(type="cli_command", params={"argv": ["version"]})
+        )
         assert "deprecation" not in annotate_removed_action(t.model_dump(mode="json"))
 ```
 
@@ -380,8 +386,16 @@ class TestCreationRefusal:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            ["--config-dir", str(tmp_config_dir), "agent", "create",
-             "--name", "x", "--type", "mcp_tool"],
+            [
+                "--config-dir",
+                str(tmp_config_dir),
+                "agent",
+                "create",
+                "--name",
+                "x",
+                "--type",
+                "mcp_tool",
+            ],
         )
         assert result.exit_code == 2
         assert "REMOVED" in result.output
@@ -396,8 +410,16 @@ class TestCreationRefusal:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            ["--config-dir", str(tmp_config_dir), "agent", "create",
-             "--name", "x", "--from-file", f"@{payload}"],
+            [
+                "--config-dir",
+                str(tmp_config_dir),
+                "agent",
+                "create",
+                "--name",
+                "x",
+                "--from-file",
+                f"@{payload}",
+            ],
         )
         assert result.exit_code == 2
         assert "REMOVED" in result.output
@@ -409,10 +431,13 @@ For the REST guard, add to `tests/test_server_smoke.py` (mirror its existing Tes
 
 ```python
 def test_post_agents_rejects_mcp_tool(client) -> None:
-    resp = client.post("/agents", json={
-        "name": "x",
-        "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}},
-    })
+    resp = client.post(
+        "/agents",
+        json={
+            "name": "x",
+            "action": {"type": "mcp_tool", "params": {"tool": "get_jobs"}},
+        },
+    )
     assert resp.status_code == 422
     assert "REMOVED" in resp.text
 ```
@@ -565,12 +590,16 @@ def test_read_cache_tolerates_legacy_mcp_keys(tmp_path, monkeypatch) -> None:
     from keboola_agent_cli import auto_update
 
     cache = tmp_path / "version_cache.json"
-    cache.write_text(json.dumps({
-        "last_check": "2026-08-17T00:00:00+00:00",
-        "latest_version": "0.84.2",
-        "mcp_latest_version": "1.61.0",
-        "mcp_install_method": "uv_tool",
-    }))
+    cache.write_text(
+        json.dumps(
+            {
+                "last_check": "2026-08-17T00:00:00+00:00",
+                "latest_version": "0.84.2",
+                "mcp_latest_version": "1.61.0",
+                "mcp_install_method": "uv_tool",
+            }
+        )
+    )
     monkeypatch.setattr(auto_update, "_get_cache_path", lambda: cache)
     data = auto_update._read_cache()
     assert data is not None and data["latest_version"] == "0.84.2"

@@ -256,6 +256,7 @@ def _load_project_id_map(root: Path) -> dict[int, str]:
         result = subprocess.run(
             ["kbagent", "--json", "project", "list"],
             capture_output=True,
+            check=False,
             text=True,
             cwd=str(root),
             timeout=30,
@@ -527,6 +528,7 @@ def add_cross_project_lineage(graph: LineageGraph, root: Path) -> None:
         result = subprocess.run(
             ["kbagent", "--json", "lineage"],
             capture_output=True,
+            check=False,
             text=True,
             cwd=str(root),
             timeout=120,
@@ -830,6 +832,7 @@ def _call_ai(prompt: str, model: str = "haiku") -> dict | None:
         result = subprocess.run(
             ["claude", "-p", prompt, "--model", claude_model, "--output-format", "json"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=120,
         )

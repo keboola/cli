@@ -11,7 +11,7 @@ from keboola_agent_cli.models import DeveloperPortalIdentity
 
 
 def _identity(**overrides) -> DeveloperPortalIdentity:
-    defaults = dict(username="service.keboola.x", password="p")
+    defaults = {"username": "service.keboola.x", "password": "p"}
     defaults.update(overrides)
     return DeveloperPortalIdentity(**defaults)
 

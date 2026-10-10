@@ -1514,6 +1514,222 @@ class TestDeleteSession:
 # ----------------------------------------------------------------------------
 
 
+_PROVISION_OK: dict[str, Any] = {
+    "project": {"id": 9840, "name": "Agent project", "backend": "snowflake"},
+    "accessToken": "kbc_at_sess1_secret",
+    "refreshToken": "kbc_rt_sess1_secret",
+    "tokenType": "Bearer",
+    "accessTokenExpiresIn": 3600,
+    "sessionId": "sess1",
+    "confirmUrl": "https://connection.keboola.com/agent-project/confirm?token=kbc_apc_1_s",
+    "claimId": "1",
+    "backendInitDispatchedAsync": True,
+}
+
+
+class TestProvisionProject:
+    """Agent provisioning (`POST /manage/programmatic-projects`)."""
+
+    def test_parses_response_and_sends_client_id(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            result = client.provision_project(project_name="Agent project", backend="snowflake")
+        finally:
+            client.close()
+
+        assert result.project.id == 9840
+        assert result.project.backend == "snowflake"
+        # accessTokenExpiresIn, not expiresIn -- the field name that makes this
+        # its own model rather than a CliTokenResponse.
+        assert result.access_token_expires_in == 3600
+        assert result.confirm_url.endswith("token=kbc_apc_1_s")
+        assert result.backend_init_dispatched_async is True
+
+        request = httpx_mock.get_requests()[0]
+        assert json.loads(request.read().decode()) == {
+            "clientId": "keboola-cli",
+            "projectName": "Agent project",
+            "backend": "snowflake",
+        }
+        # Unauthenticated by design: this is reachable with no Keboola identity.
+        assert "Authorization" not in request.headers
+
+    def test_omits_optional_fields_when_unset(self, httpx_mock) -> None:
+        """A None backend must not be sent -- it is how the stack default is kept."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project()
+        finally:
+            client.close()
+
+        assert json.loads(httpx_mock.get_requests()[0].read().decode()) == {
+            "clientId": "keboola-cli"
+        }
+
+    def test_sync_backend_init_is_passed_through(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project(sync_backend_init=True)
+        finally:
+            client.close()
+
+        body = json.loads(httpx_mock.get_requests()[0].read().decode())
+        assert body["syncBackendInit"] is True
+
+    def test_read_timeout_is_not_reported_as_repeatable(self, httpx_mock) -> None:
+        """The request WAS sent and may have created the project. Reporting it
+        retryable -- and saying "run the command again" -- is how a second
+        organization, billable project and credit grant get created over a
+        lost response."""
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("timed out"),
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.TIMEOUT
+        assert excinfo.value.retryable is False
+        assert "may have succeeded" in excinfo.value.message
+        assert "Do NOT just run it again" in excinfo.value.message
+        assert "auth status" in excinfo.value.message
+        assert "Run the command again." not in excinfo.value.message
+
+    def test_connect_timeout_is_repeatable(self, httpx_mock) -> None:
+        """Never delivered, so nothing was created -- the ordinary advice holds."""
+        httpx_mock.add_exception(
+            httpx.ConnectTimeout("timed out"),
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert excinfo.value.retryable is True
+        assert "Run the command again." in excinfo.value.message
+
+    def test_sync_backend_init_gets_a_longer_read_budget(self, httpx_mock) -> None:
+        """Without it the flag's own success path -- waiting for the backend --
+        would routinely trip the 30s default and land in the timeout above."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project(sync_backend_init=True)
+        finally:
+            client.close()
+
+        assert httpx_mock.get_requests()[0].extensions["timeout"]["read"] == 300.0
+
+    def test_async_default_keeps_the_client_timeout(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=200,
+            json=_PROVISION_OK,
+        )
+        client = _make_client()
+        try:
+            client.provision_project()
+        finally:
+            client.close()
+
+        assert httpx_mock.get_requests()[0].extensions["timeout"]["read"] != 300.0
+
+    def test_404_names_provisioning_not_browser_login(self, httpx_mock) -> None:
+        """The stack feature is off. The generic auth 404 message points at
+        `project add --token`, which a caller with no account cannot use."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=404,
+            json={"error": "Not Found"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert excinfo.value.error_code == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
+        message = excinfo.value.message
+        assert STACK_URL in message
+        # Names the capability that is missing AND the flag an operator flips,
+        # because this response is the only place a caller learns either.
+        assert "agent-provisioning" in message
+        assert "STACK_FEATURES__AGENT_PROVISIONING" in message
+        # Not the generic auth-404 text, which tells the caller to paste a
+        # token -- the one thing a caller of this command does not have.
+        assert "Browser login" not in message
+
+    def test_5xx_is_not_retried(self, httpx_mock) -> None:
+        """The call creates an organization, a billable project and a credit
+        grant -- a retried 5xx mints a second one nobody asked for."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=500,
+            json={"error": "boom"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
+
+    def test_429_is_not_retried_either(self, httpx_mock) -> None:
+        """Rate limit / unconfirmed-project cap: same non-idempotency argument."""
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/manage/programmatic-projects",
+            method="POST",
+            status_code=429,
+            json={"error": "Too many requests"},
+        )
+        client = _make_client()
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.provision_project()
+        finally:
+            client.close()
+
+        assert len(httpx_mock.get_requests()) == 1
+
+
 class Test404OnEveryEndpoint:
     @pytest.mark.parametrize(
         "path",

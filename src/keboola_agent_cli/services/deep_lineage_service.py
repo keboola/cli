@@ -113,7 +113,7 @@ def extract_sql_table_refs(sql: str, project_id: int) -> list[tuple[int, str, st
         if (part1, part2) in create_targets:
             continue
         # Only accept bucket-shaped first part (in.c-* or out.c-*)
-        if not (part1.startswith("in.") or part1.startswith("out.")):
+        if not (part1.startswith(("in.", "out."))):
             continue
         key = (project_id, part1, part2)
         if key not in seen:
@@ -585,7 +585,7 @@ class DeepLineageService:
                 if project.project_id:
                     mapping[project.project_id] = alias
         except Exception:
-            pass
+            logger.debug("building project-id to alias mapping failed", exc_info=True)
         return mapping
 
     def _scan_projects(self, root: Path, project_id_to_alias: dict[int, str]) -> LineageGraph:
@@ -824,6 +824,7 @@ class DeepLineageService:
             result = subprocess.run(
                 ["kbagent", "--json", "sharing", "edges"],
                 capture_output=True,
+                check=False,
                 text=True,
                 cwd=str(root),
                 timeout=120,

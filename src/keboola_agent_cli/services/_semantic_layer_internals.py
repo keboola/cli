@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ._semantic_layer_fqn import append_fqn_mismatch_warnings
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,8 @@ def validate_deep(
                 continue
             if outcome.detail is not None:
                 details_by_tid[outcome.table_id] = outcome.detail
+
+    append_fqn_mismatch_warnings(datasets, details_by_tid, warnings)
 
     # PHANTOM FIELD (declared field not in actual columns)
     for ds in datasets:
@@ -751,18 +754,15 @@ def push_built_model(
 
 
 def synthesize_role_classified_fields(
-    storage: StorageService,
-    alias: str,
-    table_id: str,
+    detail: dict[str, Any],
     classify_role: Callable[[str, str], str],
 ) -> list[dict[str, Any]]:
-    """Fetch storage schema for ``table_id`` and synthesise ``fields[]`` with role heuristics.
+    """Synthesise ``fields[]`` with role heuristics from a table-detail payload.
 
     Used by ``add_dataset --deep-fields``. Returns the list of
     ``{name, type, role}`` dicts (one per column); empty when the
     storage table has no columns.
     """
-    detail = storage.get_table_detail(alias, table_id)
     fields: list[dict[str, Any]] = []
     for col in detail.get("column_details", []) or []:
         cname = col.get("name", "")
@@ -818,36 +818,40 @@ def fetch_table_schemas(
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 
-def build_information_schema_sql(backend: str, bucket_id: str, table_name: str) -> str | None:
+def build_information_schema_sql(
+    backend: str, backend_path: list[str], table_name: str
+) -> str | None:
     """Build an ``INFORMATION_SCHEMA.COLUMNS`` query for a table's real types.
 
+    ``backend_path`` is the owning bucket's Storage ``backendPath`` (Snowflake
+    ``[database, schema]``, BigQuery ``[dataset]``), used verbatim.
+
     Returns a query projecting ``(column_name, data_type)`` for the given
-    backend, or ``None`` when the backend is unsupported or an identifier
-    contains an unexpected character (see ``_SAFE_IDENTIFIER_RE``).
+    backend, or ``None`` when the backend is unsupported, ``backend_path`` is
+    too short, or an identifier contains an unexpected character (see
+    ``_SAFE_IDENTIFIER_RE``).
     """
-    if not (
-        _SAFE_IDENTIFIER_RE.match(bucket_id or "") and _SAFE_IDENTIFIER_RE.match(table_name or "")
-    ):
-        return None
     normalized_backend = (backend or "").lower()
+    if normalized_backend == "bigquery" and backend_path:
+        location = backend_path[:1]
+    elif normalized_backend == "snowflake" and len(backend_path) >= 2:
+        location = backend_path[:2]
+    else:
+        return None
+    if not all(_SAFE_IDENTIFIER_RE.match(ident or "") for ident in [*location, table_name]):
+        return None
     if normalized_backend == "bigquery":
-        # Keboola maps a bucket to a BigQuery dataset by replacing `.` and `-`
-        # with `_` (e.g. `in.c-Foo-Bar` -> `in_c_Foo_Bar`).
-        dataset = bucket_id.replace(".", "_").replace("-", "_")
         return (
             "SELECT column_name, data_type "
-            f"FROM `{dataset}`.INFORMATION_SCHEMA.COLUMNS "
+            f"FROM `{location[0]}`.INFORMATION_SCHEMA.COLUMNS "
             f"WHERE table_name = '{table_name}'"
         )
-    if normalized_backend == "snowflake":
-        # Keboola's Snowflake mapping keeps the bucketId verbatim as the schema
-        # name inside the KEBOOLA database (mirrors ``_derive_fqn``).
-        return (
-            "SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type "
-            'FROM "KEBOOLA".INFORMATION_SCHEMA.COLUMNS '
-            f"WHERE TABLE_SCHEMA = '{bucket_id}' AND TABLE_NAME = '{table_name}'"
-        )
-    return None
+    database, schema = location
+    return (
+        "SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type "
+        f'FROM "{database}".INFORMATION_SCHEMA.COLUMNS '
+        f"WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table_name}'"
+    )
 
 
 def _parse_information_schema_result(result: dict[str, Any]) -> dict[str, str]:
@@ -902,14 +906,17 @@ def enrich_schemas_with_workspace_types(
         backend = detail.get("backend", "")
         sql = build_information_schema_sql(
             backend,
-            detail.get("bucket_id", ""),
+            detail.get("backend_path", []),
             detail.get("name", "") or tid.split(".")[-1],
         )
         if sql is None:
             unresolved.append(
                 {
                     "table_id": tid,
-                    "error": f"type resolution unsupported for backend {backend!r}",
+                    "error": (
+                        f"type resolution unsupported for backend {backend!r} "
+                        f"with backendPath {detail.get('backend_path', [])!r}"
+                    ),
                 }
             )
             continue
@@ -1193,7 +1200,7 @@ def heuristic_generate_model(
     *,
     schemas: dict[str, dict[str, Any]],
     model_name: str,
-    derive_fqn: Callable[[str], str],
+    derive_fqn: Callable[[str, dict[str, Any]], str],
     classify_role: Callable[[str, str], str],
 ) -> dict[str, Any]:
     """Deterministic stand-in for the AI generator (see ``build_model``).
@@ -1221,7 +1228,7 @@ def heuristic_generate_model(
             .replace(" ", "_")
             .lower()
         )
-        fqn = derive_fqn(tid)
+        fqn = derive_fqn(tid, detail)
         fields: list[dict[str, Any]] = []
         for col in detail.get("column_details", []) or []:
             cname = col.get("name", "")

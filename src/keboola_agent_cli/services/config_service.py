@@ -20,6 +20,7 @@ from ..constants import (
     CONFIG_STATE_MAX_BYTES,
     ROOT_LEVEL_CONFIG_COMPONENTS,
 )
+from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, find_matches_in_json, set_nested_value
 from ..models import ComponentDetail, ProjectConfig
@@ -29,19 +30,16 @@ from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
-from .base import BaseService, ClientFactory, sanitize_unexpected_error
+from .base import (
+    BaseService,
+    ClientFactory,
+    find_default_branch_id,
+    make_session_aware_client_factory,
+    sanitize_unexpected_error,
+)
 from .workspace_service import find_storage_workspace_for_sandbox_config
 
 AiClientFactory = Callable[[str, str], AiServiceClient]
-
-
-def _default_ai_client_factory(stack_url: str, token: str) -> AiServiceClient:
-    """Default factory: build an ``AiServiceClient`` for the given project.
-
-    Static-token-only (v1 scope is Storage + Manage); the client's
-    ``SESSION_AUTH_FEATURE`` makes a session sentinel fail fast on construction.
-    """
-    return AiServiceClient(stack_url=stack_url, token=token)
 
 
 logger = logging.getLogger(__name__)
@@ -122,7 +120,9 @@ class ConfigService(BaseService):
         ai_client_factory: AiClientFactory | None = None,
     ) -> None:
         super().__init__(config_store=config_store, client_factory=client_factory)
-        self._ai_client_factory = ai_client_factory or _default_ai_client_factory
+        self._ai_client_factory = ai_client_factory or make_session_aware_client_factory(
+            config_store, AiServiceClient
+        )
 
     def _fetch_project_configs(
         self,
@@ -148,7 +148,7 @@ class ConfigService(BaseService):
         """
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = branch_id or project.active_branch_id
+            effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
             if include_rows:
                 components = client.list_components_with_configs(
@@ -168,15 +168,12 @@ class ConfigService(BaseService):
                 folder_branch_id = effective_branch_id
                 if not folder_branch_id:
                     # Fetch default branch ID from dev-branches endpoint
-                    branches = client.list_dev_branches()
-                    default = next((b for b in branches if b.get("isDefault")), None)
-                    if default:
-                        folder_branch_id = default["id"]
-                if folder_branch_id:
+                    folder_branch_id = find_default_branch_id(client.list_dev_branches())
+                if folder_branch_id is not None:
                     result = client.list_config_folder_metadata(branch_id=folder_branch_id)
                     folder_map = result if isinstance(result, dict) else {}
             except Exception:
-                pass  # graceful fallback if search endpoint unavailable
+                logger.debug("config-folder metadata lookup failed", exc_info=True)
 
             configs: list[dict[str, Any]] = []
             for component in components:
@@ -415,7 +412,7 @@ class ConfigService(BaseService):
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -525,7 +522,7 @@ class ConfigService(BaseService):
         """
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = branch_id or project.active_branch_id
+            effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
             # Pre-filter to the matching component bucket when the
             # component_id prefix encodes a known type (keboola.ex-*,
             # keboola.wr-*, keboola.*-transformation, keboola.app-*). The
@@ -727,7 +724,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -923,7 +920,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -1067,7 +1064,7 @@ class ConfigService(BaseService):
             ConfigError: When the alias is unknown.
         """
         project = self.resolve_projects([alias])[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         base = {
             "project_alias": alias,
@@ -1140,7 +1137,7 @@ class ConfigService(BaseService):
             raise _bad_state(f"--state is {size} bytes; cap is {CONFIG_STATE_MAX_BYTES}.")
 
         project = self.resolve_projects([alias])[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         base = {
             "project_alias": alias,
@@ -1216,7 +1213,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         try:
             return trash.execute_delete(
@@ -1237,7 +1234,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         try:
             return trash.execute_restore(
@@ -1257,7 +1254,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         try:
             return trash.execute_trash_list(client, alias, component_id, effective_branch_id)
@@ -1295,7 +1292,7 @@ class ConfigService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -1461,9 +1458,7 @@ class ConfigService(BaseService):
         branch_dir = project_root / branch_path
         return branch_dir if branch_dir.exists() else None
 
-    def _resolve_metadata_branch_id(
-        self, project: ProjectConfig, client: Any, branch_id: int | None
-    ) -> int:
+    def _metadata_branch_id(self, alias: str, client: Any, branch_id: int | None) -> int:
         """Resolve the branch ID required by the config metadata API.
 
         Config metadata endpoints only support the branch-aware route
@@ -1472,9 +1467,9 @@ class ConfigService(BaseService):
 
         Raises ConfigError if no default branch can be found.
         """
-        effective = branch_id or project.active_branch_id
-        if effective:
-            return int(effective)
+        effective = resolve_branch(self._config_store, alias, branch_id)
+        if effective:  # 0 = production: read its numeric ID below
+            return effective
         try:
             branches = client.list_dev_branches()
         except KeboolaApiError as exc:
@@ -1487,9 +1482,10 @@ class ConfigService(BaseService):
                 f"Unexpected error listing branches for metadata route: {exc}. "
                 "Pass --branch explicitly."
             ) from exc
-        default = next((b for b in branches if b.get("isDefault")), None)
-        if default:
-            return int(default["id"])
+        default_branch_id = find_default_branch_id(branches)
+        if default_branch_id is not None:
+            record_branch(self._config_store, alias, default_branch_id, "production")
+            return default_branch_id
         raise ConfigError(
             "Could not determine a branch for config metadata. "
             "Set an active branch with 'kbagent branch use' or pass --branch."
@@ -1512,7 +1508,7 @@ class ConfigService(BaseService):
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            effective_branch_id = self._metadata_branch_id(alias, client, branch_id)
             entries = client.list_config_metadata(
                 component_id, config_id, branch_id=effective_branch_id
             )
@@ -1571,7 +1567,7 @@ class ConfigService(BaseService):
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            effective_branch_id = self._metadata_branch_id(alias, client, branch_id)
             result = client.set_config_metadata(
                 component_id, config_id, entries=[(key, value)], branch_id=effective_branch_id
             )
@@ -1603,7 +1599,7 @@ class ConfigService(BaseService):
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = self._resolve_metadata_branch_id(project, client, branch_id)
+            effective_branch_id = self._metadata_branch_id(alias, client, branch_id)
             client.delete_config_metadata(
                 component_id, config_id, metadata_id, branch_id=effective_branch_id
             )
@@ -1733,7 +1729,7 @@ class ConfigService(BaseService):
         """
         client = self._client_factory(project.stack_url, project.token)
         try:
-            effective_branch_id = branch_id or project.active_branch_id
+            effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
             components = client.list_components_with_configs(
                 branch_id=effective_branch_id,
                 component_type=component_type,
@@ -1829,7 +1825,7 @@ class ConfigService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         try:
             # Encrypt #-prefixed secrets before they reach Storage (issue #378).
@@ -1913,7 +1909,7 @@ class ConfigService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
         body_was_explicit = configuration is not None
         effective_config: dict[str, Any] = configuration if body_was_explicit else {}
@@ -2181,7 +2177,7 @@ class ConfigService(BaseService):
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
 
         try:
@@ -2339,7 +2335,7 @@ class ConfigService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        effective_branch_id = branch_id or project.active_branch_id
+        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
         client = self._client_factory(project.stack_url, project.token)
         try:
             client.delete_config_row(

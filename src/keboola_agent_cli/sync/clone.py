@@ -6,8 +6,10 @@ CREATEs everything fresh in the target project. Cloning into a **fresh** target
 project needs no id surgery: the reference's config ids do not exist in the
 target remote, so the diff classifies every config as ``added`` and the push
 assigns new ULIDs -- and because ``created_id_map`` is keyed by the reference id
-(the manifest entry's id before writeback), the Phase-C variable links and the
-Phase-D flow task ``configId``s remap reference->ULID automatically.
+(the manifest entry's id before writeback), push remaps the links between the
+configs reference->ULID automatically: Phase C the transformation variables and
+shared-code links, Phase D the flow and orchestrator task ``configId``s (and
+``configRowIds``) and the schedule targets.
 
 These functions are deliberately side-effecting but **pure of API calls**: they
 only touch the on-disk tree + the in-memory manifest, so they are unit-testable
@@ -63,14 +65,79 @@ def copy_reference_tree(source_dir: Path, target_dir: Path) -> None:
     shutil.copytree(source_dir, target_dir)
 
 
-def repoint_manifest_project(manifest: Any, *, project_id: int, api_host: str) -> None:
-    """Re-point the manifest's project block at the clone's target project."""
+def repoint_manifest_project(
+    manifest: Any,
+    *,
+    project_id: int,
+    api_host: str,
+    default_branch_id: int | None = None,
+) -> None:
+    """Re-point the manifest's project block at the clone's target project.
+
+    When ``default_branch_id`` is given, the production branch id (the first
+    manifest branch, which ``_resolve_branch_id`` uses as its fallback) is
+    re-pointed onto the target project's default branch too. The copied
+    manifest otherwise keeps the SOURCE project's branch id, which does not
+    exist in the target; a fresh clone with no explicit ``--branch`` then
+    resolves that stale id and diff/push fail with
+    ``Branch id "..." does not exists`` (CLI-5).
+    """
     manifest.project.id = project_id
     manifest.project.api_host = api_host
+    if default_branch_id is not None and manifest.branches:
+        manifest.branches[0].id = default_branch_id
 
 
-def _config_dir(target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str) -> Path:
-    return target_dir / branch_map.get(branch_id, _DEFAULT_BRANCH_DIR) / path
+def repoint_default_branch_configs(
+    manifest: Any, *, source_default_branch_id: int | None, new_branch_id: int
+) -> None:
+    """Move source-default-branch configs onto the branch push resolves.
+
+    Only configs that lived on the source's own default branch are re-pointed;
+    dev-branch entries keep their branch id so their tree still resolves. Push
+    matches a create placeholder on ``(branch_id, component_id, path)`` and
+    resolves the target branch to ``new_branch_id``. Without this the match
+    fails, a duplicate entry with no ``KBC.*`` metadata is appended, and config
+    metadata such as ``KBC.configuration.folderName`` never reaches the target
+    (CLI-9). ``new_branch_id`` must be what ``_resolve_branch_id`` returns for
+    the target, normalized to ``0`` for production (``None``), so the writeback
+    ``branch_id or 0`` comparison matches.
+    """
+    for cfg in manifest.configurations:
+        if cfg.branch_id == source_default_branch_id:
+            cfg.branch_id = new_branch_id
+
+
+def drop_source_pull_marks(manifest: Any) -> None:
+    """Drop the ``pull_hash`` the copied entries carry from the SOURCE project.
+
+    ``pull_hash`` marks an entry as fetched from the remote it now points at.
+    After the re-point it would claim that for the target, where none of these
+    configs exists, and the diff would report each one as deleted on the
+    target instead of new (``remote_deleted``, issue #792 H). The rows carry
+    their own. Push stamps a fresh ``pull_hash`` when it creates each one.
+    """
+    for cfg in manifest.configurations:
+        cfg.metadata.pop("pull_hash", None)
+        for row in cfg.rows:
+            if row.metadata:
+                row.metadata.pop("pull_hash", None)
+
+
+def _default_branch_dir(manifest: Any) -> str:
+    """On-disk tree for an unregistered branch id -- the default branch's dir.
+
+    Mirrors ``branch_scope.branch_tree_path``'s fallback (``branches[0].path``),
+    NOT a hardcoded literal, so a non-``main`` default-branch dir (git-branching
+    names it after the git default branch) still resolves correctly.
+    """
+    return manifest.branches[0].path if manifest.branches else _DEFAULT_BRANCH_DIR
+
+
+def _config_dir(
+    target_dir: Path, branch_map: dict[int, str], branch_id: int, path: str, default_dir: str
+) -> Path:
+    return target_dir / branch_map.get(branch_id, default_dir) / path
 
 
 def _remap_bucket_in_table_id(table_id: Any, bucket_map: dict[str, str]) -> Any:
@@ -122,14 +189,16 @@ def apply_bucket_map(target_dir: Path, manifest: Any, bucket_map: dict[str, str]
     if not bucket_map:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     rewrites = 0
     for cfg in manifest.configurations:
         rewrites += _rewrite_buckets_in_config(
-            _config_dir(target_dir, branch_map, cfg.branch_id, cfg.path), bucket_map
+            _config_dir(target_dir, branch_map, cfg.branch_id, cfg.path, default_dir), bucket_map
         )
         for row in cfg.rows:
             rewrites += _rewrite_buckets_in_config(
-                _config_dir(target_dir, branch_map, cfg.branch_id, row.path), bucket_map
+                _config_dir(target_dir, branch_map, cfg.branch_id, row.path, default_dir),
+                bucket_map,
             )
     return rewrites
 
@@ -164,13 +233,15 @@ def apply_variable_values(target_dir: Path, manifest: Any, variable_values: dict
     if not variable_values:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     overridden = 0
     for cfg in manifest.configurations:
         if cfg.component_id != VARIABLES_COMPONENT_ID:
             continue
         for row in cfg.rows:
             overridden += _override_values_in_row(
-                _config_dir(target_dir, branch_map, cfg.branch_id, row.path), variable_values
+                _config_dir(target_dir, branch_map, cfg.branch_id, row.path, default_dir),
+                variable_values,
             )
     return overridden
 
@@ -188,13 +259,14 @@ def apply_instance_rename(target_dir: Path, manifest: Any, renames: dict[str, st
     if not renames:
         return 0
     branch_map = branch_path_map(manifest)
+    default_dir = _default_branch_dir(manifest)
     moved: set[tuple[str, str]] = set()
     renamed = 0
     for old, new in renames.items():
         for cfg in manifest.configurations:
             if not (cfg.path == old or cfg.path.startswith(old + "/")):
                 continue
-            branch_dir = branch_map.get(cfg.branch_id, _DEFAULT_BRANCH_DIR)
+            branch_dir = branch_map.get(cfg.branch_id, default_dir)
             move_key = (branch_dir, old)
             if move_key not in moved:
                 src = target_dir / branch_dir / old

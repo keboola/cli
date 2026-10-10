@@ -1659,8 +1659,8 @@ class TestWorkspaceListIssue304:
     - ``--branch`` flag parity with ``storage buckets`` / ``config list``
     - ``--qs-compatible`` filter that pre-selects data-app-ready workspaces
     - ``--branch`` validation (rejects multi-project usage)
-    - ``Info: Using production branch for read ...`` banner when an alias is
-      pinned to a dev branch (read commands ignore the implicit branch)
+    - no "production branch for read" notice: the service applies the active
+      branch (#766)
     """
 
     def test_workspace_list_branch_flag_propagates_to_service(self, tmp_path: Path) -> None:
@@ -1772,14 +1772,12 @@ class TestWorkspaceListIssue304:
         kwargs = mock_ws.list_workspaces.call_args.kwargs
         assert kwargs["qs_compatible_only"] is True
 
-    def test_workspace_list_ignores_active_branch_with_banner(self, tmp_path: Path) -> None:
-        """`workspace list` with an alias pinned to a dev branch behaves like `storage buckets`.
+    def test_workspace_list_leaves_the_active_branch_to_the_service(self, tmp_path: Path) -> None:
+        """`workspace list` passes ``--branch`` unchanged; the service applies the active branch.
 
-        The implicit ``active_branch_id`` is ignored (read endpoint uses
-        production), and an ``Info: ...`` banner explains the override.
-        Before issue #304 the command silently scoped to the pinned branch
-        without notifying the caller, returning a different workspace set
-        than ``workspace list`` against the same alias one shell ago.
+        Until #766 the command printed "Using production branch for read" while
+        ``WorkspaceService`` still listed the active branch: both halves came in
+        with #304 (v0.42.0). The service now reports the branch it used.
         """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -1818,10 +1816,7 @@ class TestWorkspaceListIssue304:
             )
 
         assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-        # Banner goes to stderr in real use; CliRunner mixes streams.
-        assert "production branch for read" in result.output
-        assert "99999" in result.output
-        # branch_id must NOT be propagated -- read commands target production
+        assert "production branch for read" not in result.output
         kwargs = mock_ws.list_workspaces.call_args.kwargs
         assert kwargs["branch_id"] is None
 

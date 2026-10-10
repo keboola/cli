@@ -3,16 +3,17 @@ name: kbagent
 description: >
   Use when working with Keboola Connection projects via the kbagent CLI.
   Covers: exploring and searching configurations, job history, data
-  lineage, dev branches, workspace SQL debugging, GitOps config sync,
-  bucket sharing and linking, encrypting secrets,
-  Storage tables, files, and snapshots, data apps,
-  flows and schedules, invitations,
-  feature flags, OTLP data streams, scoped Storage tokens, the semantic
+  lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
+  bucket sharing/linking, encrypting secrets,
+  Storage tables/files/snapshots, data apps,
+  flows/schedules, invitations,
+  feature flags, OTLP data streams, scoped Storage tokens, semantic
   layer, Developer Portal, browser login,
   first-time setup and logout in any client.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  data app, streamlit deploy, semantic layer, sl, dev-portal,
+  merge request,
+  data app, python-js app, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
@@ -77,6 +78,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
@@ -142,7 +144,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
 | Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
-| Retrieve the simpleAuth password for a password-gated data app | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
@@ -153,6 +154,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | List jobs from connected projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -238,11 +240,35 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
+| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
 | Delete a branch metadata entry by its numeric ID | `kbagent branch metadata-delete --project PROJECT --metadata-id METADATA-ID` |
+| List the project's merge requests, newest first | `kbagent merge-request list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent mr list` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent mr update` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve` |
+| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent mr merge` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
 | List workspaces from connected projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -277,7 +303,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent semantic-layer model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent semantic-layer model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM` |
@@ -310,7 +336,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a new semantic-layer model | `kbagent sl model create --project PROJECT --name NAME` |
 | Delete a semantic-layer model and cascade-delete its children | `kbagent sl model delete --project PROJECT --model MODEL` |
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
-| Add a dataset (FQN derived from tableId) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
+| Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
 | Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM` |
@@ -411,6 +437,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | **Authorizing an OAuth component** (`config oauth-url`; auto-open, always echo the URL in a fenced block, verify `oauth_api.version`) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |

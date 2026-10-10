@@ -370,17 +370,20 @@ client as a reference — it is a 60-line vanilla parser:
 import json
 import httpx
 
-with httpx.Client(
-    base_url="http://127.0.0.1:8001",
-    headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "text/event-stream",
-    },
-    timeout=None,
-) as client, client.stream(
-    "GET",
-    f"/jobs/prod/{job_id}/stream",
-) as response:
+with (
+    httpx.Client(
+        base_url="http://127.0.0.1:8001",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "text/event-stream",
+        },
+        timeout=None,
+    ) as client,
+    client.stream(
+        "GET",
+        f"/jobs/prod/{job_id}/stream",
+    ) as response,
+):
     event_name = "message"
     data_lines: list[str] = []
     for line in response.iter_lines():
@@ -443,6 +446,7 @@ Credentials are allowed (cookie path), all methods, all headers.
 
 ```python
 """Smallest possible kbagent serve client — list projects."""
+
 import os
 
 import httpx
@@ -477,6 +481,7 @@ on the standard `fetch` and `EventSource` browser APIs.
 
 ```python
 """Minimal Streamlit page showing kbagent projects + jobs."""
+
 import os
 
 import httpx

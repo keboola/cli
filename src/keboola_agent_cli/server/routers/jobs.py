@@ -17,6 +17,7 @@ from ...constants import (
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
 )
+from ...services.job_service import resolve_events_run_id
 from ..dependencies import ServiceRegistry, get_registry
 from ..sse import json_event
 
@@ -164,7 +165,7 @@ async def stream_job(
                 yield json_event({"status": current_status, "job": detail}, event="status")
                 last_status = current_status
 
-            run_id = str(detail.get("runId") or detail.get("id") or job_id)
+            run_id = resolve_events_run_id(detail) or str(job_id)
             try:
                 client = registry.job._client_factory(proj.stack_url, proj.token)
                 try:

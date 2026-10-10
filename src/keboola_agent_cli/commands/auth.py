@@ -54,6 +54,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_password_stdin,
 )
+from ._url_copy import CopyableUrlWait
 
 auth_app = typer.Typer(
     help="Programmatic browser login (PKCE / device code) -- user-scoped sessions"
@@ -133,9 +134,9 @@ def _render_session_restrictions(console: Console, features: Sequence[str]) -> N
     """Disclose what a session-backed project cannot do, right after registering it.
 
     Printed at registration time (rather than left to `docs/auth.md`) so the
-    v1 scope -- Storage and Manage only -- is known before the first refusal
-    instead of being discovered one failed command at a time. The same list
-    ships as `session_unsupported_features` in `--json`.
+    current session restrictions are known before the first refusal instead of
+    being discovered one failed command at a time. The same list ships as
+    `session_unsupported_features` in `--json`.
     """
     if not features:
         return
@@ -228,6 +229,28 @@ def _format_status_result(console: Console, result: AuthStatusResult) -> None:
         )
     console.print(Panel("\n".join(lines), title="Keboola auth status", expand=False))
 
+    if result.agent_confirm_url:
+        # This session came from `kbagent project create`. Whether the project
+        # is still unclaimed can only be asserted while the session is ALIVE:
+        # claiming it revokes the session, so an expired one most often means
+        # the claim already succeeded -- saying "not claimed yet" there would
+        # assert the opposite of what just happened. On a degraded (offline)
+        # read nothing was verified either. Both get the neutral wording.
+        if result.status in ("live", "refreshed"):
+            console.print(
+                "\n[bold yellow]This session's project has not been claimed yet.[/bold yellow] "
+                "Open this link in a browser and sign in to take ownership:\n"
+            )
+        else:
+            console.print(
+                "\n[bold]Claim link stored for this session's project[/bold] (a revoked or "
+                "expired session usually means it has already been claimed):\n"
+            )
+        # markup=False, not escape(): the URL comes from the stack, so its
+        # markup must not be interpreted -- but escaping would add backslashes
+        # to a string the user has to copy-paste verbatim.
+        console.print(result.agent_confirm_url, markup=False, highlight=False, soft_wrap=True)
+
     _render_accessible_projects_table(console, result.accessible_projects)
 
 
@@ -272,6 +295,41 @@ def _format_register_projects_result(console: Console, result: RegisterProjectsR
         _render_session_restrictions(console, result.session_unsupported_features)
 
 
+def _device_login_panel(authorization: DeviceAuthorization) -> Panel:
+    """Build the device-login panel (the mandatory URL + code display).
+
+    Pulled out of ``auth_login._on_prompt`` so the copy-preview demo can render
+    exactly what the command renders, with no risk of the two drifting.
+    """
+    complete = authorization.verification_uri_complete
+    # Lead with the pre-filled link -- the primary path, click and go -- in cyan,
+    # which is also the URL 'press c' copies; the copy hint under the panel
+    # reuses cyan, so the hint and the copied link read as one thing. The manual
+    # URL + code is the fallback (approving on a second device, or a stack that
+    # sends no pre-filled link at all).
+    if complete:
+        lines = [
+            "Open this link to finish signing in (code already filled in):",
+            "",
+            f"[bold cyan]{escape(complete)}[/bold cyan]",
+            "",
+            "Or enter the code by hand at this URL:",
+            "",
+            f"[bold]{escape(authorization.verification_uri)}[/bold]",
+            "",
+            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
+        ]
+    else:
+        lines = [
+            "Open this URL and enter the code to finish signing in:",
+            "",
+            f"[bold cyan]{escape(authorization.verification_uri)}[/bold cyan]",
+            "",
+            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
+        ]
+    return Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
+
+
 # ── Commands ──────────────────────────────────────────────────────────
 
 
@@ -310,25 +368,16 @@ def auth_login(
     service: AuthService = get_service(ctx, "auth_service")
     target_console = formatter.err_console if formatter.json_mode else formatter.console
 
+    # 'press c to copy' for the verification link. Disabled (and silent) in
+    # --json mode, off a TTY, or with no clipboard tool -- see CopyableUrlWait.
+    copy_wait = None if formatter.json_mode else CopyableUrlWait(formatter.console)
+
     def _on_prompt(authorization: DeviceAuthorization) -> None:
-        lines = [
-            "Open this URL and enter the code to finish signing in:",
-            "",
-            f"[bold]{escape(authorization.verification_uri)}[/bold]",
-            "",
-            f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
-        ]
-        if authorization.verification_uri_complete:
-            lines.extend(
-                [
-                    "",
-                    "Or open this link (code pre-filled):",
-                    f"[bold]{escape(authorization.verification_uri_complete)}[/bold]",
-                ]
+        target_console.print(_device_login_panel(authorization))
+        if copy_wait is not None:
+            copy_wait.on_prompt(
+                authorization.verification_uri_complete or authorization.verification_uri
             )
-        target_console.print(
-            Panel("\n".join(lines), title="Keboola CLI device login", expand=False)
-        )
 
     def _on_notice(message: str) -> None:
         target_console.print(f"[dim]{escape(message)}[/dim]")
@@ -340,9 +389,13 @@ def auth_login(
             register_projects=register_projects,
             on_device_prompt=_on_prompt,
             on_notice=_on_notice,
+            device_wait=copy_wait.wait if copy_wait is not None else None,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
+    finally:
+        if copy_wait is not None:
+            copy_wait.restore()
     formatter.output(result, _format_login_result)
 
     if not register_projects and result.accessible_projects:
