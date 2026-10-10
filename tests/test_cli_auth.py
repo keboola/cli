@@ -346,7 +346,7 @@ class TestLoginPkceWaitNotice:
         assert result.exit_code == 0, result.output
         stderr = " ".join(result.stderr.split())
         assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in stderr
-        assert "`kbagent auth login --device-code`" in stderr
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in stderr
         assert "Waiting up to" not in result.stdout
         # stdout stays one valid JSON document.
         data = json.loads(result.stdout)["data"]
@@ -359,7 +359,7 @@ class TestLoginPkceWaitNotice:
         assert result.exit_code == 0, result.output
         output = " ".join(result.output.split())
         assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in output
-        assert "`kbagent auth login --device-code`" in output
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in output
 
 
 class TestLoginPassword:

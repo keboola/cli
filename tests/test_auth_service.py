@@ -535,8 +535,21 @@ class TestLoginPkceWaitNotice:
         announcement = seen_at_wait[0][0]
         assert f"{AUTH_CALLBACK_TIMEOUT:.0f} s" in announcement
         assert '"Login complete"' in announcement
-        assert "`kbagent auth login --device-code`" in announcement
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in announcement
         assert notices == seen_at_wait[0]
+
+    def test_wait_notice_keeps_register_projects(self, store, state_store, monkeypatch) -> None:
+        notices: list[str] = []
+        self._install_recording_server(monkeypatch, notices)
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        service.login(stack=STACK_URL, register_projects=True, on_notice=notices.append)
+
+        expected = f"`kbagent auth login --stack {STACK_URL} --device-code --register-projects`"
+        assert expected in notices[0]
 
     def test_timeout_reports_the_wait_and_then_the_fallback(
         self, store, state_store, monkeypatch

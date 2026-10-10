@@ -117,7 +117,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     Before the browser wait, login prints a notice (stderr with --json): it
     waits up to 115 s. If the browser shows the project list and not
     "Login complete", the sign-in cannot return; the way out is Ctrl+C and
-    `kbagent auth login --device-code`.
+    the command the notice names: `kbagent auth login --stack <URL>
+    --device-code` for the same stack (plus --register-projects when the
+    login used it).
     A 404 from any auth endpoint means browser login is not enabled on that
     stack yet (per-stack feature flag); use a static token instead.
 

@@ -141,8 +141,10 @@ has an account and should create the project in the Keboola UI instead.
    - Before the browser wait starts, the CLI prints a notice (since vNEXT;
      to stderr with `--json`): it waits up to 115 s for the browser to
      return. If the browser shows the project list and not "Login
-     complete", the sign-in cannot return: press Ctrl+C and run
-     `kbagent auth login --device-code`.
+     complete", the sign-in cannot return: press Ctrl+C and run the
+     command the notice names, `kbagent auth login --stack <URL>
+     --device-code` for the same stack (plus `--register-projects` when the
+     login used it).
 3. On success, stores a "programmatic session" -- a short-lived access token
    (`kbc_at_*`, ~1h) and a longer-lived rotating refresh token (`kbc_rt_*`,
    ~30d) -- in `auth.json` **plaintext at 0600**, next to `config.json` (same

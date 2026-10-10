@@ -276,7 +276,10 @@ class AuthService:
             tokens = None
             if method == "pkce":
                 try:
-                    tokens = self._perform_pkce(client, notice)
+                    device_command = f"kbagent auth login --stack {stack_url} --device-code"
+                    if register_projects:
+                        device_command += " --register-projects"
+                    tokens = self._perform_pkce(client, notice, device_command)
                 except PkceStateMismatch as exc:
                     raise KeboolaApiError(
                         str(exc), error_code=ErrorCode.AUTH_STATE_MISMATCH, retryable=False
@@ -673,7 +676,9 @@ class AuthService:
 
         return _prompt
 
-    def _perform_pkce(self, client: AuthClient, notice: Callable[[str], None]) -> CliTokenResponse:
+    def _perform_pkce(
+        self, client: AuthClient, notice: Callable[[str], None], device_command: str
+    ) -> CliTokenResponse:
         """Run one PKCE attempt: authorize URL -> browser -> loopback -> exchange.
 
         Raises `PkceSetupError` / `PkceCallbackTimeout` (fallback-eligible,
@@ -686,7 +691,8 @@ class AuthService:
         never printed, so without it the terminal shows nothing until the wait
         ends. The platform can lose the return step after a fresh sign-in
         (issue #780): the browser then shows the project list and this process
-        waits for a callback that does not come.
+        waits for a callback that does not come. ``device_command`` is the
+        device-code login for the same stack and options, named in the notice.
         """
         challenge = generate_pkce_challenge()
         with PkceCallbackServer(expected_state=challenge.state) as server:
@@ -702,7 +708,7 @@ class AuthService:
                 "return here. If the browser shows the project list and not "
                 '"Login complete", this sign-in cannot return. When the wait ends, '
                 "the CLI starts the device-code login. To start it now, press Ctrl+C "
-                "and run `kbagent auth login --device-code`."
+                f"and run `{device_command}`."
             )
             callback = server.wait()
         return client.exchange_pkce_code(
