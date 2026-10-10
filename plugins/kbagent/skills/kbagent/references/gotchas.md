@@ -1374,11 +1374,17 @@ What changed in kbagent:
   `sandbox_config_rolled_back` (bool), `branch_id`, and for `--ui` `job_id`.
   A failed cleanup is reported (`sandbox_config_rolled_back: false`,
   `sandbox_config_cleanup_error`) with the exact `config delete` to run --
-  it never masks the original failure. Exception: after a **timeout**
-  (`TIMEOUT` on an HTTP request, `QUEUE_JOB_TIMEOUT` on the job wait) the
-  server may still finish the job or the workspace, so the config is **kept**
+  it never masks the original failure. Exception: when the **outcome is
+  unknown**, a workspace may exist or still appear, so the config is **kept**
   (`sandbox_config_rolled_back: false`,
-  `sandbox_config_kept_reason: timeout_outcome_unknown`). The message names
+  `sandbox_config_kept_reason: outcome_unknown`). Unknown means: a 5xx, a
+  read/write `TIMEOUT` or `RETRY_EXHAUSTED` on the create POST (headless
+  workspace or `--ui` job), or any error after the `--ui` job was queued
+  except `QUEUE_JOB_FAILED` and the empty-lookup `WORKSPACE_NOT_FOUND`
+  (`QUEUE_JOB_TIMEOUT`, a failed job poll, a failed workspace lookup after a
+  green job). A 4xx refusal, a `CONNECTION_ERROR` or a connect timeout on
+  the create POST is definite (the request was refused or never sent), so
+  the config is trashed. The message names
   the config and job; run `workspace list --project ALIAS`, and if no
   workspace for that config appears, `config delete --component-id
   keboola.sandboxes --config-id ID`. Before, three failed `--ui` attempts

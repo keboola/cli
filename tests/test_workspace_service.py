@@ -8,6 +8,7 @@ multi-project parallel listing.
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
+import httpx
 import pytest
 
 from helpers import setup_single_project, setup_two_projects
@@ -2730,10 +2731,10 @@ class TestCreateWorkspaceUiMode:
         exc = exc_info.value
         assert exc.error_code == ErrorCode.QUEUE_JOB_TIMEOUT
         assert exc.details["sandbox_config_rolled_back"] is False
-        assert exc.details["sandbox_config_kept_reason"] == "timeout_outcome_unknown"
+        assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
         assert exc.details["sandbox_config_id"] == "cfg-slow"
         assert exc.details["job_id"] == "j77"
-        assert "job j77 may still finish" in exc.message
+        assert "the outcome of job j77 is unknown" in exc.message
         assert "kbagent workspace list --project prod" in exc.message
         assert (
             "remove the config with 'kbagent config delete --project prod --component-id "
@@ -2760,7 +2761,133 @@ class TestCreateWorkspaceUiMode:
 
         exc = exc_info.value
         assert exc.details["sandbox_config_rolled_back"] is False
-        assert exc.details["sandbox_config_kept_reason"] == "timeout_outcome_unknown"
+        assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
         assert "job_id" not in exc.details
-        assert "the workspace create may still finish" in exc.message
+        assert "the outcome of the workspace create request is unknown" in exc.message
+        mock_client.delete_config.assert_not_called()
+
+
+def _api_error(status_code: int, error_code: ErrorCode, retryable: bool = False) -> KeboolaApiError:
+    return KeboolaApiError(
+        message=f"{error_code} ({status_code})",
+        status_code=status_code,
+        error_code=error_code,
+        retryable=retryable,
+    )
+
+
+class TestCreateWorkspaceOutcomeRule:
+    """Which step-2 errors trash the sandbox config and which keep it (#755).
+
+    Definite failure (rolled back): the create POST was refused (4xx) or
+    proven undelivered (connect error, connect/pool timeout raised
+    ``retryable=True``), or the --ui job failed or finished with no workspace.
+    Unknown outcome (kept): a 5xx, a read/write timeout or RETRY_EXHAUSTED on
+    the create POST, and any other error after the --ui job was queued.
+    """
+
+    @staticmethod
+    def _client() -> MagicMock:
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_job.return_value = {"id": "j1", "branchId": "123"}
+        mock_client.list_config_workspaces.return_value = []
+        return mock_client
+
+    @staticmethod
+    def _create(tmp_config_dir: Path, mock_client: MagicMock, ui_mode: bool) -> KeboolaApiError:
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake", ui_mode=ui_mode)
+        return exc_info.value
+
+    @pytest.mark.parametrize(
+        ("error", "rolled_back"),
+        [
+            pytest.param(_api_error(502, ErrorCode.API_ERROR), False, id="5xx-kept"),
+            pytest.param(_api_error(0, ErrorCode.RETRY_EXHAUSTED, True), False, id="retry-kept"),
+            pytest.param(_api_error(0, ErrorCode.TIMEOUT), False, id="read-timeout-kept"),
+            pytest.param(_api_error(400, ErrorCode.API_ERROR), True, id="4xx-rolled-back"),
+            pytest.param(
+                _api_error(0, ErrorCode.CONNECTION_ERROR, True), True, id="connect-rolled-back"
+            ),
+            pytest.param(
+                _api_error(0, ErrorCode.TIMEOUT, True), True, id="connect-timeout-rolled-back"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("ui_mode", [False, True], ids=["headless", "ui"])
+    def test_create_post_error(
+        self, tmp_config_dir: Path, error: KeboolaApiError, rolled_back: bool, ui_mode: bool
+    ) -> None:
+        """The create POST (headless workspace or --ui job) follows the POST rule."""
+        mock_client = self._client()
+        post = mock_client.create_job if ui_mode else mock_client.create_config_workspace
+        post.side_effect = error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode)
+
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        assert "job_id" not in exc.details
+
+    @pytest.mark.parametrize(
+        ("wait_error", "list_error", "rolled_back"),
+        [
+            pytest.param(
+                _api_error(500, ErrorCode.QUEUE_JOB_FAILED), None, True, id="job-failed-rolled-back"
+            ),
+            pytest.param(None, None, True, id="no-workspace-rolled-back"),
+            pytest.param(
+                _api_error(504, ErrorCode.QUEUE_JOB_TIMEOUT, True), None, False, id="wait-timeout"
+            ),
+            pytest.param(
+                _api_error(0, ErrorCode.CONNECTION_ERROR, True), None, False, id="poll-connect"
+            ),
+            pytest.param(_api_error(503, ErrorCode.API_ERROR), None, False, id="poll-5xx"),
+            pytest.param(_api_error(404, ErrorCode.NOT_FOUND), None, False, id="poll-4xx"),
+            pytest.param(
+                None, _api_error(0, ErrorCode.CONNECTION_ERROR, True), False, id="lookup-connect"
+            ),
+            pytest.param(None, _api_error(502, ErrorCode.API_ERROR), False, id="lookup-5xx"),
+        ],
+    )
+    def test_error_after_job_was_queued(
+        self,
+        tmp_config_dir: Path,
+        wait_error: KeboolaApiError | None,
+        list_error: KeboolaApiError | None,
+        rolled_back: bool,
+    ) -> None:
+        """After the job exists, only a failed job or an empty lookup is definite."""
+        mock_client = self._client()
+        mock_client.wait_for_queue_job.side_effect = wait_error
+        if list_error is not None:
+            mock_client.list_config_workspaces.side_effect = list_error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=True)
+
+        assert exc.details["job_id"] == "j1"
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        if not rolled_back:
+            assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
+            assert "the outcome of job j1 is unknown" in exc.message
+
+    def test_transport_error_after_send_keeps_config(self, tmp_config_dir: Path) -> None:
+        """A dropped connection mid-POST is not mapped by ``_request``; the config stays."""
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = httpx.ReadError("connection reset")
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(httpx.ReadError):
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
         mock_client.delete_config.assert_not_called()

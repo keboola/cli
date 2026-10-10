@@ -29,7 +29,7 @@ from ..constants import (
     WORKSPACE_LOAD_TYPES,
 )
 from ..effective_branch import record_branch, resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
@@ -43,11 +43,30 @@ from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
 
-# Step-2 errors of `create_workspace` after which the server may still finish
-# the work: an HTTP timeout (the request may have arrived) and a Queue job
-# that did not finish in time. The sandbox config is kept after these, not
-# trashed -- trashing it would orphan a workspace that appears later.
-_AMBIGUOUS_CREATE_ERRORS = frozenset({ErrorCode.TIMEOUT, ErrorCode.QUEUE_JOB_TIMEOUT})
+# Once the --ui create job is queued, only these errors prove that it made no
+# workspace: the job ended in error, or it finished with nothing attached to
+# the config. Any other error after the job exists (a wait timeout, a failed
+# poll, a failed workspace lookup after a green job) leaves the outcome unknown.
+_DEFINITE_JOB_ERRORS = frozenset({ErrorCode.QUEUE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND})
+
+
+def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could a workspace exist (or still appear) after this step-2 error?
+
+    The sandbox config is kept when the answer is yes, and trashed only when
+    the create failed definitely -- trashing it while a workspace may exist
+    would leave that workspace without its config.
+
+    Before a job id exists the error comes from the create POST itself
+    (``create_config_workspace`` headless, ``create_job`` for ``--ui``); it is
+    classified by ``request_outcome_unknown``: a 4xx or a request proven
+    undelivered is definite; a 5xx, a read/write timeout or
+    ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` puts
+    ``job_id`` into the details of every error raised after the job exists.
+    """
+    if exc.details.get("job_id") is None:
+        return request_outcome_unknown(exc)
+    return exc.error_code not in _DEFINITE_JOB_ERRORS
 
 
 def _summarize_load_types(plans: list[LoadTablePlan]) -> str:
@@ -346,7 +365,7 @@ class WorkspaceService(BaseService):
             # (issue #755: three failed --ui attempts left three orphaned
             # keboola.sandboxes configs, invisible to `workspace gc` because
             # gc detects the inverse -- a workspace whose config is gone).
-            # After a timeout the outcome is unknown, so the config is kept.
+            # When the outcome is unknown, the config is kept.
             try:
                 if ui_mode:
                     return self._create_workspace_via_job(
@@ -367,7 +386,7 @@ class WorkspaceService(BaseService):
                     read_only,
                 )
             except KeboolaApiError as exc:
-                if exc.error_code in _AMBIGUOUS_CREATE_ERRORS:
+                if _create_outcome_unknown(exc):
                     self._keep_sandbox_config(exc, alias, config_id, branch_id, cleanup_command)
                 else:
                     self._rollback_sandbox_config(
@@ -381,10 +400,10 @@ class WorkspaceService(BaseService):
     def _keep_sandbox_config(
         exc: KeboolaApiError, alias: str, config_id: str, branch_id: int, cleanup_command: str
     ) -> None:
-        """Keep the sandbox config after a timeout; annotate ``exc`` with what to check.
+        """Keep the sandbox config after an unknown outcome; annotate ``exc``.
 
-        The server may still finish the job or the workspace create; trashing
-        the config then would leave a workspace whose config is gone.
+        A workspace may exist or still appear; trashing the config then would
+        leave a workspace whose config is gone.
         """
         job_id = exc.details.get("job_id")
         exc.details.update(
@@ -392,13 +411,13 @@ class WorkspaceService(BaseService):
                 "sandbox_config_id": config_id,
                 "branch_id": branch_id,
                 "sandbox_config_rolled_back": False,
-                "sandbox_config_kept_reason": "timeout_outcome_unknown",
+                "sandbox_config_kept_reason": "outcome_unknown",
             }
         )
-        pending = f"job {job_id}" if job_id else "the workspace create"
+        pending = f"job {job_id}" if job_id else "the workspace create request"
         exc.message = (
-            f"{exc.message} The keboola.sandboxes config {config_id} was kept: {pending} "
-            f"may still finish. Check with 'kbagent workspace list --project {alias}'; if no "
+            f"{exc.message} The keboola.sandboxes config {config_id} was kept: the outcome "
+            f"of {pending} is unknown, so a workspace may exist or still appear. Check with 'kbagent workspace list --project {alias}'; if no "
             f"workspace for config {config_id} appears, remove the config with "
             f"'{cleanup_command}'."
         )
