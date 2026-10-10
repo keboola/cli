@@ -1,7 +1,8 @@
 """CLI tests for the `kbagent auth` command group (login / status / logout /
 register-projects).
 
-The service is mocked throughout -- these tests pin the *command* layer's
+The service is mocked throughout (except in `TestLoginPkceWaitNotice`,
+which runs the real service on fakes) -- these tests pin the *command* layer's
 contract: argument wiring, exit codes, permission classification, and the
 hard requirement that no token substring ever reaches `--json` output.
 """
@@ -13,16 +14,20 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from typer.testing import CliRunner
+import pytest
+from typer.testing import CliRunner, Result
 
 from keboola_agent_cli.auth.models import DeviceAuthorization
+from keboola_agent_cli.auth.state_store import AuthStateStore
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION
-from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
+from keboola_agent_cli.config_store import CURRENT_CONFIG_VERSION, ConfigStore
+from keboola_agent_cli.constants import AUTH_CALLBACK_TIMEOUT, EXIT_PERMISSION_DENIED
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
+from keboola_agent_cli.services import auth_service as svc_mod
 from keboola_agent_cli.services.auth_service import (
     SESSION_UNSUPPORTED_FEATURES,
+    AuthService,
     AuthStatusResult,
     LoginResult,
     LogoutResult,
@@ -30,6 +35,14 @@ from keboola_agent_cli.services.auth_service import (
     ProjectCandidatesResult,
     RegisteredProject,
     RegisterProjectsResult,
+)
+from test_auth_service import (
+    _FakeAuthClient,
+    _FakeCallbackServer,
+    _introspect,
+    _reset_fake_callback_server,
+    _tokens,
+    _usable_env,
 )
 
 STACK_URL = "https://connection.keboola.com"
@@ -290,6 +303,63 @@ class TestLogin:
         assert "https://connection.keboola.com/device" in result.output
         assert "ABCD-EFGH" in result.output
         assert "Or enter the code by hand" not in result.output
+
+
+class TestLoginPkceWaitNotice:
+    """The wait for the browser callback is reported at the CLI layer (issue #780).
+
+    A real `AuthService` runs here, with a fake auth client, browser opener and
+    loopback listener, so the notice text comes from the service itself.
+    """
+
+    @staticmethod
+    def _invoke_pkce_login(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str]
+    ) -> Result:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _reset_fake_callback_server()
+        monkeypatch.setattr(svc_mod, "PkceCallbackServer", _FakeCallbackServer)
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+
+        def _real_service(config_store: ConfigStore) -> AuthService:
+            return AuthService(
+                config_store,
+                auth_client_factory=lambda _stack_url: client,  # ty: ignore[invalid-argument-type]
+                state_store=AuthStateStore(config_dir),
+                browser_env_detector=_usable_env,
+                browser_opener=lambda _url: True,
+                sleep=lambda _seconds: None,
+            )
+
+        with patch("keboola_agent_cli.cli.AuthService", side_effect=_real_service):
+            result = runner.invoke(app, ["--config-dir", str(config_dir), *args])
+        assert client.calls[0][0] == "authorize_url"
+        return result
+
+    def test_json_mode_notice_goes_to_stderr(self, tmp_path: Path, monkeypatch) -> None:
+        result = self._invoke_pkce_login(
+            tmp_path, monkeypatch, ["--json", "auth", "login", "--stack", STACK_URL]
+        )
+        assert result.exit_code == 0, result.output
+        stderr = " ".join(result.stderr.split())
+        assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in stderr
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in stderr
+        assert "Waiting up to" not in result.stdout
+        # stdout stays one valid JSON document.
+        data = json.loads(result.stdout)["data"]
+        assert data["method"] == "pkce"
+
+    def test_human_mode_notice_is_printed(self, tmp_path: Path, monkeypatch) -> None:
+        result = self._invoke_pkce_login(
+            tmp_path, monkeypatch, ["auth", "login", "--stack", STACK_URL]
+        )
+        assert result.exit_code == 0, result.output
+        output = " ".join(result.output.split())
+        assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in output
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in output
 
 
 class TestLoginPassword:

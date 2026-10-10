@@ -38,6 +38,7 @@ from keboola_agent_cli.auth.pkce import (
 )
 from keboola_agent_cli.auth.state_store import AuthStateStore
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import AUTH_CALLBACK_TIMEOUT
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services import auth_service as svc_mod
@@ -490,6 +491,87 @@ class TestLoginPkceFallback:
         with pytest.raises(KeboolaApiError) as exc_info:
             service.login(stack=STACK_URL)
         assert exc_info.value.error_code == ErrorCode.API_ERROR
+
+
+# ----------------------------------------------------------------------------
+# login -- the wait for the browser callback is announced (issue #780)
+# ----------------------------------------------------------------------------
+
+
+class TestLoginPkceWaitNotice:
+    """The authorize URL is never printed, so the wait itself has to be reported.
+
+    The platform can lose the return step after a fresh sign-in (issue #780):
+    the browser then shows the project list, and the terminal must not look hung.
+    """
+
+    @staticmethod
+    def _install_recording_server(
+        monkeypatch: pytest.MonkeyPatch, notices: list[str]
+    ) -> list[list[str]]:
+        """Replace the fake listener with one that records what was reported before `wait()`."""
+        seen_at_wait: list[list[str]] = []
+
+        class _RecordingServer(_FakeCallbackServer):
+            def wait(self, timeout: float | None = None) -> LoopbackCallback:
+                seen_at_wait.append(list(notices))
+                return super().wait(timeout)
+
+        monkeypatch.setattr(svc_mod, "PkceCallbackServer", _RecordingServer)
+        return seen_at_wait
+
+    def test_wait_is_announced_before_it_starts(self, store, state_store, monkeypatch) -> None:
+        notices: list[str] = []
+        seen_at_wait = self._install_recording_server(monkeypatch, notices)
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        service.login(stack=STACK_URL, on_notice=notices.append)
+
+        assert len(seen_at_wait) == 1
+        assert len(seen_at_wait[0]) == 1
+        announcement = seen_at_wait[0][0]
+        assert f"{AUTH_CALLBACK_TIMEOUT:.0f} s" in announcement
+        assert '"Login complete"' in announcement
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in announcement
+        assert notices == seen_at_wait[0]
+
+    def test_wait_notice_keeps_register_projects(self, store, state_store, monkeypatch) -> None:
+        notices: list[str] = []
+        self._install_recording_server(monkeypatch, notices)
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        service.login(stack=STACK_URL, register_projects=True, on_notice=notices.append)
+
+        expected = f"`kbagent auth login --stack {STACK_URL} --device-code --register-projects`"
+        assert expected in notices[0]
+
+    def test_timeout_reports_the_wait_and_then_the_fallback(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        _FakeCallbackServer.wait_error = PkceCallbackTimeout("timed out")
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        def _fake_run_device_flow(_client, *, on_prompt, sleep):
+            from keboola_agent_cli.auth.device import DeviceFlowOutcome
+
+            return DeviceFlowOutcome(tokens=_tokens(), polls=1)
+
+        monkeypatch.setattr(svc_mod, "run_device_flow", _fake_run_device_flow)
+        notices: list[str] = []
+
+        service.login(stack=STACK_URL, on_notice=notices.append)
+
+        assert len(notices) == 2
+        assert notices[0].startswith("Waiting up to ")
+        assert notices[1] == "Falling back to device login: timed out"
 
 
 # ----------------------------------------------------------------------------
