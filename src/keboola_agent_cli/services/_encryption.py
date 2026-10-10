@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 _ENCRYPTED_PREFIX = "KBC::"
 
+# ``(component_id, plaintext) -> ciphertext`` of values encrypted in advance,
+# so a write can reuse them without a second Encryption API call.
+SecretCache = dict[tuple[str, str], str]
+
 
 def is_secret_key(key: object) -> TypeGuard[str]:
     """True if ``key`` is a Keboola secret key (a ``str`` starting with ``#``).
@@ -141,6 +145,7 @@ def encrypt_secrets_in_config(
     configuration: dict[str, Any],
     *,
     allow_plaintext_fallback: bool = False,
+    known: SecretCache | None = None,
 ) -> dict[str, Any]:
     """Encrypt ``#``-prefixed secret values in ``configuration`` in place.
 
@@ -163,12 +168,22 @@ def encrypt_secrets_in_config(
         allow_plaintext_fallback: When ``False`` (default), raise on encryption
             failure. When ``True``, log a warning and return the config with
             plaintext intact.
+        known: Values already encrypted for this project. They are applied
+            without an API call; only the other values are sent.
     """
     if not project_id:
         return configuration
 
     secrets: dict[str, str] = {}
     collect_secrets(configuration, "", secrets)
+    if known:
+        cached = {
+            key: known[(component_id, value)]
+            for key, value in secrets.items()
+            if (component_id, value) in known
+        }
+        apply_encrypted(configuration, "", cached)
+        secrets = {key: value for key, value in secrets.items() if key not in cached}
     if not secrets:
         return configuration
 

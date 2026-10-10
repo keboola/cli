@@ -1210,6 +1210,30 @@ class TestStampScaffoldConfigId:
         assert parsed["_keboola"]["config_id"] == "01m0njbrqwpyqbx0yqfqq9pyen"
         assert "assigned by Keboola on first push" not in content
 
+    def test_records_base_config_hash_next_to_the_id(self) -> None:
+        """A given baseline lands next to the id, in both stamping paths,
+        and nothing is added without one (issue #792 E)."""
+        from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
+
+        stamped = stamp_scaffold_config_id(self._scaffold(), "12345", "abc123")
+        assert yaml.safe_load(stamped["files"][0]["content"])["_keboola"] == {
+            "component_id": "keboola.ex-http",
+            "config_id": "12345",
+            "base_config_hash": "abc123",
+        }
+
+        flow = self._scaffold()
+        flow["files"][0]["content"] = 'name: "my flow"\nphases: []\n'
+        appended = stamp_scaffold_config_id(flow, "999", "abc123")
+        assert yaml.safe_load(appended["files"][0]["content"])["_keboola"] == {
+            "component_id": "keboola.ex-http",
+            "config_id": "999",
+            "base_config_hash": "abc123",
+        }
+
+        plain = stamp_scaffold_config_id(self._scaffold(), "12345")
+        assert "base_config_hash" not in plain["files"][0]["content"]
+
     def test_companion_files_untouched_and_input_not_mutated(self) -> None:
         from keboola_agent_cli.services.component_service import stamp_scaffold_config_id
 
@@ -1254,9 +1278,25 @@ class TestMaterializePushedConfig:
         # Encrypted value travels verbatim -- never decrypted, never a TODO.
         assert parsed["parameters"]["#token"] == "KBC::ProjectSecure::abc"
         assert parsed["input"] == {"tables": [{"source": "in.c-b.t"}]}
+        # The remote is the file's sync baseline, the value `sync pull` would
+        # store as pull_config_hash (issue #792 E).
+        from keboola_agent_cli.services.component_service import pushed_config_base_hash
+
+        pushed = {
+            "name": "test-config",
+            "description": "desc",
+            "configuration": {
+                "parameters": {
+                    "baseUrl": "https://example.com",
+                    "#token": "KBC::ProjectSecure::abc",
+                },
+                "storage": {"input": {"tables": [{"source": "in.c-b.t"}]}},
+            },
+        }
         assert parsed["_keboola"] == {
             "component_id": "keboola.ex-http",
             "config_id": "12345",
+            "base_config_hash": pushed_config_base_hash("keboola.ex-http", "12345", pushed),
         }
 
     def test_transformation_body_extracts_real_code(self, tmp_path: Path) -> None:

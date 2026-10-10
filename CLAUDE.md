@@ -1026,6 +1026,9 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 #   the scaffold had no ID and always landed in the default branch tree, so the next
 #   `sync push` created a DUPLICATE (34-config incident). With --configuration, the local file
 #   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
+#   The scaffold also records _keboola.base_config_hash (#792 E), the created config as the API
+#   returned it, so `sync diff` compares it 3-way and push never overwrites an edit made in the UI.
+#   Version gate in gotchas.md.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
 kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
@@ -1041,6 +1044,13 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync diff/push/pull and adopted files (#792 E): an untracked _config.yml whose _keboola.config_id
+#   exists on the target has no baseline unless it records _keboola.base_config_hash; without one a
+#   difference is a conflict (push skips it), two files with one id are both conflicts, and pull keeps
+#   such a file with local changes (skipped) -- only --theirs overwrites it. Version gate in gotchas.md.
+# sync push encryption (#792 F): every #-secret is encrypted before the first write, so an
+#   ENCRYPTION_FAILED stops push before anything reaches the remote (the message ends with "Nothing
+#   was pushed.") and a retry creates nothing twice. Version gate in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # Partial failures change the exit code (#745): commands that collect per-item failures
 #   and keep going exit 1 (was 0) when at least one item failed:

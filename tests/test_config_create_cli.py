@@ -786,6 +786,30 @@ class TestConfigNewPushScaffoldStamping:
         assert isinstance(parsed["_keboola"]["config_id"], str)
         assert "assigned by Keboola on first push" not in written.read_text(encoding="utf-8")
 
+    def test_written_scaffold_records_the_created_config_as_its_base(self, tmp_path: Path) -> None:
+        """The scaffold has no manifest entry, so it records its sync baseline:
+        the created config as the API returned it (issue #792 E)."""
+        from keboola_agent_cli.services.component_service import pushed_config_base_hash
+
+        out = tmp_path / "ws"
+        out.mkdir()
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = _push_result()
+
+        result = self._run(
+            tmp_path,
+            out,
+            config_service_mock=svc_config,
+            component_service_mock=self._component_mock(),
+        )
+
+        assert result.exit_code == 0, result.output
+        written = out / "extractor/keboola.ex-http/test-config/_config.yml"
+        parsed = yaml.safe_load(written.read_text(encoding="utf-8"))
+        assert parsed["_keboola"]["base_config_hash"] == pushed_config_base_hash(
+            "keboola.ex-http", "12345", _push_result()
+        )
+
     def test_envelope_reports_local_scaffold(self, tmp_path: Path) -> None:
         out = tmp_path / "ws"
         out.mkdir()

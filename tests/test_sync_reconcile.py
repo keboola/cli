@@ -27,6 +27,7 @@ from helpers import setup_single_project
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services.component_service import pushed_config_base_hash
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
 
@@ -474,11 +475,24 @@ def test_adopted_by_id_push_registers_manifest_entry(tmp_config_dir: Path, tmp_p
 
     Pre-#497 the update succeeded but no entry was written, so every
     subsequent diff re-adopted the file and a later local delete was
-    invisible (never classified ``deleted``).
+    invisible (never classified ``deleted``). The file carries the baseline a
+    ``config new --push --output-dir`` scaffold records, so its local edit is
+    ``modified`` rather than a conflict (issue #792 E).
     """
     project_root = tmp_path / "project"
     project_root.mkdir()
     store = _init_and_pull(tmp_config_dir, project_root, REMOTE_V1)
+
+    remote = _http_extractor("https://api.example.com")
+    remote[0]["configurations"].append(
+        {
+            "id": "cfg-777",
+            "name": "Adopted Extractor",
+            "description": "",
+            "configuration": {"parameters": {"baseUrl": "https://original.example.com"}},
+            "rows": [],
+        }
+    )
 
     adopted_path = "extractor/keboola.ex-http/adopted-extractor"
     adopted_dir = project_root / "main" / adopted_path
@@ -493,21 +507,13 @@ def test_adopted_by_id_push_registers_manifest_entry(tmp_config_dir: Path, tmp_p
                 "_keboola": {
                     "component_id": "keboola.ex-http",
                     "config_id": "cfg-777",
+                    "base_config_hash": pushed_config_base_hash(
+                        "keboola.ex-http", "cfg-777", remote[0]["configurations"][-1]
+                    ),
                 },
             }
         ),
         encoding="utf-8",
-    )
-
-    remote = _http_extractor("https://api.example.com")
-    remote[0]["configurations"].append(
-        {
-            "id": "cfg-777",
-            "name": "Adopted Extractor",
-            "description": "",
-            "configuration": {"parameters": {"baseUrl": "https://original.example.com"}},
-            "rows": [],
-        }
     )
     client = _make_mock_client(components_response=remote)
     svc = _svc_with_client(store, client)
