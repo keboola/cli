@@ -467,7 +467,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   bearer token, and revoking the session is a host-operator action, not a remote one. `/auth/*`
 #   is also the FIRST router to enforce the `permissions` policy: every route declares
 #   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
-#   exactly as on the CLI. The other ~30 routers do not check the engine yet.
+#   exactly as on the CLI. Every other route is checked too since #655 (see `permissions` below).
 #   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then -- since
 #   0.91.0, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
 #   local/global chain) plus the session flags of the invocation. On 0.90.1 the root-level
@@ -479,7 +479,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   the allow list. `kbagent --deny-writes serve` does NOT work: `serve` is admin-class and
 #   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so the CLI callback
 #   blocks the `serve` command itself (exit 6) and no server ever starts. `--deny-destructive`
-#   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
+#   starts the server and blocks every destructive route (none of them under `/auth/*`).
 #   See docs/web-server.md.
 
 kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
@@ -816,12 +816,18 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 # (since vNEXT, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
 #   route is classified in server/route_permissions.py and checked by one app-level dependency
 #   against the SERVED config dir's policy -> HTTP 403 error_code PERMISSION_DENIED, the same
-#   code the CLI exits on. On 0.90.1 and older only /auth/* was checked and every other route
-#   executed unchecked. An unclassified route is REFUSED, not exempted (a test keeps the table
+#   code the CLI exits on. On 0.96.0 and older only /auth/* (0.90.1+) and /merge-requests/*
+#   (0.94.0+) were checked and every other route executed unchecked. Routes that declare their
+#   own `require_permission(...)` (those two routers) are skipped by the table. An unclassified
+#   route is REFUSED, not exempted (a test keeps the table
 #   and the live app in sync both ways); bootstrap paths (/health/ping, /health/auth-info,
 #   /ui-config, /docs, /redoc, /openapi.json, SPA shell) are never checked. Coarser than the
 #   CLI where a path param collapses leaves: POST /semantic-layer/items/{kind} maps to the
 #   parent key `semantic-layer.add`, so a leaf-only policy pattern is CLI-only.
+#   A `--scope organization` semantic-layer write is destructive-class over REST too:
+#   the handlers of scope PUT, models, items/{kind} (per-kind leaf key), import, promote
+#   and build check `<key> --scope organization` (FLAG_ESCALATIONS) for a typed OR an
+#   inherited organization scope, like the CLI.
 #   `GET /permissions/show` (serve, since vNEXT) reports the EFFECTIVE policy (persisted block
 #   merged with the daemon's --deny-* flags); read-only by design -- no REST route can widen
 #   the policy that constrains it, so `permissions set|reset` stay terminal actions on the host.

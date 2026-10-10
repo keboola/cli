@@ -498,8 +498,8 @@ carried. Two consequences worth knowing before you reach for a flag:
   classified `admin`, and `--deny-writes` appends `cli:write`, which spans
   write + destructive + admin — so the CLI callback blocks the `serve` command
   itself (exit code 6, `Operation 'serve' is blocked by the active permission
-  policy`). `--deny-destructive` does start the server, but no `/auth/*`
-  operation is destructive, so it changes nothing here.
+  policy`). `--deny-destructive` does start the server, and since vNEXT it
+  blocks every destructive route (no `/auth/*` operation is destructive).
 - **Use a persisted policy instead.** Run, on the host, in a real terminal
   (`permissions set` requires a typed confirmation code — there is no `--yes`):
 
@@ -579,15 +579,18 @@ for `serve` to use.
 `permissions set --mode deny` policy — and both `--deny-writes` and
 `--deny-destructive` — protected the CLI process and nothing else. `kbagent
 serve` exposed every route, `DELETE /storage/buckets` included, behind a single
-all-or-nothing bearer token. 0.90.1 closed that for `/auth/*` only; vNEXT closes
-it for the whole surface.
+all-or-nothing bearer token. 0.90.1 closed that for `/auth/*` and 0.94.0 for
+`/merge-requests/*`; vNEXT closes it for the whole surface.
 
 **How it works.** One app-level dependency (`server/route_permissions.py`) runs
 on every request, looks the matched route up by `(method, path template)` in
 `ROUTE_OPERATIONS`, and calls the same `PermissionEngine.check_or_raise` the CLI
 uses. A denial answers **HTTP 403** with `error_code: PERMISSION_DENIED` and the
 same message the CLI prints, so a client can branch on one value across both
-surfaces.
+surfaces. The body is the error envelope every other `serve` error uses
+(`{"status": "error", "error": {"code", "message"}}`). A route that declares its
+own `Depends(require_permission(...))` (`/auth/*`, `/merge-requests/*`) is
+checked by that dependency and skipped by the table.
 
 Three properties worth knowing:
 
@@ -610,6 +613,24 @@ mirror. `POST /semantic-layer/items/{kind}` covers `metric`/`dataset`/… in one
 route, so it maps to the collapsed parent key `semantic-layer.add`, not
 `semantic-layer.add.metric`. A policy naming only a leaf key is enforced on the
 CLI but not over REST — name the parent, or a `cli:*` category, to cover both.
+The `--scope organization` escalation below is the exception: it is checked per
+kind.
+
+**`--scope organization` writes are destructive-class over REST too.** The table
+sees the route, not the body, so it checks only the base key (`write`). An
+organization scope is one-way and makes an item visible to every project in the
+organization, so `FLAG_ESCALATIONS` classifies it `destructive`, and the
+handlers add that check: `PUT /semantic-layer/scope/{context_id}` with
+`"scope": "organization"` checks `semantic-layer.scope.set --scope
+organization`; `POST /semantic-layer/models`, `POST /semantic-layer/items/{kind}`
+(per kind: `semantic-layer.add.<kind> --scope organization`), `POST
+/semantic-layer/import` and `POST /semantic-layer/promote` check their own
+escalated key when the body asks for `organization`. As on the CLI, an omitted
+`scope` that would INHERIT `organization` from the target model (`items`,
+`import`, `promote`, and `build` with a `model`) gets the same check; the model
+lookup runs only when a policy is active. Under `--deny-destructive` these calls
+answer 403 `PERMISSION_DENIED`; the same calls at `project` or `targeted` scope
+are allowed.
 
 **Discovering the policy.** `GET /permissions/show` returns the *effective*
 policy the server enforces — the persisted block already merged with the

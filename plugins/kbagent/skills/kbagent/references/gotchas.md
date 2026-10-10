@@ -5304,24 +5304,25 @@ though single-project `job list` looked correctly time-ordered.
   already server-sorted); the fix only changes behavior once 2+ projects are
   queried together.
 
-## `kbagent serve` permission enforcement is `/auth/*`-only so far (since v0.90.1)
+## `kbagent serve` permission enforcement (since v0.90.1)
 
 `create_app` builds a `PermissionEngine` from the persisted `permissions`
 policy of **the config dir `serve` resolves** (its own `--config-dir`, then --
 since 0.91.0 -- an explicit root-level `kbagent --config-dir`, then
 `KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
-forwards only the session FLAGS of the invocation on top. But of the ~30
-routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
-`Depends(require_permission(...))` -- see `docs/web-server.md` for the endpoint
-shapes.
+forwards only the session FLAGS of the invocation on top. The three `/auth/*`
+routes (`server/routers/auth.py`) and the `/merge-requests/*` routes declare
+`Depends(require_permission(...))` themselves; since vNEXT every other route is
+checked through one central table (below) -- see `docs/web-server.md` for the
+endpoint shapes.
 
 - **`kbagent --deny-writes serve` cannot start the server** -- do not
   recommend it. `serve` is classified `admin` in `permissions.py`, and
   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so
   the CLI callback blocks the `serve` command itself: `Error: Operation
   'serve' is blocked by the active permission policy.`, exit code 6, no
-  uvicorn. `--deny-destructive` does start the server, but no `/auth/*`
-  operation is destructive, so it changes nothing on this router.
+  uvicorn. `--deny-destructive` does start the server, and since vNEXT it
+  blocks every destructive route (no `/auth/*` operation is destructive).
 - **The reachable recipe is a persisted policy in the SERVED config dir.**
   Verified live:
 
@@ -5343,11 +5344,17 @@ shapes.
   `permissions set --mode deny --deny cli:write` now blocks `POST
   /storage/tables/{project}` exactly like it blocks `POST
   /auth/register-projects` -- HTTP 403, `error_code: PERMISSION_DENIED`, same
-  code the CLI exits on. **On 0.90.1 and older only `/auth/*` was checked**;
+  code the CLI exits on. **On 0.96.0 and older only `/auth/*` (0.90.1+) and
+  `/merge-requests/*` (0.94.0+) were checked**;
   on those versions every other write/destructive route executed unchecked, so
   do not rely on a deny policy to contain a `serve` you did not upgrade.
   Bootstrap paths (`/health/ping`, `/health/auth-info`, `/ui-config`, `/docs`,
   `/redoc`, `/openapi.json`, SPA shell) are never checked, by design.
+  A `--scope organization` write is destructive-class over REST too, as on the
+  CLI: `PUT /semantic-layer/scope/{context_id}` with `"scope": "organization"`,
+  and `models` / `items/{kind}` / `import` / `promote` asking for (or
+  inheriting from the target model) `organization` scope, plus `build` into an
+  organization-scope model, answer 403 under `--deny-destructive`.
 - **`GET /permissions/show` (since vNEXT)** reports the EFFECTIVE policy --
   the persisted block already merged with the `--deny-*` flags the daemon was
   launched with. Read-only: there is no REST way to change the policy, so an
@@ -5358,12 +5365,13 @@ shapes.
   `semantic-layer.add`, not `semantic-layer.add.metric` (`kind` is a path
   param). A policy naming only the leaf key is enforced on the CLI but not
   over REST -- name the parent or a `cli:*` category to cover both.
-- Three registry keys back a serve-only surface with no CLI leaf command:
+- Four registry keys back a serve-only surface with no CLI leaf command:
   `auth.projects` (the terminal equivalent is `auth register-projects`'s
-  interactive picker) plus `ai.chat` and `workspace.sql-improve` (since vNEXT --
+  interactive picker), `merge-request.by-branch` (the CLI resolves it behind an
+  omitted `--merge-request-id`) plus `ai.chat` and `workspace.sql-improve` (since vNEXT --
   the dashboard's Local AI tile and the SQL editor's "improve this query"
   helper; both are `write`, because both spawn a local CLI process on the host
-  exactly like `agent prompt-improve`). All three are exempted from
+  exactly like `agent prompt-improve`). All four are exempted from
   `scripts/check_command_sync.py`'s dead-key check via `SERVE_ONLY_OPERATIONS`
   in `permissions.py`; see CONTRIBUTING.md's command-sync gate section before
   adding another.

@@ -14,6 +14,7 @@ without a table entry fails here long before anyone meets its 403.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -27,7 +28,8 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 from fastapi.testclient import TestClient
 
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.models import PermissionPolicy
+from keboola_agent_cli.errors import PermissionDeniedError
+from keboola_agent_cli.models import AppConfig, PermissionPolicy, ProjectConfig
 from keboola_agent_cli.permissions import OPERATION_REGISTRY, SERVE_ONLY_OPERATIONS
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import PERMISSION_DEPENDENCY_MARKER
@@ -105,6 +107,40 @@ def _declares_inline_guard(app: Any, method: str, path: str) -> bool:
     return False
 
 
+def _inline_guard_operations(app: Any) -> dict[tuple[str, str], str]:
+    """(method, path) -> operation of every route that declares ``require_permission``."""
+    guarded: dict[tuple[str, str], str] = {}
+    for route in _iter_api_routes(app):
+        for dependant in getattr(route, "dependencies", ()) or ():
+            operation = getattr(
+                getattr(dependant, "dependency", None), PERMISSION_DEPENDENCY_MARKER, None
+            )
+            if operation is None:
+                continue
+            for method in route.methods - {"HEAD", "OPTIONS"}:
+                guarded[(method, route.path)] = operation
+    return guarded
+
+
+def _openapi_operations(app: Any) -> set[tuple[str, str]]:
+    """Every (method, path) in the app's OpenAPI spec, with ``{name:path}`` put back.
+
+    The spec drops path converters (``{table_id}``), ``APIRoute.path`` keeps them
+    (``{table_id:path}``). The spec is built by FastAPI itself, not by
+    :func:`_iter_api_routes`, so it is an independent list of the routes.
+    """
+    converters = {
+        re.sub(r"\{(\w+):[^}]+\}", r"{\1}", route.path): route.path
+        for route in _iter_api_routes(app)
+    }
+    return {
+        (method.upper(), converters.get(path, path))
+        for path, item in app.openapi()["paths"].items()
+        for method in item
+        if method.upper() not in ("HEAD", "OPTIONS")
+    }
+
+
 class TestTableCoversTheLiveApp:
     """The three-way partition: mapped, exempt, or inline-guarded. No fourth case."""
 
@@ -139,6 +175,28 @@ class TestTableCoversTheLiveApp:
     def test_every_operation_is_a_registry_key(self) -> None:
         """A typo'd operation silently defaults to 'write' and matches no exact pattern."""
         assert unknown_operations() == []
+
+    def test_route_walk_sees_every_openapi_operation(self, tmp_path: Path) -> None:
+        """The completeness checks above audit only the routes the walk finds.
+
+        A walk that misses a router (a new FastAPI version, a new kind of
+        include) would let an unmapped route pass them. The OpenAPI spec is an
+        independent list of the same routes, so it must be a subset of the walk.
+        """
+        app = _app(tmp_path)
+        missed = sorted(
+            f"{method} {path}" for method, path in _openapi_operations(app) - _live_routes(app)
+        )
+        assert missed == [], f"_iter_api_routes does not see these routes: {missed}"
+
+    def test_inline_guards_name_registry_operations(self, tmp_path: Path) -> None:
+        """An inline ``require_permission`` with a typo is as silent as a table typo."""
+        unknown = sorted(
+            f"{method} {path} -> {operation}"
+            for (method, path), operation in _inline_guard_operations(_app(tmp_path)).items()
+            if operation not in OPERATION_REGISTRY
+        )
+        assert unknown == [], f"Inline guards naming no OPERATION_REGISTRY key: {unknown}"
 
     def test_auth_routes_are_covered_by_their_inline_guards(self, tmp_path: Path) -> None:
         """#677's three routes stay enforced without a table entry."""
@@ -276,6 +334,282 @@ class TestUnmappedRouteFailsClosed:
         assert TestClient(app).get("/_inline", headers=AUTH).status_code == 403
 
 
+class TestRoutesAddedAfterTheTable:
+    """Routes added to `main` after the table was first written are enforced too."""
+
+    @pytest.mark.parametrize(
+        ("method", "path", "operation"),
+        [
+            ("GET", "/flows/demo/1/triggers", "flow.triggers"),
+            ("POST", "/notifications/demo", "notification.create"),
+            ("DELETE", "/notifications/demo/1", "notification.delete"),
+            ("POST", "/notifications/demo/1/replace-recipient", "notification.replace-recipient"),
+        ],
+    )
+    def test_exact_operation_deny_blocks_the_route(
+        self, tmp_path: Path, method: str, path: str, operation: str
+    ) -> None:
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=[operation]))
+        response = _client(tmp_path).request(method, path, headers=AUTH, json={})
+        assert response.status_code == 403
+        assert response.json()["error"]["message"] == PermissionDeniedError(operation).message
+
+
+# Minimal valid body per semantic-layer write that can land at organization
+# scope: (method, path, body without `scope`, escalated operation, inherits).
+_SL = "/semantic-layer"
+_ORG_SCOPE_WRITES = [
+    ("POST", f"{_SL}/models", {"project": "demo", "name": "m"}, "model.create", False),
+    (
+        "POST",
+        f"{_SL}/items/metric",
+        {"project": "demo", "name": "n", "sql": "1", "dataset": "d"},
+        "add.metric",
+        True,
+    ),
+    (
+        "POST",
+        f"{_SL}/items/dataset",
+        {"project": "demo", "name": "n", "table_id": "t"},
+        "add.dataset",
+        True,
+    ),
+    (
+        "POST",
+        f"{_SL}/items/relationship",
+        {"project": "demo", "name": "n", "from": "a", "to": "b", "on": "x"},
+        "add.relationship",
+        True,
+    ),
+    (
+        "POST",
+        f"{_SL}/items/constraint",
+        {"project": "demo", "name": "n", "constraint_type": "c", "rule": "r", "metrics": ["m"]},
+        "add.constraint",
+        True,
+    ),
+    (
+        "POST",
+        f"{_SL}/items/glossary",
+        {"project": "demo", "term": "t", "definition": "d"},
+        "add.glossary",
+        True,
+    ),
+    ("POST", f"{_SL}/import", {"project": "demo", "snapshot": {}}, "import", True),
+    ("POST", f"{_SL}/promote", {"from_project": "a", "to_project": "demo"}, "promote", True),
+]
+_ORG_SCOPE_IDS = [f"{method} {path}" for method, path, *_ in _ORG_SCOPE_WRITES]
+
+
+class TestOrganizationScopeEscalation:
+    """`--scope organization` is destructive-class over REST too (FLAG_ESCALATIONS).
+
+    The route table checks only the base `write` key, so without the in-handler
+    check a REST caller under `--deny-destructive` could still make an
+    irreversible organization elevation the CLI refuses.
+    """
+
+    @staticmethod
+    def _client(
+        tmp_path: Path, inherited: str = "project", **kwargs: Any
+    ) -> tuple[TestClient, Any]:
+        from unittest.mock import MagicMock
+
+        from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+
+        sl = MagicMock()
+        sl.child_scope.return_value = inherited
+        for method in (
+            "create_model",
+            "add_metric",
+            "add_dataset",
+            "add_relationship",
+            "add_constraint",
+            "add_glossary",
+            "import_snapshot_from_dict",
+            "promote_model",
+            "build_model",
+            "scope_set",
+        ):
+            # A bare MagicMock return value is not JSON-serializable.
+            getattr(sl, method).return_value = {}
+        registry = ServiceRegistry.__new__(ServiceRegistry)
+        registry.semantic_layer = sl
+        app = _app(tmp_path, **kwargs)
+        app.dependency_overrides[get_registry] = lambda: registry
+        return TestClient(app), sl
+
+    @staticmethod
+    def _assert_denied(response: Any, operation: str) -> None:
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        assert f"{operation} --scope organization" in response.json()["error"]["message"]
+
+    def test_scope_set_organization_is_denied(self, tmp_path: Path) -> None:
+        client, sl = self._client(tmp_path, deny_destructive=True)
+        item = {"project": "demo", "type": "dataset"}
+        response = client.put(
+            f"{_SL}/scope/d1", headers=AUTH, json={**item, "scope": "organization"}
+        )
+        self._assert_denied(response, "semantic-layer.scope.set")
+        sl.scope_set.assert_not_called()
+        targets = {**item, "target_projects": ["a"]}
+        assert client.put(f"{_SL}/scope/d1", headers=AUTH, json=targets).status_code == 200
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body", "op", "inherits"), _ORG_SCOPE_WRITES, ids=_ORG_SCOPE_IDS
+    )
+    def test_typed_organization_scope_is_denied(
+        self, tmp_path: Path, method: str, path: str, body: dict[str, Any], op: str, inherits: bool
+    ) -> None:
+        client, _ = self._client(tmp_path, deny_destructive=True)
+        org = {**body, "scope": "organization"}
+        self._assert_denied(
+            client.request(method, path, headers=AUTH, json=org), f"semantic-layer.{op}"
+        )
+        assert (
+            client.request(
+                method, path, headers=AUTH, json={**body, "scope": "project"}
+            ).status_code
+            == 200
+        )
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body", "op", "inherits"), _ORG_SCOPE_WRITES, ids=_ORG_SCOPE_IDS
+    )
+    def test_inherited_organization_scope_is_denied(
+        self, tmp_path: Path, method: str, path: str, body: dict[str, Any], op: str, inherits: bool
+    ) -> None:
+        client, sl = self._client(tmp_path, inherited="organization", deny_destructive=True)
+        response = client.request(method, path, headers=AUTH, json=body)
+        if inherits:
+            self._assert_denied(response, f"semantic-layer.{op}")
+            # The scope is looked up on the project the items land in (`to_project` for promote).
+            sl.child_scope.assert_called_once_with(alias="demo", model_name_or_uuid=None)
+        else:  # a new model has no model to inherit from: it is created project-scoped
+            assert response.status_code == 200
+        sl.child_scope.return_value = "project"
+        assert client.request(method, path, headers=AUTH, json=body).status_code == 200
+
+    def test_build_into_an_organization_model_is_denied(self, tmp_path: Path) -> None:
+        body = {"project": "demo", "tables": ["in.c-a.t"]}
+        client, sl = self._client(tmp_path, inherited="organization", deny_destructive=True)
+        self._assert_denied(
+            client.post(f"{_SL}/build", headers=AUTH, json={**body, "model": "m"}),
+            "semantic-layer.build",
+        )
+        assert client.post(f"{_SL}/build", headers=AUTH, json=body).status_code == 200
+        sl.child_scope.assert_called_once()  # only the `model` call looked the scope up
+
+    def test_leaf_escalation_pattern_is_per_kind(self, tmp_path: Path) -> None:
+        policy = PermissionPolicy(
+            mode="allow", deny=["semantic-layer.add.metric --scope organization"]
+        )
+        _persist_policy(tmp_path, policy)
+        client, _ = self._client(tmp_path)
+        metric = {
+            "project": "demo",
+            "name": "n",
+            "sql": "1",
+            "dataset": "d",
+            "scope": "organization",
+        }
+        glossary = {"project": "demo", "term": "t", "definition": "d", "scope": "organization"}
+        self._assert_denied(
+            client.post(f"{_SL}/items/metric", headers=AUTH, json=metric),
+            "semantic-layer.add.metric",
+        )
+        assert client.post(f"{_SL}/items/glossary", headers=AUTH, json=glossary).status_code == 200
+
+    def test_no_policy_skips_the_model_lookup(self, tmp_path: Path) -> None:
+        client, sl = self._client(tmp_path, inherited="organization")
+        body = {"project": "demo", "term": "t", "definition": "d"}
+        assert client.post(f"{_SL}/items/glossary", headers=AUTH, json=body).status_code == 200
+        sl.child_scope.assert_not_called()
+
+
+class TestDenialEnvelope:
+    """A firewall denial looks like every other `kbagent serve` error."""
+
+    @staticmethod
+    def _shape(body: dict[str, Any]) -> tuple[list[str], str, list[str]]:
+        return sorted(body), body["status"], sorted(body["error"])
+
+    def test_table_inline_and_unmapped_denials_share_one_envelope(self, tmp_path: Path) -> None:
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:destructive"]))
+        app = _app(tmp_path)
+
+        @app.get("/_unclassified")
+        def _unclassified() -> dict[str, str]:  # pragma: no cover - never reached
+            return {"status": "ok"}
+
+        client = TestClient(app)
+        table = client.request("DELETE", "/storage/buckets/demo", headers=AUTH, json={})
+        inline = client.post("/merge-requests/demo/1/merge", headers=AUTH)
+        unmapped = client.get("/_unclassified", headers=AUTH)
+        not_found = client.get("/no-such-route", headers=AUTH)
+
+        for response in (table, inline, unmapped):
+            assert response.status_code == 403
+            assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        # Same keys as any other error the server returns, here a plain 404.
+        assert not_found.status_code == 404
+        expected = self._shape(not_found.json())
+        assert expected == (["error", "status"], "error", ["code", "message"])
+        for response in (table, inline, unmapped):
+            assert self._shape(response.json()) == expected
+
+    def test_table_denial_carries_the_cli_message(self, tmp_path: Path) -> None:
+        _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["cli:destructive"]))
+        response = _client(tmp_path).request(
+            "DELETE", "/storage/buckets/demo", headers=AUTH, json={}
+        )
+        expected = PermissionDeniedError("storage.delete-bucket").message
+        assert response.json()["error"]["message"] == expected
+
+    def test_unmapped_denial_message_is_not_wrapped_as_an_operation_name(
+        self, tmp_path: Path
+    ) -> None:
+        app = _app(tmp_path)
+
+        @app.get("/_unclassified")
+        def _unclassified() -> dict[str, str]:  # pragma: no cover - never reached
+            return {"status": "ok"}
+
+        message = TestClient(app).get("/_unclassified", headers=AUTH).json()["error"]["message"]
+        assert message.startswith("GET /_unclassified has no permission classification")
+        assert "is blocked by the active permission policy" not in message
+
+    def test_denial_comes_before_the_project_id_translation(self, tmp_path: Path) -> None:
+        """A denied route answers 403 even when its `{project}` would fail to resolve.
+
+        Project ID 77 is registered under two aliases on two stacks, so
+        `translate_project_refs` refuses it with 400 CONFIG_ERROR. The firewall
+        runs first, so the caller learns about the policy, and the translation
+        does no work for a request that is refused anyway.
+        """
+        token = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+        projects = {
+            "a": ProjectConfig(
+                stack_url="https://connection.keboola.com", token=token, project_id=77
+            ),
+            "b": ProjectConfig(
+                stack_url="https://connection.eu-central-1.keboola.com", token=token, project_id=77
+            ),
+        }
+        ConfigStore(config_dir=tmp_path).save(
+            AppConfig(projects=projects, permissions=PermissionPolicy(deny=["cli:destructive"]))
+        )
+        client = _client(tmp_path)
+        denied = client.request("DELETE", "/storage/buckets/77", headers=AUTH, json={})
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
+        # Control: the same ID on an allowed route does reach the translation.
+        allowed = client.get("/storage/buckets?project=77", headers=AUTH)
+        assert allowed.status_code == 400
+        assert allowed.json()["error"]["code"] == "CONFIG_ERROR"
+
+
 class TestPermissionsShowEndpoint:
     def test_reports_no_policy_when_clean(self, tmp_path: Path) -> None:
         body = _client(tmp_path).get("/permissions/show", headers=AUTH).json()
@@ -344,16 +678,23 @@ class TestVerbAndRiskClassAgree:
     # `branch merge` only ever produces a URL (the merge happens in the web
     # UI), so mirroring its `write` class on a GET is CLI parity, not a slip.
     _NON_READ_GETS: ClassVar[set[str]] = {"GET /branches/{project}/merge-url"}
+    # DELETE of a grant or a pending request, not of data: it narrows an item's
+    # visibility or withdraws an elevation request, and the CLI classifies both
+    # `write`. Mirroring that class is CLI parity.
+    _NON_DESTRUCTIVE_DELETES: ClassVar[set[str]] = {
+        "DELETE /semantic-layer/scope/{context_id}/target-projects",
+        "DELETE /semantic-layer/scope/{context_id}/elevation-request",
+    }
 
     def test_every_delete_route_is_destructive_or_admin(self) -> None:
         offenders = sorted(
-            f"{method} {path} -> {op} ({OPERATION_REGISTRY[op]})"
+            f"{method} {path}"
             for (method, path), op in ROUTE_OPERATIONS.items()
             if method == "DELETE" and OPERATION_REGISTRY[op] not in ("destructive", "admin")
         )
-        assert offenders == [], (
+        assert set(offenders) <= self._NON_DESTRUCTIVE_DELETES, (
             "A DELETE route classified below `destructive` slips through "
-            f"--deny-destructive: {offenders}"
+            f"--deny-destructive: {sorted(set(offenders) - self._NON_DESTRUCTIVE_DELETES)}"
         )
 
     def test_mutating_verbs_are_not_classified_read(self) -> None:

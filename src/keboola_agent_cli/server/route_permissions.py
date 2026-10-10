@@ -40,6 +40,13 @@ route, so it maps to the collapsed parent key ``semantic-layer.add`` rather
 than ``semantic-layer.add.metric``. A policy naming only the leaf key is
 therefore enforced on the CLI but not over REST; name the parent (or
 ``cli:write``) to cover both. Documented in ``docs/web-server.md``.
+
+Flag escalations
+----------------
+The table sees the route, not the body, so it checks the base key only. The
+semantic-layer writes that can land at ``organization`` scope (``FLAG_ESCALATIONS``
+makes that destructive-class) add the escalated check in their handlers, with
+the per-kind leaf key for ``POST /semantic-layer/items/{kind}``.
 """
 
 from __future__ import annotations
@@ -252,6 +259,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("PATCH", "/flows/{project}/{config_id}"): "flow.update",
     ("DELETE", "/flows/{project}/{config_id}"): "flow.delete",
     ("GET", "/flows/{project}/{config_id}/schedules"): "schedule.list",
+    ("GET", "/flows/{project}/{config_id}/triggers"): "flow.triggers",
     ("POST", "/flows/{project}/{config_id}/schedule"): "flow.schedule",
     ("DELETE", "/flows/{project}/{config_id}/schedule"): "flow.schedule-remove",
     # ── schedules / notifications ────────────────────────────────────
@@ -260,6 +268,13 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/schedules/find/query"): "schedule.find",
     ("GET", "/notifications"): "notification.list",
     ("GET", "/notifications/{project}/{subscription_id}"): "notification.detail",
+    ("POST", "/notifications/{project}"): "notification.create",
+    ("DELETE", "/notifications/{project}/{subscription_id}"): "notification.delete",
+    # Create-then-delete (the API has no update), `write` like the CLI command.
+    (
+        "POST",
+        "/notifications/{project}/{subscription_id}/replace-recipient",
+    ): "notification.replace-recipient",
     # ── lineage (all read-only; `build` is the only cache writer) ─────
     ("POST", "/lineage/build"): "lineage.build",
     ("GET", "/lineage/info"): "lineage.info",
@@ -340,6 +355,23 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
         "DELETE",
         "/semantic-layer/reference-data/{record_id}",
     ): "semantic-layer.reference-data.delete",
+    # Base keys only. An `organization` scope write escalates to the
+    # destructive-class `<key> --scope organization` inside the handler (the
+    # scope sits in the body, which this table never sees) -- see
+    # `_gate_organization_scope` in server/routers/semantic_layer.py.
+    ("GET", "/semantic-layer/scope/elevation-requests"): "semantic-layer.scope.request-list",
+    ("GET", "/semantic-layer/scope/{context_id}"): "semantic-layer.scope.get",
+    ("PUT", "/semantic-layer/scope/{context_id}"): "semantic-layer.scope.set",
+    ("POST", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer.scope.add",
+    ("DELETE", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer.scope.remove",
+    (
+        "PUT",
+        "/semantic-layer/scope/{context_id}/elevation-request",
+    ): "semantic-layer.scope.request-create",
+    (
+        "DELETE",
+        "/semantic-layer/scope/{context_id}/elevation-request",
+    ): "semantic-layer.scope.request-delete",
     # ── transformations ──────────────────────────────────────────────
     ("POST", "/transformations/{project}"): "transformation.create",
     ("GET", "/transformations/{project}/{config_id}"): "transformation.show",
@@ -451,9 +483,12 @@ def _deny_unmapped(method: str, path: str) -> None:
     from ..errors import PermissionDeniedError
 
     raise PermissionDeniedError(
-        f"{method} {path} has no permission classification, so its risk cannot be "
-        "evaluated and it is refused. Add an entry to ROUTE_OPERATIONS in "
-        "server/route_permissions.py (or list the path in UNGUARDED_PATHS)."
+        f"{method} {path}",
+        message=(
+            f"{method} {path} has no permission classification, so its risk cannot be "
+            "evaluated and it is refused. Add an entry to ROUTE_OPERATIONS in "
+            "server/route_permissions.py (or list the path in UNGUARDED_PATHS)."
+        ),
     )
 
 
