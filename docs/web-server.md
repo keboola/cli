@@ -492,7 +492,10 @@ three inline declarations survive only as the per-route override form.
 
 The policy in force is the **persisted `permissions` block of the config dir
 `serve` resolves**, plus whichever session flags the `kbagent` invocation
-carried. Two consequences worth knowing before you reach for a flag:
+carried. The server reads that block once, when it starts. After
+`permissions set` or `permissions reset`, restart `kbagent serve`: until then
+the running server keeps the old policy. Two consequences worth knowing before
+you reach for a flag:
 
 - **`kbagent --deny-writes serve` never starts the server.** `serve` is
   classified `admin`, and `--deny-writes` appends `cli:write`, which spans
