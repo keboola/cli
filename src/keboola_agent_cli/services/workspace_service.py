@@ -84,6 +84,19 @@ def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
+def _sandbox_config_delete_command(alias: str, config_id: str, branch_id: int) -> str:
+    """Return the 'config delete' command that removes a leftover sandbox config.
+
+    ``--branch`` is always named: the command must target the branch the
+    config was created in even after a later 'branch use' changes the
+    active branch.
+    """
+    return (
+        f"kbagent config delete --project {alias} --component-id keboola.sandboxes "
+        f"--config-id {config_id} --branch {branch_id}"
+    )
+
+
 def _workspace_login_type_for_backend(backend: str) -> str | None:
     """Return the loginType kbagent should request for newly created workspaces."""
     normalized = backend.lower()
@@ -326,6 +339,7 @@ class WorkspaceService(BaseService):
                 branch_id=branch_id,
             )
             config_id = sandbox_config.get("id", "")
+            cleanup_command = _sandbox_config_delete_command(alias, config_id, branch_id)
 
             # Step 2: back the config with a Storage workspace. If that fails
             # definitely, the config from step 1 is debris nobody asked for
@@ -354,16 +368,18 @@ class WorkspaceService(BaseService):
                 )
             except KeboolaApiError as exc:
                 if exc.error_code in _AMBIGUOUS_CREATE_ERRORS:
-                    self._keep_sandbox_config(exc, alias, config_id, branch_id)
+                    self._keep_sandbox_config(exc, alias, config_id, branch_id, cleanup_command)
                 else:
-                    self._rollback_sandbox_config(client, exc, config_id, branch_id)
+                    self._rollback_sandbox_config(
+                        client, exc, config_id, branch_id, cleanup_command
+                    )
                 raise
         finally:
             client.close()
 
     @staticmethod
     def _keep_sandbox_config(
-        exc: KeboolaApiError, alias: str, config_id: str, branch_id: int
+        exc: KeboolaApiError, alias: str, config_id: str, branch_id: int, cleanup_command: str
     ) -> None:
         """Keep the sandbox config after a timeout; annotate ``exc`` with what to check.
 
@@ -383,13 +399,13 @@ class WorkspaceService(BaseService):
         exc.message = (
             f"{exc.message} The keboola.sandboxes config {config_id} was kept: {pending} "
             f"may still finish. Check with 'kbagent workspace list --project {alias}'; if no "
-            f"workspace for config {config_id} appears, remove the config with 'kbagent config "
-            f"delete --project {alias} --component-id keboola.sandboxes --config-id {config_id}'."
+            f"workspace for config {config_id} appears, remove the config with "
+            f"'{cleanup_command}'."
         )
 
     @staticmethod
     def _rollback_sandbox_config(
-        client: Any, exc: KeboolaApiError, config_id: str, branch_id: int
+        client: Any, exc: KeboolaApiError, config_id: str, branch_id: int, cleanup_command: str
     ) -> None:
         """Trash the sandbox config a failed create left behind; annotate ``exc``.
 
@@ -409,7 +425,7 @@ class WorkspaceService(BaseService):
             exc.message = (
                 f"{exc.message} The keboola.sandboxes config {config_id} created for this "
                 f"attempt could not be cleaned up ({cleanup_exc.message}); remove it with "
-                f"'kbagent config delete --component-id keboola.sandboxes --config-id {config_id}'."
+                f"'{cleanup_command}'."
             )
             return
         exc.details["sandbox_config_rolled_back"] = True
@@ -534,15 +550,22 @@ class WorkspaceService(BaseService):
         connection = ws_data.get("connection", {})
         workspace_id = ws_data.get("id")
 
-        # Reset password so we can return it (job doesn't expose the initial password)
+        # Reset password so we can return it (job doesn't expose the initial
+        # password). The workspace lives in the branch of its config, so the
+        # reset must target that branch too.
         password = ""
+        warnings: list[str] = []
         try:
-            pw_data = client.reset_workspace_password(workspace_id)
+            pw_data = client.reset_workspace_password(workspace_id, branch_id=branch_id)
             password = pw_data.get("password", "")
-        except KeboolaApiError:
-            logger.debug("Could not reset password for workspace %s", workspace_id)
+        except KeboolaApiError as exc:
+            warnings.append(
+                f"Workspace {workspace_id} was created, but its password could not be reset "
+                f"({exc.message}). Get a password with 'kbagent workspace password --project "
+                f"{alias} --workspace-id {workspace_id}'."
+            )
 
-        return {
+        result = {
             "project_alias": alias,
             "workspace_id": workspace_id,
             "name": name,
@@ -561,6 +584,9 @@ class WorkspaceService(BaseService):
                 "Save the password -- it cannot be retrieved later!"
             ),
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def resolve_sandbox_workspace_id(
         self,

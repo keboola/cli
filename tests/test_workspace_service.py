@@ -2534,6 +2534,36 @@ class TestCreateWorkspaceUiMode:
             config_id="cfg-ui",
         )
         mock_client.delete_config.assert_not_called()
+        # The password reset targets the dev branch the workspace lives in
+        mock_client.reset_workspace_password.assert_called_once_with(42, branch_id=200)
+        assert "warnings" not in result
+
+    def test_ui_mode_failed_password_reset_is_a_warning(self, tmp_config_dir: Path) -> None:
+        """A failed reset must not pass as success with a silent empty password."""
+        mock_client = MagicMock()
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-ui", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j1", "branchId": "200"}
+        mock_client.list_config_workspaces.return_value = [SAMPLE_WORKSPACE]
+        mock_client.reset_workspace_password.side_effect = KeboolaApiError(
+            message="Workspace not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+
+        svc = WorkspaceService(
+            config_store=self._dev_branch_store(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        assert result["password"] == ""
+        assert result["warnings"] == [
+            (
+                "Workspace 42 was created, but its password could not be reset (Workspace not "
+                "found). Get a password with 'kbagent workspace password --project prod "
+                "--workspace-id 42'."
+            )
+        ]
+        mock_client.delete_config.assert_not_called()
 
     def test_ui_mode_passes_default_branch_to_queue_job(self, tmp_config_dir: Path) -> None:
         """On the default branch the resolved production branch id is forwarded too."""
@@ -2644,8 +2674,10 @@ class TestCreateWorkspaceUiMode:
         assert exc.details["sandbox_config_rolled_back"] is False
         assert exc.details["sandbox_config_cleanup_error"] == "Storage is read-only"
         assert "could not be cleaned up" in exc.message
-        assert "kbagent config delete" in exc.message
-        assert "cfg-stuck" in exc.message
+        assert (
+            "remove it with 'kbagent config delete --project prod --component-id "
+            "keboola.sandboxes --config-id cfg-stuck --branch 123'." in exc.message
+        )
 
     def test_headless_failure_rolls_back_sandbox_config(self, tmp_config_dir: Path) -> None:
         """The headless path gets the same guarantee: a failed Storage workspace
@@ -2703,7 +2735,10 @@ class TestCreateWorkspaceUiMode:
         assert exc.details["job_id"] == "j77"
         assert "job j77 may still finish" in exc.message
         assert "kbagent workspace list --project prod" in exc.message
-        assert "--config-id cfg-slow" in exc.message
+        assert (
+            "remove the config with 'kbagent config delete --project prod --component-id "
+            "keboola.sandboxes --config-id cfg-slow --branch 123'." in exc.message
+        )
         mock_client.delete_config.assert_not_called()
 
     def test_headless_request_timeout_keeps_sandbox_config(self, tmp_config_dir: Path) -> None:
