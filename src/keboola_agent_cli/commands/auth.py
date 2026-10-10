@@ -54,7 +54,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_password_stdin,
 )
-from ._url_copy import CopyableUrlWait
+from ._url_copy import LINK_STYLE, CopyableUrlWait
 
 auth_app = typer.Typer(
     help="Programmatic browser login (PKCE / device code) -- user-scoped sessions"
@@ -311,7 +311,7 @@ def _device_login_panel(authorization: DeviceAuthorization) -> Panel:
         lines = [
             "Open this link to finish signing in (code already filled in):",
             "",
-            f"[bold cyan]{escape(complete)}[/bold cyan]",
+            f"[{LINK_STYLE}]{escape(complete)}[/{LINK_STYLE}]",
             "",
             "Or enter the code by hand at this URL:",
             "",
@@ -323,7 +323,7 @@ def _device_login_panel(authorization: DeviceAuthorization) -> Panel:
         lines = [
             "Open this URL and enter the code to finish signing in:",
             "",
-            f"[bold cyan]{escape(authorization.verification_uri)}[/bold cyan]",
+            f"[{LINK_STYLE}]{escape(authorization.verification_uri)}[/{LINK_STYLE}]",
             "",
             f"Code: [bold yellow]{escape(authorization.user_code)}[/bold yellow]",
         ]

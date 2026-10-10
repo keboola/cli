@@ -468,6 +468,26 @@ class TestStorageCallCounts:
         assert _data(result)["table_id"] == "in.c-main.t0"
         assert_api_calls(httpx_mock, [("GET", "/v2/storage/tables/in.c-main.t0")])
 
+    @pytest.mark.parametrize("wait", [False, True])
+    def test_storage_job_detail_single_call(
+        self, tmp_config_dir: Path, httpx_mock, wait: bool
+    ) -> None:
+        """One job GET; --wait on an already-finished job adds no poll."""
+        setup_single_project(tmp_config_dir)
+        job = {
+            "id": 555,
+            "status": "success",
+            "operationName": "tableImport",
+            "tableId": "in.c-main.t0",
+            "operationParams": {"source": {"type": "file", "fileId": 77}},
+            "results": {"importedRowsCount": 3, "warnings": []},
+        }
+        mock_api_routes(httpx_mock, {("GET", "/v2/storage/jobs/555"): job})
+        args = ["storage", "job-detail", "--project", "prod", "--job-id", "555"]
+        result = _invoke(tmp_config_dir, *args, *(["--wait"] if wait else []))
+        assert _data(result)["file_id"] == 77
+        assert_api_calls(httpx_mock, [("GET", "/v2/storage/jobs/555")])
+
 
 # flow ------------------------------------------------------------------------
 

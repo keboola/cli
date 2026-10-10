@@ -4,6 +4,7 @@ Provides direct Storage API access including sharing/linked bucket metadata
 (source project id and name) that the plain bucket listing does not surface.
 """
 
+from contextlib import nullcontext
 from pathlib import Path
 
 import typer
@@ -18,6 +19,12 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+)
+from ._progress import ProgressOption, transfer_progress
+from ._storage_jobs import (
+    ImportTimeoutOption,
+    ImportWaitOption,
+    print_import_outcome,
 )
 from ._storage_table_detail import (
     format_range_partitioning,
@@ -764,12 +771,17 @@ def storage_upload_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    wait: ImportWaitOption = True,
+    timeout: ImportTimeoutOption = None,
+    progress: ProgressOption = False,
 ) -> None:
-    """Upload a CSV file into a storage table.
+    """Upload a CSV (or gzipped CSV) file into a storage table.
 
     Auto-creates the bucket and table if they don't exist (columns inferred as
     STRING from the CSV header). Use --no-auto-create to require the table to
-    already exist.
+    already exist. The import runs as a Storage job: --no-wait returns once it
+    is queued, and a --timeout that runs out leaves it running server-side --
+    follow it with `storage job-detail --wait` rather than uploading again.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -788,16 +800,22 @@ def storage_upload_table(
         )
 
     try:
-        result = service.upload_table(
-            alias=project,
-            table_id=table_id,
-            file_path=file,
-            incremental=incremental,
-            delimiter=delimiter,
-            enclosure=enclosure,
-            auto_create=auto_create,
-            branch_id=effective_branch,
-        )
+        with transfer_progress(
+            formatter, label=f"upload {p.name}", total_bytes=p.stat().st_size, enabled=progress
+        ) as on_progress:
+            result = service.upload_table(
+                alias=project,
+                table_id=table_id,
+                file_path=file,
+                incremental=incremental,
+                delimiter=delimiter,
+                enclosure=enclosure,
+                auto_create=auto_create,
+                branch_id=effective_branch,
+                wait=wait,
+                timeout=timeout,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -805,7 +823,12 @@ def storage_upload_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -819,15 +842,12 @@ def storage_upload_table(
             formatter.console.print(f"[dim]Created table: {result['table_id']}[/dim]")
         load_type = "incremental" if result["incremental"] else "full"
         size_mb = result.get("file_size_bytes", 0) / (1024 * 1024)
+        file_note = f", Storage file {result['file_id']}" if result.get("file_id") else ""
         formatter.console.print(
             f"[bold green]Uploaded:[/bold green] {result['table_id']} "
-            f"({load_type} load, {size_mb:.2f} MB)"
+            f"({load_type} load, {size_mb:.2f} MB{file_note})"
         )
-        if result["imported_rows"] is not None:
-            formatter.console.print(f"  Rows imported: {result['imported_rows']}")
-        if result["warnings"]:
-            for w in result["warnings"]:
-                formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
+        print_import_outcome(formatter, project, result)
 
 
 @storage_app.command("download-table", rich_help_panel=_TABLES)
@@ -901,6 +921,7 @@ def storage_download_table(
         "--changed-until",
         help="Only rows imported up to this time (unix ts or strtotime).",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Export a storage table to a local CSV file.
 
@@ -926,20 +947,24 @@ def storage_download_table(
         formatter.console.print(msg)
 
     try:
-        result = service.download_table(
-            alias=project,
-            table_id=table_id,
-            output_path=output,
-            columns=columns,
-            limit=limit,
-            branch_id=effective_branch,
-            keep_slices=keep_slices,
-            where_column=where_column,
-            where_operator=where_operator,
-            where_values=where_value,
-            changed_since=changed_since,
-            changed_until=changed_until,
-        )
+        with transfer_progress(
+            formatter, label=f"download {table_id}", total_bytes=None, enabled=progress
+        ) as on_progress:
+            result = service.download_table(
+                alias=project,
+                table_id=table_id,
+                output_path=output,
+                columns=columns,
+                limit=limit,
+                branch_id=effective_branch,
+                keep_slices=keep_slices,
+                where_column=where_column,
+                where_operator=where_operator,
+                where_values=where_value,
+                changed_since=changed_since,
+                changed_until=changed_until,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -1849,6 +1874,7 @@ def storage_file_upload(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Upload a local file to Storage Files.
 
@@ -1870,14 +1896,18 @@ def storage_file_upload(
         formatter.console.print(f"Uploading [bold]{p.name}[/bold] ({size_str})...")
 
     try:
-        result = service.upload_file(
-            alias=project,
-            file_path=file,
-            name=name,
-            tags=tag,
-            is_permanent=permanent,
-            branch_id=effective_branch,
-        )
+        with transfer_progress(
+            formatter, label=f"upload {p.name}", total_bytes=p.stat().st_size, enabled=progress
+        ) as on_progress:
+            result = service.upload_file(
+                alias=project,
+                file_path=file,
+                name=name,
+                tags=tag,
+                is_permanent=permanent,
+                branch_id=effective_branch,
+                on_progress=on_progress,
+            )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -1924,6 +1954,7 @@ def storage_file_download(
         "-o",
         help="Output file path (default: original filename)",
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Download a Storage File to local disk.
 
@@ -1946,13 +1977,18 @@ def storage_file_download(
         else:
             formatter.console.print(f"Downloading latest file with tags: {', '.join(tag or [])}...")
 
+    label = f"download file {file_id}" if file_id else f"download file tagged {','.join(tag or [])}"
     try:
-        result = service.download_file(
-            alias=project,
-            file_id=file_id,
-            tags=tag,
-            output_path=output,
-        )
+        with transfer_progress(
+            formatter, label=label, total_bytes=None, enabled=progress
+        ) as on_progress:
+            result = service.download_file(
+                alias=project,
+                file_id=file_id,
+                tags=tag,
+                output_path=output,
+                on_progress=on_progress,
+            )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -2139,11 +2175,14 @@ def storage_load_file(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    wait: ImportWaitOption = True,
+    timeout: ImportTimeoutOption = None,
 ) -> None:
     """Load a Storage File into a table.
 
-    Imports an already-uploaded file (from file-upload or component output)
-    into a storage table. Use --incremental to append rows.
+    Imports an already-uploaded file (from file-upload, component output, or
+    an upload-table whose import failed) into a storage table. Use
+    --incremental to append rows, --no-wait to return once the import is queued.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -2164,12 +2203,22 @@ def storage_load_file(
             delimiter=delimiter,
             enclosure=enclosure,
             branch_id=effective_branch,
+            wait=wait,
+            timeout=timeout,
         )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        formatter.error(
+            message=exc.message,
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
@@ -2180,10 +2229,7 @@ def storage_load_file(
             f"[bold green]Loaded:[/bold green] file {result['file_id']} -> "
             f"{result['table_id']} ({load_type} load)"
         )
-        if result["imported_rows"] is not None:
-            formatter.console.print(f"  Rows imported: {result['imported_rows']}")
-        for w in result.get("warnings", []):
-            formatter.console.print(f"  [yellow]Warning:[/yellow] {w}")
+        print_import_outcome(formatter, project, result)
 
 
 @storage_app.command("unload-table", rich_help_panel=_FILES)
@@ -2247,6 +2293,7 @@ def storage_unload_table(
             "parquet (always sliced) and for non-sliced exports."
         ),
     ),
+    progress: ProgressOption = False,
 ) -> None:
     """Export a table to a Storage File.
 
@@ -2279,18 +2326,27 @@ def storage_unload_table(
         formatter.console.print(msg)
 
     try:
-        result = service.unload_table_to_file(
-            alias=project,
-            table_id=table_id,
-            columns=columns,
-            limit=limit,
-            tags=tag,
-            download=download,
-            output_path=output,
-            branch_id=effective_branch,
-            file_type=file_type,
-            keep_slices=keep_slices,
-        )
+        # Progress covers the local download; without --download nothing transfers.
+        with (
+            transfer_progress(
+                formatter, label=f"download {table_id}", total_bytes=None, enabled=progress
+            )
+            if download
+            else nullcontext()
+        ) as on_progress:
+            result = service.unload_table_to_file(
+                alias=project,
+                table_id=table_id,
+                columns=columns,
+                limit=limit,
+                tags=tag,
+                download=download,
+                output_path=output,
+                branch_id=effective_branch,
+                file_type=file_type,
+                keep_slices=keep_slices,
+                on_progress=on_progress,
+            )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -2329,3 +2385,9 @@ _register_snapshot_commands(storage_app)
 from ._storage_describe import register as _register_describe_commands  # noqa: E402
 
 _register_describe_commands(storage_app)
+
+
+# `job-detail` (issue #834) lives in a private module for the same reason.
+from ._storage_jobs import register as _register_job_commands  # noqa: E402
+
+_register_job_commands(storage_app)

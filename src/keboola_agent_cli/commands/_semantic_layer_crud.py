@@ -17,8 +17,23 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    item_failure_exit_code,
 )
-from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty
+from ._semantic_layer_helpers import (
+    ScopeChoice,
+    _handle_service_call,
+    _is_stdin_tty,
+    resolve_scope_targets,
+)
+
+_SCOPE_HELP = (
+    "Visibility: 'project' (owner only), 'organization' (every project in the org), or "
+    "'targeted' (owner + --target-project grants). Default: the model's own scope."
+)
+_TARGET_PROJECT_HELP = (
+    "Project alias or ID to grant visibility to (repeatable or comma-separated; "
+    "--scope targeted only)."
+)
 
 # ---------------------------------------------------------------------------
 # semantic-layer add -- one sub-subcommand per entity type
@@ -68,10 +83,20 @@ def add_metric(
     dataset: str = typer.Option(..., "--dataset", help="Dataset tableId this metric belongs to"),
     description: str = typer.Option("", "--description", help="Optional description"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the dataset-mismatch warning"),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a metric to a semantic-layer model."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.add.metric",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.add_metric,
@@ -84,6 +109,8 @@ def add_metric(
         assume_yes=yes,
         is_tty=_is_stdin_tty(),
         confirm_cb=typer.confirm,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_item_added("metric"))
 
@@ -115,10 +142,20 @@ def add_dataset(
             'location from Storage, e.g. \'"DB"."out.c-bucket"."table"\'.'
         ),
     ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a dataset (FQN read from the table's Storage location)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.add.dataset",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.add_dataset,
@@ -131,6 +168,8 @@ def add_dataset(
         primary_key=primary_key,
         deep_fields=deep_fields,
         fqn=fqn,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_item_added("dataset"))
 
@@ -145,10 +184,20 @@ def add_relationship(
     to: str = typer.Option(..., "--to", help="Target dataset tableId"),
     on: str = typer.Option(..., "--on", help="Join condition"),
     type_: str = typer.Option("left", "--type", help="Join type: 'left' or 'inner'."),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a relationship between two datasets."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.add.relationship",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.add_relationship,
@@ -159,6 +208,8 @@ def add_relationship(
         to=to,
         on=on,
         type_=type_,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_item_added("relationship"))
 
@@ -194,6 +245,8 @@ def add_constraint(
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
     ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a constraint."""
     formatter = get_formatter(ctx)
@@ -205,6 +258,14 @@ def add_constraint(
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.add.constraint",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.add_constraint,
@@ -215,6 +276,8 @@ def add_constraint(
         rule=rule,
         metrics=metrics_list,
         severity=severity,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_item_added("constraint"))
 
@@ -225,11 +288,23 @@ def add_glossary(
     project: str = typer.Option(..., "--project", help="Project alias"),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Glossary term"),
-    definition: str = typer.Option("", "--definition", help="Optional definition"),
+    definition: str = typer.Option(
+        ..., "--definition", help="Definition of the term (the metastore requires one)"
+    ),
+    scope: ScopeChoice | None = typer.Option(None, "--scope", help=_SCOPE_HELP),
+    target_project: list[str] = typer.Option([], "--target-project", help=_TARGET_PROJECT_HELP),
 ) -> None:
     """Add a glossary term."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
+    target_projects = resolve_scope_targets(
+        ctx,
+        operation="semantic-layer.add.glossary",
+        scope=scope,
+        target_project=target_project,
+        owner_alias=project,
+        inherit_from_model=(model,),
+    )
     result = _handle_service_call(
         ctx,
         service.add_glossary,
@@ -237,12 +312,14 @@ def add_glossary(
         model_name_or_uuid=model,
         term=term,
         definition=definition,
+        scope=scope,
+        target_projects=target_projects,
     )
     formatter.output(result, _print_item_added("glossary"))
 
 
 # ---------------------------------------------------------------------------
-# semantic-layer edit -- DELETE+POST with rollback + rename cascade
+# semantic-layer edit -- in-place PUT + rename cascade
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +327,7 @@ edit_app = typer.Typer(
     name="edit",
     help=(
         "Edit a metric, dataset, constraint, relationship, or glossary term "
-        "(DELETE+POST with rollback)."
+        "(in-place update; keeps scope and id)."
     ),
     no_args_is_help=True,
 )
@@ -333,6 +410,10 @@ def edit_metric(
         confirm_cb=typer.confirm,
     )
     formatter.output(result, _print_edit_result("metric"))
+    # A constraint the rename could not repoint is a failed cascade item (#745).
+    cascaded = result.get("cascaded_constraints") or []
+    if code := item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed")):
+        raise typer.Exit(code=code)
 
 
 @edit_app.command("dataset")
@@ -383,7 +464,7 @@ def edit_constraint(
         None, "--new-metrics", help="Comma-separated list of metric names"
     ),
 ) -> None:
-    """Edit a constraint (DELETE+POST, with local validators)."""
+    """Edit a constraint (in-place update, with local validators)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     metrics_list = (
@@ -420,7 +501,7 @@ def edit_relationship(
         None, "--new-type", help="Replace join type (left | inner)"
     ),
 ) -> None:
-    """Edit a relationship (DELETE+POST). Validates ``--new-type`` locally."""
+    """Edit a relationship (in-place update). Validates ``--new-type`` locally."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(

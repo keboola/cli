@@ -92,6 +92,16 @@ def test_on_prompt_prints_hint_when_enabled() -> None:
     assert "Press c to copy the link" in _output(console)
 
 
+def test_on_prompt_hint_is_cyan() -> None:
+    """The style of the `auth login --device-code` hint, also used by `data-app password`."""
+    console = Console(
+        file=io.StringIO(), force_terminal=True, color_system="standard", no_color=False, width=80
+    )
+    wait = CopyableUrlWait(console, copier=_Recorder(), interactive=True)
+    wait.on_prompt("https://example.com/x")
+    assert "\x1b[36mPress c to copy the link\x1b[0m" in _output(console)
+
+
 def test_on_prompt_silent_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same staging as test_disabled_without_backend: no detectable backend.
     monkeypatch.setattr(_url_copy, "detect_clipboard", lambda: None)

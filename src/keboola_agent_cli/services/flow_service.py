@@ -938,7 +938,9 @@ class FlowService(BaseService):
         the cron trigger stops firing), then its Storage config is deleted.
         A missing service-side registration is ignored; other deregistration
         failures are reported via ``warnings`` and do not block the Storage
-        config deletion.
+        config deletion. A schedule whose config could not be deleted is
+        listed in ``errors`` (``{schedule_id, error}``); when no schedule
+        could be deleted, the call raises ``SCHEDULE_DELETE_FAILED`` instead.
 
         Idempotent: if no schedules exist, returns deleted_count=0.
         """
@@ -959,7 +961,7 @@ class FlowService(BaseService):
                     raise
 
             deleted: list[str] = []
-            errors: list[str] = []
+            errors: list[dict[str, str]] = []
             warnings: list[str] = []
             matching = _schedules_targeting_flow(all_sched, config_id)
             if matching:
@@ -983,13 +985,14 @@ class FlowService(BaseService):
                             )
                             deleted.append(sched_id)
                         except KeboolaApiError as exc:
-                            errors.append(f"{sched_id}: {exc.message}")
+                            errors.append({"schedule_id": sched_id, "error": exc.message})
         finally:
             client.close()
 
         if errors and not deleted:
+            failures = "; ".join(f"{e['schedule_id']}: {e['error']}" for e in errors)
             raise KeboolaApiError(
-                message=f"Failed to delete schedules: {'; '.join(errors)}",
+                message=f"Failed to delete schedules: {failures}",
                 status_code=0,
                 error_code=ErrorCode.SCHEDULE_DELETE_FAILED,
                 retryable=False,
@@ -1002,6 +1005,8 @@ class FlowService(BaseService):
             "config_id": config_id,
             "deleted_schedule_ids": deleted,
             "deleted_count": len(deleted),
+            # Schedules whose config delete failed while others were deleted (#745).
+            "errors": errors,
             "branch_id": effective_branch,
             "warnings": warnings,
         }
