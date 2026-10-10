@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,13 @@ def resolve_scaffold_placement(
         return ScaffoldPlacement(fallback, warning)
 
 
+def _is_path_like(name: str) -> bool:
+    """True when *name* reads as a path: a '.' or '..' part, or a leading separator."""
+    if name.startswith(("/", "\\")):
+        return True
+    return any(part in {".", ".."} for part in re.split(r"[/\\]", name))
+
+
 def ensure_branch_registered(
     manifest: Manifest,
     branch_id: int | None,
@@ -159,25 +167,30 @@ def ensure_branch_registered(
 
     # Generate filesystem-safe path
     path = sanitize_name(branch_name) if branch_name else ""
+    reason = None
+    if branch_name and _is_path_like(branch_name):
+        reason = "the branch name contains a path part ('.', '..' or a leading separator)"
+    elif branch_name and not path:
+        reason = "the branch name has no characters usable in a directory name"
     if not path:
         path = f"branch-{branch_id}"
 
     # Handle path uniqueness -- avoid collisions with existing entries
     existing_paths = {br.path for br in manifest.branches}
     if path in existing_paths:
+        reason = f"another branch already uses the directory '{path}/'"
         path = f"{path}-{branch_id}"
 
-    # Tell the user when the directory is not the branch name (issue #271
-    # sec-10). Otherwise an unexpected sync-workspace layout -- '../etc' stored
-    # as 'etc/', or a second 'etc' stored as 'etc-<id>/' -- has no explanation.
-    if branch_name and path != branch_name:
+    # Explain an unexpected directory (issue #271 sec-10): '../etc' stored as
+    # 'etc/', or a second 'etc' stored as 'etc-<id>/'. Plain normalization
+    # ('My Feature' -> 'my-feature/') is expected and stays silent.
+    if reason:
         logger.warning(
-            "Dev branch %d '%s' uses the directory '%s/' in the sync workspace: "
-            "the branch name is not a safe directory name, or another branch "
-            "already uses that directory.",
+            "Dev branch %d '%s' uses the directory '%s/' in the sync workspace: %s.",
             branch_id,
             branch_name,
             path,
+            reason,
         )
 
     manifest.branches.append(ManifestBranch(id=branch_id, path=path))

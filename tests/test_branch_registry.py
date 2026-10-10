@@ -105,25 +105,39 @@ class TestEnsureBranchRegistered:
         client.list_dev_branches.return_value = []  # API knows nothing
         assert ensure_branch_registered(manifest, 20, client) == "branch-20"
 
-    def test_changed_branch_name_is_reported(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize("name", ["../etc", "/etc", "..\\etc", "a/../etc", "./etc"])
+    def test_path_like_branch_name_is_reported(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str
     ) -> None:
-        """A branch stored under another directory name gets a warning (issue #271 sec-10)."""
+        """A path-like name stored under another directory gets a warning (issue #271 sec-10)."""
         _write_manifest(tmp_path, [{"id": 10, "path": "main"}])
         manifest = load_manifest(tmp_path)
         client = MagicMock()
-        client.list_dev_branches.return_value = [{"id": 20, "name": "../etc"}]
+        client.list_dev_branches.return_value = [{"id": 20, "name": name}]
 
         with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
-            assert ensure_branch_registered(manifest, 20, client) == "etc"
+            path = ensure_branch_registered(manifest, 20, client)
 
         assert [r.getMessage() for r in caplog.records] == [
             (
-                "Dev branch 20 '../etc' uses the directory 'etc/' in the sync workspace: "
-                "the branch name is not a safe directory name, or another branch "
-                "already uses that directory."
+                f"Dev branch 20 '{name}' uses the directory '{path}/' in the sync workspace: "
+                "the branch name contains a path part ('.', '..' or a leading separator)."
             )
         ]
+
+    def test_unusable_branch_name_falls_back_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_manifest(tmp_path, [{"id": 10, "path": "main"}])
+        manifest = load_manifest(tmp_path)
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 20, "name": "???"}]
+
+        with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
+            assert ensure_branch_registered(manifest, 20, client) == "branch-20"
+
+        assert len(caplog.records) == 1
+        assert "has no characters usable in a directory name" in caplog.records[0].getMessage()
 
     def test_directory_collision_is_reported(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -137,19 +151,35 @@ class TestEnsureBranchRegistered:
         with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
             assert ensure_branch_registered(manifest, 30, client) == "etc-30"
 
-        assert len(caplog.records) == 1
-        assert "Dev branch 30 'etc' uses the directory 'etc-30/'" in caplog.records[0].getMessage()
+        assert [r.getMessage() for r in caplog.records] == [
+            (
+                "Dev branch 30 'etc' uses the directory 'etc-30/' in the sync workspace: "
+                "another branch already uses the directory 'etc/'."
+            )
+        ]
 
-    def test_unchanged_branch_name_is_silent(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("feature-x", "feature-x"),
+            ("My Feature", "my-feature"),
+            ("Fix_Login", "fix-login"),
+            ("JIRA-123", "jira-123"),
+            ("feature/login", "feature-login"),
+            ("v1.2 release", "v1-2-release"),
+        ],
+    )
+    def test_plain_normalization_is_silent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str, expected: str
     ) -> None:
+        """Case, spaces, '_', '.' and '/' inside a name are normal and give no warning."""
         _write_manifest(tmp_path, [{"id": 10, "path": "main"}])
         manifest = load_manifest(tmp_path)
         client = MagicMock()
-        client.list_dev_branches.return_value = [{"id": 20, "name": "feature-x"}]
+        client.list_dev_branches.return_value = [{"id": 20, "name": name}]
 
         with caplog.at_level(logging.WARNING, logger="keboola_agent_cli.sync.branch_registry"):
-            assert ensure_branch_registered(manifest, 20, client) == "feature-x"
+            assert ensure_branch_registered(manifest, 20, client) == expected
 
         assert caplog.records == []
 
