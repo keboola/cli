@@ -1,6 +1,7 @@
 """Tests for permissions CLI commands and enforcement via CliRunner."""
 
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -358,7 +359,10 @@ class TestPermissionsSet:
         for command in ("set", "reset"):
             result = runner.invoke(app, ["permissions", command, "--help"])
             assert result.exit_code == 0, result.output
-            help_text = " ".join(result.output.split())
+            # CI renders the help with colour codes and the panel border (│) at
+            # each wrapped line, so drop both before the phrase match.
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("│", " ")
+            help_text = " ".join(plain.split())
             assert "guard rail" in help_text, command
             assert "not a hard lockout" in help_text, command
             assert "programmatically" not in help_text, command
