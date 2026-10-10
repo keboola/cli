@@ -38,7 +38,6 @@ from .services.version_service import (
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
     get_update_timeout,
-    legacy_install_advice,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
     summarize_install_failure,
@@ -326,27 +325,17 @@ def _perform_update(latest_version: str, *, command: tuple[str, ...] | None = No
     return UpdateResult(UpdateOutcome.FAILED, run.output)
 
 
-# uv's refusal when another tool entry owns the ``kbagent`` executable.
-_EXECUTABLE_CONFLICT = "Executable already exists"
-
-
 def _format_update_failure(output: str, recovery_command: str | None) -> str:
     """Render the startup banner for a failed install (issue #771).
 
-    Names the line the installer ended with. Without it the banner cannot tell
-    a network error from a permanent one such as uv's ``Executable already
-    exists`` on an install made under the old package name. Only that conflict
-    gets the steps that move the install to ``keboola-cli``; every other
-    failure gets the recovery command.
+    Names the line the installer ended with, so the user can tell a network
+    error from a permanent one.
     """
     lines = ["Auto-update failed; continuing with current version."]
     cause = summarize_install_failure(output)
     if cause:
         lines.append(f"Cause: {cause}")
-    advice = legacy_install_advice(recovery_command) if _EXECUTABLE_CONFLICT in output else None
-    if advice:
-        lines.append(advice)
-    elif recovery_command:
+    if recovery_command:
         lines.append(f"Recover with: {recovery_command}")
     return "\n".join(lines) + "\n"
 

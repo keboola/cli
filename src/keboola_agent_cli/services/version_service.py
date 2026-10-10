@@ -19,11 +19,9 @@ from packaging.version import InvalidVersion, Version
 
 from .. import __version__
 from ..constants import (
-    APP_NAME,
     ENV_UPDATE_TIMEOUT,
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
-    LEGACY_APP_NAME,
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
@@ -323,29 +321,6 @@ def summarize_install_failure(output: str | None) -> str:
     """
     lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
     return lines[-1] if lines else ""
-
-
-def legacy_install_advice(recovery_command: str | None) -> str | None:
-    """Return the steps that move a legacy-named install to ``keboola-cli``.
-
-    Returns ``None`` for every other install, so only an install made under
-    the pre-0.63 distribution name sees it (issue #771). The order is
-    load-bearing: ``uv tool uninstall`` removes the ``kbagent`` executable even
-    when a newer ``keboola-cli`` entry has taken it over, so the install must
-    come second.
-
-    Args:
-        recovery_command: The install command that recreates the tool
-            environment under the current name.
-    """
-    if APP_NAME != LEGACY_APP_NAME or recovery_command is None:
-        return None
-    return (
-        f"This install uses the old package name {LEGACY_APP_NAME}. "
-        "To move it to keboola-cli, run these two commands in this order:\n"
-        f"  uv tool uninstall {LEGACY_APP_NAME}\n"
-        f"  {recovery_command}"
-    )
 
 
 def _fetch_kbagent_latest_version(

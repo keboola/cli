@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import keboola_agent_cli.auto_update as auto_update_module
-import keboola_agent_cli.services.version_service as version_service_module
 from keboola_agent_cli.auto_update import (
     UpdateOutcome,
     UpdateResult,
@@ -287,13 +286,17 @@ class TestVersionCache:
 # ---------------------------------------------------------------------------
 # _perform_update
 # ---------------------------------------------------------------------------
-# What uv prints when the `kbagent` executable belongs to another tool entry
-# (issue #771). Captured from uv 0.12; a fake install run returns it, so no test
+# What uv 0.12 prints when the startup command
+# (`uv tool install --force --reinstall "keboola-cli @ <wheel URL>"`) cannot
+# download the wheel (issue #771). A fake install run returns it, so no test
 # ever starts a real uv.
-UV_EXECUTABLE_CONFLICT = (
-    "Resolved 1 package in 3ms\n"
-    " + keboola-cli==0.96.0\n"
-    "error: Executable already exists: kbagent (use `--force` to overwrite)\n"
+UV_DOWNLOAD_FAILURE = (
+    "error: Failed to download `keboola-cli @ https://example.test/k.whl`\n"
+    "  cause: Failed to fetch: `https://example.test/k.whl`\n"
+    "  cause: HTTP status client error (404 Not Found) for url (https://example.test/k.whl)\n"
+)
+UV_DOWNLOAD_FAILURE_CAUSE = (
+    "cause: HTTP status client error (404 Not Found) for url (https://example.test/k.whl)"
 )
 
 
@@ -334,12 +337,12 @@ class TestPerformUpdate:
         mock_install.return_value = InstallRun(
             status=InstallStatus.FAILED,
             exit_code=2,
-            output=UV_EXECUTABLE_CONFLICT,
+            output=UV_DOWNLOAD_FAILURE,
             log_path=Path("update.log"),
         )
         result = _perform_update("2.0.0")
         assert result.outcome is UpdateOutcome.FAILED
-        assert result.output == UV_EXECUTABLE_CONFLICT
+        assert result.output == UV_DOWNLOAD_FAILURE
 
     @patch("shutil.which")
     @patch("keboola_agent_cli.auto_update.run_install")
@@ -996,7 +999,7 @@ class TestStartupFailureBanner:
 
     @pytest.fixture
     def run_failed_update(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture):
-        def run(*, app_name: str, install_output: str) -> str:
+        def run(*, install_output: str) -> str:
             plan = KbagentUpdatePlan("1.0.0", "2.0.0", False, ("uv", "tool"), self.RECOVERY)
             monkeypatch.setattr(auto_update_module, "_AUTO_UPDATE_RAN", False)
             monkeypatch.setattr(auto_update_module, "_should_skip_all", lambda: False)
@@ -1008,7 +1011,6 @@ class TestStartupFailureBanner:
             )
             monkeypatch.setattr(auto_update_module, "_prepare_auto_kbagent_plan", lambda _: plan)
             monkeypatch.setattr(auto_update_module, "__version__", "1.0.0")
-            monkeypatch.setattr(version_service_module, "APP_NAME", app_name)
             monkeypatch.setattr(
                 auto_update_module,
                 "run_install",
@@ -1026,37 +1028,16 @@ class TestStartupFailureBanner:
         return run
 
     def test_banner_names_the_line_uv_ended_with(self, run_failed_update):
-        err = run_failed_update(app_name="keboola-cli", install_output=UV_EXECUTABLE_CONFLICT)
+        err = run_failed_update(install_output=UV_DOWNLOAD_FAILURE)
 
-        assert "Auto-update failed; continuing with current version." in err
-        assert "Cause: error: Executable already exists: kbagent" in err
-        assert f"Recover with: {self.RECOVERY}" in err
-        # Only a legacy-named install is told to uninstall anything.
-        assert "uv tool uninstall" not in err
-
-    def test_legacy_install_gets_the_move_steps_in_order(self, run_failed_update):
-        err = run_failed_update(app_name="keboola-agent-cli", install_output=UV_EXECUTABLE_CONFLICT)
-
-        assert "Cause: error: Executable already exists: kbagent" in err
-        uninstall = err.index("uv tool uninstall keboola-agent-cli")
-        install = err.index(self.RECOVERY)
-        # The uninstall also deletes the shared `kbagent` executable, so it must
-        # run first.
-        assert uninstall < install
-
-    def test_legacy_install_with_another_failure_gets_the_recovery_command(self, run_failed_update):
-        # A network error on a legacy-named install is not the executable
-        # conflict, so the uninstall steps would not help.
-        err = run_failed_update(
-            app_name="keboola-agent-cli",
-            install_output="error: Failed to fetch: `https://example.test/k.whl`\n",
-        )
-
-        assert "uv tool uninstall" not in err
-        assert f"Recover with: {self.RECOVERY}" in err
+        assert err.splitlines()[1:] == [
+            "Auto-update failed; continuing with current version.",
+            f"Cause: {UV_DOWNLOAD_FAILURE_CAUSE}",
+            f"Recover with: {self.RECOVERY}",
+        ]
 
     def test_no_installer_output_prints_no_cause_line(self, run_failed_update):
-        err = run_failed_update(app_name="keboola-cli", install_output="")
+        err = run_failed_update(install_output="")
 
         assert "Cause:" not in err
         assert f"Recover with: {self.RECOVERY}" in err
