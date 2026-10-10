@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**235 operations** across **205 paths** and **30 routers**.
+**248 operations** across **216 paths** and **31 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -294,7 +294,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 
 ### `data-apps` (18 operations)
 
-Streamlit / R / Python data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
+Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
 | Method | Path | Summary |
 |---|---|---|
@@ -305,7 +305,7 @@ Streamlit / R / Python data apps -- create, deploy, start/stop, manage secrets. 
 | `POST` | `/data-apps/{project}/{app_id}/deploy` | Deploy a data app version |
 | `POST` | `/data-apps/{project}/{app_id}/start` | Start a data app |
 | `POST` | `/data-apps/{project}/{app_id}/stop` | Stop a data app |
-| `GET` | `/data-apps/{project}/{app_id}/password` | Get data app access password |
+| `GET` | `/data-apps/{project}/{app_id}/password` | Get data app password metadata (password only with reveal=true) |
 | `GET` | `/data-apps/{project}/{app_id}/logs` | Tail data app container logs |
 | `GET` | `/data-apps/{project}/{app_id}/secrets` | List data app secrets |
 | `PUT` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |
@@ -352,6 +352,26 @@ Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata
 | `GET` | `/branches/{project}/metadata/{key}` | Get a branch metadata value |
 | `PUT` | `/branches/{project}/metadata/{key}` | Set a branch metadata value |
 | `DELETE` | `/branches/{project}/metadata/{metadata_id}` | Delete a branch metadata entry |
+
+### `merge-requests` (13 operations)
+
+Merge requests (Branches 2.0, non-SOX): list / detail / create / update / review transitions / merge, plus conflict inspection and resolution. Every route enforces the permission policy; `merge` and any operation that arms or completes an auto-merge are destructive. `POST .../merge` is synchronous and may block up to 600 s. Mirrors `kbagent merge-request *`.
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/merge-requests/{project}` | List merge requests |
+| `POST` | `/merge-requests/{project}` | Create a merge request |
+| `GET` | `/merge-requests/{project}/by-branch/{branch_id}` | Find the merge request of a branch |
+| `GET` | `/merge-requests/{project}/{merge_request_id}` | Merge request detail |
+| `PUT` | `/merge-requests/{project}/{merge_request_id}` | Update a merge request |
+| `GET` | `/merge-requests/{project}/{merge_request_id}/conflicts` | List conflicts |
+| `GET` | `/merge-requests/{project}/{merge_request_id}/diff/{component_id}/{config_id}` | Three-way diff of one conflicting configuration |
+| `PUT` | `/merge-requests/{project}/{merge_request_id}/auto-merge` | Arm or disarm auto-merge |
+| `POST` | `/merge-requests/{project}/{merge_request_id}/request-review` | Send for review |
+| `POST` | `/merge-requests/{project}/{merge_request_id}/approve` | Approve |
+| `POST` | `/merge-requests/{project}/{merge_request_id}/request-changes` | Request changes |
+| `POST` | `/merge-requests/{project}/{merge_request_id}/merge` | Merge into production |
+| `POST` | `/merge-requests/{project}/{merge_request_id}/resolve/{component_id}/{config_id}` | Resolve one conflict |
 
 ### `lineage` (8 operations)
 

@@ -16,6 +16,7 @@ from ..config_store import project_not_found_error, validate_alias_format
 from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
+from ..project_ref import resolve_project_ref
 from .base import BaseService
 
 # Credential type of a config.json project entry, surfaced as ``auth_mode`` in
@@ -900,11 +901,14 @@ class ProjectService(BaseService):
         The env override is reported even when it points at a project that is
         not (yet) registered in config.json -- callers get the true effective
         alias plus an ``env_points_to_configured_project`` flag to reason about
-        it. This avoids silently masking misconfigurations.
+        it. This avoids silently masking misconfigurations. A project ID
+        reports as its alias (CLI-22). An ID registered under several aliases
+        stays as typed, the flag is False (commands using it fail), and
+        ``env_error`` carries the message those commands fail with.
 
         Returns:
             Dict with keys: alias, source ('env' | 'pin' | 'none'), pinned,
-            env_override, env_points_to_configured_project.
+            env_override, env_points_to_configured_project, env_error.
         """
         config = self._config_store.load()
         pinned = config.default_project or None
@@ -916,12 +920,19 @@ class ProjectService(BaseService):
         env_override = env_value if env_value else None
 
         if env_override is not None:
+            alias = env_override
+            env_error: str | None = None
+            try:
+                alias = resolve_project_ref(config.projects, env_override)
+            except ConfigError as exc:
+                env_error = exc.message
             return {
-                "alias": env_override,
+                "alias": alias,
                 "source": "env",
                 "pinned": pinned,
                 "env_override": env_override,
-                "env_points_to_configured_project": env_override in config.projects,
+                "env_points_to_configured_project": alias in config.projects,
+                "env_error": env_error,
             }
 
         return {
@@ -930,6 +941,7 @@ class ProjectService(BaseService):
             "pinned": pinned,
             "env_override": None,
             "env_points_to_configured_project": None,
+            "env_error": None,
         }
 
     def get_info(self, alias: str) -> dict[str, Any]:

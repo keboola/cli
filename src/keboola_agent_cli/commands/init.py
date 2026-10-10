@@ -173,7 +173,8 @@ def _filter_global_projects(
         available = ", ".join(sorted(config.projects)) or "(none)"
         formatter.error(
             message=(
-                f"Unknown project alias(es): {', '.join(missing)}. "
+                f"Unknown project alias(es): {', '.join(missing)} "
+                "(no alias or project ID matches). "
                 f"Available in global config: {available}"
             ),
             error_code=ErrorCode.CONFIG_ERROR,

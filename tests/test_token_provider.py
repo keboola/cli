@@ -954,6 +954,31 @@ class TestBearerAuthReactive401:
         assert requests[-1].headers["X-KBC-ProjectId"] == "10105"
         assert fake.calls == ["kbc_rt_original"]
 
+    def test_401_is_not_retried_when_refresh_on_401_is_false(
+        self, tmp_path: Path, httpx_mock
+    ) -> None:
+        """`refresh_on_401=False` opts a client out of the refresh-and-retry.
+
+        The metastore answers a VALID non-master token with 401; a refresh cannot
+        fix that, so the hook must not burn a rotation or a second round trip
+        (CLI-13 review, O002).
+        """
+        store = AuthStateStore(tmp_path)
+        _seed_session(store, access_expires_in=3600)
+        fake = _FakeAuthClient()
+        provider = SessionTokenProvider(STACK_URL, store, client_factory=lambda _url: fake)
+
+        httpx_mock.add_response(url=f"{STACK_URL}/probe", status_code=401, json={})
+
+        with httpx.Client(
+            base_url=STACK_URL, auth=BearerAuth(provider, 10105, refresh_on_401=False)
+        ) as client:
+            response = client.get("/probe")
+
+        assert response.status_code == 401
+        assert len(httpx_mock.get_requests()) == 1  # no retry
+        assert fake.calls == []  # no refresh-token rotation
+
     def test_persistent_401_does_not_loop(self, tmp_path: Path, httpx_mock) -> None:
         """A second 401 is returned to the caller rather than retried forever."""
         store = AuthStateStore(tmp_path)

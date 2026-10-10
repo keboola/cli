@@ -12,6 +12,7 @@ from typing import ClassVar
 
 import pytest
 
+from keboola_agent_cli.auth.token_provider import BearerAuth
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.metastore_client import (
     SEMANTIC_TYPES,
@@ -21,6 +22,25 @@ from keboola_agent_cli.metastore_client import (
 STACK_URL_US = "https://connection.keboola.com"
 METASTORE_URL_US = "https://metastore.keboola.com"
 TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+
+
+class _SpyProvider:
+    """Minimal ``TokenProvider`` that records ``force_refresh`` calls.
+
+    Enough for BearerAuth's contract (``get_access_token`` / ``force_refresh``)
+    without the real refresh + rotation machinery, so a test can prove a 401 did
+    NOT trigger a rotation.
+    """
+
+    def __init__(self) -> None:
+        self.refresh_calls = 0
+
+    def get_access_token(self) -> str:
+        return "kbc_at_live"
+
+    def force_refresh(self, rejected_token: str) -> str:
+        self.refresh_calls += 1
+        return "kbc_at_rotated"
 
 
 @pytest.fixture(autouse=True)
@@ -420,3 +440,83 @@ class TestProjectScope401Reclassification:
         with pytest.raises(KeboolaApiError) as excinfo:
             metastore_client.post_item("semantic-metric", name="foo", data={"name": "foo"})
         assert excinfo.value.error_code == ErrorCode.MISSING_MASTER_TOKEN
+
+
+class TestProjectScope401OverSession:
+    """CLI-13 review (O002): the metastore's master-token gate 401 must NOT make
+    a session bearer refresh + retry.
+
+    The metastore answers a VALID non-master token with 401, so a refresh cannot
+    fix it. Retrying burns a refresh-token rotation, doubles the round trip, and
+    on a failed refresh masks ``MISSING_MASTER_TOKEN`` behind ``SESSION_EXPIRED``.
+    ``MetastoreClient`` opts out with ``BEARER_REFRESH_ON_401 = False``.
+    """
+
+    _SCOPE_401_BODY: ClassVar[dict] = {
+        "exception": "Failed to create project scope",
+        "exceptionId": "metastore-fbfeCiBSXXBLk7D",
+    }
+
+    def test_metastore_declares_the_opt_out(self) -> None:
+        assert MetastoreClient.BEARER_REFRESH_ON_401 is False
+
+    def test_factory_builds_a_non_refreshing_bearer_for_metastore(self, tmp_path) -> None:
+        from keboola_agent_cli.config_store import ConfigStore
+        from keboola_agent_cli.services.base import make_session_aware_client_factory
+
+        factory = make_session_aware_client_factory(
+            ConfigStore(config_dir=tmp_path), MetastoreClient
+        )
+        client = factory(STACK_URL_US, "kbc-session://10105")
+        try:
+            assert client._http_auth._refresh_on_401 is False
+        finally:
+            client.close()
+
+    def test_session_scope_401_does_not_refresh(self, httpx_mock) -> None:
+        spy = _SpyProvider()
+        httpx_mock.add_response(
+            url=f"{METASTORE_URL_US}/api/v1/repository/semantic-model",
+            status_code=401,
+            json=self._SCOPE_401_BODY,
+        )
+        client = MetastoreClient(
+            stack_url=STACK_URL_US,
+            token="",
+            http_auth=BearerAuth(spy, 10105, refresh_on_401=MetastoreClient.BEARER_REFRESH_ON_401),
+        )
+        try:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                client.list_items("semantic-model")
+        finally:
+            client.close()
+        exc = excinfo.value
+        assert exc.error_code == ErrorCode.MISSING_MASTER_TOKEN
+        assert spy.refresh_calls == 0  # no wasted refresh-token rotation
+        assert len(httpx_mock.get_requests()) == 1  # no doubled round trip
+        # Session-aware remedy: no useless masked-token note, no `project edit --token`.
+        assert "project edit --token" not in exc.message
+        assert "session" in exc.message.lower()
+        assert "project add" in exc.message
+
+    def test_default_bearer_would_refresh_reproducing_the_bug(self, httpx_mock) -> None:
+        """Without the opt-out the gate 401 wastes a refresh and a second call."""
+        spy = _SpyProvider()
+        for _ in range(2):
+            httpx_mock.add_response(
+                url=f"{METASTORE_URL_US}/api/v1/repository/semantic-model",
+                status_code=401,
+                json=self._SCOPE_401_BODY,
+            )
+        client = MetastoreClient(
+            stack_url=STACK_URL_US,
+            token="",
+            http_auth=BearerAuth(spy, 10105, refresh_on_401=True),
+        )
+        try:
+            with pytest.raises(KeboolaApiError):
+                client.list_items("semantic-model")
+        finally:
+            client.close()
+        assert spy.refresh_calls == 1
+        assert len(httpx_mock.get_requests()) == 2

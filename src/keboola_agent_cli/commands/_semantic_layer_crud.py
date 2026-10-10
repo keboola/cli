@@ -107,8 +107,16 @@ def add_dataset(
         "--deep-fields",
         help="Fetch storage schema and synthesise fields[] with role heuristics.",
     ),
+    fqn: str | None = typer.Option(
+        None,
+        "--fqn",
+        help=(
+            "Store this fqn verbatim instead of reading the table's warehouse "
+            'location from Storage, e.g. \'"DB"."out.c-bucket"."table"\'.'
+        ),
+    ),
 ) -> None:
-    """Add a dataset (FQN derived from tableId)."""
+    """Add a dataset (FQN read from the table's Storage location)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     result = _handle_service_call(
@@ -122,6 +130,7 @@ def add_dataset(
         grain=grain,
         primary_key=primary_key,
         deep_fields=deep_fields,
+        fqn=fqn,
     )
     formatter.output(result, _print_item_added("dataset"))
 

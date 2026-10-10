@@ -205,6 +205,11 @@ STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
+# Server-side caps on merge-request fields (MergeRequestRejectRequest::REASON_MAX_LENGTH,
+# Assert\Length(max: 255) on externalId in the create/update DTOs). Validated ONCE, in
+# MergeRequestService, so the CLI and the serve router cannot drift on the number.
+MERGE_REQUEST_REASON_MAX_LENGTH = 1000
+MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH = 255
 
 # --- Workspace Table Loading ---
 # A workspace load is NOT fire-and-forget: when the local poller gives up, the
@@ -451,6 +456,13 @@ DEFERRED_UPDATE_MAX_WAIT_SECONDS: int = 900
 # A marker older than this whose helper never wrote an exit file is treated as
 # lost (helper killed, machine rebooted mid-wait) and reported once.
 DEFERRED_UPDATE_STALE_SECONDS: int = 86400
+# Text in uv's error chain when a hardlink failed and uv did not fall back
+# ("Caused by: failed to hardlink file from ... (os error 396)", issue #786,
+# OneDrive / cloud-synced volume). The helper retries the install once in copy
+# link mode only when a failed install printed this. Matched case-sensitively:
+# uv's warning "Failed to hardlink files; falling back to full copy" means the
+# fallback worked, so it must not trigger a retry.
+DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT: str = "failed to hardlink file"
 
 # --- Native (frozen / PyInstaller) distribution ---
 # kbagent also ships as a self-contained PyInstaller binary with NO Python
@@ -601,11 +613,13 @@ MINUTES_PER_CREDIT: int = 60
 PAYG_FEATURE: str = "pay-as-you-go"
 
 # --- Changelog rendering ---
-# `kbagent changelog` shows a one-line summary per version by default (--full
-# expands). A summary is the note's first sentence, capped at this many chars
+# `kbagent changelog` shows headlines by default (--full expands): every
+# BREAKING note of a version, plus its first other notes until at least
+# CHANGELOG_SUMMARY_NOTES show. A headline is the note's first sentence, capped at this many chars
 # (cut on a word boundary) so a verbose release note collapses to a scannable
 # headline instead of a wall of text.
 CHANGELOG_HEADLINE_MAX_CHARS: int = 160
+CHANGELOG_SUMMARY_NOTES: int = 2
 
 # --- Job Run ---
 DEFAULT_JOB_RUN_TIMEOUT: float = 300.0  # 5 min default for --wait polling
@@ -698,6 +712,14 @@ QUERY_JOB_MAX_WAIT: float = 120.0  # max seconds to wait for a query job
 QUERY_RESULTS_DEFAULT_LIMIT: int = 500  # default --limit for `workspace query` fast path
 QUERY_RESULTS_PAGE_SIZE: int = 500  # rows per /results page (API requires 100..100000)
 
+# --- Data Science API (data apps) ---
+# GET /apps is paginated (default page = 100 items) and mixes workspace
+# deployments with data apps, so list_apps() pages with limit/offset until a
+# short page (#798). MAX_PAGES only guards against a server that ignores
+# ``offset`` (500 * 200 = 100k deployments, far beyond any real project).
+DATA_SCIENCE_APPS_PAGE_SIZE: int = 500  # items per GET /apps page
+DATA_SCIENCE_APPS_MAX_PAGES: int = 200  # safety cap on pages fetched by list_apps()
+
 # --- Workspace Defaults ---
 DEFAULT_WORKSPACE_BACKEND: str = "snowflake"
 
@@ -748,7 +770,7 @@ ENCRYPTED_COLUMN_MASK: str = "***ENCRYPTED***"
 # Components that are always excluded from sync operations (pull/push/diff).
 # These are managed through separate APIs and have volatile internal state.
 # A project may extend this set per working tree via the manifest's
-# ``ignoredComponents`` field -- see ``SyncService._effective_ignored_components``.
+# ``ignoredComponents`` field -- see ``_sync_workspace.effective_ignored_components``.
 ALWAYS_IGNORED_COMPONENTS: frozenset[str] = frozenset(
     {
         "keboola.sandboxes",  # Workspaces API; parameters.id is volatile
@@ -846,6 +868,28 @@ AUTH_TOKEN_REVOKE_PATH: str = "/v1/auth/token/revoke"
 # which only ever has a session id on hand, never that session's refresh
 # token -- see plan review B-1/B-2).
 AUTH_SESSIONS_PATH: str = "/v1/auth/sessions"
+
+# Agent provisioning (DMD-1940): create a brand-new Keboola project from a
+# machine with no Keboola identity at all. Unauthenticated POST -- the request
+# itself is the credential -- answering a project-pinned, Manage-less
+# programmatic session (the same AT/RT pair every other flow here produces)
+# plus a single-use `confirmUrl` a human opens to take ownership. Gated by the
+# stack feature `agent-provisioning`; a stack without it answers 404.
+#
+# Lives under /manage, not /v1/auth, because the public surface is named
+# "programmatic projects" while the internal feature kept the shipped
+# `agent-provisioning` name (keboola/connection#8081).
+AGENT_PROVISIONING_PATH: str = "/manage/programmatic-projects"
+
+# `--sync-backend-init` holds the provisioning request open until the stack has
+# finished initializing the storage backend, which routinely outlasts the
+# client default read timeout (30 s). Timing out there is the WORST outcome
+# this command has -- the project was created, the response was lost, and the
+# confirm link with it -- so the synchronous variant gets its own budget.
+# Connect/write/pool stay short: only the wait for the body is long.
+AGENT_PROVISIONING_SYNC_TIMEOUT: httpx.Timeout = httpx.Timeout(
+    connect=10.0, read=300.0, write=10.0, pool=5.0
+)
 
 AUTH_DEVICE_DEFAULT_INTERVAL: int = 5  # RFC 8628 default poll interval (s)
 AUTH_DEVICE_MAX_INTERVAL: int = 60  # cap after repeated slow_down

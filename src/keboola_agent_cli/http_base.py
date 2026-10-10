@@ -116,6 +116,13 @@ class BaseHttpClient:
     # constructor whose caller forgot to guard it.
     SESSION_AUTH_FEATURE: str | None = None
 
+    # Whether a bearer (session) 401 should trigger a token refresh + one retry.
+    # True for every client whose 401 means "the access token expired". A client
+    # whose backend answers a VALID token with 401 for a non-credential reason
+    # sets this False, so ``make_session_aware_client_factory`` builds a
+    # ``BearerAuth`` that does not refresh-and-retry -- see ``MetastoreClient``.
+    BEARER_REFRESH_ON_401: bool = True
+
     def __init__(
         self,
         base_url: str,

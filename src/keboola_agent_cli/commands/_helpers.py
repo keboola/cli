@@ -8,9 +8,11 @@ Provides common patterns used by all CLI commands:
 """
 
 import getpass
+import json
 import os
 import secrets
 import sys
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -72,6 +74,36 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
         err=True,
     )
     raise typer.Exit(code=2)
+
+
+def parse_json_arg(raw: str, *, label: str) -> Any:
+    """Parse a ``JSON|@file|-`` argument: inline JSON, ``@path``, or ``-`` for stdin.
+
+    The house input contract for structured flags (``config update
+    --configuration``, ``transformation edit --op``, ``merge-request resolve
+    --resolved``). Hoisted from ``transformation.py``'s private copy so the
+    merge-request group did not add another; ``config.py`` still carries an
+    older dict-only variant (``_parse_json_input``) -- folding it in is a
+    follow-up, not this PR.
+
+    Raises:
+        ValueError: On a missing/unreadable file or malformed JSON -- the message
+            names ``label`` (the flag) so the caller can print it at exit 2 as-is.
+    """
+    try:
+        if raw == "-":
+            return json.loads(sys.stdin.read())
+        if raw.startswith("@"):
+            file_path = Path(raw[1:])
+            if not file_path.is_file():
+                raise ValueError(f"{label}: file not found: {file_path}")
+            return json.loads(file_path.read_text(encoding="utf-8"))
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label}: invalid JSON: {exc}") from exc
+    except OSError as exc:
+        # a directory, a permission problem -- a usage error, not a crash
+        raise ValueError(f"{label}: cannot read file: {exc}") from exc
 
 
 def read_password_stdin() -> str:
@@ -279,88 +311,6 @@ def validate_branch_requires_project(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
-
-
-def resolve_branch(
-    config_store: ConfigStore,
-    formatter: OutputFormatter,
-    project: str | None,
-    branch: int | None,
-    *,
-    ignore_active_branch: bool = False,
-) -> tuple[str | None, int | None]:
-    """Resolve the effective branch and project.
-
-    Resolution order:
-    1. Explicit --branch always wins (no change)
-    2. If no --branch, check active_branch_id from config for the resolved project
-    3. If active branch found, use it and print info message in human mode
-
-    When an active branch is resolved from config, --project is also set
-    to the project alias (branch is per-project).
-
-    Args:
-        config_store: Config store for looking up project configs.
-        formatter: Output formatter for info messages.
-        project: Explicit --project alias or None.
-        branch: Explicit --branch integer or None.
-        ignore_active_branch: When True, the implicit active_branch_id from
-            config is ignored and the production endpoint (branch_id=None) is
-            used unless --branch was passed explicitly. An info message is
-            printed so the user can see the active dev branch was skipped.
-            Intended for storage READ commands -- the Storage API
-            branch-scoped endpoint returns only locally-modified resources,
-            which for a freshly created dev branch is an empty set. Explicit
-            --branch still overrides.
-
-    Returns:
-        Tuple of (effective_project, effective_branch_id).
-    """
-    if branch is not None:
-        return project, branch
-
-    if project is not None:
-        proj_config = config_store.get_project(project)
-        if proj_config and proj_config.active_branch_id is not None:
-            if ignore_active_branch:
-                if not formatter.json_mode:
-                    formatter.err_console.print(
-                        f"[bold blue]Info:[/bold blue] Using production branch for read "
-                        f"(active dev branch '{proj_config.active_branch_id}' ignored; "
-                        f"pass --branch {proj_config.active_branch_id} to override)"
-                    )
-                return project, None
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj_config.active_branch_id}) for project '{project}'"
-                )
-            return project, proj_config.active_branch_id
-    else:
-        config = config_store.load()
-        active_projects = [
-            (alias, proj)
-            for alias, proj in config.projects.items()
-            if proj.active_branch_id is not None
-        ]
-        if len(active_projects) == 1:
-            alias, proj = active_projects[0]
-            if ignore_active_branch:
-                if not formatter.json_mode:
-                    formatter.err_console.print(
-                        f"[bold blue]Info:[/bold blue] Using production branch for read "
-                        f"(active dev branch '{proj.active_branch_id}' on project '{alias}' "
-                        f"ignored; pass --branch {proj.active_branch_id} to override)"
-                    )
-                return alias, None
-            if not formatter.json_mode:
-                formatter.err_console.print(
-                    f"[bold blue]Info:[/bold blue] Using active branch "
-                    f"(ID: {proj.active_branch_id}) for project '{alias}'"
-                )
-            return alias, proj.active_branch_id
-
-    return project, None
 
 
 _CONFIRM_CODE_LENGTH = 4

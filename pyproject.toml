@@ -1,6 +1,6 @@
 [project]
 name = "keboola-cli"
-version = "0.93.1"
+version = "0.96.0"
 description = "AI-friendly CLI for managing Keboola projects"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -171,8 +171,11 @@ dev = [
     "ruff>=0.16",
     "ty>=0.0.33",
     "bandit>=1.9.4",
-    "pip-audit>=2.10.0",
 ]
+
+[tool.uv]
+# a higher bound breaks current Dependabot's uv lock
+required-version = ">=0.12.7"
 
 [tool.ty.src]
 include = ["src", "tests", "scripts"]

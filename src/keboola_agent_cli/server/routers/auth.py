@@ -32,9 +32,20 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..dependencies import ServiceRegistry, get_registry, require_permission
+from ..dependencies import (
+    ServiceRegistry,
+    get_registry,
+    require_permission,
+    translate_project_refs,
+)
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+# `?stack=` takes a stack URL or a registered alias, so a project ID works too
+# (CLI-22). A URL is never all digits, so it is left alone.
+router = APIRouter(
+    prefix="/auth",
+    tags=["auth"],
+    dependencies=[Depends(translate_project_refs("stack"))],
+)
 
 
 class RegisterProjectsBody(BaseModel):

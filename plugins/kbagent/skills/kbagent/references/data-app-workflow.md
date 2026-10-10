@@ -1,7 +1,13 @@
-# Data App Workflow -- Streamlit / Flask / Node Lifecycle
+# Data App Workflow -- Python/JS App Lifecycle
 
 Data apps in Keboola are deployed from a git repo into a managed container
-that auto-suspends after idle. Two API surfaces own them:
+that auto-suspends after idle. **`python-js` is the default and recommended
+runtime type** -- one contract for Python, Node, and mixed Python + Node apps
+(<https://help.keboola.com/data-apps/python-js/>). Build new apps on it.
+`streamlit`, `r`, and the other types still work, but only when you pass
+`--type` explicitly.
+
+Two API surfaces own them:
 
 | Layer | What it owns |
 |---|---|
@@ -113,18 +119,24 @@ container.
 
 ## Quick recipes
 
-### Public-repo Streamlit app from scratch (no auth gate)
+### Public-repo Python/JS app from scratch (no auth gate)
 
 ```bash
+# Keboola's public Python + JS example app.
+# --type defaults to python-js, so it is omitted here.
 kbagent --json data-app create \
   --project prod \
-  --name "Hello Streamlit" \
-  --slug hello-streamlit \
-  --git-repo https://github.com/streamlit/streamlit-example \
+  --name "Hello World" \
+  --slug hello-world \
+  --git-repo https://github.com/keboola/data-app-python-js-hello-world \
   --git-public \
   --auth public \
   --wait
 ```
+
+An existing Streamlit repo still deploys, but you must pass `--type streamlit`.
+Without it the app is created as `python-js` and the Streamlit repo fails that
+contract.
 
 Three calls under the hood: `POST /apps` (mint id + configId) → `PUT
 Storage config` (full body with git block + parameters.id back-pointer) →
@@ -152,18 +164,40 @@ kbagent --json data-app create \
 `--git-pat-env` is the recommended PAT input mode -- the plaintext token
 never appears in argv. The service encrypts it under THIS project's KMS via
 the Encryption API before writing it to Storage. `--auth password` (the
-default) auto-mints a 20-character hex simpleAuth password; retrieve it
-with:
+default) makes the platform generate a 20-character hex simpleAuth password
+during the deploy, so the password exists only after a deploy. The user copies
+it to the clipboard with (since 0.96.0; project token only, no Manage token):
 
 ```bash
 kbagent data-app password --project prod --app-id <ID>
-# Manage token: interactive prompt by default (since v0.29.0); for CI add
-# --allow-env-manage-token alongside KBC_MANAGE_API_TOKEN. Storage token
-# is read from .kbagent/config.json as usual.
+# In a terminal: press c to copy, Enter to finish. The password is never printed.
+kbagent --json data-app password --project prod --app-id <ID> --copy
+# No terminal (agent, CI): --copy copies it; password_delivered_to says where it went.
 ```
 
-The simpleAuth password CANNOT be rotated (writeup §11.2). To change it,
-delete and recreate the app.
+`create --wait` and `deploy --wait` deliver it the same way once the app
+runs: the `c` prompt in a terminal (the command then ends after Enter or
+120 s), `--copy`, or `--reveal`. Without `--wait` (or with `--no-deploy`)
+`--copy` / `--reveal` are refused with exit 2, because no password exists
+yet; `create --dry-run` refuses the same flags and otherwise reports the
+planned delivery as `password_delivery`. With no flag and no prompt (no
+terminal, `--json`) the password is not read and the output is as before.
+With a flag, the `--json` result gains only `ui_url`,
+`password_delivered_to` and, with `--reveal`, `password`. If the password
+cannot be read after a successful deploy, the result carries a
+`warnings[]` entry and the command still exits 0. The `kbagent serve`
+create / deploy routes do not deliver the password.
+
+The password must not go into an AI agent's chat. An agent recommends that
+the user runs the first command in their own terminal window, or offers the
+`--copy` form (the password then replaces the clipboard content). Only when
+a deploy is needed anyway does the agent recommend `kbagent data-app deploy
+--project prod --app-id <ID> --wait` there instead: a deploy restarts the
+app, so it is never a way to get the password. When `password_delivered_to`
+is `null`, `ui_url` is the Keboola UI page that shows the password under
+Open App. `--reveal` prints it, for scripts and CI only (a script that read
+`.data.password` must add `--reveal` since 0.96.0). The Keboola UI can reset
+the password.
 
 ### Roll out a new code version (no Storage edit)
 
@@ -413,7 +447,7 @@ yours at runtime.
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |
 | Pause a running app temporarily | `data-app stop --app-id N` |
-| Read the simpleAuth password | `data-app password --app-id N` (needs Manage token) |
+| Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.0; never printed without `--reveal`) |
 | Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
 | Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
 | Read one key | `data-app secrets-get --app-id N --key KEY` (`#` optional; encrypted → metadata only, plain → value) |
@@ -438,8 +472,8 @@ yours at runtime.
   --set 'runtime.backend.size="medium"' --merge` then `data-app deploy`.
   `PATCH /apps {config:{...}}` is silently dropped by the API (writeup §8
   row 3).
-- **Rotating the simpleAuth password** — not supported by the API. To
-  change the password, delete and recreate the app (writeup §11.2).
+- **Resetting the simpleAuth password** — done in the Keboola UI; kbagent
+  has no command for it.
 
 ## Endpoints used
 
@@ -447,12 +481,12 @@ yours at runtime.
 |---|---|---|
 | `POST` | `data-science.<stack>/apps` | `data-app create` step 1 |
 | `GET` | `data-science.<stack>/apps` | `data-app list` |
-| `GET` | `data-science.<stack>/apps/{id}` | `data-app detail`, poll loop |
+| `GET` | `data-science.<stack>/apps/{id}` | `data-app detail`, poll loop, `data-app password` |
 | `PATCH` | `data-science.<stack>/apps/{id}` | `data-app deploy / start / stop` |
 | `DELETE` | `data-science.<stack>/apps/{id}` | `data-app delete` (cascades to Storage) |
-| `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (needs Manage) |
+| `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (project token only, since 0.96.0) |
 | `GET` | `data-science.<stack>/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
 | `GET` | `data-science.<stack>/apps/{id}/runs` | `data-app runs` (since 0.65.0; deployment attempts + failure_reason / startup_logs) |
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |
 | `PUT` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app create` step 3, also `config update` |
-| `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest) |
+| `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest), `data-app password` (auth check) |

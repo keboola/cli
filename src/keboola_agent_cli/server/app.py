@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -36,7 +36,12 @@ from ..permissions import PermissionEngine, apply_firewall_flags
 from ._serve_command_map import SERVE_COMMAND_MAP
 from .agents_store import AgentStore
 from .auth import PUBLIC_PATHS, AuthSettings, install_auth
-from .dependencies import ServiceRegistry, install_permission_engine, install_registry
+from .dependencies import (
+    ServiceRegistry,
+    install_permission_engine,
+    install_registry,
+    translate_project_refs,
+)
 from .routers import (
     agents,
     ai_chat,
@@ -56,6 +61,7 @@ from .routers import (
     kai,
     lineage,
     members,
+    merge_requests,
     notifications,
     org,
     projects,
@@ -269,7 +275,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "data-apps",
         "description": (
             "**Execution.** "
-            "Streamlit / R / Python data apps -- create, deploy, "
+            "Python/JS (default), Streamlit and R data apps -- create, deploy, "
             "start/stop, manage secrets. "
             "Mirrors `kbagent data-app *`."
         ),
@@ -300,6 +306,18 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Dev branch lifecycle (create / use / reset / delete / "
             "merge) and branch metadata. "
             "Mirrors `kbagent branch *`."
+        ),
+    },
+    {
+        "name": "merge-requests",
+        "description": (
+            "**Development.** "
+            "Merge requests (Branches 2.0, non-SOX): list / detail / create / "
+            "update / review transitions / merge, plus conflict inspection and "
+            "resolution. Every route enforces the permission policy; `merge` and "
+            "any operation that arms or completes an auto-merge are destructive. "
+            "`POST .../merge` is synchronous and may block up to 600 s. "
+            "Mirrors `kbagent merge-request *`."
         ),
     },
     {
@@ -479,7 +497,11 @@ def _build_custom_openapi(app: FastAPI):
 
 
 def _format_error(
-    message: str, error_code: ErrorCode | str, *, http_status: int = 400
+    message: str,
+    error_code: ErrorCode | str,
+    *,
+    http_status: int = 400,
+    details: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """Render a kbagent-style error envelope at the given HTTP status.
 
@@ -489,16 +511,11 @@ def _format_error(
     code is not yet in the enum). The :class:`ErrorCode` mixes in ``str``, so
     both shapes serialise as plain strings in the JSON body.
     """
-    return JSONResponse(
-        status_code=http_status,
-        content={
-            "status": "error",
-            "error": {
-                "code": str(error_code),
-                "message": message,
-            },
-        },
-    )
+    error: dict[str, Any] = {"code": str(error_code), "message": message}
+    if details:
+        # Only when non-empty, matching the CLI envelope's presence contract.
+        error["details"] = details
+    return JSONResponse(status_code=http_status, content={"status": "error", "error": error})
 
 
 # A browser-login session backing a session-registered project is USER-scoped
@@ -521,6 +538,15 @@ _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESS
 # of -- a call reaching an upstream API, so none of them is a gateway fault.
 _CALLER_REFUSAL_CODES = frozenset(
     {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
+)
+
+# The merge-request merge 409s: a statement about the merge request's state
+# (conflicts / lock / another merge running), not about the gateway -- and the
+# conflict list in `details.api_error_params` is the whole point of the
+# remapping, so it must survive into the REST envelope. 502 would drop it and
+# invite a retry of a request that cannot succeed until the conflicts clear.
+_MERGE_REQUEST_CONFLICT_CODES = frozenset(
+    {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
 )
 
 _SESSION_REMEDY_ON_HOST = (
@@ -708,6 +734,15 @@ class _UsageTelemetryMiddleware:
             values = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("project")
             project_alias = values[0] if values else None
 
+        # The caller's X-Conversation-ID (set by kbagent's own clients) rides into
+        # params.cliContext so the telemetry reader tells an agent request from a
+        # human one; a web-UI request sends no such header and stays unmarked (CLI-12).
+        conversation_id: str | None = None
+        for key, value in scope.get("headers") or []:
+            if key == b"x-conversation-id":
+                conversation_id = value.decode("latin-1") or None
+                break
+
         await asyncio.to_thread(
             telemetry.send_serve_event,
             self._config_store,
@@ -717,6 +752,7 @@ class _UsageTelemetryMiddleware:
             status_code=status_code,
             duration_s=duration_s,
             project_alias=project_alias,
+            conversation_id=conversation_id,
         )
 
 
@@ -813,6 +849,8 @@ def create_app(
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
+        dependencies=[Depends(translate_project_refs("project"))],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,
@@ -898,6 +936,8 @@ def create_app(
             return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
         if code in _CALLER_REFUSAL_CODES:
             return _format_error(msg, code, http_status=400)
+        if code in _MERGE_REQUEST_CONFLICT_CODES:
+            return _format_error(msg, code, http_status=409, details=getattr(exc, "details", None))
         if code == ErrorCode.NOT_FOUND:
             # An upstream 404 is a statement about the requested resource, not
             # about the gateway: reporting it as 502 made callers retry (and
@@ -937,6 +977,7 @@ def create_app(
     app.include_router(token.router)
     app.include_router(jobs.router)
     app.include_router(branches.router)
+    app.include_router(merge_requests.router)
     app.include_router(workspaces.router)
     app.include_router(flows.router)
     app.include_router(schedules.router)
