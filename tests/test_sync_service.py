@@ -2977,13 +2977,14 @@ class TestIssue482BranchSwitchDuplicates:
         assert push_result["created"] == 0
         dev_client.create_config.assert_not_called()
 
-    def test_untracked_file_with_known_remote_id_updates_instead_of_creating(
+    def test_untracked_file_with_known_remote_id_is_not_created_again(
         self, tmp_config_dir: Path, tmp_path: Path
     ) -> None:
         """Adopt-by-id guard: an untracked ``_config.yml`` whose
         ``_keboola.config_id`` exists on the target branch and is not claimed
-        by any manifest entry is diffed as ``modified`` (an update), never
-        ``added`` (a duplicate create)."""
+        by any manifest entry is diffed against that config, never as
+        ``added`` (a duplicate create). It has no baseline, so a difference
+        is a ``conflict`` that push does not apply (issue #792 E)."""
         project_root = tmp_path / "project"
         project_root.mkdir()
         store = self._init_and_pull_main(tmp_config_dir, project_root, SAMPLE_COMPONENTS_NO_ROWS)
@@ -3031,16 +3032,16 @@ class TestIssue482BranchSwitchDuplicates:
 
         diff_result = svc.diff(alias="prod", project_root=project_root)
         assert diff_result["summary"]["added"] == 0
-        assert diff_result["summary"]["modified"] == 1
-        modified = [c for c in diff_result["changes"] if c["change_type"] == "modified"]
-        assert modified[0]["config_id"] == "cfg-777"
+        assert diff_result["summary"]["conflict"] == 1
+        conflicts = [c for c in diff_result["changes"] if c["change_type"] == "conflict"]
+        assert conflicts[0]["config_id"] == "cfg-777"
 
         push_result = svc.push(alias="prod", project_root=project_root)
         assert push_result["created"] == 0
-        assert push_result["updated"] == 1
+        assert push_result["updated"] == 0
+        assert push_result["skipped"] == 1
         client.create_config.assert_not_called()
-        client.update_config.assert_called_once()
-        assert client.update_config.call_args.kwargs["config_id"] == "cfg-777"
+        client.update_config.assert_not_called()
 
     def test_untracked_copy_of_tracked_config_still_creates_fresh(
         self, tmp_config_dir: Path, tmp_path: Path

@@ -5711,6 +5711,58 @@ drops manifest entries whose config is gone from the remote) are closed:
   created as `remote_deleted`. Delete that target directory and run the clone
   again.
 
+## `sync` and a file that carries a config id but has no manifest entry (#792)
+
+*(since vNEXT, #792)* A `_config.yml` whose `_keboola.config_id` exists on the
+target branch, but that has no manifest entry, is *adopted*: `sync diff`
+compares it with that remote config, and `sync push` never creates a
+duplicate of it. Examples: a `config new --push --output-dir` scaffold, a tree
+whose manifest was lost or written again, a `main/` file that
+`sync pull --branch` left behind. Such a file has no sync baseline.
+
+- **No baseline: a difference is a `conflict`.** Before, diff read every
+  difference as a local edit (`modified`), so `sync push` overwrote an edit
+  made in the UI after the file was written. Now diff reports `conflict`, and
+  push skips it (`skipped`, `skipped_reason`). Two files that carry the same id
+  are both a `conflict`. Before, push sent both and the last one won.
+- **A `config new --push --output-dir` scaffold records its baseline** in
+  `_keboola.base_config_hash`: the created config as the API returned it. Its
+  diff is 3-way: an edit of the scaffold is `modified` and push applies it, an
+  edit in the UI is `remote_modified`, an edit on both sides is a `conflict`.
+  After the first push the manifest holds the baseline, and push removes the
+  key from the file. A scaffold written by an older kbagent has no key, so a
+  difference from the remote is a `conflict`.
+- **Pull keeps an adopted file with local changes.** Before, pull treated the
+  file as a new config and overwrote it with no message. Now plain pull and
+  `pull --force` keep the file, and report it as `skipped` with reason
+  `locally modified, not tracked in the manifest`. The file stays untracked.
+  "Local changes" means a difference from `_keboola.base_config_hash`, or,
+  when the file has no such key, any difference from the remote. A scaffold
+  with no local changes gets the remote version, as before.
+- **To resolve such a `conflict`:** keep a copy of the local edit if you need
+  it, run `kbagent sync pull --theirs` (the remote wins and the file becomes
+  tracked), apply the edit again, and push.
+- Pull protects only a file in the directory where pull writes that config. A
+  file with the same config id in another directory stays a separate copy
+  after the pull, and push creates it as a new config (fork by copy, #482).
+
+## `sync push` encrypts every secret before its first write (#792)
+
+*(since vNEXT, #792)* Before, push encrypted the `#` secrets of each config
+just before its own write. An `ENCRYPTION_FAILED` on a later config stopped
+the push after earlier configs were created or updated, and the manifest did
+not record them. The retry then created those configs again.
+
+- Now push encrypts the secrets of every config and row that it writes before
+  the first write, one Encryption API call per component. An
+  `ENCRYPTION_FAILED` stops the push before anything reaches the remote, and
+  the error message ends with `Nothing was pushed.` The remote, the manifest
+  and the local files do not change. Fix the cause and run the same push
+  again.
+- With `--allow-plaintext-on-encrypt-failure` nothing changes: push does not
+  encrypt in advance, and a failed encryption writes plaintext with a warning.
+- `--dry-run` calls no Encryption API, as before.
+
 ## `sync` can sync shared SQL workspaces, opt-in per tree (CLI-25)
 
 *(since 0.96.1)* `keboola.sandboxes` is no longer skipped when the manifest sets

@@ -178,7 +178,10 @@ kbagent sync diff --project prod                  # target: production
 
 - Configs whose id **does** exist on the target branch are still diffed, from
   the file in the target's own tree (`main/`) — so an ordinary production diff
-  after a dev pull reports `unchanged`, not a create.
+  after a dev pull reports `unchanged`, not a create. Such a file has no
+  baseline for the target, so a file that differs is a `conflict`, and push
+  does not send it *(since vNEXT, #792)*; see "Files with a config id and no
+  manifest entry" below.
 - Configs that exist **only** on the dev branch are excluded entirely. Promote
   them with `kbagent branch merge`, never by pushing them to production.
 - `--json` carries the full list under `orphaned` (`component_id`, `config_id`,
@@ -416,7 +419,7 @@ Stored in `.keboola/branch-mapping.json`:
 |------------|---------|--------|
 | MODIFIED | Local changed, remote unchanged | Safe to push |
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
-| CONFLICT | Both sides changed | Resolve manually, then push |
+| CONFLICT | Both sides changed, or a file with a config id and no manifest entry differs from the remote *(since vNEXT, #792)* | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
 | DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
 | REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.1)* |
@@ -429,10 +432,20 @@ Stored in `.keboola/branch-mapping.json`:
   an edit to a companion file (`transform.sql`, `code.py`, `_description.md`,
   ...) protects the config the same way *(since 0.96.1, #792)*. Before, such an
   edit was silently overwritten whenever the remote changed, plain or `--force`
+- **Pull keeps an untracked file that carries the config id** and has local
+  changes (`skipped`, reason `locally modified, not tracked in the manifest`)
+  *(since vNEXT, #792)*; only `--theirs` overwrites it. Before, pull
+  overwrote it with no message. See "Files with a config id and no manifest
+  entry" below
 - **`--force` is conflict-aware**: see below -- it no longer blindly overwrites
 - **Push only sends local changes**: remote_modified, conflict and remote_deleted
   changes are skipped (`skipped` in the result), and local deletions are applied
   only with `--force` (`skipped_deletions` otherwise) *(since 0.96.1, #792)*
+- **Push encrypts every secret before its first write** *(since vNEXT, #792)*:
+  an `ENCRYPTION_FAILED` stops the push before anything reaches the remote
+  (the message ends with `Nothing was pushed.`), so running the same push
+  again after the fix is safe. Before, the push stopped after earlier configs
+  were created, and the retry created them again
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
   read-back), never from the files on disk. Before 0.91.0 the two producers
@@ -451,6 +464,27 @@ Stored in `.keboola/branch-mapping.json`:
 - **Jobs are per-config**: `_jobs.jsonl` shows recent N jobs (default 5) with status + timing
 - **Data samples auto-trim**: tables with >30 columns export only first 30 (API sync limit)
 - **Encrypted columns masked**: columns starting with `#` show `***ENCRYPTED***` in samples
+
+## Files with a config id and no manifest entry
+
+*(since vNEXT, #792)* A `_config.yml` whose `_keboola.config_id` exists on the
+target branch but has no manifest entry is adopted: diff compares it with that
+remote config, and push never creates a duplicate. A `config new --push
+--output-dir` scaffold is such a file, and so is a file in a tree whose
+manifest was lost.
+
+| The file | `sync diff` / `sync push` | `sync pull` (plain, `--force`) |
+|---|---|---|
+| Records `_keboola.base_config_hash` (a scaffold) | 3-way against that hash: `modified` is pushed, `remote_modified` and `conflict` are skipped | Local changes: kept, `skipped`. No local changes: remote version written, file tracked |
+| Has no baseline, same as the remote | `unchanged` | Remote version written, file tracked |
+| Has no baseline, differs from the remote | `conflict`, skipped by push | Kept, `skipped` |
+| Two files with the same id | Both `conflict` | The file in the directory pull writes to: as above. The other file: not changed |
+
+`sync pull --theirs` writes the remote version over the file in every case,
+and the manifest then tracks it. After the first push of a scaffold, the
+manifest holds the baseline and push removes `base_config_hash` from the
+file. Older versions read every difference as `modified`, so push overwrote
+an edit made in the UI, and pull overwrote a local edit.
 
 ## Ignored components
 

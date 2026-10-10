@@ -41,7 +41,7 @@ from ..sync.code_extraction import (
     marker_less_roundtrip,
     merge_code_files,
 )
-from ..sync.config_format import api_config_to_local, api_row_to_local
+from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_row_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 
@@ -302,6 +302,49 @@ def config_locally_modified(
     if service._file_hash(config_file) != pull_hash:
         return True
     return extras_modified(service, config_dir, extra_hashes)
+
+
+# Pull ``details[].reason`` for a kept file that only carries the config id.
+ADOPTED_SKIP_REASON = "locally modified, not tracked in the manifest"
+
+
+def adopted_skip_detail(
+    service: SyncService,
+    config_dir: Path,
+    component_id: str,
+    remote: dict[str, Any],
+    rel_path: str,
+) -> dict[str, str] | None:
+    """Pull's ``skipped`` detail for an untracked local file of *remote* with local changes.
+
+    Such a file carries the config's ``_keboola.config_id`` but has no manifest
+    entry: a ``config new --push --output-dir`` scaffold, or a tree whose
+    manifest was lost. Pull treated it as a new config and overwrote it, so a
+    local edit was lost without a message (issue #792 E). Its baseline is the
+    ``base_config_hash`` the scaffold records. Without one, pull cannot tell
+    which side changed, so any difference from the remote counts as a local
+    change. Returns ``None`` when pull may write the remote version.
+    """
+    config_id = str(remote.get("id", ""))
+    local = service._read_config_file(config_dir)
+    meta = (local or {}).get("_keboola") or {}
+    if local is None or meta.get("component_id") != component_id:
+        return None
+    if str(meta.get("config_id", "")) != config_id:
+        return None
+    merge_code_files(component_id, local, config_dir)
+    base = meta.get(BASE_CONFIG_HASH_KEY) or config_hash(
+        api_config_to_local(component_id, remote, config_id)
+    )
+    if config_hash(local) == base:
+        return None
+    return {
+        "action": "skipped",
+        "component_id": component_id,
+        "config_name": remote.get("name", "untitled"),
+        "path": rel_path,
+        "reason": ADOPTED_SKIP_REASON,
+    }
 
 
 def _scripts_by_code(config_data: dict[str, Any]) -> list[list[Any]] | None:

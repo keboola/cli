@@ -56,6 +56,9 @@ kbagent --json config new --component-id COMPONENT_ID --project ALIAS --name "Co
 # (_keboola.config_id) and lands in the subtree of the branch the config was
 # created in -- the next `sync push` ADOPTS the config (reported as
 # `modified` until you edit + push) instead of creating a duplicate.
+# Since vNEXT (#792) it also records _keboola.base_config_hash, the created
+# config as the API returned it: an edit made in the UI before your push is
+# reported as `remote_modified` / `conflict` and push does not overwrite it.
 # On older versions this combo wrote an ID-less scaffold: the next
 # `sync push` DUPLICATED the config (issue #644). There, use the two-step
 # path (scaffold without --push, edit, `sync push`) instead.

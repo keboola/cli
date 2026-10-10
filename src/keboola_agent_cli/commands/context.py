@@ -509,7 +509,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     instead of creating a duplicate. With an explicit --configuration body the local
     directory mirrors the pushed (already encrypted) body exactly like sync pull would
     materialize it (real transform.sql/.py extracted from the body) instead of
-    placeholder scaffolding.
+    placeholder scaffolding. The scaffold also records _keboola.base_config_hash (the
+    created config as the API returned it; since vNEXT, #792 E), so sync diff compares
+    it 3-way and push never overwrites an edit made in the UI.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]
@@ -1687,9 +1689,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (summary.orphaned + details: component_id, config_id, path, branch_id, branch_path,
     exists_on_target, reason, hint); human mode previews the first 10. An orphaned FILE
     whose _keboola.config_id still resolves on the target is ADOPTED (unchanged/modified),
-    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
-    non-zero summary.orphaned with `sync pull`; promote dev-only configs with
-    `branch merge`, never by pushing them to production.
+    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. An adopted
+    file has no baseline unless it records _keboola.base_config_hash (a config new --push
+    scaffold): without one a difference is a CONFLICT, never modified, and two files with
+    one id are both conflicts (since vNEXT, #792 E). sync pull keeps such a file with
+    local changes (skipped, "locally modified, not tracked in the manifest"); --theirs
+    overwrites it. Fix a non-zero summary.orphaned with `sync pull`; promote dev-only
+    configs with `branch merge`, never by pushing them to production.
     Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
     so a stale manifest entry or leftover dir for one of them contributes nothing --
     not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
@@ -1698,6 +1704,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
+    Every secret is encrypted BEFORE the first write (since vNEXT, #792 F): an
+    ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
+    "Nothing was pushed."), so run the same push again after the fix -- it creates
+    nothing twice.
     Workspace delete (since 0.96.1, syncWorkspaces trees): a --force push that deletes a shared
     SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
     backend workspaces, which config restore does not bring back; check

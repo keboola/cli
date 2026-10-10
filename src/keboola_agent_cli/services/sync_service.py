@@ -66,13 +66,14 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path, sanitize_name
+from ..sync.naming import config_path, config_row_path
 from . import _sync_workspace as sql_workspaces
 from ._encryption import (
     encrypt_secrets_in_config,
     find_plaintext_secret_keys,
 )
 from ._sync_baseline import (
+    adopted_skip_detail,
     config_locally_modified,
     detect_force_pull_conflicts,
     effective_stored_hash,
@@ -106,7 +107,7 @@ from ._sync_data_app import (
     type_needs_rewrite,
 )
 from ._sync_models import CreatedConfig, LocalConfigHashes
-from ._sync_push_ops import plan_push, push_create, push_row_change, push_update
+from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
@@ -767,6 +768,14 @@ class SyncService(BaseService):
                 api_cfg_hash = config_hash(local_data)
                 pull_cfg_hash = api_cfg_hash
 
+                # An untracked file that carries this config's id keeps its
+                # local changes; only --theirs overwrites it (issue #792 E).
+                if is_new and not theirs:
+                    skipped = adopted_skip_detail(self, config_dir, component_id, cfg, rel_path)
+                    if skipped:
+                        pull_details.append(skipped)
+                        continue
+
                 # Detect local modifications: if the file hash differs from the
                 # pull_hash stored in manifest, the user edited the file -- so
                 # preserve it instead of overwriting.  This now runs even under
@@ -1412,6 +1421,8 @@ class SyncService(BaseService):
                 continue
             if verdict == VERDICT_CREATE:
                 untracked_id = ""  # new config, push creates it
+            # An adopted file has no manifest baseline: compute_changeset reads
+            # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
                 {
                     "component_id": component_id,
@@ -1419,6 +1430,7 @@ class SyncService(BaseService):
                     "config_name": local_data.get("name", ""),
                     "path": added_cfg["path"],
                     "data": local_data,
+                    "adopted": bool(untracked_id),
                 }
             )
 
@@ -1658,7 +1670,7 @@ class SyncService(BaseService):
         )
 
         # Detect name drift: local dir name doesn't match config name
-        name_drift_warnings = self._detect_name_drift(manifest, project_root)
+        name_drift_warnings = detect_name_drift(self, manifest, project_root)
 
         client = self._client_factory(project.stack_url, project.token)
         created = 0
@@ -1688,6 +1700,10 @@ class SyncService(BaseService):
             # first manifest branch (#808), and only when a data app is created.
             ds_branch_id = resolve_ds_branch_id(client, ds_client, branch_id, warnings)
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
+            # An encryption failure stops push before its first write (#792 F).
+            known_secrets = plan.encrypt_secrets(
+                self, client, project_root / branch_path, manifest, allow_plaintext_fallback
+            )
 
             # Process configs before rows, and rebind variable links last.
             # A freshly-created parent config must carry its API-assigned ULID
@@ -1724,6 +1740,7 @@ class SyncService(BaseService):
                             warnings=warnings,
                             ds_client=ds_client,
                             ds_branch_id=ds_branch_id,
+                            known_secrets=known_secrets,
                         )
                         if result:
                             new_id = str(result.get("id", ""))
@@ -1793,6 +1810,7 @@ class SyncService(BaseService):
                             branch_id,
                             allow_plaintext_fallback=allow_plaintext_fallback,
                             warnings=warnings,
+                            known_secrets=known_secrets,
                         )
                         # Update hashes so pull knows local == remote
                         if (config_dir / CONFIG_FILENAME).exists():
@@ -1870,6 +1888,7 @@ class SyncService(BaseService):
                         branch_id=branch_id,
                         allow_plaintext_fallback=allow_plaintext_fallback,
                         warnings=warnings,
+                        known_secrets=known_secrets,
                     )
                     manifest_dirty = True
                     if change_type == "added":
@@ -2235,44 +2254,6 @@ class SyncService(BaseService):
         """Return the SHA256 hex digest of a file's contents."""
         content = file_path.read_bytes()
         return hashlib.sha256(content).hexdigest()
-
-    def _detect_name_drift(self, manifest: Manifest, project_root: Path) -> list[dict[str, str]]:
-        """Detect configs where local dir name doesn't match the config name.
-
-        Reads each tracked config's _config.yml to get the current name,
-        then compares sanitize_name(name) against the directory basename.
-
-        Returns a list of warning dicts with component_id, config_id,
-        local_dirname, and expected_dirname.
-        """
-        warnings: list[dict[str, str]] = []
-        for cfg in manifest.configurations:
-            path = cfg.path
-            dirname = path.rsplit("/", 1)[-1] if "/" in path else path
-
-            # Find branch dir and read _config.yml
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            config_dir = project_root / branch_path / path
-            local_data = self._read_config_file(config_dir)
-            if local_data is None:
-                continue
-
-            config_name = local_data.get("name", "")
-            if not config_name:
-                continue
-
-            expected_dirname = sanitize_name(config_name)
-            if dirname != expected_dirname:
-                warnings.append(
-                    {
-                        "component_id": cfg.component_id,
-                        "config_id": cfg.id,
-                        "local_dirname": dirname,
-                        "expected_dirname": expected_dirname,
-                        "config_name": config_name,
-                    }
-                )
-        return warnings
 
     def _rename_directory(self, source: Path, target: Path) -> str:
         """Rename a directory, using git mv if in a git repo, else shutil.move.

@@ -20,7 +20,11 @@ from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYP
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
-from ..services.component_service import materialize_pushed_config, stamp_scaffold_config_id
+from ..services.component_service import (
+    materialize_pushed_config,
+    pushed_config_base_hash,
+    stamp_scaffold_config_id,
+)
 from ..services.config_service import validate_set_paths
 from ..sync.branch_registry import default_branch_prefix
 from ._helpers import (
@@ -1427,7 +1431,11 @@ def config_new(
                 written_dir = target_dir
             else:
                 if created_id:
-                    scaffold = stamp_scaffold_config_id(scaffold, created_id)
+                    scaffold = stamp_scaffold_config_id(
+                        scaffold,
+                        created_id,
+                        pushed_config_base_hash(component_id, created_id, push_result),
+                    )
                 written_dir = _write_scaffold_to_disk(
                     formatter,
                     scaffold,
