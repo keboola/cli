@@ -5,6 +5,7 @@ scaffold used by ConfigService, JobService, ProjectService, and LineageService.
 """
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -107,13 +108,13 @@ def normalize_job_timeout(timeout: float | None, default: float) -> float:
         The resolved budget in seconds.
 
     Raises:
-        KeboolaApiError: ``INVALID_ARGUMENT`` when ``timeout`` is <= 0.
+        KeboolaApiError: ``INVALID_ARGUMENT`` when ``timeout`` is <= 0, NaN or infinite.
     """
     if timeout is None:
         return default
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         raise KeboolaApiError(
-            message=f"Invalid timeout {timeout}. Must be greater than 0.",
+            message=f"Invalid timeout {timeout}. Must be a finite number greater than 0.",
             status_code=0,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )

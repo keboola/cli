@@ -568,3 +568,11 @@ class TestNormalizeJobTimeout:
 
         assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         assert str(bad) in exc_info.value.message
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    def test_non_finite_is_rejected(self, bad: float) -> None:
+        """NaN and infinity would make the poller's deadline never expire."""
+        with pytest.raises(KeboolaApiError) as exc_info:
+            normalize_job_timeout(bad, 300.0)
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
