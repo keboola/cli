@@ -538,6 +538,51 @@ class TestDataAppDeploy:
         assert body["data"]["config_version"] == "5"
         mock.deploy_data_app.assert_called_once()
 
+    @pytest.mark.parametrize(("extra", "branch"), [(["--git-branch", "dev"], "dev"), ([], None)])
+    def test_deploy_passes_git_branch_to_service(
+        self, tmp_path: Path, extra: list[str], branch: str | None
+    ) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.deploy_data_app.return_value = {"app_id": "42", "action": "deploy"}
+
+        result = _invoke(
+            ["data-app", "deploy", "--project", "prod", "--app-id", "42", *extra],
+            store=store,
+            data_app_mock=mock,
+        )
+
+        assert result.exit_code == 0
+        assert mock.deploy_data_app.call_args.kwargs["git_branch"] == branch
+
+    def test_deploy_reports_git_backfill(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        mock.deploy_data_app.return_value = {
+            "project_alias": "prod",
+            "app_id": "42",
+            "action": "deploy",
+            "state": "starting",
+            "desired_state": "running",
+            "config_version": "5",
+            "url": "",
+            "message": "Data app 42 deploy requested.",
+            "git_backfilled": True,
+            "warnings": ["Deploy wrote parameters.dataApp.git into the configuration."],
+        }
+        args = ["data-app", "deploy", "--project", "prod", "--app-id", "42"]
+
+        as_json = _invoke(["--json", *args], store=store, data_app_mock=mock)
+        assert json.loads(as_json.output)["data"]["git_backfilled"] is True
+
+        human = _invoke(args, store=store, data_app_mock=mock)
+        assert human.exit_code == 0
+        assert "Deploy wrote parameters.dataApp.git into the configuration." in human.output
+
     def test_api_error_exit_code(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()

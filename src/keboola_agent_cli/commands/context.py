@@ -1440,12 +1440,21 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
     by default; --keep-on-failure preserves it for forensics).
     --use-managed-git-repo (0.65.0+) provisions an EMPTY Keboola-hosted repo
-    instead of cloning an external one; writes no git block, forces --no-deploy,
-    mutually exclusive with --git-repo and all --git-*/PAT flags. Managed deploy
-    works via: create --use-managed-git-repo -> git-credentials-create
-    --type http_token --permissions readWrite + push code to the managed repo
-    URL -> deploy. The platform injects the clone credentials at deploy time,
-    so no credential wiring is needed.
+    instead of cloning an external one; create writes no git block, forces
+    --no-deploy, mutually exclusive with --git-repo and all --git-*/PAT flags.
+    Managed deploy works via: create --use-managed-git-repo ->
+    git-credentials-create --type http_token --permissions readWrite + push
+    code to the `main` branch of the managed repo URL -> deploy. The platform
+    injects the clone credentials at deploy time, so no credential wiring is
+    needed. Deploy writes the git block itself (vNEXT+, CLI-15): for a managed
+    app with no parameters.dataApp.git it backfills repository URL + branch
+    into the Storage config, then pins the new version. The branch is
+    deploy --git-branch; without it, `main` for an app with no runs, and a
+    VALIDATION_ERROR before any write for an app that has runs (its branch
+    is unknown -- pass --git-branch with the branch the code is on). The
+    platform provisions the workspace only when that block exists. The result
+    has git_backfilled: true, git_branch and a warnings[] entry; code on any
+    other branch is not deployed.
     --workspace (0.87.0+, DEFAULT ON) writes runtime.workspace.enabled=true --
     the single switch that makes the platform provision the ephemeral workspace
     and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
@@ -1461,7 +1470,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
-    [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+    [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH]
+    [--copy] [--reveal]
     With --wait on a password app (0.96.1+): the password is delivered like
     `data-app password` (the c prompt in a terminal, which then waits for
     Enter or 120 s; --copy / --reveal need --wait). Without a flag and
@@ -1470,7 +1480,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (+ password with --reveal); a failed password read or a non-password
     app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
-    and pins to it; --config-version pins an older version (rollback).
+    and pins to it; --config-version pins an older version (rollback) and
+    skips the git-block backfill. --git-branch only sets the branch of
+    that backfill; it has no effect otherwise.
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
     together -- HTTP 422 otherwise.
 
