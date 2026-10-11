@@ -8,6 +8,7 @@ multi-project parallel listing.
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
+import httpx
 import pytest
 
 from helpers import setup_single_project, setup_two_projects
@@ -2477,3 +2478,416 @@ class TestBigQueryQueryServiceSupport:
         ids = [w["id"] for w in result["workspaces"]]
         assert ids == [7]
         assert result["workspaces"][0]["qs_compatible"] is True
+
+
+class TestCreateWorkspaceUiMode:
+    """Tests for the ``--ui`` (Queue job) path of create_workspace() (issue #755)."""
+
+    @staticmethod
+    def _dev_branch_store(tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-xxx",
+                project_name="Production",
+                project_id=258,
+                active_branch_id=200,
+            ),
+        )
+        return store
+
+    def test_ui_mode_passes_dev_branch_to_queue_job(self, tmp_config_dir: Path) -> None:
+        """The sandbox job must run on the branch the config was created in.
+
+        Before the fix the job was queued without branchId, so the Queue
+        resolved the config on the default branch and answered
+        400 "Cannot resolve job parameters: Configuration ... not found".
+        """
+        mock_client = MagicMock()
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-ui", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "1019482", "branchId": "200"}
+        mock_client.list_config_workspaces.return_value = [SAMPLE_WORKSPACE]
+        mock_client.reset_workspace_password.return_value = {"password": "reset-pw"}
+
+        svc = WorkspaceService(
+            config_store=self._dev_branch_store(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        assert result["ui_mode"] is True
+        assert result["workspace_id"] == 42
+        assert result["password"] == "reset-pw"
+        mock_client.create_job.assert_called_once_with(
+            component_id="keboola.sandboxes",
+            config_id="cfg-ui",
+            config_data={"parameters": {"task": "create", "type": "snowflake", "shared": False}},
+            branch_id=200,
+        )
+        mock_client.wait_for_queue_job.assert_called_once_with("1019482")
+        # The lookup uses the branch we resolved, never the job's echo of it
+        mock_client.list_config_workspaces.assert_called_once_with(
+            branch_id=200,
+            component_id="keboola.sandboxes",
+            config_id="cfg-ui",
+        )
+        mock_client.delete_config.assert_not_called()
+        # The password reset targets the dev branch the workspace lives in
+        mock_client.reset_workspace_password.assert_called_once_with(42, branch_id=200)
+        assert "warnings" not in result
+
+    def test_ui_mode_failed_password_reset_is_a_warning(self, tmp_config_dir: Path) -> None:
+        """A failed reset must not pass as success with a silent empty password."""
+        mock_client = MagicMock()
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-ui", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j1", "branchId": "200"}
+        mock_client.list_config_workspaces.return_value = [SAMPLE_WORKSPACE]
+        mock_client.reset_workspace_password.side_effect = KeboolaApiError(
+            message="Workspace not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+
+        svc = WorkspaceService(
+            config_store=self._dev_branch_store(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        assert result["password"] == ""
+        assert result["warnings"] == [
+            (
+                "Workspace 42 was created, but its password could not be reset (Workspace not "
+                "found). Get a password with 'kbagent workspace password --project prod "
+                "--workspace-id 42'."
+            )
+        ]
+        mock_client.delete_config.assert_not_called()
+
+    def test_ui_mode_passes_default_branch_to_queue_job(self, tmp_config_dir: Path) -> None:
+        """On the default branch the resolved production branch id is forwarded too."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-ui", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j1", "branchId": None}
+        mock_client.list_config_workspaces.return_value = [SAMPLE_WORKSPACE]
+        mock_client.reset_workspace_password.return_value = {"password": "pw"}
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        assert mock_client.create_job.call_args.kwargs["branch_id"] == 123
+        # A null branchId echo from the Queue must not crash the lookup (int(None))
+        assert mock_client.list_config_workspaces.call_args.kwargs["branch_id"] == 123
+
+    def test_ui_mode_no_workspace_rolls_back_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A successful job with no Storage workspace behind it is the #755 main-branch case.
+
+        The keboola.sandboxes ``create`` task no longer provisions
+        Snowflake/BigQuery workspaces; the error must say so, name the job,
+        and the config created for the attempt must be trashed so nothing
+        accumulates in the project.
+        """
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-orphan", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "1019482", "branchId": "123"}
+        mock_client.list_config_workspaces.return_value = []
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.WORKSPACE_NOT_FOUND
+        assert exc.retryable is False
+        assert "1019482" in exc.message
+        assert "no longer provisions" in exc.message
+        assert "cfg-orphan" in exc.message
+        assert "moved to the trash" in exc.message
+        assert exc.details["job_id"] == "1019482"
+        assert exc.details["sandbox_config_id"] == "cfg-orphan"
+        assert exc.details["sandbox_config_rolled_back"] is True
+        assert exc.details["branch_id"] == 123
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "cfg-orphan", branch_id=123
+        )
+        mock_client.reset_workspace_password.assert_not_called()
+
+    def test_ui_mode_job_failure_rolls_back_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A Queue rejection (e.g. the old 400 on a dev branch) also trashes the config."""
+        mock_client = MagicMock()
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-400", "name": "ui-ws"}
+        mock_client.create_job.side_effect = KeboolaApiError(
+            message='Cannot resolve job parameters: Configuration "cfg-400" not found',
+            status_code=400,
+            error_code=ErrorCode.API_ERROR,
+        )
+
+        svc = WorkspaceService(
+            config_store=self._dev_branch_store(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        exc = exc_info.value
+        assert exc.status_code == 400
+        assert "Cannot resolve job parameters" in exc.message
+        assert exc.details["sandbox_config_rolled_back"] is True
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "cfg-400", branch_id=200
+        )
+
+    def test_ui_mode_rollback_failure_is_reported_not_swallowed(self, tmp_config_dir: Path) -> None:
+        """When the cleanup itself fails the original error still wins, but the
+        user is told which config is left behind and how to remove it."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-stuck", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j9", "branchId": "123"}
+        mock_client.list_config_workspaces.return_value = []
+        mock_client.delete_config.side_effect = KeboolaApiError(
+            message="Storage is read-only", status_code=403, error_code=ErrorCode.API_ERROR
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.WORKSPACE_NOT_FOUND
+        assert exc.details["sandbox_config_rolled_back"] is False
+        assert exc.details["sandbox_config_cleanup_error"] == "Storage is read-only"
+        assert "could not be cleaned up" in exc.message
+        assert (
+            "remove it with 'kbagent config delete --project prod --component-id "
+            "keboola.sandboxes --config-id cfg-stuck --branch 123'." in exc.message
+        )
+
+    def test_headless_failure_rolls_back_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """The headless path gets the same guarantee: a failed Storage workspace
+        create must not leave the freshly created sandbox config behind."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-h", "name": "ws"}
+        mock_client.create_config_workspace.side_effect = KeboolaApiError(
+            message="Quota exceeded", status_code=403, error_code=ErrorCode.API_ERROR
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError, match="Quota exceeded") as exc_info:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
+        assert exc_info.value.details["sandbox_config_rolled_back"] is True
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "cfg-h", branch_id=123
+        )
+
+    def test_ui_mode_job_timeout_keeps_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A Queue job that outran the wait may still create the workspace.
+
+        Trashing the config then would orphan that workspace, so the config
+        is kept and the error says why, names the job and how to check.
+        """
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-slow", "name": "ui-ws"}
+        mock_client.create_job.return_value = {"id": "j77", "branchId": "123"}
+        mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job j77 did not complete within 300s",
+            status_code=504,
+            error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+            retryable=True,
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ui-ws", backend="snowflake", ui_mode=True)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.QUEUE_JOB_TIMEOUT
+        assert exc.details["sandbox_config_rolled_back"] is False
+        assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
+        assert exc.details["sandbox_config_id"] == "cfg-slow"
+        assert exc.details["job_id"] == "j77"
+        assert "the outcome of job j77 is unknown" in exc.message
+        assert "kbagent workspace list --project prod" in exc.message
+        assert (
+            "remove the config with 'kbagent config delete --project prod --component-id "
+            "keboola.sandboxes --config-id cfg-slow --branch 123'." in exc.message
+        )
+        mock_client.delete_config.assert_not_called()
+
+    def test_headless_request_timeout_keeps_sandbox_config(self, tmp_config_dir: Path) -> None:
+        """A read timeout on the workspace POST: the server may have created it."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-t", "name": "ws"}
+        mock_client.create_config_workspace.side_effect = KeboolaApiError(
+            message="Request timed out", status_code=0, error_code=ErrorCode.TIMEOUT
+        )
+
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
+        exc = exc_info.value
+        assert exc.details["sandbox_config_rolled_back"] is False
+        assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
+        assert "job_id" not in exc.details
+        assert "the outcome of the workspace create request is unknown" in exc.message
+        mock_client.delete_config.assert_not_called()
+
+
+def _api_error(status_code: int, error_code: ErrorCode, retryable: bool = False) -> KeboolaApiError:
+    return KeboolaApiError(
+        message=f"{error_code} ({status_code})",
+        status_code=status_code,
+        error_code=error_code,
+        retryable=retryable,
+    )
+
+
+class TestCreateWorkspaceOutcomeRule:
+    """Which step-2 errors trash the sandbox config and which keep it (#755).
+
+    Definite failure (rolled back): the create POST was refused (4xx) or
+    proven undelivered (connect error, connect/pool timeout raised
+    ``retryable=True``), or the --ui job failed or finished with no workspace.
+    Unknown outcome (kept): a 5xx, a read/write timeout or RETRY_EXHAUSTED on
+    the create POST, and any other error after the --ui job was queued.
+    """
+
+    @staticmethod
+    def _client() -> MagicMock:
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_job.return_value = {"id": "j1", "branchId": "123"}
+        mock_client.list_config_workspaces.return_value = []
+        return mock_client
+
+    @staticmethod
+    def _create(tmp_config_dir: Path, mock_client: MagicMock, ui_mode: bool) -> KeboolaApiError:
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake", ui_mode=ui_mode)
+        return exc_info.value
+
+    @pytest.mark.parametrize(
+        ("error", "rolled_back"),
+        [
+            pytest.param(_api_error(502, ErrorCode.API_ERROR), False, id="5xx-kept"),
+            pytest.param(_api_error(0, ErrorCode.RETRY_EXHAUSTED, True), False, id="retry-kept"),
+            pytest.param(_api_error(0, ErrorCode.TIMEOUT), False, id="read-timeout-kept"),
+            pytest.param(_api_error(400, ErrorCode.API_ERROR), True, id="4xx-rolled-back"),
+            pytest.param(
+                _api_error(0, ErrorCode.CONNECTION_ERROR, True), True, id="connect-rolled-back"
+            ),
+            pytest.param(
+                _api_error(0, ErrorCode.TIMEOUT, True), True, id="connect-timeout-rolled-back"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("ui_mode", [False, True], ids=["headless", "ui"])
+    def test_create_post_error(
+        self, tmp_config_dir: Path, error: KeboolaApiError, rolled_back: bool, ui_mode: bool
+    ) -> None:
+        """The create POST (headless workspace or --ui job) follows the POST rule."""
+        mock_client = self._client()
+        post = mock_client.create_job if ui_mode else mock_client.create_config_workspace
+        post.side_effect = error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode)
+
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        assert "job_id" not in exc.details
+
+    @pytest.mark.parametrize(
+        ("wait_error", "list_error", "rolled_back"),
+        [
+            pytest.param(
+                _api_error(500, ErrorCode.QUEUE_JOB_FAILED), None, True, id="job-failed-rolled-back"
+            ),
+            pytest.param(None, None, True, id="no-workspace-rolled-back"),
+            pytest.param(
+                _api_error(504, ErrorCode.QUEUE_JOB_TIMEOUT, True), None, False, id="wait-timeout"
+            ),
+            pytest.param(
+                _api_error(0, ErrorCode.CONNECTION_ERROR, True), None, False, id="poll-connect"
+            ),
+            pytest.param(_api_error(503, ErrorCode.API_ERROR), None, False, id="poll-5xx"),
+            pytest.param(_api_error(404, ErrorCode.NOT_FOUND), None, False, id="poll-4xx"),
+            pytest.param(
+                None, _api_error(0, ErrorCode.CONNECTION_ERROR, True), False, id="lookup-connect"
+            ),
+            pytest.param(None, _api_error(502, ErrorCode.API_ERROR), False, id="lookup-5xx"),
+        ],
+    )
+    def test_error_after_job_was_queued(
+        self,
+        tmp_config_dir: Path,
+        wait_error: KeboolaApiError | None,
+        list_error: KeboolaApiError | None,
+        rolled_back: bool,
+    ) -> None:
+        """After the job exists, only a failed job or an empty lookup is definite."""
+        mock_client = self._client()
+        mock_client.wait_for_queue_job.side_effect = wait_error
+        if list_error is not None:
+            mock_client.list_config_workspaces.side_effect = list_error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=True)
+
+        assert exc.details["job_id"] == "j1"
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        if not rolled_back:
+            assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
+            assert "the outcome of job j1 is unknown" in exc.message
+
+    def test_transport_error_after_send_keeps_config(self, tmp_config_dir: Path) -> None:
+        """A dropped connection mid-POST is not mapped by ``_request``; the config stays."""
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = httpx.ReadError("connection reset")
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(httpx.ReadError):
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
+        mock_client.delete_config.assert_not_called()

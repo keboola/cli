@@ -29,7 +29,7 @@ from ..constants import (
     WORKSPACE_LOAD_TYPES,
 )
 from ..effective_branch import record_branch, resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
@@ -42,6 +42,31 @@ from ._workspace_load_plan import (
 from .base import BaseService, find_default_branch_id
 
 logger = logging.getLogger(__name__)
+
+# Once the --ui create job is queued, only these errors prove that it made no
+# workspace: the job ended in error, or it finished with nothing attached to
+# the config. Any other error after the job exists (a wait timeout, a failed
+# poll, a failed workspace lookup after a green job) leaves the outcome unknown.
+_DEFINITE_JOB_ERRORS = frozenset({ErrorCode.QUEUE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND})
+
+
+def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could a workspace exist (or still appear) after this step-2 error?
+
+    The sandbox config is kept when the answer is yes, and trashed only when
+    the create failed definitely -- trashing it while a workspace may exist
+    would leave that workspace without its config.
+
+    Before a job id exists the error comes from the create POST itself
+    (``create_config_workspace`` headless, ``create_job`` for ``--ui``); it is
+    classified by ``request_outcome_unknown``: a 4xx or a request proven
+    undelivered is definite; a 5xx, a read/write timeout or
+    ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` puts
+    ``job_id`` into the details of every error raised after the job exists.
+    """
+    if exc.details.get("job_id") is None:
+        return request_outcome_unknown(exc)
+    return exc.error_code not in _DEFINITE_JOB_ERRORS
 
 
 def _summarize_load_types(plans: list[LoadTablePlan]) -> str:
@@ -76,6 +101,19 @@ def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
     if backend.lower() == "bigquery":
         return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
+
+
+def _sandbox_config_delete_command(alias: str, config_id: str, branch_id: int) -> str:
+    """Return the 'config delete' command that removes a leftover sandbox config.
+
+    ``--branch`` is always named: the command must target the branch the
+    config was created in even after a later 'branch use' changes the
+    active branch.
+    """
+    return (
+        f"kbagent config delete --project {alias} --component-id keboola.sandboxes "
+        f"--config-id {config_id} --branch {branch_id}"
+    )
 
 
 def _workspace_login_type_for_backend(backend: str) -> str | None:
@@ -320,18 +358,24 @@ class WorkspaceService(BaseService):
                 branch_id=branch_id,
             )
             config_id = sandbox_config.get("id", "")
+            cleanup_command = _sandbox_config_delete_command(alias, config_id, branch_id)
 
-            if ui_mode:
-                # The sandbox job is created without a branch: it runs on production.
-                record_branch(self._config_store, alias, None, "production", fixed=True)
-                return self._create_workspace_via_job(
-                    client,
-                    alias,
-                    effective_name,
-                    config_id,
-                    effective_backend,
-                )
-            else:
+            # Step 2: back the config with a Storage workspace. If that fails
+            # definitely, the config from step 1 is debris nobody asked for
+            # (issue #755: three failed --ui attempts left three orphaned
+            # keboola.sandboxes configs, invisible to `workspace gc` because
+            # gc detects the inverse -- a workspace whose config is gone).
+            # When the outcome is unknown, the config is kept.
+            try:
+                if ui_mode:
+                    return self._create_workspace_via_job(
+                        client,
+                        alias,
+                        effective_name,
+                        config_id,
+                        branch_id,
+                        effective_backend,
+                    )
                 return self._create_workspace_direct(
                     client,
                     alias,
@@ -341,8 +385,73 @@ class WorkspaceService(BaseService):
                     effective_backend,
                     read_only,
                 )
+            except KeboolaApiError as exc:
+                if _create_outcome_unknown(exc):
+                    self._keep_sandbox_config(exc, alias, config_id, branch_id, cleanup_command)
+                else:
+                    self._rollback_sandbox_config(
+                        client, exc, config_id, branch_id, cleanup_command
+                    )
+                raise
         finally:
             client.close()
+
+    @staticmethod
+    def _keep_sandbox_config(
+        exc: KeboolaApiError, alias: str, config_id: str, branch_id: int, cleanup_command: str
+    ) -> None:
+        """Keep the sandbox config after an unknown outcome; annotate ``exc``.
+
+        A workspace may exist or still appear; trashing the config then would
+        leave a workspace whose config is gone.
+        """
+        job_id = exc.details.get("job_id")
+        exc.details.update(
+            {
+                "sandbox_config_id": config_id,
+                "branch_id": branch_id,
+                "sandbox_config_rolled_back": False,
+                "sandbox_config_kept_reason": "outcome_unknown",
+            }
+        )
+        pending = f"job {job_id}" if job_id else "the workspace create request"
+        exc.message = (
+            f"{exc.message} The keboola.sandboxes config {config_id} was kept: the outcome "
+            f"of {pending} is unknown, so a workspace may exist or still appear. Check with 'kbagent workspace list --project {alias}'; if no "
+            f"workspace for config {config_id} appears, remove the config with "
+            f"'{cleanup_command}'."
+        )
+
+    @staticmethod
+    def _rollback_sandbox_config(
+        client: Any, exc: KeboolaApiError, config_id: str, branch_id: int, cleanup_command: str
+    ) -> None:
+        """Trash the sandbox config a failed create left behind; annotate ``exc``.
+
+        Soft delete (Storage trash, restorable via ``config restore``) -- the
+        same cleanup ``delete_workspace`` performs. The outcome is recorded on
+        the ORIGINAL error so the caller learns both what failed and whether
+        anything is left to clean up by hand; a failed cleanup never masks
+        the failure that triggered it.
+        """
+        exc.details.update({"sandbox_config_id": config_id, "branch_id": branch_id})
+        try:
+            client.delete_config("keboola.sandboxes", config_id, branch_id=branch_id)
+        except KeboolaApiError as cleanup_exc:
+            logger.debug("Could not roll back sandbox config %s", config_id)
+            exc.details["sandbox_config_rolled_back"] = False
+            exc.details["sandbox_config_cleanup_error"] = cleanup_exc.message
+            exc.message = (
+                f"{exc.message} The keboola.sandboxes config {config_id} created for this "
+                f"attempt could not be cleaned up ({cleanup_exc.message}); remove it with "
+                f"'{cleanup_command}'."
+            )
+            return
+        exc.details["sandbox_config_rolled_back"] = True
+        exc.message = (
+            f"{exc.message} The keboola.sandboxes config {config_id} created for this attempt "
+            "was moved to the trash (restorable via 'config restore')."
+        )
 
     def _create_workspace_direct(
         self,
@@ -394,12 +503,18 @@ class WorkspaceService(BaseService):
         alias: str,
         name: str,
         config_id: str,
+        branch_id: int,
         backend: str,
     ) -> dict[str, Any]:
         """Create workspace via Queue job (slower, visible in UI)."""
         # The Queue job path does not expose a publicKey/loginType input. Keep
         # returning a reset password here; headless Snowflake creates use the
         # key-pair path in _create_workspace_direct().
+        #
+        # branch_id MUST reach the Queue: the config was created in that
+        # branch (step 1), and a job queued without branchId resolves it on
+        # the default branch -- on a dev branch that was a 400 "Cannot resolve
+        # job parameters: Configuration ... not found" (issue #755).
         job = client.create_job(
             component_id="keboola.sandboxes",
             config_id=config_id,
@@ -410,40 +525,66 @@ class WorkspaceService(BaseService):
                     "shared": False,
                 },
             },
+            branch_id=branch_id,
         )
         job_id = str(job.get("id", ""))
 
-        # Wait for the job to complete
-        client.wait_for_queue_job(job_id)
-
-        # Find the workspace created by the job
-        workspaces = client.list_config_workspaces(
-            branch_id=int(job.get("branchId", 0)),
-            component_id="keboola.sandboxes",
-            config_id=config_id,
-        )
+        try:
+            client.wait_for_queue_job(job_id)
+            # Find the workspace created by the job. Look it up on the branch we
+            # resolved ourselves -- the job's own branchId echo is null on the
+            # default branch, and int(None) used to crash here.
+            workspaces = client.list_config_workspaces(
+                branch_id=branch_id,
+                component_id="keboola.sandboxes",
+                config_id=config_id,
+            )
+        except KeboolaApiError as exc:
+            exc.details.setdefault("job_id", job_id)
+            raise
 
         if not workspaces:
+            # A green job with nothing behind it is not a race to poll away:
+            # the keboola.sandboxes component dropped Snowflake/BigQuery
+            # workspace provisioning in March 2026 (its `create` task now only
+            # registers a sandbox-service record and writes parameters.id back
+            # into the config), and the Keboola UI creates SQL workspaces
+            # through SQL Editor sessions instead. Say so, name the job.
             raise KeboolaApiError(
-                message=f"Sandbox job completed but no workspace found for config {config_id}",
+                message=(
+                    f"Sandbox job {job_id} completed but no Storage workspace is attached to "
+                    f"config {config_id}. The keboola.sandboxes 'create' task no longer "
+                    f"provisions {backend} workspaces on this stack (the Keboola UI creates SQL "
+                    "workspaces through SQL Editor sessions, which kbagent does not drive), so "
+                    "'--ui' cannot produce a UI-visible workspace here. Create the workspace "
+                    "without '--ui' (headless), or create it in the Keboola UI."
+                ),
                 status_code=500,
                 error_code=ErrorCode.WORKSPACE_NOT_FOUND,
                 retryable=False,
+                details={"job_id": job_id},
             )
 
         ws_data = workspaces[0]
         connection = ws_data.get("connection", {})
         workspace_id = ws_data.get("id")
 
-        # Reset password so we can return it (job doesn't expose the initial password)
+        # Reset password so we can return it (job doesn't expose the initial
+        # password). The workspace lives in the branch of its config, so the
+        # reset must target that branch too.
         password = ""
+        warnings: list[str] = []
         try:
-            pw_data = client.reset_workspace_password(workspace_id)
+            pw_data = client.reset_workspace_password(workspace_id, branch_id=branch_id)
             password = pw_data.get("password", "")
-        except KeboolaApiError:
-            logger.debug("Could not reset password for workspace %s", workspace_id)
+        except KeboolaApiError as exc:
+            warnings.append(
+                f"Workspace {workspace_id} was created, but its password could not be reset "
+                f"({exc.message}). Get a password with 'kbagent workspace password --project "
+                f"{alias} --workspace-id {workspace_id}'."
+            )
 
-        return {
+        result = {
             "project_alias": alias,
             "workspace_id": workspace_id,
             "name": name,
@@ -462,6 +603,9 @@ class WorkspaceService(BaseService):
                 "Save the password -- it cannot be retrieved later!"
             ),
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def resolve_sandbox_workspace_id(
         self,

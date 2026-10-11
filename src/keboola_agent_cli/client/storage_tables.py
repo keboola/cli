@@ -19,7 +19,7 @@ from ..constants import (
     IMPORT_JOB_MAX_WAIT,
     S3_MULTIPART_THRESHOLD,
 )
-from ..errors import ErrorCode, KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError, request_outcome_unknown
 from ._core import _CoreClient
 from ._s3_multipart import (
     S3Target,
@@ -51,25 +51,6 @@ class TableUploadOutcome:
 
     file_id: int
     job: dict[str, Any]
-
-
-def _enqueue_outcome_unknown(exc: KeboolaApiError) -> bool:
-    """Could this failed import POST still have started an import job?
-
-    Mirrors how ``BaseHttpClient._request`` classifies a POST it did not
-    replay. A 5xx, or a failure with no HTTP response other than one proven
-    undelivered, means the request may have reached Storage and only the
-    answer was lost. Undelivered for certain: a connect error, and a connect /
-    pool timeout (raised ``retryable=True``; a read/write timeout is raised
-    ``retryable=False``). A 4xx is a definitive refusal -- nothing started.
-    """
-    if exc.status_code >= 500:
-        return True
-    if exc.status_code != 0:
-        return False
-    if exc.error_code == ErrorCode.CONNECTION_ERROR:
-        return False
-    return not (exc.error_code == ErrorCode.TIMEOUT and exc.retryable)
 
 
 def _import_may_be_running(file_id: int, exc: KeboolaApiError) -> KeboolaApiError:
@@ -875,7 +856,7 @@ class _StorageTablesMixin(_CoreClient):
         try:
             response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
         except KeboolaApiError as exc:
-            if _enqueue_outcome_unknown(exc):
+            if request_outcome_unknown(exc):
                 raise _import_may_be_running(file_id, exc) from exc
             raise
         except httpx.TransportError as exc:
